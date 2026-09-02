@@ -94,7 +94,7 @@ notes: |
 ## [T-002] a lane cannot be isolated from the checkout it runs in
 scope: harness/worktree.sh, selftest.sh, README.md
 blockedBy: none
-status: review
+status: done
 rows: `selftest.sh::a worktree lane leaves the parent checkout untouched`, `selftest.sh::a lane that cannot fast forward is left for a human`
 criteria:
   - `.harness/worktree.sh [iterations]` creates a git worktree on its own branch, runs `loop.sh`
@@ -117,6 +117,11 @@ notes: |
   merge — so it is evidence about the moment the lane was running.
   OUT OF SCOPE, noted and not touched (`one-scope`): `install.sh`'s header comment lists the files
   it writes into the harness directory and now misses `worktree.sh` and `driver.example.sh`.
+
+  VERIFIED 2026-09-02 at 74b7f64. `git status --porcelain` 0 lines; `git diff --name-only HEAD~1 HEAD`
+  is the scope line plus bookkeeping; both row assertions declared in `selftest.sh`; `git merge` is
+  `--ff-only` and nowhere else, `worktree remove` runs only after a successful merge and never with
+  `--force`, the branch delete is `-d` and not `-D`; `.harness/hooks/check-gate.sh` rc=0.
 
 ## [T-003] nothing tests a role prompt
 scope: evals/**, selftest.sh, README.md
