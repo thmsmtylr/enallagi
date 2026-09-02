@@ -152,7 +152,8 @@ HARNESS_FILES = [f for f in __HARNESS_FILES__ if os.path.exists(f)] + sorted(g f
 
 
 # enforcement is: the check runs it, the tool's settings wire it, or a hash covers it
-WIRED = (['test-hashes.json', '__HARNESS_DIR__/loop.sh']
+WIRED = (['test-hashes.json', '__HARNESS_DIR__/loop.sh', '__HARNESS_DIR__/tasks.py']
+         + sorted(glob.glob('__HARNESS_DIR__/lib/*.sh'))
          + sorted(glob.glob('.*/settings.json')) + sorted(glob.glob('.*/settings.local.json'))
          + sorted(glob.glob('__HARNESS_DIR__/roles/*.md')))
 

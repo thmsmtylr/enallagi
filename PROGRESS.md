@@ -32,3 +32,18 @@ output.
 stays here. The **second** occurrence of the same thing becomes a line in LEARNINGS.md — one rule per surprise rewrites the operating manual every week, which costs more than the friction it removes.
 
 ---
+
+## 2026-09-02 — T-001, T-002 — landed
+rows: all four
+check: `HARNESS_DRIVER=1 HARNESS_EVALS=1 ./selftest.sh` -> 83 ok, 0 skip, 0 FAIL, rc=0.
+what happened: TASKS.md is parsed once, in harness/tasks.py, with 15 assertions of its own. The
+launcher went 632 -> 252 lines and sources queue.sh, agent.sh and gates.sh. Fence-aware parsing
+means a task heading inside a code block is documentation, which is the class of bug that made the
+template's own example a takeable task.
+friction: moving gate_verdict out of loop.sh made `rail-unenforced` report that nothing runs
+check-gate.sh — correctly, because the probe's WIRED list named loop.sh and knew nothing about
+lib/. A probe that decides what counts as "the harness" has to be told when the harness moves.
+Second: the gated floor now takes about 50 minutes, most of it three live-agent evals run in
+series. That is too slow to be a routine check and it is why both agent-spawning sections are
+behind flags. Running the evals in parallel is the obvious fix and is not done.
+next: teardown.

@@ -35,7 +35,7 @@ needing a human credential and no launcher auto-selects it.
 ## [T-001] TASKS.md is parsed by seven awk programs inside the launcher
 scope: harness/tasks.py, harness/loop.sh, install.sh, selftest.sh, README.md
 blockedBy: none
-status: ready
+status: done
 rows: `selftest.sh::the launcher parses no task blocks itself`, `selftest.sh::tasks.py answers the queue against fixture files`, `selftest.sh::a heading inside a code fence is not a task`
 criteria:
   - `harness/tasks.py` parses TASKS.md once and exposes the queue questions as a CLI:
@@ -54,11 +54,18 @@ notes: |
   Two parser defects in this repository came from the awk layer: BSD sed reading `[ \t]` as
   space-backslash-t, and `ready_unattended` offering a lane the `## [T-042]` example inside a code
   fence. python3 is already a hard dependency: probes.sh is 92% python behind a 42-line shim.
+  Measured, at the tip of harness/split-loop:
+    harness/loop.sh   632 -> 252 lines, awk/sed sites 22 -> 4
+    harness/tasks.py  287 lines, 15 assertions in `tasks.py --selftest`
+  The four sed and awk that remain in the launcher format output; none reads TASKS.md.
+  `set_status` lost its line-count floor and does not need it: the guard existed because awk can
+  exit 0 having written nothing and `mv` would then delete the queue. tasks.py rewrites one line of
+  a parsed structure and returns the file unchanged when the id is unknown, which is asserted.
 
 ## [T-002] the launcher is one 632-line file
-scope: harness/lib/*.sh, harness/loop.sh, install.sh, selftest.sh, README.md
+scope: harness/lib/*.sh, harness/loop.sh, harness/hooks/probes.sh, install.sh, selftest.sh, README.md
 blockedBy: T-001
-status: blocked
+status: done
 rows: `selftest.sh::the launcher is split into sourced modules`
 criteria:
   - `loop.sh` sources `agent.sh`, `queue.sh`, `gates.sh` and `telemetry.sh` from `__HARNESS_DIR__/lib/`.
@@ -71,3 +78,16 @@ notes: |
   harnesses found in the field (lSAAGl/loop-harness, gabrielkoerich/orchestrator-sh) split into
   lib/ as well. Bats is deliberately not adopted: it is a real dependency and the README claims
   none beyond bash and python3.
+  Scope amended at implementation time to add `harness/hooks/probes.sh`, with the reason recorded
+  here rather than edited in silently. Moving `gate_verdict` out of `loop.sh` made
+  `rail-unenforced` report `check-gate.sh exists and the check does not run it`, correctly: the
+  probe's `WIRED` list named `loop.sh` and knew nothing of `lib/`. The fix belongs to the change
+  that caused it.
+  Implemented in the same pass as T-001: the module boundaries are only visible once the parser is
+  out, so splitting first would have moved awk programs between files and then deleted them.
+
+<!-- VERIFIED 2026-09-02, both, at the tip of harness/split-loop.
+     HARNESS_DRIVER=1 HARNESS_EVALS=1 ./selftest.sh -> 83 ok, 0 skip, 0 FAIL, rc=0.
+     tasks.py --selftest -> 15 assertions, all passing.
+     loop.sh 632 -> 252 lines; awk/sed sites 22 -> 4, none of which reads TASKS.md. -->
+

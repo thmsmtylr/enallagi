@@ -8,6 +8,8 @@
 #   CLAUDE.md, GEMINI.md,  one-line pointers at it, for tools that read their own file
 #   .github/copilot-instructions.md
 #   .harness/              loop.sh, worktree.sh, archive-done.sh, watch.sh, driver.example.sh, RAILS.md
+#   .harness/lib/          the launcher's modules: queue.sh, agent.sh, gates.sh
+#   .harness/tasks.py      the one parser for TASKS.md
 #   .harness/hooks/        probes.sh, check-gate.sh, verify-done.sh, immutable.sh
 #   .harness/roles/        the five role prompts the launcher feeds to a fresh agent process
 #   <skillsDir>/           this project's own Agent Skill, in the agentskills.io format
@@ -104,7 +106,7 @@ PY
 ) || exit 2
 
 echo "installing the harness into $TARGET${DRY:+  (dry run)}"
-run mkdir -p "$TARGET/$HARNESS_DIR/hooks" "$TARGET/$HARNESS_DIR/roles" "$TARGET/$SKILLS_DIR"
+run mkdir -p "$TARGET/$HARNESS_DIR/hooks" "$TARGET/$HARNESS_DIR/lib" "$TARGET/$HARNESS_DIR/roles" "$TARGET/$SKILLS_DIR"
 
 place() { # $1 = source file, $2 = destination
   if [ -n "$DRY" ]; then say "would write: ${2#$TARGET/}"; return 0; fi
@@ -123,9 +125,11 @@ seed() { [ -s "$2" ] && { say "kept: ${2#$TARGET/} (already has content)"; retur
 
 for f in "$SRC"/harness/*.sh;       do place "$f" "$TARGET/$HARNESS_DIR/$(basename "$f")"; done
 for f in "$SRC"/harness/hooks/*.sh; do place "$f" "$TARGET/$HARNESS_DIR/hooks/$(basename "$f")"; done
+for f in "$SRC"/harness/lib/*.sh;   do place "$f" "$TARGET/$HARNESS_DIR/lib/$(basename "$f")"; done
+place "$SRC/harness/tasks.py" "$TARGET/$HARNESS_DIR/tasks.py"
 for f in "$SRC"/roles/*.md;         do place "$f" "$TARGET/$HARNESS_DIR/roles/$(basename "$f")"; done
 place "$SRC/templates/RAILS.md" "$TARGET/$HARNESS_DIR/RAILS.md"
-run chmod +x "$TARGET/$HARNESS_DIR"/*.sh "$TARGET/$HARNESS_DIR/hooks"/*.sh
+run chmod +x "$TARGET/$HARNESS_DIR"/*.sh "$TARGET/$HARNESS_DIR/hooks"/*.sh "$TARGET/$HARNESS_DIR/tasks.py"
 # The run log is machinery, not content: a lane that stages everything would otherwise commit it,
 # and the scope gate would reject that lane for a file it did not write. Scoped to the harness
 # directory, so the repository's own .gitignore is never touched.
@@ -197,9 +201,11 @@ if [ -z "$DRY" ]; then
     for f in $LEFT; do echo "  ${f#$TARGET/}: $(grep -ohE '__[A-Z][A-Z_]+__' "$f" | sort -u | tr '\n' ' ')" >&2; done
     exit 2
   fi
-  for f in "$TARGET/$HARNESS_DIR"/*.sh "$TARGET/$HARNESS_DIR/hooks"/*.sh; do
+  for f in "$TARGET/$HARNESS_DIR"/*.sh "$TARGET/$HARNESS_DIR/hooks"/*.sh "$TARGET/$HARNESS_DIR/lib"/*.sh; do
     bash -n "$f" || { echo "install FAILED: $f is not valid bash after substitution" >&2; exit 2; }
   done
+  python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$TARGET/$HARNESS_DIR/tasks.py" \
+    || { echo "install FAILED: tasks.py is not valid python after substitution" >&2; exit 2; }
   COUNT=$(find "$TARGET/$HARNESS_DIR" "$TARGET/$SKILLS_DIR" -type f | wc -l | tr -d ' ')
   echo; echo "installed $COUNT files, every token substituted, every script parses."
 fi
