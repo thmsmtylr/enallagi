@@ -1,6 +1,10 @@
 # LEARNINGS
 
-<!-- One line per costly mistake: - [date] <what went wrong> → <rule instead> -->
+<!-- One line per costly mistake: - [date] <what went wrong> → <rule instead> (evals/<name>) -->
+<!-- A dated entry names the eval that decided it was worth its place. Write the eval first, run -->
+<!-- `evals/run.sh --gate <name>`, and add the line only on ACCEPT: the eval has to fail without -->
+<!-- the rule and pass with it, and regress nothing that was passing. `[seed]` entries predate -->
+<!-- the gate. The file is capped (learningsCap): at the cap, adding a rule means removing one. -->
 <!-- Read at the start of every task. Rails are named in CLAUDE.md, never numbered. -->
 <!-- Every entry names a file, a command or a hook. One that names nothing is unenforceable, -->
 <!-- and probes.sh `learning-unenforced` will say so. -->

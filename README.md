@@ -54,6 +54,39 @@ task whose implementation was never committed. They need a real agent, so `./sel
 runner rather than spawning one — and with no agent configured `run.sh` refuses instead of reporting
 a pass for something it never ran.
 
+**The write-path gate.** A repeated `friction:` line in `PROGRESS.md` becomes a rule in
+`LEARNINGS.md`, which every task reads at its start. `evals/run.sh --gate <name>` decides whether
+that rule earns its place. Three conditions, all required:
+
+| | |
+| --- | --- |
+| the eval passes with the rule | the rule fixes the case it came from |
+| the eval fails with the rule ablated | the case would not have passed anyway |
+| every other eval still passes | the rule regresses nothing that worked |
+
+Ablation is a per-eval `ablate.sh` that removes the rule from the fixture. `learning-ungated` then
+reports any dated `LEARNINGS.md` entry that names no eval, and any file over `learningsCap`.
+
+This is not a design preference. Self-written rules added without a gate are measurably worse than
+no rules at all: reflective memory made two ALFWorld environments strictly worse than a no-memory
+ablation — 7 trials against 1, and 8 against 1 — and across 16 frozen environments *"0 of 121
+reflections mention the correct target object"*, the authors concluding that *"write-path validation
+is as important as retrieval quality"*
+([arXiv:2605.29463](https://arxiv.org/html/2605.29463)). Sequential memory accumulated without
+admission control fell below its own no-skills baseline, 41.2% against 40.6%
+([arXiv:2605.29668](https://arxiv.org/abs/2605.29668)). And context that grows unchecked collapses:
+one measured step went from 18,282 tokens at 66.7% accuracy to 122 tokens at 57.1%, under a 63.7%
+baseline ([arXiv:2510.04618](https://arxiv.org/html/2510.04618v1)).
+
+Conditions 1 and 3 are GRASP's admission rule, `(F(c)-F0)-(R(c)-R0)>0` under a hard regression
+budget `R(c)<=R0`, evaluated on a balanced probe of previously-failing and previously-passing cases
+(18-18 at N=36), and GSE's two stages — *"proposals that fail to resolve their originating failure
+are discarded immediately"*, then a replay set that must *"maintain or improve"*
+([arXiv:2608.06153](https://arxiv.org/html/2608.06153)). Condition 2 is not in either: both ask
+whether the case passes now, neither asks whether it would have passed without the rule. The cap
+follows GRASP's capacity-bounded library, where an ADD at capacity is blocked unless a paired REMOVE
+frees a slot.
+
 **The documents.** The repository is the control plane. Sessions end, context compresses, and the
 next agent starts without the last one's reasoning:
 

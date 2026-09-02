@@ -35,7 +35,7 @@ needing a human credential and no launcher auto-selects it.
 ## [T-001] a repeated friction becomes a rule with nothing checking the rule
 scope: evals/**, selftest.sh, README.md
 blockedBy: none
-status: ready
+status: review
 rows: `selftest.sh::a candidate rule that does not fix its case is rejected`, `selftest.sh::a candidate rule whose case passes without it is rejected`, `selftest.sh::a candidate rule that regresses another eval is rejected`, `selftest.sh::a candidate rule that fixes its case and regresses nothing is accepted`
 criteria:
   - `evals/run.sh --gate <eval>` decides one candidate rule and prints `GATE <eval> ACCEPT` or
@@ -63,7 +63,7 @@ notes: |
 ## [T-002] nothing bounds the rule library or checks a rule has an eval
 scope: harness/hooks/probes.sh, harness.default.json, templates/LEARNINGS.md, templates/RAILS.md, selftest.sh, README.md
 blockedBy: none
-status: ready
+status: review
 rows: `selftest.sh::a dated learning with no eval is reported`, `selftest.sh::a learnings file over its cap is reported`
 criteria:
   - A `learning-ungated` probe reports a dated LEARNINGS.md entry that names no `evals/<dir>`, or
@@ -82,3 +82,18 @@ notes: |
     inference cost by over 20%, with LLM-generated ones costing about 3% of success rate.
   The cap is 12 by default rather than GRASP's 10: LEARNINGS.md entries are one line, not a skill
   document with four sections, and the harness ships four seeds.
+
+## [T-003] the gate is not installed into the repositories that need it
+scope: install.sh, templates/RAILS.md, selftest.sh, README.md
+blockedBy: none
+status: ready
+rows: none — harness
+criteria:
+  - `install.sh` writes `evals/run.sh` and an `evals/README.md` into the target repo, so a rule can
+    be gated where the rules are written. Existing evals in the target are never overwritten.
+  - The `gated-rules` rail names `evals/run.sh` as enforcement and `rail-unenforced` stays at 2.
+  - `./selftest.sh` passes.
+notes: raised by T-002 under `one-scope`. The rail had to name `probes.sh` alone because a target
+  repo has no `evals/run.sh`: the package's evals test the package's own role prompts and are not
+  installed. A user who writes a rule needs the gate in their own tree.
+

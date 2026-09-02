@@ -12,7 +12,24 @@
 #
 #   ./evals/run.sh              every eval
 #   ./evals/run.sh verifier     one
+#   ./evals/run.sh --gate <n>   decide one candidate rule (see below)
 #   EVAL_AGENT='./stub.sh {prompt}' ./evals/run.sh   a stub, for testing the runner itself
+#
+# --gate is the write-path check on a new rule. A repeated `friction:` line in PROGRESS.md becomes a
+# rule in LEARNINGS.md, and this decides whether that rule is worth its place. Three conditions,
+# all required:
+#
+#   1. the eval PASSES with the rule            the rule fixes the case it came from
+#   2. the eval FAILS with the rule ablated     the case would not have passed anyway
+#   3. every other eval still PASSES            the rule regresses nothing that worked
+#
+# 1 and 3 are GRASP's admission rule, (F(c)-F0)-(R(c)-R0)>0 with a hard regression budget R(c)<=R0
+# (arXiv:2605.29668), and GSE's two stages, local then replay-driven (arXiv:2608.06153). 2 is not
+# in either: both ask whether the case now passes, neither asks whether it would have passed
+# without the rule. A rule that changes no outcome is context that costs and buys nothing.
+#
+# Ablation is per-eval: `ablate.sh` in the eval directory removes the rule from the fixture repo,
+# and an eval without one cannot be gated.
 #
 # The agent comes from EVAL_AGENT, else harness.json's agentCommand, else harness.default.json's.
 # With none of the three, this refuses:
@@ -39,13 +56,19 @@ fi
   echo "evals: refusing to report a result for something that was never run." >&2
   exit 2; }
 
+GATE=""
+if [ "${1:-}" = "--gate" ]; then
+  GATE="${2:-}"
+  [ -n "$GATE" ] || { echo "evals: --gate needs an eval name" >&2; exit 2; }
+  shift 2
+fi
+
 NAMES=("$@")
 [ "$#" -eq 0 ] && while IFS= read -r d; do NAMES+=("$(basename "$d")"); done < <(find "$PKG/evals" -mindepth 1 -maxdepth 1 -type d | sort)
 
-failed=0
-for name in ${NAMES[@]+"${NAMES[@]}"}; do
-  [ -f "$PKG/evals/$name/assert.sh" ] || { echo "EVAL $name ERROR (no such eval)"; failed=1; continue; }
-  dir=$(mktemp -d) || exit 3
+run_one() { # $1 = eval name, $2 = "ablate" to remove the rule from the fixture first
+  local name="$1" mode="${2:-}" dir
+  dir=$(mktemp -d) || return 3
   (
     cd "$dir" || exit 3
     git init -q && git config user.email eval@local && git config user.name eval
@@ -53,6 +76,12 @@ for name in ${NAMES[@]+"${NAMES[@]}"}; do
     git add -A && git commit -qm init >/dev/null
     "$PKG/install.sh" "$dir" >/dev/null 2>&1 || exit 3
     EVAL_PKG="$PKG" bash "$PKG/evals/$name/setup.sh" || exit 3
+    # the ablation runs after setup and before the agent: the fixture is identical either way,
+    # and the only difference is whether the rule is present when the agent reads its prompt
+    if [ "$mode" = "ablate" ]; then
+      [ -f "$PKG/evals/$name/ablate.sh" ] || exit 3
+      EVAL_PKG="$PKG" bash "$PKG/evals/$name/ablate.sh" || exit 3
+    fi
     git add -A && git commit -qm fixture >/dev/null
 
     prompt=$(cat "$PKG/evals/$name/prompt.txt")
@@ -65,11 +94,51 @@ for name in ${NAMES[@]+"${NAMES[@]}"}; do
 
     bash "$PKG/evals/$name/assert.sh"
   )
-  case "$?" in
-    0) echo "EVAL $name PASS" ;;
-    3) echo "EVAL $name ERROR (the fixture could not be built — nothing was measured)"; failed=1 ;;
-    *) echo "EVAL $name FAIL"; failed=1 ;;
-  esac
+  local rc=$?
   rm -rf "$dir"
+  return $rc
+}
+
+report() { # $1 = name, $2 = exit status. Returns 0 when the eval passed.
+  case "$2" in
+    0) echo "EVAL $1 PASS"; return 0 ;;
+    3) echo "EVAL $1 ERROR (the fixture could not be built — nothing was measured)"; return 2 ;;
+    *) echo "EVAL $1 FAIL"; return 1 ;;
+  esac
+}
+
+if [ -n "$GATE" ]; then
+  [ -f "$PKG/evals/$GATE/ablate.sh" ] || {
+    echo "GATE $GATE REJECT no ablate.sh: without one, nothing can tell a rule that works from a rule that is never consulted" >&2
+    exit 2; }
+
+  run_one "$GATE"; with=$?
+  report "$GATE" "$with" >/dev/null
+  [ "$with" -eq 0 ] || { echo "GATE $GATE REJECT the rule does not fix the case it came from (its eval fails with the rule in place)"; exit 1; }
+
+  run_one "$GATE" ablate; without=$?
+  [ "$without" -eq 3 ] && { echo "GATE $GATE REJECT the ablated fixture could not be built, so nothing was measured"; exit 1; }
+  [ "$without" -eq 0 ] && { echo "GATE $GATE REJECT the case passes with the rule ablated, so the rule changed no outcome"; exit 1; }
+
+  regressed=""
+  while IFS= read -r d; do
+    other="$(basename "$d")"
+    [ "$other" = "$GATE" ] && continue
+    run_one "$other"; rc=$?
+    [ "$rc" -eq 0 ] || regressed="$regressed $other"
+  done < <(find "$PKG/evals" -mindepth 1 -maxdepth 1 -type d | sort)
+  [ -n "$regressed" ] && { echo "GATE $GATE REJECT it regresses evals that were passing:$regressed"; exit 1; }
+
+  echo "GATE $GATE ACCEPT fixes its case, fails without itself, regresses nothing"
+  exit 0
+fi
+
+failed=0
+for name in ${NAMES[@]+"${NAMES[@]}"}; do
+  if [ ! -f "$PKG/evals/$name/assert.sh" ]; then
+    echo "EVAL $name ERROR (no such eval)"; failed=1; continue
+  fi
+  run_one "$name"; rc=$?
+  report "$name" "$rc" || failed=1
 done
 exit "$failed"

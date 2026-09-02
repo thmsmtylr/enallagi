@@ -109,5 +109,7 @@
     "target"
   ],
   "_cost": "costSed extracts the run cost from what the agent printed, one sed -n expression. Empty output means no cost was reported and the run log's cost column stays empty; wall clock is always recorded. The default matches Claude Code's --output-format json.",
-  "costSed": "s/.*\"total_cost_usd\"[: ]*\\([0-9.]*\\).*/\\1/p"
+  "costSed": "s/.*\"total_cost_usd\"[: ]*\\([0-9.]*\\).*/\\1/p",
+  "_learnings": "learningsCap bounds LEARNINGS.md, which every task reads at its start. GRASP keeps a capacity-bounded skill library, 10 in its experiments, where an ADD at capacity is blocked unless a paired REMOVE frees a slot (arXiv:2605.29668); its ungated baseline regressed below the no-skills baseline as memory accumulated. Context files also cost: over 20% more inference, and about 3% of success rate when LLM-generated (arXiv:2602.11988). 12 here because an entry is one line and five ship as seeds.",
+  "learningsCap": 12
 }
