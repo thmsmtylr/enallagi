@@ -47,3 +47,14 @@ launcher reads a non-zero lane as a halt, so the verify stage never ran and the 
 nothing. Cost one debug cycle to find. Use `if ... fi` for the last statement of a branch.
 next: T-002 (worktree isolation). The scope-gate message bug noted in T-001's `notes:` needs its own
 block — it is `harness/loop.sh` and was out of T-001's scope.
+
+## 2026-09-02 — T-001 — landed (second attempt, after a rejection)
+rows: `selftest.sh::the package driver reports shortfalls as FINDING lines`, `selftest.sh::an example driver installs into the harness directory`
+check: `HARNESS_DRIVER=1 ./selftest.sh` -> 50 ok, 0 skip, all assertions passed, rc=0.
+what happened: the verifier rejected the first attempt because `./selftest.sh` printed `ok` for an
+assertion it had skipped, which would have shown an exit-criteria row green on a run that drove
+nothing. Added `skip()` beside `ok()`/`bad()`, a skip count, and a summary line that names the flag.
+friction: the gated-assertion pattern reintroduced zero-as-pass one level up from the probe that
+exists to prevent it. A skipped check that prints like a passing one is the failure the whole
+harness is built around, and it took a verifier pass to catch.
+next: T-002 (worktree isolation).

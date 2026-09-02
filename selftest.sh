@@ -10,9 +10,14 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 T="${TMPDIR:-/tmp}/harness-selftest-$$"
 FAIL=0
 
+SKIPPED=0
 ok() { echo "ok    $1"; }
 bad() { echo "FAIL  $1"; [ $# -gt 1 ] && echo "      $2"; FAIL=1; }
 is() { [ "$2" = "$3" ] && ok "$1" || bad "$1" "want [$2] got [$3]"; }
+# A gate asserts what it EXECUTED. An assertion that did not run prints `skip`, never `ok`, and the
+# summary says how many — otherwise an exit-criteria row reads green on a run that drove nothing
+# (LEARNINGS.md, zero-as-pass; TASKS.md T-001, rejected 2026-09-02 for exactly this).
+skip() { echo "skip  $1"; [ $# -gt 1 ] && echo "      $2"; SKIPPED=$((SKIPPED + 1)); return 0; }
 
 mkdir -p "$T/src" && cd "$T" || exit 2
 git init -q && echo 'export const x = 1' > src/schema.ts
@@ -151,7 +156,8 @@ if [ -n "${HARNESS_DRIVER:-}" ]; then
   is "the package driver reports shortfalls as FINDING lines" "reached and reported" \
     "$([ "$DRC" -eq 0 ] && [ "$DN" -ge 1 ] && echo "reached and reported" || echo "rc=$DRC findings=$DN")"
 else
-  ok "the package driver reports shortfalls as FINDING lines (skipped: HARNESS_DRIVER unset)"
+  skip "the package driver reports shortfalls as FINDING lines" \
+       "HARNESS_DRIVER is unset, so nothing drove the artifact. Not a pass."
 fi
 
 # --- the gate, on delta -----------------------------------------------------
@@ -225,5 +231,11 @@ rm -f src/fakelane.sh
 cd /
 [ -n "${KEEP:-}" ] && echo "kept: $T" || rm -rf "$T"
 echo
-[ "$FAIL" -eq 0 ] && echo "harness selftest: all assertions passed." || echo "harness selftest: FAILURES above."
+if [ "$FAIL" -ne 0 ]; then
+  echo "harness selftest: FAILURES above."
+elif [ "$SKIPPED" -gt 0 ]; then
+  echo "harness selftest: all assertions that RAN passed, and $SKIPPED did not run. Set HARNESS_DRIVER=1 for the whole floor."
+else
+  echo "harness selftest: all assertions passed."
+fi
 exit "$FAIL"
