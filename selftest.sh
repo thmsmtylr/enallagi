@@ -325,7 +325,7 @@ is "the eval runner passes a role that obeys its rule" "EVAL verifier PASS" \
 is "the eval runner fails a role that breaks its rule" "EVAL verifier FAIL" \
   "$(EVAL_AGENT="$T/src/evalbreaks.sh {prompt}" "$SRC/evals/run.sh" verifier 2>/dev/null | tail -1)"
 # with no agent anywhere, a refusal — never a pass for something that was never run
-cp -R "$SRC" "$T/pkgcopy" 2>/dev/null; rm -f "$T/pkgcopy/harness.json"
+cp -R "$SRC" "$T/pkgcopy" 2>/dev/null; rm -f "$T/pkgcopy/harness.json" "$T/pkgcopy/harness.default.json"
 is "with no agent configured the evals refuse rather than report" "2" \
   "$("$T/pkgcopy/evals/run.sh" verifier >/dev/null 2>&1; echo $?)"
 rm -rf "$T/pkgcopy" src/evalobeys.sh src/evalbreaks.sh
