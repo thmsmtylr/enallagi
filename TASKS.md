@@ -35,7 +35,7 @@ needing a human credential and no launcher auto-selects it.
 ## [T-001] the role prompts narrate their own history at the model
 scope: roles/*.md, selftest.sh
 blockedBy: none
-status: review
+status: done
 rows: `selftest.sh::no role prompt carries an incident narrative`, `selftest.sh::the trimmed role prompts still pass their evals`
 criteria:
   - Every hard rule, named rail, protocol step and output format in each role prompt survives.
@@ -62,3 +62,10 @@ notes: |
   Scrutinise: the second row cannot be checked without spawning an agent, so its assertion is gated
   on HARNESS_EVALS and prints `skip` when unset, the same treatment the driver gets. A trim that
   passes only because nothing ran is the failure this harness is built around.
+
+<!-- VERIFIED 2026-09-02. HARNESS_DRIVER=1 HARNESS_EVALS=1 ./selftest.sh -> 79 ok, 0 skip, 0 FAIL,
+     rc=0, including "the trimmed role prompts still pass their evals" (three live agents: the scout
+     transcribed and promoted nothing, the adjudicator killed an unanchored block, the verifier
+     rejected uncommitted work). Every rail name in all five prompts is byte-identical to before the
+     trim, checked with `git show HEAD~1:roles/<f>.md | grep -oE '\(`[a-z-]+`\)'`. -->
+
