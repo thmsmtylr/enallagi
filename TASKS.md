@@ -126,7 +126,7 @@ notes: |
 ## [T-003] nothing tests a role prompt
 scope: evals/**, selftest.sh, README.md
 blockedBy: none
-status: review
+status: done
 rows: `selftest.sh::the eval runner passes a role that obeys its rule`, `selftest.sh::the eval runner fails a role that breaks its rule`
 criteria:
   - `evals/run.sh` runs one eval per directory under `evals/`: each carries a `setup.sh` that builds
@@ -148,3 +148,26 @@ notes: |
   Scrutinise: the runner is asserted in `selftest.sh` with stubs and never spawns a real agent there;
   the evals themselves need one. And `evals/verifier/setup.sh` asserts its own edit landed — a
   fixture whose replace matches nothing would measure a state it never built and pass.
+
+  VERIFIED 2026-09-02 at d211db0. `git status --porcelain` 0 lines; every changed file is under
+  `evals/`, or is `selftest.sh`/`README.md` from the scope line, or is bookkeeping (LEARNINGS.md
+  carries the two-occurrence rule the `friction` rail requires); both row assertions declared;
+  `selftest.sh` spawns only stubs (`EVAL_AGENT=` twice, no bare agent); `run.sh` refuses with no
+  agent and reports ERROR rather than a result when a fixture will not build;
+  `.harness/hooks/check-gate.sh` rc=0.
+
+## [T-004] two out-of-scope notes the last two tasks left
+scope: harness/loop.sh, install.sh, selftest.sh
+blockedBy: none
+status: ready
+rows: none — harness
+criteria:
+  - `gate_scope`'s rejection message puts a space between the verb and the first path: the run on
+    2026-09-02 printed `touchedsrc/sneaky.ts`, which reads as one token and is the line a human acts
+    on. `./selftest.sh` asserts the message, not only the status it produced.
+  - `install.sh`'s header comment lists what it writes into the harness directory and names
+    `worktree.sh` and `driver.example.sh`, both of which it has been writing since T-001 and T-002.
+  - `./selftest.sh` passes.
+notes: raised by T-001 and T-002 under `one-scope` — both were outside their scope lines, so neither
+  lane touched them. `rows: none — harness`, so the `harness-lane` gate allows the harness edit.
+
