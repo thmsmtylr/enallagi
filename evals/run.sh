@@ -14,7 +14,8 @@
 #   ./evals/run.sh verifier     one
 #   EVAL_AGENT='./stub.sh {prompt}' ./evals/run.sh   a stub, for testing the runner itself
 #
-# The agent comes from harness.json's agentCommand, or from EVAL_AGENT. With neither, this refuses:
+# The agent comes from EVAL_AGENT, else harness.json's agentCommand, else harness.default.json's.
+# With none of the three, this refuses:
 # an eval suite that reports a pass without spawning anything is worse than no eval suite.
 set -u
 PKG="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,9 +24,15 @@ AGENT=()
 if [ -n "${EVAL_AGENT:-}" ]; then
   # ponytail: space-split, so an argument with a space in it needs harness.json instead
   read -r -a AGENT <<< "$EVAL_AGENT"
-elif [ -f "$PKG/harness.json" ]; then
-  while IFS= read -r word; do AGENT+=("$word"); done < <(
-    python3 -c "import json,sys;[print(w) for w in json.load(open(sys.argv[1]))['agentCommand']]" "$PKG/harness.json")
+else
+  # harness.json if this package sits in a configured repo, harness.default.json otherwise — the
+  # package itself ships without a harness.json, and the evals still have to be runnable from it
+  for config in "$PKG/harness.json" "$PKG/harness.default.json"; do
+    [ -f "$config" ] || continue
+    while IFS= read -r word; do AGENT+=("$word"); done < <(
+      python3 -c "import json,sys;[print(w) for w in json.load(open(sys.argv[1]))['agentCommand']]" "$config")
+    break
+  done
 fi
 [ "${#AGENT[@]}" -gt 0 ] || {
   echo "evals: no agent configured. Set EVAL_AGENT, or put an agentCommand in harness.json." >&2
