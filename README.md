@@ -224,9 +224,17 @@ reports which sloppiness the harness let through. What it cannot know is your ar
 Until you fill the skeleton in and set `driverCommand`, every count the loop reads came from a grep
 over the repo, and capability shortfall is invisible to all of it.
 
-**Parallel lanes.** A multi-worktree launcher exists in the repo this came from and is not shipped:
-it is 23KB, unused for months, and its one load-bearing function (`gate_verdict`) is ported into
-`loop.sh` here. Add lanes when you have file-disjoint scopes to fight over, not before.
+**Parallel lanes.** `.harness/worktree.sh` gives one lane its own checkout — `git worktree add`, the
+loop inside it, then `--ff-only` back, and if the parent moved it leaves the branch and says what a
+human has to decide. That is the isolation; running several of them at once is not shipped. The
+multi-worktree launcher in the repo this came from is 23KB, was unused for months, and its one
+load-bearing function (`gate_verdict`) is in `loop.sh` here. Add lanes when you have file-disjoint
+scopes to fight over, not before.
+
+Worth being precise about, because the two get conflated: **fresh sessions isolate context, worktrees
+isolate the checkout.** Every stage already runs as a new process that cannot see the last one's
+conversation — that is what `verifier-not-implementer` buys — and all of them still write to the same
+working tree, which is why `one checkout is one writer` is a rail rather than a mechanism.
 
 **A held-out suite.** `verifier-not-implementer` gets you a fresh session and a separate process,
 which is most of the value. A suite the implementer never sees is more, and it is yours to write.
