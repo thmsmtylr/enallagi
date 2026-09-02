@@ -11,6 +11,7 @@
 #   .harness/hooks/        probes.sh, check-gate.sh, verify-done.sh, immutable.sh
 #   .harness/roles/        the five role prompts the launcher feeds to a fresh agent process
 #   <skillsDir>/           this project's own Agent Skill, in the agentskills.io format
+#   evals/                 the write-path gate for a new LEARNINGS.md rule
 #   documents              TASKS.md, PROGRESS.md, LEARNINGS.md, DECISIONS.md, .check-baseline
 #
 # Adapters (optional): --adapter claude also writes .claude/agents/ and .claude/settings.json;
@@ -135,6 +136,12 @@ run chmod +x "$TARGET/$HARNESS_DIR"/*.sh "$TARGET/$HARNESS_DIR/hooks"/*.sh
 while IFS= read -r -d '' f; do
   place "$f" "$TARGET/$SKILLS_DIR/${f#$SRC/skills/}"
 done < <(find "$SRC/skills" -type f -print0)
+
+# The write-path gate lives where the rules are written. The runner is replaced on upgrade; the
+# evals themselves are the repository's own and are never overwritten.
+place "$SRC/evals/run.sh" "$TARGET/evals/run.sh"
+run chmod +x "$TARGET/evals/run.sh"
+seed "$SRC/evals/README.md" "$TARGET/evals/README.md"
 
 # --- documents, seeded once -------------------------------------------------
 # A document with content in it is the project's own record and is never overwritten.

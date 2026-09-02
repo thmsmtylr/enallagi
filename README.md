@@ -66,6 +66,8 @@ that rule earns its place. Three conditions, all required:
 
 Ablation is a per-eval `ablate.sh` that removes the rule from the fixture. `learning-ungated` then
 reports any dated `LEARNINGS.md` entry that names no eval, and any file over `learningsCap`.
+`install.sh` writes `evals/run.sh` into your repo, so a rule is gated where rules are written;
+your own evals there are never overwritten on upgrade.
 
 This is not a design preference. Self-written rules added without a gate are measurably worse than
 no rules at all: reflective memory made two ALFWorld environments strictly worse than a no-memory

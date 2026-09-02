@@ -43,3 +43,14 @@ friction: the new rail named `evals/run.sh`, which no installed repo has, so `ra
 from 2 to 3. A rail must name enforcement that exists where the rail is read, not where it was
 written. Raised as T-003 rather than widened into T-002's scope.
 next: T-003, install the gate into target repos.
+
+## 2026-09-02 — T-003 — landed
+rows: none — harness
+check: `./selftest.sh` -> all assertions that ran passed, 1 skipped.
+what happened: `install.sh` now writes `evals/run.sh` and `evals/README.md` into the target repo, so
+the gate exists where the rules are written. The rail names the probe and the verifier, not the
+gate command: nothing runs the gate automatically and `rail-unenforced` reported that correctly.
+friction: installing a new directory into a target repo made the `litter` probe report it, because
+`allowedPrefixes` did not know it existed. Any change that adds a directory to an install has to
+change the allowlist in the same task.
+next: verify, then teardown.

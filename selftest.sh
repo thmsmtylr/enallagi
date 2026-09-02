@@ -106,6 +106,8 @@ P=$(.harness/hooks/probes.sh 2>&1); is "probes.sh exits 0 (every probe ran)" "0"
 is "no probe errored" "0" "$(printf '%s\n' "$P" | grep -c 'PROBE .* ERROR')"
 is "the row parser reads the seeded criteria table" "1" \
   "$(printf '%s\n' "$P" | sed -n 's/^PROBE spec-untested //p')"
+[ -x evals/run.sh ] && ok "the write-path gate installs where the rules are written" \
+  || bad "the write-path gate installs where the rules are written"
 is "a fresh install has two unenforced rails, both wanting test-hashes.json" "2" \
   "$(printf '%s\n' "$P" | sed -n 's/^PROBE rail-unenforced //p')"
 is "the seeded criterion is untested and no task in flight names it" "1" \
