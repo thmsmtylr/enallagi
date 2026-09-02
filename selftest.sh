@@ -59,6 +59,26 @@ DRY_RUN=1 .harness/loop.sh 1 2>&1 | grep -q '.harness/roles/implementer.md' \
   && ok "the implement stage points the agent at its role file" \
   || bad "the implement stage points the agent at its role file"
 
+# one command per role: a verifier on a different model from the implementer
+python3 -c "
+import json; c = json.load(open('harness.json'))
+c['agentCommand'] = {'default': ['./src/fakeagent.sh', '{prompt}', '{turns}'],
+                     'verifier': ['./src/fakeverifier.sh', '{prompt}', '{turns}']}
+json.dump(c, open('harness.json', 'w'), indent=2)"
+printf '#!/usr/bin/env bash\necho "fake verifier ran"\n' > src/fakeverifier.sh && chmod +x src/fakeverifier.sh
+"$SRC/install.sh" "$T" >/dev/null 2>&1
+is "a role with its own agent command is spawned with it" "1" \
+  "$(DRY_RUN=1 .harness/loop.sh 1 2>&1 | grep -c 'as role verifier via ./src/fakeverifier.sh')"
+is "a role with no agent command falls back to the default" "1" \
+  "$(DRY_RUN=1 .harness/loop.sh 1 2>&1 | grep -c 'as role implementer via ./src/fakeagent.sh')"
+python3 -c "
+import json; c = json.load(open('harness.json'))
+c['agentCommand'] = ['./src/fakeagent.sh', '{prompt}', '{turns}']
+json.dump(c, open('harness.json', 'w'), indent=2)"
+rm -f src/fakeverifier.sh
+"$SRC/install.sh" "$T" >/dev/null 2>&1
+git add -A && git -c user.email=t@t -c user.name=t commit -qm roles
+
 printf '\n[NEEDS CLARIFICATION] which store?\n' >> SPEC.md
 .harness/loop.sh 1 2>&1 | grep -q 'HALT: SPEC.md carries' \
   && ok "a bare clarification marker halts the loop" || bad "a bare clarification marker halts the loop"

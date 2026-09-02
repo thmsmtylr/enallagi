@@ -35,7 +35,7 @@ needing a human credential and no launcher auto-selects it.
 ## [T-001] one agent command for every role
 scope: harness/loop.sh, install.sh, harness.default.json, selftest.sh, README.md
 blockedBy: none
-status: ready
+status: review
 rows: `selftest.sh::a role with its own agent command is spawned with it`, `selftest.sh::a role with no agent command falls back to the default`
 criteria:
   - `agentCommand` in harness.json accepts an object keyed by role (`default`, `scout`,
@@ -44,7 +44,14 @@ criteria:
   - Each stage spawns the command for its own role, falling back to `default`.
   - `DRY_RUN=1 .harness/loop.sh 1` prints which command each stage would spawn.
   - `./selftest.sh` declares both rows' assertions and passes.
-notes:
+notes: |
+  install.sh emits one __AGENT_COMMAND_<ROLE>__ token per known role, filling any the config does
+  not name with default, so loop.sh can reference all five and the leftover-token check still
+  applies. loop.sh selects with a case, no eval.
+  Evidence 2026-09-02: `DRY_RUN=1 .harness/loop.sh 1` -> "as role verifier via ./src/fakeverifier.sh"
+  and "as role implementer via ./src/fakeagent.sh" with one config naming only default and verifier.
+  Scrutinise: __AGENT_BINARY__ is now a pipe-joined alternation of every configured binary, because
+  archive-done.sh passes it to `pgrep -f`, which takes an ERE.
 
 ## [T-002] the loop reports no cost and enforces no budget
 scope: harness/loop.sh, harness.default.json, selftest.sh, README.md

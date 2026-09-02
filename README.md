@@ -130,6 +130,26 @@ skill — `running-the-loop` — written to the same open format, installed into
 
 Set `skillInvocation` in `harness.json` to whatever your tool calls it.
 
+### More than one model
+
+`agentCommand` also accepts an object keyed by role. A role it does not name uses `default`.
+
+```json
+"agentCommand": {
+  "default":  ["claude", "-p", "{prompt}", "--dangerously-skip-permissions", "--max-turns", "{turns}"],
+  "verifier": ["codex", "exec", "{prompt}", "--sandbox", "workspace-write"]
+}
+```
+
+Each stage is already a separate process, so a different command per role costs nothing extra. The
+reason to use it is measurement: a verifier running the model that wrote the code reports agreement
+between two samples of one model, not correctness. SpecBench measured 43-48pp visible-versus-held-out
+gaps for a single agent grading its own work ([arXiv:2605.21384](https://arxiv.org/pdf/2605.21384)).
+The scout and adjudicator are cheap and high-volume; a smaller model there and a larger one on
+`verifier` is the other common split.
+
+`DRY_RUN=1 .harness/loop.sh 1` prints the command each stage would spawn.
+
 ## Configuration
 
 One file, `harness.json`, at your repo root. Every key becomes a `__SCREAMING_SNAKE__` token that
