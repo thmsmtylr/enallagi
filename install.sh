@@ -125,6 +125,10 @@ for f in "$SRC"/harness/hooks/*.sh; do place "$f" "$TARGET/$HARNESS_DIR/hooks/$(
 for f in "$SRC"/roles/*.md;         do place "$f" "$TARGET/$HARNESS_DIR/roles/$(basename "$f")"; done
 place "$SRC/templates/RAILS.md" "$TARGET/$HARNESS_DIR/RAILS.md"
 run chmod +x "$TARGET/$HARNESS_DIR"/*.sh "$TARGET/$HARNESS_DIR/hooks"/*.sh
+# The run log is machinery, not content: a lane that stages everything would otherwise commit it,
+# and the scope gate would reject that lane for a file it did not write. Scoped to the harness
+# directory, so the repository's own .gitignore is never touched.
+[ -n "$DRY" ] || [ -e "$TARGET/$HARNESS_DIR/.gitignore" ] || printf 'run.log\n' > "$TARGET/$HARNESS_DIR/.gitignore"
 
 # Skills install per tool, not per repository (superpowers: "Installation differs by harness").
 # What ships here is this project's OWN skill, in the format ~48 clients read.

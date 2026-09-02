@@ -215,6 +215,7 @@ case "$1" in
   *"roles/verifier.md"*)
     sed -i.bak 's/^status: review/status: done/' TASKS.md && rm -f TASKS.md.bak ;;
 esac
+echo '{"total_cost_usd": 0.5}'
 LANE
 chmod +x src/fakelane.sh
 python3 -c "
@@ -244,7 +245,7 @@ FIXTURE
   git add -A >/dev/null && git commit -qm fixture >/dev/null
   # outside the repo: the fixture lane runs `git add -A`, so a log inside it becomes part of the
   # diff the scope gate is judging
-  SNEAK="$1" NO_COMMIT="${NO_COMMIT:-}" .harness/loop.sh 1 > "$LANE_LOG" 2>&1
+  SNEAK="$1" NO_COMMIT="${NO_COMMIT:-}" BUDGET_USD="${BUDGET_USD:-}" .harness/loop.sh 1 > "$LANE_LOG" 2>&1
   git add -A >/dev/null 2>&1 && git commit -qm "whatever the lane left" >/dev/null 2>&1
   awk '/^## \[T-101\]/{f=1} f&&/^status:/{print $2; exit}' TASKS.md
 }
@@ -259,6 +260,20 @@ is "a harness edit a harness task declared is allowed" "done" \
   "$(lane .check-baseline 'none — harness' .check-baseline)"
 is "the same edit under a product task is forced back to ready" "ready" \
   "$(lane .check-baseline '`src/thing.test.ts::a name copied from your suite`' .check-baseline)"
+# --- the run log and the budget ---------------------------------------------
+rm -f .harness/run.log
+lane '' 'none — harness' >/dev/null
+is "every spawned stage appends one record to the run log" "2" "$(grep -c . .harness/run.log)"
+is "and the record carries the role, the seconds and the reported cost" "implementer 0.5" \
+  "$(awk -F'\t' 'NR==1{print $3, $7}' .harness/run.log)"
+
+rm -f .harness/run.log
+BUDGET_USD=0.4 lane '' 'none — harness' >/dev/null
+is "the loop stops before a stage that would exceed the budget" "1" \
+  "$(grep -c 'HALT: the run has spent' "$LANE_LOG")"
+is "and the stage it would have spawned never ran" "1" "$(grep -c . .harness/run.log)"
+rm -f .harness/run.log
+
 rm -f src/fakelane.sh "$LANE_LOG"
 
 # --- worktree isolation -----------------------------------------------------

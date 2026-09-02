@@ -102,7 +102,29 @@ unblock() {
 # filled in per stage. Subagents are not portable -- they exist for Claude, Copilot and Cursor and
 # not for Codex or Gemini (arXiv:2602.14690, Table 1) -- so role isolation here is one fresh
 # PROCESS per stage, which every agent CLI supports.
-AGENT_CMD=(claude -p '{prompt}' --dangerously-skip-permissions --max-turns '{turns}')
+# One command per role, so the verifier can run on a different model or vendor from the
+# implementer. harness.json takes either a word list (every role gets it) or an object keyed by
+# role with a 'default'. Independent verification is the reason the field is per-role.
+AGENT_CMD_DEFAULT=(claude -p '{prompt}' --dangerously-skip-permissions --max-turns '{turns}')
+AGENT_CMD_SCOUT=(claude -p '{prompt}' --dangerously-skip-permissions --max-turns '{turns}')
+AGENT_CMD_ADJUDICATOR=(claude -p '{prompt}' --dangerously-skip-permissions --max-turns '{turns}')
+AGENT_CMD_IMPLEMENTER=(claude -p '{prompt}' --dangerously-skip-permissions --max-turns '{turns}')
+AGENT_CMD_VERIFIER=(claude -p '{prompt}' --dangerously-skip-permissions --max-turns '{turns}')
+AGENT_CMD=("${AGENT_CMD_DEFAULT[@]}")
+AGENT_ROLE=default
+
+# Point AGENT_CMD at one role's command. A role harness.json does not name got the default at
+# install time, so every branch here is defined.
+agent_for() { # $1 = role
+  case "$1" in
+    scout)       AGENT_CMD=("${AGENT_CMD_SCOUT[@]}") ;;
+    adjudicator) AGENT_CMD=("${AGENT_CMD_ADJUDICATOR[@]}") ;;
+    implementer) AGENT_CMD=("${AGENT_CMD_IMPLEMENTER[@]}") ;;
+    verifier)    AGENT_CMD=("${AGENT_CMD_VERIFIER[@]}") ;;
+    *)           AGENT_CMD=("${AGENT_CMD_DEFAULT[@]}") ;;
+  esac
+  AGENT_ROLE="$1"
+}
 
 FRAMES='|/-\'
 spin() {
@@ -157,14 +179,41 @@ sleep_until() {
   printf '\r\033[2K'; return 0
 }
 
+# One record per spawned stage. Wall clock is portable; cost is not, so it is read from whatever
+# the agent printed using a pattern from harness.json, and left empty when nothing matched.
+RUN_LOG=".harness/run.log"
+SPENT_SECONDS=0
+SPENT_USD=0
+ROLE_SECONDS=""
+
+log_stage() { # $1 = role, $2 = task, $3 = seconds, $4 = exit code, $5 = cost or empty
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$i" "$1" "${2:--}" "$3" "$4" "${5:-}" >> "$RUN_LOG"
+  SPENT_SECONDS=$((SPENT_SECONDS + $3))
+  ROLE_SECONDS="${ROLE_SECONDS}$1 $3"$'\n'
+  [ -n "${5:-}" ] && SPENT_USD=$(python3 -c "print(round($SPENT_USD + $5, 4))" 2>/dev/null || echo "$SPENT_USD")
+  return 0
+}
+
+# Checked before every stage, never during one: a half-finished stage is worse than a slow run.
+# Unset or zero means no limit.
+over_budget() {
+  [ "${BUDGET_SECONDS:-0}" -gt 0 ] && [ "$SPENT_SECONDS" -ge "${BUDGET_SECONDS:-0}" ] && {
+    halt "the run has spent ${SPENT_SECONDS}s of its ${BUDGET_SECONDS}s budget."; return 0; }
+  [ -n "${BUDGET_USD:-}" ] && [ "$(python3 -c "print(1 if $SPENT_USD >= ${BUDGET_USD:-0} else 0)" 2>/dev/null || echo 0)" = "1" ] && {
+    halt "the run has spent \$$SPENT_USD of its \$$BUDGET_USD budget."; return 0; }
+  return 1
+}
+
 run_agent() {
-  local label="$1" prompt="$2" turns="$3" out rc hit wait_s
+  local label="$1" prompt="$2" turns="$3" out rc hit wait_s started cost
   # DRY_RUN reads the run without buying it: every stage announces itself here and nothing spawns.
   if [ -n "${DRY_RUN:-}" ]; then
-    echo "  DRY_RUN would spawn: $label via ${AGENT_CMD[0]} (turns: $turns)"
+    echo "  DRY_RUN would spawn: $label as role ${AGENT_ROLE:-default} via ${AGENT_CMD[0]} (turns: $turns)"
     printf '%s\n' "$prompt" | sed 's/^/    | /'
     return 0
   fi
+  started=$SECONDS
   while :; do
     out=$(mktemp)
     local cmd=() word
@@ -176,8 +225,9 @@ run_agent() {
     rc=$?
     cat "$out"
     hit=$(grep -m1 -i "hit your session limit" "$out" || true)
+    cost=$(sed -n 's/.*"total_cost_usd"[: ]*\([0-9.]*\).*/\1/p' "$out" | tail -1)
     rm -f "$out"
-    [ -n "$hit" ] || return $rc
+    [ -n "$hit" ] || { log_stage "${AGENT_ROLE:-default}" "${TASK:-}" $((SECONDS - started)) "$rc" "$cost"; return $rc; }
     wait_s=$(seconds_until_reset "$hit") || wait_s=1800
     echo "  session limit. sleeping $((wait_s / 60))m, then retrying $label."
     sleep_until "$wait_s" || return 1
@@ -434,6 +484,7 @@ needs_spec_halt() {
 while [ "$i" -lt "$MAX_ITER" ]; do
   i=$((i+1))
   stop_now && break
+  over_budget && break
   needs_spec_halt && break
 
   if [ -n "${DRY_RUN:-}" ]; then
@@ -478,14 +529,18 @@ while [ "$i" -lt "$MAX_ITER" ]; do
     fi
 
     stop_now && break
+  over_budget && break
     echo "=== Iteration $i: scout (queue empty, $DRY_ROUNDS dry rounds so far) ==="
     READY_BEFORE=$(ids_at ready); REJ_BEFORE=$(rejections)
+    agent_for scout
     run_agent "scout" "$LANE Read AGENTS.md and LEARNINGS.md. Your role is defined in .harness/roles/scout.md: read that file first and follow it exactly. Run .harness/hooks/probes.sh and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks and that is a success, not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop." 30 \
       || { echo "scout exited $? -- halting."; break; }
 
     stop_now && break
+  over_budget && break
     echo "=== Iteration $i: adjudicate ==="
     ADJ_OUT=$(mktemp)
+    agent_for adjudicator
     run_agent "adjudicate" "$LANE Read AGENTS.md and LEARNINGS.md. Your role is defined in .harness/roles/adjudicator.md: read that file first and follow it exactly. Act on every block with 'status: proposed' in TASKS.md, in file order. Promote it to 'status: ready' with a scope and criteria an agent that has read only CLAUDE.md, SPEC.md, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to SPEC.md or CLAUDE.md is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop." 40 2>&1 | tee "$ADJ_OUT"
     [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "adjudicate exited non-zero -- halting."; rm -f "$ADJ_OUT"; break; }
 
@@ -527,12 +582,16 @@ while [ "$i" -lt "$MAX_ITER" ]; do
   ITER_BASE=$(git rev-parse HEAD 2>/dev/null || true)
 
   stop_now && break
+  over_budget && break
   echo "=== Iteration $i: implement $TASK ==="
+  agent_for implementer
   run_agent "$TASK implement" "$LANE Read AGENTS.md, SPEC.md, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in .harness/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason -- and include it in that commit. An implementation left uncommitted is a lost iteration." 60 \
     || { echo "implement exited $? -- halting rather than reporting a finished iteration."; break; }
 
   stop_now && break
+  over_budget && break
   echo "=== Iteration $i: verify $TASK ==="
+  agent_for verifier
   run_agent "$TASK verify" "$LANE Read AGENTS.md, SPEC.md and TASKS.md. Your role is defined in .harness/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons, and commit the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop." 40 \
     || { echo "verify exited $? -- halting."; break; }
 
@@ -561,6 +620,8 @@ done
 
 echo
 echo "=== digest: $i iteration(s) ==="
+echo "wall clock: ${SPENT_SECONDS}s across $(wc -l < "$RUN_LOG" 2>/dev/null | tr -d ' ') stage(s)${SPENT_USD:+, cost \$$SPENT_USD}"
+[ -n "$ROLE_SECONDS" ] && printf '%s' "$ROLE_SECONDS" | awk 'NF{t[$1]+=$2} END{for(r in t) printf "  %s: %ds\n", r, t[r]}' | sort
 echo "tasks landed:${LANDED:- none}"
 listing "rows turned green:" "$ROWS"
 echo "findings promoted:${PROMOTED:- none}"

@@ -107,5 +107,7 @@
     "node_modules",
     "out",
     "target"
-  ]
+  ],
+  "_cost": "costSed extracts the run cost from what the agent printed, one sed -n expression. Empty output means no cost was reported and the run log's cost column stays empty; wall clock is always recorded. The default matches Claude Code's --output-format json.",
+  "costSed": "s/.*\"total_cost_usd\"[: ]*\\([0-9.]*\\).*/\\1/p"
 }
