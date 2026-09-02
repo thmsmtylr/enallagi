@@ -1,0 +1,7 @@
+# The recorded red. `green` is verified on delta: a failure listed here is the state the tree was
+# handed to you in, any failure not listed here is a rejection, and this file only ever shrinks.
+# A task that turns a row green deletes its line in the same commit.
+#
+# One test name per line, copied character for character from the check's own failure output.
+# Every line carries the task that owns it. Empty is the correct state; adding a line back is
+# weakening a test by another name.
