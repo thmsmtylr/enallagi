@@ -36,7 +36,9 @@ PROGRESS.md               one entry per iteration, append-only, read by its tail
 LEARNINGS.md              one line per paid-for mistake, each naming a file, command or hook
 DECISIONS.md              killed findings, then archived task blocks
 .check-baseline           inherited failures; only ever shrinks
-.harness/loop.sh          the launcher
+.harness/loop.sh          the launcher: stage sequence, halts, digest
+.harness/lib/             its modules — queue.sh, agent.sh, gates.sh
+.harness/tasks.py         the one parser for TASKS.md
 .harness/worktree.sh      one lane in its own git worktree
 .harness/archive-done.sh  trims TASKS.md and PROGRESS.md
 .harness/hooks/           probes.sh, check-gate.sh, immutable.sh, verify-done.sh
@@ -58,6 +60,25 @@ touch STOP                        halt before the next stage; delete to resume
 evals/run.sh [--gate <name>]      test a role prompt, or decide a candidate rule
 ./selftest.sh                     the package's own floor
 ```
+
+## Layout of the launcher
+
+`loop.sh` is the stage sequence, the halts and the digest. Everything else is a module it sources:
+
+| Module | Holds |
+| --- | --- |
+| `lib/queue.sh` | the shell surface over `tasks.py`; no parser of its own |
+| `lib/agent.sh` | one process per stage, the spinner, the rate-limit wait, the run log |
+| `lib/gates.sh` | `gate_verdict`, `gate_scope`, `in_scope` |
+| `tasks.py` | TASKS.md parsed once. `--selftest` asserts it against fixture queues |
+
+`TASKS.md` used to be read by seven separate awk and sed programs inside the launcher. Both parser
+defects this repository has had came from that layer: BSD `sed` reads `[ \t]` as
+space-backslash-t, and awk cannot see a code fence, so the block-format example in the template was
+a task a lane could take. asdf hit the same wall at a larger scale and rewrote to Go — *"Bash is
+very limiting when it comes to data structures. By default everything in Bash is just a string"*
+([asdf v0.16](http://stratus3d.com/blog/2025/02/03/asdf-has-been-rewritten-in-go/)) — and kept
+shell for plugins. Here bash keeps process spawning, the tty and the traps; Python takes the data.
 
 ## Roles
 

@@ -152,7 +152,8 @@ HARNESS_FILES = [f for f in ["selftest.sh", "install.sh", "harness.default.json"
 
 
 # enforcement is: the check runs it, the tool's settings wire it, or a hash covers it
-WIRED = (['test-hashes.json', '.harness/loop.sh']
+WIRED = (['test-hashes.json', '.harness/loop.sh', '.harness/tasks.py']
+         + sorted(glob.glob('.harness/lib/*.sh'))
          + sorted(glob.glob('.*/settings.json')) + sorted(glob.glob('.*/settings.local.json'))
          + sorted(glob.glob('.harness/roles/*.md')))
 

@@ -102,6 +102,18 @@ grep -q '^name: running-the-loop' "$SKILLS/running-the-loop/SKILL.md" \
   && ok "the project skill is valid agentskills.io frontmatter" \
   || bad "the project skill is valid agentskills.io frontmatter"
 
+# one parser, and the launcher holds none of its own
+is "the launcher parses no task blocks itself" "0" \
+  "$(grep -cE '## \\\[T-|awk .*TASKS|sed .*TASKS' .harness/loop.sh)"
+is "tasks.py answers the queue against fixture files" "0" \
+  "$(python3 .harness/tasks.py --selftest >/dev/null 2>&1; echo $?)"
+printf '# TASKS\n\n```\n## [T-900] the example in the docs\nblockedBy:\nstatus: ready\n```\n\n## [T-901] the real one\nblockedBy: none\nstatus: ready\n' > /tmp/fence.$$.md
+is "a heading inside a code fence is not a task" "T-901" \
+  "$(python3 .harness/tasks.py ready-unattended /tmp/fence.$$.md)"
+rm -f /tmp/fence.$$.md
+is "the launcher is split into sourced modules" "queue agent gates" \
+  "$(for m in queue agent gates; do [ -f ".harness/lib/$m.sh" ] && printf '%s ' "$m"; done | sed 's/ $//')"
+
 P=$(.harness/hooks/probes.sh 2>&1); is "probes.sh exits 0 (every probe ran)" "0" "$?"
 is "no probe errored" "0" "$(printf '%s\n' "$P" | grep -c 'PROBE .* ERROR')"
 is "the row parser reads the seeded criteria table" "1" \
