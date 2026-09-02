@@ -264,4 +264,4 @@ justifies it, not before.
 
 Extracted from a working single-package repo where it ran for weeks. Every rail in the templates
 carries the measured finding behind it, and every seed line in `LEARNINGS.md` is a mistake that was
-actually paid for. `GAPS.md` is an honest list of what is still wrong with it.
+actually paid for. `GAPS.md` is an honest list of what is still missing from it.
