@@ -178,3 +178,30 @@ notes: raised by T-001 and T-002 under `one-scope` — both were outside their s
   `git add -A`, so a log written inside it joined the diff the scope gate was judging and turned two
   passing assertions red. Evidence: `./selftest.sh` -> all assertions that ran passed, 1 skipped.
 
+
+## [T-005] a lane left its implementation uncommitted and the task still reached done
+scope: harness/loop.sh, selftest.sh
+blockedBy: none
+status: done
+probe: driver
+rows: none — harness
+command: `HARNESS_DRIVER=1 .harness/hooks/probes.sh`
+output: |
+  PROBE driver 1
+  FINDING driver ./driver.sh:0 a lane left its implementation uncommitted and the task still
+  reached done with 2 dirty path(s). Nothing the launcher runs reads the working tree; only
+  verifier.md step 0 does, and a prompt is not a gate.
+criteria:
+  - `gate_verdict` forces a `done` back to `ready` when the tree is dirty, and says how many paths.
+  - the probe stops emitting that line.
+notes: |
+  The first finding the driver ever produced, and the first one no text probe could have seen.
+  `gate_verdict` now reads `git status --porcelain` before it reads the check, excluding the
+  harness's own STOP marker.
+  VERIFIED 2026-09-02. Evidence:
+    ./selftest.sh -> "a lane that never committed is forced back to ready" ok
+    HARNESS_DRIVER=1 .harness/hooks/probes.sh -> PROBE driver 0   (it stopped emitting)
+    HARNESS_DRIVER=1 ./selftest.sh -> all assertions passed
+  Also corrected here: the selftest asserted the driver must report at least one finding, which is
+  an assertion that the harness stays broken. It now asserts the INSTRUMENT — reached, and every
+  line it printed was a finding.

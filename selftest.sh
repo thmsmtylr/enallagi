@@ -152,9 +152,13 @@ is "an example driver installs into the harness directory" "0" \
 # worked example still reaches the artifact and still reports what it found.
 if [ -n "${HARNESS_DRIVER:-}" ]; then
   DOUT=$("$SRC/driver.sh" 2>&1); DRC=$?
-  DN=$(printf '%s\n' "$DOUT" | grep -c '^FINDING ' || true)
-  is "the package driver reports shortfalls as FINDING lines" "reached and reported" \
-    "$([ "$DRC" -eq 0 ] && [ "$DN" -ge 1 ] && echo "reached and reported" || echo "rc=$DRC findings=$DN")"
+  # What is asserted is the INSTRUMENT: it reached the artifact (rc 0) and everything it said was a
+  # finding — never a verdict, a pass or a fail. Deliberately NOT "it found at least one thing":
+  # that would assert the harness stays broken, and the first hole it found (a lane that never
+  # commits still reaching done) was closed by `gate_verdict` the same day, at which point the
+  # probe correctly went quiet.
+  DN=$(printf '%s\n' "$DOUT" | grep -v '^FINDING ' | grep -c . || true)
+  is "the package driver reports shortfalls as FINDING lines" "0 0" "$DRC $DN"
 else
   skip "the package driver reports shortfalls as FINDING lines" \
        "HARNESS_DRIVER is unset, so nothing drove the artifact. Not a pass."
@@ -185,7 +189,9 @@ case "$1" in
     [ -n "${SNEAK:-}" ] && date +%s%N > "$SNEAK"
     sed -i.bak 's/^status: ready/status: review/' TASKS.md && rm -f TASKS.md.bak
     printf '\n## fixture — T-101 — landed\nfriction: none\n' >> PROGRESS.md
-    git add -A && git commit -qm "feat: T-101" ;;
+    # `if`, never `[ x ] && y` as a branch's last statement: a false test is the script's exit
+    # status and the launcher reads a non-zero lane as a halt (PROGRESS.md, T-001)
+    if [ -z "${NO_COMMIT:-}" ]; then git add -A && git commit -qm "feat: T-101"; fi ;;
   *"roles/verifier.md"*)
     sed -i.bak 's/^status: review/status: done/' TASKS.md && rm -f TASKS.md.bak ;;
 esac
@@ -218,10 +224,12 @@ FIXTURE
   git add -A >/dev/null && git commit -qm fixture >/dev/null
   # outside the repo: the fixture lane runs `git add -A`, so a log inside it becomes part of the
   # diff the scope gate is judging
-  SNEAK="$1" .harness/loop.sh 1 > "$LANE_LOG" 2>&1
+  SNEAK="$1" NO_COMMIT="${NO_COMMIT:-}" .harness/loop.sh 1 > "$LANE_LOG" 2>&1
+  git add -A >/dev/null 2>&1 && git commit -qm "whatever the lane left" >/dev/null 2>&1
   awk '/^## \[T-101\]/{f=1} f&&/^status:/{print $2; exit}' TASKS.md
 }
 is "a lane inside its scope keeps its done verdict" "done" "$(lane '' 'none — harness')"
+is "a lane that never committed is forced back to ready" "ready" "$(NO_COMMIT=1 lane '' 'none — harness')"
 is "a lane that leaves its scope is forced back to ready" "ready" "$(lane src/sneaky.ts 'none — harness')"
 # the message is the line a human acts on, so it is asserted, not only the status it produced
 is "and the rejection names the file it is rejecting" "1" \

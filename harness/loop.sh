@@ -304,8 +304,23 @@ set_status() { # $1 = id, $2 = new status, $3 = optional reason. TASKS_FILE for 
 # agent reporting on itself; this runs the gate and forces a `done` the tree cannot support back to
 # `ready`. `blocked-is-allowed` names this function as its enforcement.
 gate_verdict() { # $1 = task id
-  local task="$1" out
+  local task="$1" out left
   [ "$(field "$task" status)" = "done" ] || return 0
+  # Found by driver.sh on 2026-09-02, and by nothing else: a lane that never commits leaves the work
+  # in the tree, the check is green either way, and the task reached `done` with the implementation
+  # on no branch — a merge would take none of it. `verifier.md` step 0 says reject, and a prompt is
+  # not a gate. ponytail: STOP is the harness's own marker and never a lane's work; anything else
+  # untracked at this point is.
+  left=$(git status --porcelain 2>/dev/null | grep -v ' STOP$' | grep -c . || true)
+  if [ "${left:-0}" -gt 0 ]; then
+    echo "  !! [$task] GATE FAILED -- done, and $left path(s) are uncommitted. The implementation is not on the branch."
+    git status --short | sed 's/^/     /'
+    set_status "$task" "ready" "the verifier returned done with $left uncommitted path(s): the work is not on the branch"
+    git add TASKS.md 2>/dev/null
+    git diff --cached --quiet 2>/dev/null || git commit -q -m "chore($task): harness gate rejected a done verdict with work off the branch"
+    WARNINGS="${WARNINGS}  $task was forced back to ready: done with $left uncommitted path(s)."$'\n'
+    return 1
+  fi
   if out=$(__HARNESS_DIR__/hooks/check-gate.sh 2>&1); then
     echo "  gate: $task done, and the gate agrees."
     return 0
