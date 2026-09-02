@@ -6,7 +6,7 @@
 # resolvers read: the header, `blockedBy:` and `status:`.
 #
 # It also rolls PROGRESS.md over. The loop reads only `tail -200` of that file, so past a few
-# thousand lines the rest is an archive wearing a state file's name (GAPS.md #4) -- same move,
+# thousand lines the rest is an archive wearing a state file's name -- same move,
 # same reason: keep the file a fresh process re-reads small, keep the record whole.
 #
 # Usage:  __HARNESS_DIR__/archive-done.sh [--dry-run]
