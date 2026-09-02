@@ -173,7 +173,7 @@ def rail_rows():
     rows = []
     inside = False
     if not os.path.exists(RAILS_FILE):
-        raise RuntimeError('%s does not exist -- the rails are unwritten, which is not the same as enforced' % RAILS_FILE)
+        raise RuntimeError('%s does not exist -- the rails are unwritten, so nothing here is enforced' % RAILS_FILE)
     for index, line in enumerate(lines_of(RAILS_FILE)):
         if line.strip() == RAILS_HEADER:
             inside = True
@@ -481,8 +481,8 @@ probe('friction-repeat', friction_repeat)
 probe('check-red', check_red)
 probe('litter', litter)
 if os.environ['DRIVER_STATUS'] == 'off':
-    # not a count of zero: a probe that did not run has found nothing, which is not the same as
-    # a clean tree (LEARNINGS.md, zero-as-pass). The scout reports this line and proposes from it.
+    # not a count of zero: a probe that did not run has found nothing, which is no evidence about
+    # the tree (LEARNINGS.md, zero-as-pass). The scout reports this line and proposes from it.
     print('PROBE driver OFF -- no driverCommand in harness.json, or HARNESS_DRIVER is unset. '
           'Nothing here exercised the built artifact.')
 else:

@@ -40,7 +40,7 @@ case "$1" in
     [ "$MODE" = "out-of-scope" ] && echo "not mine" > src/sneaky.ts
     sed -i.bak 's/^status: ready/status: review/' TASKS.md && rm -f TASKS.md.bak
     [ "$MODE" != "no-progress" ] && printf '\n## driver — T-001 — landed\nfriction: none\n' >> PROGRESS.md
-    # the whole point of this mode: the work never lands on the branch.
+    # this mode exists for exactly this: the work never lands on the branch.
     # `if`, never `[ ] && ...` as the last statement of a branch: a false test is the script's
     # exit status, the launcher reads a non-zero lane as a halt, and the verify stage never runs.
     if [ "$MODE" != "uncommitted" ]; then git add -A && git commit -qm "feat: T-001" >/dev/null; fi

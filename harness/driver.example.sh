@@ -3,8 +3,8 @@
 #
 #   "driverCommand": "$HARNESS_ROOT/__HARNESS_DIR__/driver.sh"
 #
-# and run the probes with HARNESS_DRIVER=1. Until then this file finds nothing, and **finding
-# nothing is not the same as nothing being wrong** — it is the same as not having looked.
+# and run the probes with HARNESS_DRIVER=1. Until then this file finds nothing, which is a
+# statement about this file and not about your artifact.
 #
 # You get a throwaway working directory and a stripped environment. `$HARNESS_ROOT` is the repo.
 # Exit 0 whenever you REACHED the artifact, whatever you found. Exit non-zero only when you could

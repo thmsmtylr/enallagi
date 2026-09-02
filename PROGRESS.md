@@ -51,3 +51,14 @@ friction: writing the run log into the repository put a harness-authored file in
 scope gate judges, which failed four unrelated assertions. Machinery the loop writes during a run
 belongs outside what git sees.
 next: T-003, the prose pass.
+
+## 2026-09-02 — T-003 — landed
+rows: `selftest.sh::no shipped file carries rhetorical filler`
+check: `./selftest.sh` -> all assertions that ran passed, 1 skipped.
+what happened: added a grep over the shipped files for rhetorical patterns and rewrote all 16 hits,
+plus the aphorisms in RAILS.md, PROGRESS.md, AGENTS.md and the skill. Where the flourish was
+carrying a measurement, the citation replaced it rather than being deleted with it.
+friction: the first pattern list matched informational sentences as well as filler, so the check
+would have forced the deletion of real content to go green. A prose check has to be narrow enough
+that passing it does not require losing information.
+next: teardown to shippable state.

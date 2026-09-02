@@ -24,7 +24,7 @@ on the task's `scope:` line; an out-of-scope need is a note and a stop.
 
 ## The rails
 
-Named, never numbered, and each names what enforces it — a rail with no enforcement is a wish.
+Named, never numbered, and each names what enforces it.
 The full table, with the evidence behind each one, is `__HARNESS_DIR__/RAILS.md`. The five that
 decide most reviews:
 

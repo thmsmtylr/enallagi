@@ -1,22 +1,19 @@
 # harness
 
-An autonomous goal loop for coding agents. Not a framework — a directory of shell scripts, agent
-prompts and document templates you copy into a repo. Nothing to install, no dependency, no runtime.
-`bash` and `python3`, both of which you have.
+An autonomous goal loop for coding agents: a directory of shell scripts, agent prompts and document
+templates copied into a repo. No dependency and no runtime beyond `bash` and `python3`.
 
 It runs one task per fresh session, gates every claim against a command someone else can run, and
 keeps the whole decision trail in files so the next session can start cold and continue.
 
 ## What it is made of
 
-Four parts, and the fourth is the one people skip.
+**The floor.** The check command is yours; the harness never defines it. What the harness adds is a
+gate that verifies on **delta** against `.check-baseline` rather than on absolute zero. A tree whose
+exit criteria are not all covered cannot reach zero failures, so a gate demanding zero can never
+pass. `.check-baseline` only ever shrinks.
 
-**The floor.** The check command is yours — the harness never defines it. What the harness adds is a gate
-that verifies on **delta** against `.check-baseline` rather than on absolute zero, because a tree
-whose exit criteria are not all covered yet cannot reach zero failures, and a gate whose passing
-state is unreachable is not strict, it is broken. `.check-baseline` only ever shrinks.
-
-**The roles.** Five agent prompts with separated authority, and the separation is the whole point:
+**The roles.** Five agent prompts with separated authority:
 
 | Role | Does | May never |
 | --- | --- | --- |
@@ -26,7 +23,9 @@ state is unreachable is not strict, it is broken. `.check-baseline` only ever sh
 | `verifier` | fresh session, adversarial, promotes to `done` or rejects with reproducible reasons | fix code |
 | `researcher` | attaches a source to a decision already made | find anything, or amend a governing document |
 
-An agent that finds its own work and then grades it is not a loop, it is one agent with extra steps.
+A single agent that selects its own work and then grades it measures self-consistency. SpecBench
+put the visible-versus-held-out gap for that arrangement at 43-48pp
+([arXiv:2605.21384](https://arxiv.org/pdf/2605.21384)).
 
 **The probes.** `.harness/hooks/probes.sh` is twelve analyses over the tree. It reports and never
 gates. Its `FINDING` lines are the only legal input to the queue (`anchored`): the scout transcribes
@@ -36,8 +35,8 @@ Eleven of them read text — test declarations, the exit-criteria table, `git ls
 fields, `PROGRESS.md` entries. The twelfth is `driver`, and it is the only one that exercises the
 built artifact through the surface a user touches. It is **off** until you set `driverCommand` in
 `harness.json` and `HARNESS_DRIVER=1` in the environment, and while it is off it prints
-`PROBE driver OFF` rather than a count of zero — because a probe that did not run has found nothing,
-which is not the same as a clean tree. Your driver exits 0 whenever it reached the artifact, whatever
+`PROBE driver OFF` rather than a count of zero: a probe that did not run has found nothing, which is
+no evidence about the tree. Your driver exits 0 whenever it reached the artifact, whatever
 it found, and prints one line per shortfall beginning `FINDING `; a non-zero exit is
 `PROBE driver ERROR`, and nothing is proposed from a probe that could not run. It gets a throwaway
 working directory and a stripped environment, so if the thing you drive is itself an agent it does
@@ -261,8 +260,7 @@ better. What the same research says is still missing is under **What is not here
 
 A caution worth keeping: of 601 skills studied, **83.3% bundled no resources at all** and only 5.7%
 had a `scripts/` directory. "Configuration is currently used more as documentation than as
-automation." An executable harness is the rare case, not the norm — which is a reason to keep it
-small, not a reason to skip it.
+automation." Executable harnesses are uncommon, which argues for keeping this one small.
 
 ## What is not here, deliberately
 
@@ -285,14 +283,13 @@ isolate the checkout.** Every stage already runs as a new process that cannot se
 conversation — that is what `verifier-not-implementer` buys — and all of them still write to the same
 working tree, which is why `one checkout is one writer` is a rail rather than a mechanism.
 
-**A held-out suite.** `verifier-not-implementer` gets you a fresh session and a separate process,
-which is most of the value. A suite the implementer never sees is more, and it is yours to write.
+**A held-out suite.** `verifier-not-implementer` gives you a fresh session and a separate process.
+A suite the implementer never sees is stronger, and it is yours to write.
 Freeze your **exam** with your tests while you are there — the corpus, the fixtures and the scoring
 rules belong in `test-hashes.json`, or a lane can retune what it is graded on.
 
 **`test-hashes.json` itself.** `install.sh` does not write it, and a fresh install emits exactly one
-`hash-uncovered` finding naming `loop.sh` until you do. The hashes are yours to cut: a rail claiming
-coverage it does not have is worse than one saying so out loud.
+`hash-uncovered` finding naming `loop.sh` until you do. The hashes are yours to cut.
 
 **Evals for two of the five roles.** `evals/` covers the three that gate the queue. The implementer
 and the researcher have none; each is a fixture and two files, and the pattern is in place.

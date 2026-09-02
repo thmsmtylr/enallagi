@@ -365,6 +365,14 @@ is "with no agent configured the evals refuse rather than report" "2" \
   "$("$T/pkgcopy/evals/run.sh" verifier >/dev/null 2>&1; echo $?)"
 rm -rf "$T/pkgcopy" src/evalobeys.sh src/evalbreaks.sh
 
+# --- shipped prose ----------------------------------------------------------
+# This is a public repository. The patterns below are rhetoric, not information: antithesis,
+# appeals to the point, and self-congratulation. Every one of them can be replaced by the fact it
+# was decorating. Checked against the package source, not the throwaway install.
+FILLER='the whole point|that is the trick|is the whole |beautifully|elegantly|, it is one |extra steps|which is the point|the honest argument|is not a [a-z]+, it is'
+HITS=$(cd "$SRC" && grep -rniE "$FILLER" README.md roles templates skills harness install.sh selftest.sh driver.sh evals 2>/dev/null | grep -v FILLER || true)
+is "no shipped file carries rhetorical filler" "" "$HITS"
+
 # --- teardown ---------------------------------------------------------------
 cd /
 [ -n "${KEEP:-}" ] && echo "kept: $T" || rm -rf "$T"
