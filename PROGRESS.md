@@ -33,3 +33,17 @@ stays here. The **second** occurrence of the same thing becomes a line in LEARNI
 per surprise is how a harness rewrites its operating system every week and gets worse.
 
 ---
+
+## 2026-09-02 — T-001 — landed
+rows: `selftest.sh::the package driver reports shortfalls as FINDING lines`, `selftest.sh::an example driver installs into the harness directory`
+check: `./selftest.sh` -> all assertions passed. `HARNESS_DRIVER=1 ./selftest.sh` -> all assertions passed.
+what happened: wrote `driver.sh`, this package's own driver, and `harness/driver.example.sh`, the
+skeleton every install now carries. The driver installs the harness into four throwaway repos and
+drives one loop iteration through each with a lane that is sloppy in exactly one way, then reads the
+task's status and the working tree back out. It found one real hole on its first run: a lane that
+never commits still reaches `done`, because nothing the launcher runs looks at `git status`.
+friction: a bash branch ending in `[ test ] && action` exits non-zero when the test is false; the
+launcher reads a non-zero lane as a halt, so the verify stage never ran and the driver reported
+nothing. Cost one debug cycle to find. Use `if ... fi` for the last statement of a branch.
+next: T-002 (worktree isolation). The scope-gate message bug noted in T-001's `notes:` needs its own
+block — it is `harness/loop.sh` and was out of T-001's scope.

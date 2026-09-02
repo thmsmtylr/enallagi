@@ -35,7 +35,7 @@ needing a human credential and no launcher auto-selects it.
 ## [T-001] the driver has nothing to drive
 scope: driver.sh, harness/driver.example.sh, selftest.sh, README.md
 blockedBy: none
-status: ready
+status: review
 rows: `selftest.sh::the package driver reports shortfalls as FINDING lines`, `selftest.sh::an example driver installs into the harness directory`
 criteria:
   - `./driver.sh` installs this package into a throwaway repo, drives one request through the
@@ -47,7 +47,23 @@ criteria:
   - `install.sh` writes a runnable `driver.example.sh` into the harness directory, and it exits 0
     finding nothing until someone fills in its three sections.
   - `./selftest.sh` declares both rows' assertions and passes.
-notes:
+notes: |
+  `driver.sh` drives four modes through a real install: a lane that never commits, one that writes
+  no PROGRESS.md entry, one that edits outside its scope, and one that reaches done with the floor
+  red. It judges the PERSISTENT EFFECT — the task's `status:` and `git status --porcelain` read back
+  from the tree — never what the loop printed.
+  Evidence, 2026-09-02 at f6b7215:
+    ./selftest.sh                    -> harness selftest: all assertions passed.
+    HARNESS_DRIVER=1 ./selftest.sh   -> harness selftest: all assertions passed.
+    ./driver.sh; echo $?             -> 1 FINDING line, exit 0
+  The one FINDING it reports today is real and is the point of the task:
+    "a lane left its implementation uncommitted and the task still reached done with 2 dirty
+     path(s). Nothing the launcher runs reads the working tree; only verifier.md step 0 does, and a
+     prompt is not a gate."
+  Scrutinise: (a) that the four modes differ in exactly one behaviour each, so a FINDING names one
+  cause; (b) that `driver.sh` exits non-zero ONLY when install fails, never on a finding.
+  OUT OF SCOPE, noted and not touched (`one-scope`): `harness/loop.sh`'s scope-gate message prints
+  `touchedsrc/sneaky.ts` — `${out_of# }` strips the separating space. Needs its own block.
 
 ## [T-002] a lane cannot be isolated from the checkout it runs in
 scope: harness/worktree.sh, selftest.sh, README.md

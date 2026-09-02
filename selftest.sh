@@ -124,7 +124,8 @@ is "the driver's shortfall is one FINDING" "1" "$(printf '%s\n' "$D" | sed -n 's
 printf '%s\n' "$D" | grep -q '^FINDING driver .*wrote nothing to the store' \
   && ok "the driver's FINDING line reaches the scout verbatim" \
   || bad "the driver's FINDING line reaches the scout verbatim"
-D=$(.harness/hooks/probes.sh 2>&1)
+# `env -u`, so this assertion still means what it says under `HARNESS_DRIVER=1 ./selftest.sh`
+D=$(env -u HARNESS_DRIVER .harness/hooks/probes.sh 2>&1)
 printf '%s\n' "$D" | grep -q '^PROBE driver OFF' \
   && ok "configured but HARNESS_DRIVER unset is still off" || bad "configured but HARNESS_DRIVER unset is still off"
 # a driver that cannot reach the artifact records no score and the scout proposes nothing from it
@@ -134,6 +135,24 @@ is "a driver that cannot reach the artifact fails the whole probe run" "1" "$DRC
 printf '%s\n' "$D" | grep -q '^PROBE driver ERROR' \
   && ok "an unreachable artifact is ERROR, never a count of zero" || bad "an unreachable artifact is ERROR, never a count of zero"
 rm -f src/fakedriver.sh
+
+# the example driver ships with every install: driverCommand needs somewhere to point, and a
+# skeleton that finds nothing is the honest starting state
+is "an example driver installs into the harness directory" "0" \
+  "$([ -x .harness/driver.example.sh ] && .harness/driver.example.sh >/dev/null 2>&1; echo $?)"
+
+# --- this package's own driver, against the installed artifact ---------------
+# HARNESS_DRIVER gates it out of the ordinary run: it installs four throwaway repos and drives four
+# loop iterations, ~45s. `./selftest.sh` stays fast; `HARNESS_DRIVER=1 ./selftest.sh` asserts the
+# worked example still reaches the artifact and still reports what it found.
+if [ -n "${HARNESS_DRIVER:-}" ]; then
+  DOUT=$("$SRC/driver.sh" 2>&1); DRC=$?
+  DN=$(printf '%s\n' "$DOUT" | grep -c '^FINDING ' || true)
+  is "the package driver reports shortfalls as FINDING lines" "reached and reported" \
+    "$([ "$DRC" -eq 0 ] && [ "$DN" -ge 1 ] && echo "reached and reported" || echo "rc=$DRC findings=$DN")"
+else
+  ok "the package driver reports shortfalls as FINDING lines (skipped: HARNESS_DRIVER unset)"
+fi
 
 # --- the gate, on delta -----------------------------------------------------
 gate() { .harness/hooks/check-gate.sh >/dev/null 2>&1; echo $?; }
