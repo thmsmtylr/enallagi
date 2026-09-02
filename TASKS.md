@@ -35,7 +35,7 @@ needing a human credential and no launcher auto-selects it.
 ## [T-001] the driver has nothing to drive
 scope: driver.sh, harness/driver.example.sh, selftest.sh, README.md
 blockedBy: none
-status: ready
+status: review
 rows: `selftest.sh::the package driver reports shortfalls as FINDING lines`, `selftest.sh::an example driver installs into the harness directory`
 criteria:
   - `./driver.sh` installs this package into a throwaway repo, drives one request through the
@@ -77,6 +77,13 @@ notes: |
   Everything else verified: tree clean, every changed file on the scope line or bookkeeping, no test
   weakened (the one deleted line is the `env -u HARNESS_DRIVER` strengthening), both row assertions
   present and spelled as SPEC.md spells them, `driver.sh` exits non-zero only when install fails.
+
+  Rejection addressed 2026-09-02. The one point was: a skipped assertion printed `ok`.
+  `selftest.sh` now has a `skip()` beside `ok()`/`bad()`; the driver assertion calls it with the
+  reason; the summary line counts skips and names the flag that runs them. Evidence:
+    ./selftest.sh                  -> "skip  the package driver reports shortfalls as FINDING lines"
+                                      "all assertions that RAN passed, and 1 did not run."
+    HARNESS_DRIVER=1 ./selftest.sh -> 50 ok, 0 skip, "all assertions passed.", rc=0
 
 ## [T-002] a lane cannot be isolated from the checkout it runs in
 scope: harness/worktree.sh, selftest.sh, README.md
