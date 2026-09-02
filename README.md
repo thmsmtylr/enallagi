@@ -209,7 +209,7 @@ can report its plan, write an adapter; it is forty lines.
 ## What the research changed
 
 Everything in this section is a change made because a cited source said so, not because it seemed
-better. `GAPS.md` records what the same research says is still missing.
+better. What the same research says is still missing is under **What is not here** above.
 
 | Change | Grounded in |
 | --- | --- |
@@ -249,6 +249,15 @@ working tree, which is why `one checkout is one writer` is a rail rather than a 
 
 **A held-out suite.** `verifier-not-implementer` gets you a fresh session and a separate process,
 which is most of the value. A suite the implementer never sees is more, and it is yours to write.
+Freeze your **exam** with your tests while you are there — the corpus, the fixtures and the scoring
+rules belong in `test-hashes.json`, or a lane can retune what it is graded on.
+
+**`test-hashes.json` itself.** `install.sh` does not write it, and a fresh install emits exactly one
+`hash-uncovered` finding naming `loop.sh` until you do. The hashes are yours to cut: a rail claiming
+coverage it does not have is worse than one saying so out loud.
+
+**Evals for two of the five roles.** `evals/` covers the three that gate the queue. The implementer
+and the researcher have none; each is a fixture and two files, and the pattern is in place.
 
 ## When not to use it
 
@@ -264,4 +273,8 @@ justifies it, not before.
 
 Extracted from a working single-package repo where it ran for weeks. Every rail in the templates
 carries the measured finding behind it, and every seed line in `LEARNINGS.md` is a mistake that was
-actually paid for. `GAPS.md` is an honest list of what is still missing from it.
+actually paid for. It was then installed into its own repository and used to build its last three
+capabilities through its own queue — the driver, worktree isolation and the role evals — which is
+where the git history starts being the argument for it. That run found a task the loop should never
+have been offered, a gate that let uncommitted work reach `done`, and two fresh instances of the
+exact failure the whole harness is built around. None of the three came from reading the code.

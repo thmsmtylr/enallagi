@@ -16,7 +16,7 @@ fi
 
 # The one probe that does not read text: it drives the built artifact through the surface a user
 # touches and prints what fell short. The other eleven read the repo, so the floor and the direction
-# signal are the same instrument and capability shortfall is invisible to them (GAPS.md #1).
+# signal are the same instrument and capability shortfall is invisible to them.
 # Off unless harness.json names a driverCommand AND HARNESS_DRIVER is set, because it costs
 # wall-clock on every scout round and has to earn it.
 #
@@ -230,7 +230,7 @@ HASHES = 'test-hashes.json'
 def hash_uncovered():
     """A rail that names files and names test-hashes.json as its enforcement is true only if
     every file it names has a key there. `rail-unenforced` goes quiet as soon as the file exists,
-    whatever is in it, which made `harness-immutable` aspirational (GAPS.md #3)."""
+    whatever is in it, which made `harness-immutable` aspirational."""
     keys = json.load(open(HASHES)) if os.path.exists(HASHES) else None
     found = []
     for line, cells in rail_rows():
@@ -258,7 +258,7 @@ ROW_REF = re.compile(r'([\w./-]+__TEST_FILE_SUFFIX_RE__)::([^`,\n]+)')
 def queue_uncovered():
     """The queue against the spec, both directions -- Spec Kit's `analyze` step. `spec-untested`
     asks whether a criterion has a test and `queue-hygiene` asks whether the queue is internally
-    consistent; neither asks whether the two agree (GAPS.md #7)."""
+    consistent; neither asks whether the two agree  -- Spec Kit's `analyze` step."""
     found = []
     defined = set((name, test) for name, test, _ in spec_rows())
     claimed = set()

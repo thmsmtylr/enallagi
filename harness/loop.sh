@@ -351,10 +351,10 @@ in_scope() { # $1 = path, then the glob patterns
 BOOKKEEPING="TASKS.md PROGRESS.md PROGRESS.archive.md DECISIONS.md LEARNINGS.md"
 
 # `one-scope` named "the harness's scope check" and no such check existed: the M2 mechanism was a
-# PLANNER that keeps lanes disjoint, not a check that a lane stayed inside its own (GAPS.md #2).
+# PLANNER that keeps lanes disjoint, not a check that a lane stayed inside its own (the `one-scope` rail).
 # This is the check -- the iteration's own commits, diffed against the task's `scope:` globs.
 #
-# It also routes the three loops (GAPS.md #6): a diff touching the harness -- the launcher, the
+# It also routes the three loops: a diff touching the harness -- the launcher, the
 # hooks, the baseline, the hashes, harness.json -- under a task that did not declare
 # `rows: none — harness` is a product task editing the measure of its own product lever, and the
 # article's rule is that one round may not do both. ponytail: the harness set is this literal list,
