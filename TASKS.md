@@ -159,7 +159,7 @@ notes: |
 ## [T-004] two out-of-scope notes the last two tasks left
 scope: harness/loop.sh, install.sh, selftest.sh
 blockedBy: none
-status: review
+status: done
 rows: none — harness
 criteria:
   - `gate_scope`'s rejection message puts a space between the verb and the first path: the run on
