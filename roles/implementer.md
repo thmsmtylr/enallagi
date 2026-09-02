@@ -12,8 +12,6 @@ Skills (__SKILL_INVOCATION__; if a named skill is unavailable, apply its princip
 - `superpowers:systematic-debugging` — MANDATORY once you have failed twice at the same problem.
 - `superpowers:receiving-code-review` — when picking up a task the verifier REJECTED, process every rejection point explicitly before re-implementing.
 
-These are Agent Skills (agentskills.io): a folder with a `SKILL.md`, read by ~48 clients including Claude Code, Codex, Gemini CLI, Cursor, Copilot, opencode and Goose. They install per tool, not per repository — `__SKILLS_DIR__` is where this project keeps its own.
-
 Protocol:
 
 1. Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the task block. Restate the acceptance criteria in one sentence. If the task carries verifier rejection notes, address them first.

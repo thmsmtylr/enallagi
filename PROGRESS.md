@@ -32,3 +32,13 @@ output.
 stays here. The **second** occurrence of the same thing becomes a line in LEARNINGS.md — one rule per surprise rewrites the operating manual every week, which costs more than the friction it removes.
 
 ---
+
+## 2026-09-02 — T-001 — landed
+rows: `selftest.sh::no role prompt carries an incident narrative`, `selftest.sh::the trimmed role prompts still pass their evals`
+check: pending the gated run — `HARNESS_DRIVER=1 HARNESS_EVALS=1 ./selftest.sh`.
+what happened: removed dated incidents, task-id cross-references, reproduction stories and the
+duplicated skills paragraph from the five role prompts. 4671 -> 4244 words. Added a grep that fails
+on any of those patterns returning, and a second assertion that runs the three evals against a real
+agent, since a prompt trim is a behaviour change no static check can see.
+friction: none.
+next: teardown.
