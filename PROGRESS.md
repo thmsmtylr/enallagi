@@ -62,3 +62,11 @@ friction: the first pattern list matched informational sentences as well as fill
 would have forced the deletion of real content to go green. A prose check has to be narrow enough
 that passing it does not require losing information.
 next: teardown to shippable state.
+
+## 2026-09-02 — round 2 verified — T-001, T-002, T-003
+rows: all five
+check: probes.sh -> spec-untested 0, queue-uncovered 0, check-red 0, litter 0.
+what happened: three tasks, no rejections this round. The queue ends empty with every exit-criteria
+row green.
+friction: none new.
+next: teardown. The instance is removed; the record stays in this history.
