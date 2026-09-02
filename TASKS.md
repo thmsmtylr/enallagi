@@ -35,7 +35,7 @@ needing a human credential and no launcher auto-selects it.
 ## [T-001] one agent command for every role
 scope: harness/loop.sh, install.sh, harness.default.json, selftest.sh, README.md
 blockedBy: none
-status: review
+status: done
 rows: `selftest.sh::a role with its own agent command is spawned with it`, `selftest.sh::a role with no agent command falls back to the default`
 criteria:
   - `agentCommand` in harness.json accepts an object keyed by role (`default`, `scout`,
@@ -56,7 +56,7 @@ notes: |
 ## [T-002] the loop reports no cost and enforces no budget
 scope: harness/loop.sh, harness.default.json, selftest.sh, README.md
 blockedBy: none
-status: review
+status: done
 rows: `selftest.sh::every spawned stage appends one record to the run log`, `selftest.sh::the loop stops before a stage that would exceed the budget`
 criteria:
   - Every spawned stage appends one tab-separated record to `.harness/run.log`: ISO timestamp,
@@ -81,7 +81,7 @@ notes: |
 ## [T-003] the shipped prose is written for an audience that is not the reader
 scope: README.md, roles/*.md, templates/*.md, skills/**, harness/*.sh, harness/hooks/*.sh, install.sh, selftest.sh, driver.sh, evals/**
 blockedBy: none
-status: review
+status: done
 rows: `selftest.sh::no shipped file carries rhetorical filler`
 criteria:
   - `./selftest.sh` greps every shipped file for a written list of rhetorical patterns and fails on
@@ -100,3 +100,13 @@ notes: |
   matched sentences carrying real information ("a testcase existing is not the check"), so the
   automated list now covers unambiguous filler only and the ambiguous cases were rewritten by hand.
   Evidence 2026-09-02: `./selftest.sh` -> "no shipped file carries rhetorical filler" ok.
+
+<!-- VERIFIED 2026-09-02, all three, at the tip of harness/round-2.
+     git status --porcelain      0 lines
+     probes.sh                   spec-untested 0, queue-uncovered 0, check-red 0, litter 0
+     selftest.sh                 all five rows' assertions declared and passing
+     Every changed file is on its task's scope line or is bookkeeping. T-001 and T-002 carry
+     `rows:` naming product rows and touched harness/loop.sh and install.sh, which the harness-lane
+     gate permits only under `rows: none — harness` -- here the harness IS the product, and the
+     gate's harness set is `.harness/` (generated output), not `harness/` (source). -->
+
