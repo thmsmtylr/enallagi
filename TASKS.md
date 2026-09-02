@@ -94,7 +94,7 @@ notes: |
 ## [T-002] a lane cannot be isolated from the checkout it runs in
 scope: harness/worktree.sh, selftest.sh, README.md
 blockedBy: none
-status: ready
+status: review
 rows: `selftest.sh::a worktree lane leaves the parent checkout untouched`, `selftest.sh::a lane that cannot fast forward is left for a human`
 criteria:
   - `.harness/worktree.sh [iterations]` creates a git worktree on its own branch, runs `loop.sh`
@@ -103,7 +103,20 @@ criteria:
   - When the parent branch has moved and the merge cannot fast-forward, it leaves the branch and the
     worktree in place, prints what a human has to do, and exits non-zero. It never forces a merge.
   - `./selftest.sh` declares both rows' assertions and passes.
-notes:
+notes: |
+  `.harness/worktree.sh [iterations]`: `git worktree add -b lane/<stamp>`, run `loop.sh` in there,
+  then `git merge --ff-only` and `git worktree remove`. Three refusals, each deliberate — a detached
+  parent HEAD, a lane with uncommitted work (a terminated iteration leaves exactly that, and
+  `implementer.md` says finish it, never restart it), and a parent that moved so the merge would be
+  a merge commit. None of them is forced; the last one prints the three commands a human chooses
+  between.
+  Evidence, 2026-09-02: `./selftest.sh` -> six new assertions, all ok.
+  Scrutinise: the isolation assertion does not read the parent AFTERWARDS, which would prove
+  nothing. The fixture lane records the parent's HEAD and `git status --porcelain` count from INSIDE
+  the worktree while it works, commits that recording, and the assertion reads it back after the
+  merge — so it is evidence about the moment the lane was running.
+  OUT OF SCOPE, noted and not touched (`one-scope`): `install.sh`'s header comment lists the files
+  it writes into the harness directory and now misses `worktree.sh` and `driver.example.sh`.
 
 ## [T-003] nothing tests a role prompt
 scope: evals/**, selftest.sh, README.md

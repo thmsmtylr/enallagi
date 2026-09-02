@@ -58,3 +58,12 @@ friction: the gated-assertion pattern reintroduced zero-as-pass one level up fro
 exists to prevent it. A skipped check that prints like a passing one is the failure the whole
 harness is built around, and it took a verifier pass to catch.
 next: T-002 (worktree isolation).
+
+## 2026-09-02 — T-002 — landed
+rows: `selftest.sh::a worktree lane leaves the parent checkout untouched`, `selftest.sh::a lane that cannot fast forward is left for a human`
+check: `./selftest.sh` -> all assertions that ran passed, 1 skipped (the driver, HARNESS_DRIVER unset).
+what happened: added `harness/worktree.sh`. It composes rather than complicating `loop.sh` — the
+loop needed no change at all. Six assertions: isolation while the lane runs, the fast-forward back,
+removal after merge, and the three-way refusal when the parent has moved.
+friction: none.
+next: T-003 (evals for the role prompts).

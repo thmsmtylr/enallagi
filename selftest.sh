@@ -227,6 +227,70 @@ is "the same edit under a product task is forced back to ready" "ready" \
   "$(lane .check-baseline '`src/thing.test.ts::a name copied from your suite`' .check-baseline)"
 rm -f src/fakelane.sh
 
+# --- worktree isolation -----------------------------------------------------
+# Fresh sessions isolate context; only a worktree isolates the checkout. The lane records what the
+# PARENT looked like while it was working, from inside the worktree, and that recording is what the
+# first assertion reads — "untouched afterwards" would prove nothing.
+cat > src/wtlane.sh <<'WTLANE'
+#!/usr/bin/env bash
+P=$(dirname "$(git rev-parse --git-common-dir)")
+case "$1" in
+  *"roles/implementer.md"*)
+    printf '%s %s\n' "$(git -C "$P" rev-parse HEAD)" "$(git -C "$P" status --porcelain | grep -c . || true)" > wt-observed.txt
+    date +%s%N > src/allowed.ts
+    [ -n "${SECOND_WRITER:-}" ] && git -C "$P" commit -q --allow-empty -m "a second writer moved the parent"
+    sed -i.bak 's/^status: ready/status: review/' TASKS.md && rm -f TASKS.md.bak
+    printf '\n## fixture — T-201 — landed\nfriction: none\n' >> PROGRESS.md
+    git add -A && git commit -qm "feat: T-201" ;;
+  *"roles/verifier.md"*)
+    sed -i.bak 's/^status: review/status: done/' TASKS.md && rm -f TASKS.md.bak ;;
+esac
+WTLANE
+chmod +x src/wtlane.sh
+python3 -c "
+import json; c = json.load(open('harness.json'))
+c['agentCommand'] = ['./src/wtlane.sh', '{prompt}', '{turns}']
+json.dump(c, open('harness.json', 'w'), indent=2)"
+"$SRC/install.sh" "$T" >/dev/null 2>&1
+wt_task() {
+  python3 - <<'FIXTURE'
+import re
+s = re.sub(r'(?ms)^## \[T-201\].*?(?=\n## |\Z)', '', open('TASKS.md').read()).rstrip()
+s = s.replace('status: ready', 'status: blocked')
+open('TASKS.md', 'w').write(s + """
+
+## [T-201] the worktree fixture lane
+scope: src/allowed.ts, wt-observed.txt
+blockedBy: none
+status: ready
+rows: none — harness
+criteria:
+  - it exists
+notes:
+""")
+FIXTURE
+  git add -A >/dev/null && git commit -qm wt-fixture >/dev/null
+}
+
+wt_task
+PRE=$(git rev-parse HEAD)
+.harness/worktree.sh 1 >/dev/null 2>&1
+is "a worktree lane leaves the parent checkout untouched" "$PRE 0" "$(cat wt-observed.txt 2>/dev/null)"
+is "and the parent branch fast-forwarded to the lane" "1" "$(git log --oneline "$PRE"..HEAD | grep -c 'feat: T-201')"
+is "the worktree is removed once it has merged" "0" "$(git worktree list | grep -c lane/)"
+
+# the second-writer case: the parent moves under the lane, so the merge is a decision, not a step
+wt_task
+PRE=$(git rev-parse HEAD)
+SECOND_WRITER=1 .harness/worktree.sh 1 >/dev/null 2>&1
+is "a lane that cannot fast forward is left for a human" "1" "$?"
+is "and its work is still there, unmerged" "1" "$(git worktree list | grep -c lane/)"
+is "and the parent took none of it" "0" "$(git log --oneline "$PRE"..HEAD | grep -c 'feat: T-201')"
+LANE_DIR=$(git worktree list | awk '/lane\//{print $1}')
+git worktree remove --force "$LANE_DIR" >/dev/null 2>&1
+git branch -D "$(git branch --list 'lane/*' | tr -d ' *')" >/dev/null 2>&1
+rm -f src/wtlane.sh
+
 # --- teardown ---------------------------------------------------------------
 cd /
 [ -n "${KEEP:-}" ] && echo "kept: $T" || rm -rf "$T"
