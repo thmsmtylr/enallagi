@@ -35,7 +35,7 @@ stays here. The **second** occurrence of the same thing becomes a line in LEARNI
 
 ## 2026-09-02 — T-001 — landed
 rows: `selftest.sh::no role prompt carries an incident narrative`, `selftest.sh::the trimmed role prompts still pass their evals`
-check: pending the gated run — `HARNESS_DRIVER=1 HARNESS_EVALS=1 ./selftest.sh`.
+check: `HARNESS_DRIVER=1 HARNESS_EVALS=1 ./selftest.sh` -> 79 ok, 0 skip, 0 FAIL, rc=0.
 what happened: removed dated incidents, task-id cross-references, reproduction stories and the
 duplicated skills paragraph from the five role prompts. 4671 -> 4244 words. Added a grep that fails
 on any of those patterns returning, and a second assertion that runs the three evals against a real
