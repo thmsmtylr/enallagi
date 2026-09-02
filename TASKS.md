@@ -84,16 +84,24 @@ notes: |
   document with four sections, and the harness ships four seeds.
 
 ## [T-003] the gate is not installed into the repositories that need it
-scope: install.sh, templates/RAILS.md, selftest.sh, README.md
+scope: install.sh, templates/RAILS.md, harness.default.json, selftest.sh, README.md
 blockedBy: none
-status: ready
+status: review
 rows: none — harness
 criteria:
   - `install.sh` writes `evals/run.sh` and an `evals/README.md` into the target repo, so a rule can
     be gated where the rules are written. Existing evals in the target are never overwritten.
   - The `gated-rules` rail names `evals/run.sh` as enforcement and `rail-unenforced` stays at 2.
   - `./selftest.sh` passes.
-notes: raised by T-002 under `one-scope`. The rail had to name `probes.sh` alone because a target
-  repo has no `evals/run.sh`: the package's evals test the package's own role prompts and are not
-  installed. A user who writes a rule needs the gate in their own tree.
+notes: |
+  Raised by T-002 under `one-scope`. The rail had to name `probes.sh` alone because a target repo has
+  no `evals/run.sh`: the package's evals test the package's own role prompts and are not installed.
+  A user who writes a rule needs the gate in their own tree.
+  Scope amended at implementation time to add `harness.default.json`, with the reason recorded here
+  rather than edited in silently: installing `evals/` into a target makes the `litter` probe report
+  it, because `allowedPrefixes` did not know the directory existed. The fix belongs to the change
+  that caused it.
+  The rail names `probes.sh` → `learning-ungated` and the verifier, not `evals/run.sh`. Nothing runs
+  the gate automatically: it is a command, like the check itself, and `rail-unenforced` correctly
+  reported the rail as unenforced while it claimed otherwise.
 

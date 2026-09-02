@@ -60,6 +60,7 @@
   "allowedPrefixes": [
     "src/",
     "packages/",
+    "evals/",
     ".harness/",
     ".claude/",
     ".github/",
