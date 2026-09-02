@@ -363,6 +363,16 @@ git worktree remove --force "$LANE_DIR" >/dev/null 2>&1
 git branch -D "$(git branch --list 'lane/*' | tr -d ' *')" >/dev/null 2>&1
 rm -f src/wtlane.sh
 
+# A prompt trim is a behaviour change, and only a real agent can show whether a rule survived it.
+# Gated like the driver: `./selftest.sh` stays fast and says out loud that it skipped this.
+if [ -n "${HARNESS_EVALS:-}" ]; then
+  EOUT=$("$SRC/evals/run.sh" 2>&1)
+  is "the trimmed role prompts still pass their evals" "3" "$(printf '%s\n' "$EOUT" | grep -c ' PASS$')"
+else
+  skip "the trimmed role prompts still pass their evals" \
+       "HARNESS_EVALS is unset, so no agent was spawned. Not a pass."
+fi
+
 # --- the write-path gate on a candidate rule ---------------------------------
 # A stub that reads whatever rule is in front of it, so ablating the rule changes what it does.
 # That is the only way to test the gate without spawning a real agent per outcome.
@@ -434,6 +444,12 @@ rm -rf "$T/pkgcopy" src/evalobeys.sh src/evalbreaks.sh
 # This is a public repository. The patterns below are rhetoric, not information: antithesis,
 # appeals to the point, and self-congratulation. Every one of them can be replaced by the fact it
 # was decorating. Checked against the package source, not the throwaway install.
+# A role prompt is an instruction, not a post-mortem. Dated incidents, task ids and reproduction
+# stories are evidence for a human reading the repo; in a prompt they are tokens the model pays for
+# on every stage. The rules, the rails they name and the output formats all stay.
+NARRATIVE=$(cd "$SRC" && grep -rniE '[0-9]{4}-[0-9]{2}-[0-9]{2}|TASKS\.md T-[0-9]|reproduced (on |by )?[0-9]{4}|agentskills\.io' roles/ 2>/dev/null || true)
+is "no role prompt carries an incident narrative" "" "$NARRATIVE"
+
 FILLER='the whole point|that is the trick|is the whole |beautifully|elegantly|, it is one |extra steps|which is the point|the honest argument|is not a [a-z]+, it is'
 HITS=$(cd "$SRC" && grep -rniE "$FILLER" README.md roles templates skills harness install.sh selftest.sh driver.sh evals 2>/dev/null | grep -v FILLER || true)
 is "no shipped file carries rhetorical filler" "" "$HITS"
@@ -445,7 +461,7 @@ echo
 if [ "$FAIL" -ne 0 ]; then
   echo "harness selftest: FAILURES above."
 elif [ "$SKIPPED" -gt 0 ]; then
-  echo "harness selftest: all assertions that RAN passed, and $SKIPPED did not run. Set HARNESS_DRIVER=1 for the whole floor."
+  echo "harness selftest: all assertions that RAN passed, and $SKIPPED did not run. HARNESS_DRIVER=1 HARNESS_EVALS=1 runs the whole floor."
 else
   echo "harness selftest: all assertions passed."
 fi
