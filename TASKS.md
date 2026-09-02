@@ -35,7 +35,7 @@ needing a human credential and no launcher auto-selects it.
 ## [T-001] the driver has nothing to drive
 scope: driver.sh, harness/driver.example.sh, selftest.sh, README.md
 blockedBy: none
-status: review
+status: ready
 rows: `selftest.sh::the package driver reports shortfalls as FINDING lines`, `selftest.sh::an example driver installs into the harness directory`
 criteria:
   - `./driver.sh` installs this package into a throwaway repo, drives one request through the
@@ -64,6 +64,19 @@ notes: |
   cause; (b) that `driver.sh` exits non-zero ONLY when install fails, never on a finding.
   OUT OF SCOPE, noted and not touched (`one-scope`): `harness/loop.sh`'s scope-gate message prints
   `touchedsrc/sneaky.ts` — `${out_of# }` strips the separating space. Needs its own block.
+
+  REJECTED 2026-09-02, verifier, at 0f7ce72.
+  Reproduce: `./selftest.sh | grep "the package driver"` ->
+    "ok    the package driver reports shortfalls as FINDING lines (skipped: HARNESS_DRIVER unset)"
+  The default run prints `ok` for an assertion it did not execute. A gate asserts what it EXECUTED,
+  never merely that nothing failed (LEARNINGS.md, zero-as-pass) — and the exit-criteria row named by
+  that assertion reads green on a run where nothing drove anything. This is the exact defect the
+  `driver` probe was built to avoid one level down, reintroduced one level up.
+  To fix: a skipped assertion must not print `ok`. Print it as a skip, count skips separately, and
+  say so in the summary line so a reader cannot mistake the run for complete.
+  Everything else verified: tree clean, every changed file on the scope line or bookkeeping, no test
+  weakened (the one deleted line is the `env -u HARNESS_DRIVER` strengthening), both row assertions
+  present and spelled as SPEC.md spells them, `driver.sh` exits non-zero only when install fails.
 
 ## [T-002] a lane cannot be isolated from the checkout it runs in
 scope: harness/worktree.sh, selftest.sh, README.md
