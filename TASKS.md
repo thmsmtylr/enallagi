@@ -35,7 +35,7 @@ needing a human credential and no launcher auto-selects it.
 ## [T-001] the driver has nothing to drive
 scope: driver.sh, harness/driver.example.sh, selftest.sh, README.md
 blockedBy: none
-status: review
+status: done
 rows: `selftest.sh::the package driver reports shortfalls as FINDING lines`, `selftest.sh::an example driver installs into the harness directory`
 criteria:
   - `./driver.sh` installs this package into a throwaway repo, drives one request through the
@@ -84,6 +84,12 @@ notes: |
     ./selftest.sh                  -> "skip  the package driver reports shortfalls as FINDING lines"
                                       "all assertions that RAN passed, and 1 did not run."
     HARNESS_DRIVER=1 ./selftest.sh -> 50 ok, 0 skip, "all assertions passed.", rc=0
+
+  VERIFIED 2026-09-02, second pass, at 241e29b. Commands run: `git status --porcelain` (0 lines),
+  `./selftest.sh` (the rejection point, now "skip"), `HARNESS_DRIVER=1 ./selftest.sh` (50 ok, 0 skip,
+  rc=0), `git diff --name-only HEAD~3 HEAD` (every file on the scope line or bookkeeping),
+  `.harness/hooks/check-gate.sh` (rc=0). Noted, not a rejection: the gate passes on a run carrying a
+  labelled skip. The skip is named in the summary and `HARNESS_DRIVER=1` is the complete floor.
 
 ## [T-002] a lane cannot be isolated from the checkout it runs in
 scope: harness/worktree.sh, selftest.sh, README.md
