@@ -176,6 +176,7 @@ is "green is green" "0" "$(gate)"
 # --- the scope gate, end to end --------------------------------------------
 # in_scope is asserted in loop.sh --selftest; this is the gate around it, which rewrites TASKS.md.
 git config user.email t@t && git config user.name t
+LANE_LOG="${TMPDIR:-/tmp}/harness-lane-$$.log"
 cat > src/fakelane.sh <<'LANE'
 #!/usr/bin/env bash
 case "$1" in
@@ -215,17 +216,22 @@ notes:
 """ % ((', ' + sys.argv[2] if sys.argv[2] else ''), sys.argv[1]))
 FIXTURE
   git add -A >/dev/null && git commit -qm fixture >/dev/null
-  SNEAK="$1" .harness/loop.sh 1 >/dev/null 2>&1
+  # outside the repo: the fixture lane runs `git add -A`, so a log inside it becomes part of the
+  # diff the scope gate is judging
+  SNEAK="$1" .harness/loop.sh 1 > "$LANE_LOG" 2>&1
   awk '/^## \[T-101\]/{f=1} f&&/^status:/{print $2; exit}' TASKS.md
 }
 is "a lane inside its scope keeps its done verdict" "done" "$(lane '' 'none — harness')"
 is "a lane that leaves its scope is forced back to ready" "ready" "$(lane src/sneaky.ts 'none — harness')"
+# the message is the line a human acts on, so it is asserted, not only the status it produced
+is "and the rejection names the file it is rejecting" "1" \
+  "$(grep -c 'SCOPE FAILED -- touched src/sneaky.ts' "$LANE_LOG")"
 rm -f src/sneaky.ts
 is "a harness edit a harness task declared is allowed" "done" \
   "$(lane .check-baseline 'none — harness' .check-baseline)"
 is "the same edit under a product task is forced back to ready" "ready" \
   "$(lane .check-baseline '`src/thing.test.ts::a name copied from your suite`' .check-baseline)"
-rm -f src/fakelane.sh
+rm -f src/fakelane.sh "$LANE_LOG"
 
 # --- worktree isolation -----------------------------------------------------
 # Fresh sessions isolate context; only a worktree isolates the checkout. The lane records what the

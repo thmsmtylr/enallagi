@@ -7,7 +7,7 @@
 #   AGENTS.md              the core context file, read by 20+ agents
 #   CLAUDE.md, GEMINI.md,  one-line pointers at it, for tools that read their own file
 #   .github/copilot-instructions.md
-#   .harness/              loop.sh, archive-done.sh, watch.sh, RAILS.md
+#   .harness/              loop.sh, worktree.sh, archive-done.sh, watch.sh, driver.example.sh, RAILS.md
 #   .harness/hooks/        probes.sh, check-gate.sh, verify-done.sh, immutable.sh
 #   .harness/roles/        the five role prompts the launcher feeds to a fresh agent process
 #   <skillsDir>/           this project's own Agent Skill, in the agentskills.io format

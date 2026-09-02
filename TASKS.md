@@ -159,7 +159,7 @@ notes: |
 ## [T-004] two out-of-scope notes the last two tasks left
 scope: harness/loop.sh, install.sh, selftest.sh
 blockedBy: none
-status: ready
+status: review
 rows: none — harness
 criteria:
   - `gate_scope`'s rejection message puts a space between the verb and the first path: the run on
@@ -170,4 +170,11 @@ criteria:
   - `./selftest.sh` passes.
 notes: raised by T-001 and T-002 under `one-scope` — both were outside their scope lines, so neither
   lane touched them. `rows: none — harness`, so the `harness-lane` gate allows the harness edit.
+  Done 2026-09-02. `${out_of# }` had stripped the separating space along with the leading one;
+  `touched ${out_of# }` restores it. The new assertion greps the rejection LINE
+  (`SCOPE FAILED -- touched src/sneaky.ts`) rather than the message anywhere, because the digest
+  repeats it and `grep -c` returned 2.
+  Scrutinise: `lane()`'s log had to move OUT of the fixture repo — the fixture lane runs
+  `git add -A`, so a log written inside it joined the diff the scope gate was judging and turned two
+  passing assertions red. Evidence: `./selftest.sh` -> all assertions that ran passed, 1 skipped.
 

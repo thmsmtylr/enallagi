@@ -80,3 +80,14 @@ friction: none new. The repeat from T-001 (a check that can be skipped must not 
 passed) hit again in an eval fixture and is now a LEARNINGS.md line, per the two-occurrence rule.
 next: the three skipped items are in. Remaining: T-004 for the two out-of-scope notes T-001 and T-002
 left, then strip this dogfood install back out so the package ships as a starter harness.
+
+## 2026-09-02 — T-004 — landed
+rows: none — harness
+check: `./selftest.sh` -> all assertions that ran passed, 1 skipped (the driver, HARNESS_DRIVER unset).
+what happened: the two notes T-001 and T-002 left under `one-scope`. `gate_scope`'s message said
+`touchedsrc/sneaky.ts`; `install.sh`'s header no longer omits `worktree.sh` and `driver.example.sh`.
+The message is now asserted, not just the status it produced.
+friction: a log file written inside the fixture repo joined the diff the scope gate was judging,
+because the fixture lane runs `git add -A`. Scratch output belongs outside the tree under test —
+which is the `tidy` rail pointed at a test's own working files.
+next: strip the dogfood install back out so the package ships as a starter harness.
