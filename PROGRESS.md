@@ -54,3 +54,13 @@ friction: installing a new directory into a target repo made the `litter` probe 
 `allowedPrefixes` did not know it existed. Any change that adds a directory to an install has to
 change the allowlist in the same task.
 next: verify, then teardown.
+
+## 2026-09-02 — round 3 verified — T-001, T-002, T-003
+rows: all six
+check: probes.sh -> spec-untested 0, queue-uncovered 0, learning-ungated 0, check-red 0, litter 0.
+what happened: the friction-to-eval link is closed. A repeated friction produces a candidate rule; the
+gate decides it on three conditions; the probe reports rules that skipped the gate and a library over
+its cap. Every condition is cited to a fetched source, and the one condition with no precedent in
+those sources (ablation) is marked as ours.
+friction: none new.
+next: teardown.

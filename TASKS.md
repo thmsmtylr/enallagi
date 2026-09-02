@@ -35,7 +35,7 @@ needing a human credential and no launcher auto-selects it.
 ## [T-001] a repeated friction becomes a rule with nothing checking the rule
 scope: evals/**, selftest.sh, README.md
 blockedBy: none
-status: review
+status: done
 rows: `selftest.sh::a candidate rule that does not fix its case is rejected`, `selftest.sh::a candidate rule whose case passes without it is rejected`, `selftest.sh::a candidate rule that regresses another eval is rejected`, `selftest.sh::a candidate rule that fixes its case and regresses nothing is accepted`
 criteria:
   - `evals/run.sh --gate <eval>` decides one candidate rule and prints `GATE <eval> ACCEPT` or
@@ -63,7 +63,7 @@ notes: |
 ## [T-002] nothing bounds the rule library or checks a rule has an eval
 scope: harness/hooks/probes.sh, harness.default.json, templates/LEARNINGS.md, templates/RAILS.md, selftest.sh, README.md
 blockedBy: none
-status: review
+status: done
 rows: `selftest.sh::a dated learning with no eval is reported`, `selftest.sh::a learnings file over its cap is reported`
 criteria:
   - A `learning-ungated` probe reports a dated LEARNINGS.md entry that names no `evals/<dir>`, or
@@ -86,7 +86,7 @@ notes: |
 ## [T-003] the gate is not installed into the repositories that need it
 scope: install.sh, templates/RAILS.md, harness.default.json, selftest.sh, README.md
 blockedBy: none
-status: review
+status: done
 rows: none — harness
 criteria:
   - `install.sh` writes `evals/run.sh` and an `evals/README.md` into the target repo, so a rule can
@@ -104,4 +104,13 @@ notes: |
   The rail names `probes.sh` → `learning-ungated` and the verifier, not `evals/run.sh`. Nothing runs
   the gate automatically: it is a command, like the check itself, and `rail-unenforced` correctly
   reported the rail as unenforced while it claimed otherwise.
+
+<!-- VERIFIED 2026-09-02, all three, at the tip of harness/friction-gate.
+     git status --porcelain   0 lines
+     probes.sh                spec-untested 0, queue-uncovered 0, learning-ungated 0,
+                              rail-unenforced 2, check-red 0, litter 0
+     selftest.sh              all six rows' assertions declared and passing
+     Each of the four gate outcomes is asserted against a stub that reads the rule in front of it,
+     so ablating the rule changes what the stub does. That is what makes the ablation arm testable
+     without spawning a model per outcome. -->
 
