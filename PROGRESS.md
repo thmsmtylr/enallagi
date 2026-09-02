@@ -67,3 +67,16 @@ loop needed no change at all. Six assertions: isolation while the lane runs, the
 removal after merge, and the three-way refusal when the parent has moved.
 friction: none.
 next: T-003 (evals for the role prompts).
+
+## 2026-09-02 — T-003 — landed
+rows: `selftest.sh::the eval runner passes a role that obeys its rule`, `selftest.sh::the eval runner fails a role that breaks its rule`
+check: `./selftest.sh` -> all assertions that ran passed, 1 skipped. `./evals/run.sh` -> three PASS, rc=0.
+what happened: added `evals/` — a runner and one eval per queue-gating role. All three prompts hold
+under a live agent: the scout transcribed findings and promoted nothing, the adjudicator killed an
+unanchored block unread and wrote its line to DECISIONS.md, and the verifier rejected a task whose
+implementation was never committed. That last one is the hole `driver.sh` found in T-001, so the
+prompt that closes it is now held to its word by a test.
+friction: none new. The repeat from T-001 (a check that can be skipped must not print like one that
+passed) hit again in an eval fixture and is now a LEARNINGS.md line, per the two-occurrence rule.
+next: the three skipped items are in. Remaining: T-004 for the two out-of-scope notes T-001 and T-002
+left, then strip this dogfood install back out so the package ships as a starter harness.

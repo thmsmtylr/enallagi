@@ -126,7 +126,7 @@ notes: |
 ## [T-003] nothing tests a role prompt
 scope: evals/**, selftest.sh, README.md
 blockedBy: none
-status: ready
+status: review
 rows: `selftest.sh::the eval runner passes a role that obeys its rule`, `selftest.sh::the eval runner fails a role that breaks its rule`
 criteria:
   - `evals/run.sh` runs one eval per directory under `evals/`: each carries a `setup.sh` that builds
@@ -137,4 +137,14 @@ criteria:
   - With no agent configured for evals it refuses and says so, rather than reporting a pass.
   - At least one eval exists per queue-gating role: scout, adjudicator, verifier.
   - `./selftest.sh` declares both rows' assertions and passes.
-notes:
+notes: |
+  `evals/run.sh` plus three evals, one per queue-gating role. Each runs in a throwaway repo with the
+  harness freshly installed and one fresh agent process — the same isolation the loop's stages get.
+  Evidence, 2026-09-02:
+    ./evals/run.sh                  -> EVAL adjudicator PASS / EVAL scout PASS / EVAL verifier PASS, rc=0
+                                       (a real `claude -p` per eval, from harness.json's agentCommand)
+    ./selftest.sh                   -> the three runner assertions ok
+    EVAL_AGENT=<an agent that does nothing> ./evals/run.sh verifier -> EVAL verifier FAIL, rc=1
+  Scrutinise: the runner is asserted in `selftest.sh` with stubs and never spawns a real agent there;
+  the evals themselves need one. And `evals/verifier/setup.sh` asserts its own edit landed — a
+  fixture whose replace matches nothing would measure a state it never built and pass.

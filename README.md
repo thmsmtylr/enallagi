@@ -44,6 +44,17 @@ working directory and a stripped environment, so if the thing you drive is itsel
 not inherit this loop's context. Watch the persistent effect, not the answer — diff the store, the
 file, the row your artifact was supposed to change.
 
+**The evals.** The role prompts are the one part of this that nothing else can test: `selftest.sh`
+tests the launcher *around* them, so a change to `roles/verifier.md` is otherwise unverifiable
+except by watching a run. `evals/run.sh` fixes that — one eval per directory, each three files
+(`setup.sh` builds a fixture repo with the harness freshly installed, `prompt.txt` is the request in
+the shape `loop.sh` sends it, `assert.sh` exits 0 when the role obeyed its rule), each in a throwaway
+repo with a fresh agent process. Three ship, one per queue-gating role: the scout must transcribe and
+never promote, the adjudicator must kill an unanchored proposal unread, the verifier must reject a
+task whose implementation was never committed. They need a real agent, so `./selftest.sh` asserts the
+runner rather than spawning one — and with no agent configured `run.sh` refuses instead of reporting
+a pass for something it never ran.
+
 **The documents.** The repository is the control plane. Sessions end, context compresses, and the
 next agent starts without the last one's reasoning:
 
