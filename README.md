@@ -217,10 +217,12 @@ small, not a reason to skip it.
 
 ## What is not here, deliberately
 
-**The driver itself.** The `driver` probe is here; what it drives is not, and cannot be — only you
-know what your artifact's surface is. Until you write that script and set `driverCommand`, every
-count the loop reads came from a grep over the repo, and capability shortfall is invisible to all of
-it. That is the harness's real ceiling and `GAPS.md` still names it first.
+**A driver for *your* artifact.** The probe is here, `.harness/driver.example.sh` is the skeleton to
+copy, and `driver.sh` in this package is a worked example — it installs the harness into four
+throwaway repos, drives one request through each with a lane that is sloppy in exactly one way, and
+reports which sloppiness the harness let through. What it cannot know is your artifact's surface.
+Until you fill the skeleton in and set `driverCommand`, every count the loop reads came from a grep
+over the repo, and capability shortfall is invisible to all of it.
 
 **Parallel lanes.** A multi-worktree launcher exists in the repo this came from and is not shipped:
 it is 23KB, unused for months, and its one load-bearing function (`gate_verdict`) is ported into
