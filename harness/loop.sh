@@ -366,7 +366,7 @@ gate_scope() { # $1 = task id, $2 = the sha the iteration started at
   [ -z "$out_of" ] && [ -z "$harness_hit" ] && { echo "  scope: $task stayed inside its scope."; return 0; }
 
   reason=""
-  [ -n "$out_of" ] && reason="touched${out_of# }, which the scope line does not name"
+  [ -n "$out_of" ] && reason="touched ${out_of# }, which the scope line does not name"
   [ -n "$harness_hit" ] && reason="${reason:+$reason; }touched the harness (${harness_hit# }) with rows: ${rows:-unset}, not \`none — harness\`"
   echo "  !! [$task] SCOPE FAILED -- $reason. Forced back to ready."
   set_status "$task" "ready" "the verifier returned done and the scope gate rejected it: $reason"
