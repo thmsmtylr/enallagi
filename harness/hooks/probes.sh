@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Twelve probes over the tree. Reports; never gates, and is wired into no hook and no build task.
+# Thirteen probes over the tree. Reports; never gates, and is wired into no hook and no build task.
 # Tokens like __CHECK__ are substituted by install.sh from harness.json. Edit harness.json, re-install.
 # Exit 0 when every probe ran, non-zero only when one could not.
 set -u
@@ -323,7 +323,7 @@ def cites_something(text):
     return False
 
 
-def learning_unenforced():
+def learning_entries():
     entries, open_at = [], None
     for index, line in enumerate(lines_of('LEARNINGS.md')):
         if line.startswith('- '):
@@ -333,8 +333,43 @@ def learning_unenforced():
             entries[open_at][1] += ' ' + line.strip()
         elif not line.strip():
             open_at = None
+    return entries
+
+
+def learning_unenforced():
     return [('LEARNINGS.md', at, 'entry names no file, command or hook: %s' % text.strip()[:90])
-            for at, text in entries if not cites_something(text)]
+            for at, text in learning_entries() if not cites_something(text)]
+
+
+LEARNINGS_CAP = __LEARNINGS_CAP__
+DATED = re.compile(r'^- \[\d{4}-\d{2}-\d{2}\]')
+
+
+def learning_ungated():
+    """A rule written from a repeated friction is a write to the agent's standing context, and an
+    unvalidated write is the failure mode the field has measured: reflective memory made two
+    ALFWorld environments strictly worse than no memory at all, with 0 of 121 reflections naming the
+    correct target (arXiv:2605.29463), and accumulation without a gate regressed below the no-skills
+    baseline (arXiv:2605.29668). So a dated rule names the eval that holds it, and the library is
+    capacity-bounded the way GRASP's is. `[seed]` entries predate the gate and are exempt."""
+    found = []
+    entries = learning_entries()
+    for at, text in entries:
+        if not DATED.match(text.strip()):
+            continue
+        named = re.findall(r'evals/([\w.-]+)', text)
+        if not named:
+            found.append(('LEARNINGS.md', at, 'dated rule names no eval, so nothing decided it was '
+                                              'worth its place: %s' % text.strip()[:80]))
+            continue
+        for name in named:
+            if not os.path.isdir('evals/' + name):
+                found.append(('LEARNINGS.md', at, 'names evals/%s, which does not exist' % name))
+    if len(entries) > LEARNINGS_CAP:
+        found.append(('LEARNINGS.md', 0, 'the rule library holds %d entries against a cap of %d. Every '
+                      'entry is read at the start of every task; adding one means removing one'
+                      % (len(entries), LEARNINGS_CAP)))
+    return found
 
 
 def ponytail_ceiling():
@@ -474,6 +509,7 @@ probe('queue-uncovered', queue_uncovered)
 probe('rail-unenforced', rail_unenforced)
 probe('hash-uncovered', hash_uncovered)
 probe('learning-unenforced', learning_unenforced)
+probe('learning-ungated', learning_ungated)
 probe('ponytail-ceiling', ponytail_ceiling)
 probe('rejection-stale', rejection_stale)
 probe('queue-hygiene', queue_hygiene)

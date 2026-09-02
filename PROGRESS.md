@@ -32,3 +32,14 @@ output.
 stays here. The **second** occurrence of the same thing becomes a line in LEARNINGS.md — one rule per surprise rewrites the operating manual every week, which costs more than the friction it removes.
 
 ---
+
+## 2026-09-02 — T-001, T-002 — landed
+rows: the four gate rows and the two probe rows
+check: `./selftest.sh` -> all assertions that ran passed, 1 skipped (driver, HARNESS_DRIVER unset).
+what happened: `evals/run.sh --gate <name>` decides a candidate rule on three conditions — fixes its
+case, fails without itself, regresses nothing. `learning-ungated` reports dated rules with no eval
+and a library over its cap. Both are grounded in fetched sources, cited in README and RAILS.md.
+friction: the new rail named `evals/run.sh`, which no installed repo has, so `rail-unenforced` went
+from 2 to 3. A rail must name enforcement that exists where the rail is read, not where it was
+written. Raised as T-003 rather than widened into T-002's scope.
+next: T-003, install the gate into target repos.

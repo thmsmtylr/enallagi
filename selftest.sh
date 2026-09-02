@@ -121,6 +121,27 @@ is "the seeded queue is clean" "0" "$(printf '%s\n' "$P" | sed -n 's/^PROBE queu
 is "every seeded learning names a file, command or hook" "0" \
   "$(printf '%s\n' "$P" | sed -n 's/^PROBE learning-unenforced //p')"
 is "the tree has no litter" "0" "$(printf '%s\n' "$P" | sed -n 's/^PROBE litter //p')"
+is "the seeded learnings are all [seed] entries, which predate the gate" "0" \
+  "$(printf '%s\n' "$P" | sed -n 's/^PROBE learning-ungated //p')"
+
+# a rule written from a repeated friction, with nothing that decided it was worth its place
+cp LEARNINGS.md "$T/learnings.bak"
+echo '- [2026-09-02] the check cache served a green nobody ran -> always run `./selftest.sh` uncached.' >> LEARNINGS.md
+is "a dated learning with no eval is reported" "1" \
+  "$(.harness/hooks/probes.sh 2>&1 | sed -n 's/^PROBE learning-ungated //p')"
+# and the same rule, once an eval holds it. The eval lives in the repo being checked, which is why
+# the fixture creates it here: the package's own evals are not installed into a target repo.
+mkdir -p evals/cache-green
+sed -i.bak 's|uncached\.|uncached (evals/cache-green).|' LEARNINGS.md && rm -f LEARNINGS.md.bak
+is "and the same rule naming an eval that exists is not" "0" \
+  "$(.harness/hooks/probes.sh 2>&1 | sed -n 's/^PROBE learning-ungated //p')"
+# the library is bounded: every entry is read at the start of every task
+for n in 1 2 3 4 5 6 7 8; do
+  echo "- [2026-09-0$n] a rule that cost a run -> do the other thing (evals/cache-green)." >> LEARNINGS.md
+done
+is "a learnings file over its cap is reported" "1" \
+  "$(.harness/hooks/probes.sh 2>&1 | grep -c 'against a cap of 12')"
+cp "$T/learnings.bak" LEARNINGS.md && rm -f "$T/learnings.bak" && rm -rf evals
 
 # --- the PROGRESS.md rollover -----------------------------------------------
 for n in 1 2 3 4 5 6; do printf '\n## fixture entry %s\nfriction: none\nnext: nothing\n' "$n" >> PROGRESS.md; done
@@ -339,6 +360,48 @@ LANE_DIR=$(git worktree list | awk '/lane\//{print $1}')
 git worktree remove --force "$LANE_DIR" >/dev/null 2>&1
 git branch -D "$(git branch --list 'lane/*' | tr -d ' *')" >/dev/null 2>&1
 rm -f src/wtlane.sh
+
+# --- the write-path gate on a candidate rule ---------------------------------
+# A stub that reads whatever rule is in front of it, so ablating the rule changes what it does.
+# That is the only way to test the gate without spawning a real agent per outcome.
+cat > src/rulestub.sh <<'STUB'
+#!/usr/bin/env bash
+# $1 = the prompt. Behaves per role, and on the verifier it obeys the rule only if the rule is there.
+set -u
+case "$1" in
+  *"roles/verifier.md"*)
+    case "${STUB_MODE:-follows}" in
+      never)  : ;;                                   # never rejects: its eval fails with the rule in place
+      always) sed -i.bak 's/^status: review/status: ready/' TASKS.md ;;   # rejects with or without the rule
+      *) grep -q 'git status --porcelain' .harness/roles/verifier.md \
+           && sed -i.bak 's/^status: review/status: ready/' TASKS.md ;;
+    esac
+    rm -f TASKS.md.bak ;;
+  *"roles/scout.md"*)
+    [ "${STUB_MODE:-follows}" = "breakother" ] && exit 0    # writes no proposed block: its eval fails
+    printf '\n## [T-950] transcribed from a FINDING line\nscope: x\nblockedBy:\nstatus: proposed\nprobe: litter\ncommand: probes.sh\noutput: |\n  FINDING litter x:0 y\nnotes: proposed.\n' >> TASKS.md ;;
+  *"roles/adjudicator.md"*)
+    python3 - <<'PY'
+import io, re
+s = io.open('TASKS.md').read()
+io.open('TASKS.md','w').write(re.sub(r'(?ms)^## \[T-900\].*?(?=\n## |\Z)', '', s))
+d = io.open('DECISIONS.md').read()
+io.open('DECISIONS.md','w').write(d.rstrip() + "\n- [2026-09-02] T-900, the check is slow — refuted by `probes.sh`: unanchored, no probe line.\n")
+PY
+    ;;
+esac
+STUB
+chmod +x src/rulestub.sh
+gate() { STUB_MODE="$1" EVAL_AGENT="$T/src/rulestub.sh {prompt}" "$SRC/evals/run.sh" --gate verifier 2>&1 | tail -1; }
+is "a candidate rule that does not fix its case is rejected" \
+  "GATE verifier REJECT the rule does not fix the case it came from (its eval fails with the rule in place)" "$(gate never)"
+is "a candidate rule whose case passes without it is rejected" \
+  "GATE verifier REJECT the case passes with the rule ablated, so the rule changed no outcome" "$(gate always)"
+is "a candidate rule that regresses another eval is rejected" \
+  "GATE verifier REJECT it regresses evals that were passing: scout" "$(gate breakother)"
+is "a candidate rule that fixes its case and regresses nothing is accepted" \
+  "GATE verifier ACCEPT fixes its case, fails without itself, regresses nothing" "$(gate follows)"
+rm -f src/rulestub.sh
 
 # --- the eval runner, against the role prompts -------------------------------
 # The evals themselves need a real agent, which `./selftest.sh` must not spawn. What is asserted
