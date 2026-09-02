@@ -1,0 +1,101 @@
+{
+  "_comment": "Answers install.sh substitutes into the harness. Copy to your repo root as harness.json, edit, re-run install.sh. Every key becomes a __SCREAMING_SNAKE__ token. Lists render as literals; agentCommand renders as a shell-quoted word list; strings render raw.",
+  "_agent": "agentCommand is the headless invocation of YOUR coding agent, as a word list. {prompt} and {turns} are filled in per stage. Known forms: claude -p | codex exec | gemini -p | opencode run | copilot -p | goose run | aider --message. It also accepts an object keyed by role -- default, scout, adjudicator, implementer, verifier -- so one role can run on a different model or vendor from another. A role the object does not name uses default. Independent verification is the reason to use this: a verifier on the model that wrote the code measures self-consistency.",
+  "agentCommand": [
+    "claude",
+    "-p",
+    "{prompt}",
+    "--dangerously-skip-permissions",
+    "--max-turns",
+    "{turns}"
+  ],
+  "rateLimitPattern": "hit your session limit",
+  "_context": "AGENTS.md is the core context file: an open format read by 20+ tools and present in 60,000+ repos (agents.md, 2026). pointerFiles are one-line adapters for tools that read their own file instead; Claude Code does not read AGENTS.md natively (anthropics/claude-code#34235).",
+  "contextFile": "AGENTS.md",
+  "pointerFiles": [
+    "CLAUDE.md",
+    "GEMINI.md",
+    ".github/copilot-instructions.md"
+  ],
+  "_layout": "harnessDir holds the launcher, hooks and roles and is vendor-neutral. skillsDir is your tool's Agent Skills directory: .claude/skills | .codex/skills | .gemini/skills | .cursor/skills | .github/skills.",
+  "harnessDir": ".harness",
+  "skillsDir": ".claude/skills",
+  "skillInvocation": "invoke it via the Skill tool",
+  "_driver": "driverCommand is the ONLY probe that exercises the built artifact rather than reading text. Empty means off; it also needs HARNESS_DRIVER=1 in the environment, because it costs wall-clock on every scout round. It runs in a throwaway directory with a stripped environment, must exit 0 whenever it REACHED the artifact, and prints one line per shortfall beginning `FINDING `. No double quotes: it is spliced into a shell script, and $ and backticks in it expand where it is assigned \u2014 which is what makes `$HARNESS_ROOT/scripts/drive.sh` the right way to name a script, since the driver runs from a throwaway directory.",
+  "driverCommand": "",
+  "check": "./selftest.sh",
+  "checkForce": "./selftest.sh",
+  "failNameSed": "s/^FAIL  //p",
+  "spec": "SPEC.md",
+  "rowsHeading": "## 11. Exit criteria",
+  "rowsEndHeading": "## 12.",
+  "rowCountFile": "",
+  "sourceRoot": ".",
+  "contractFile": "harness.default.json",
+  "testFileSuffixRe": "\\.sh",
+  "testDeclPatterns": [
+    "is \"{name}\"",
+    "&& ok \"{name}\"",
+    "ok \"{name}\""
+  ],
+  "sourceExt": [
+    ".sh",
+    ".ts",
+    ".md",
+    ".json"
+  ],
+  "harnessFiles": [
+    "selftest.sh",
+    "install.sh",
+    "harness.default.json"
+  ],
+  "harnessGlobs": [],
+  "allowedPrefixes": [
+    "adapters/",
+    "evals/",
+    "harness/",
+    "roles/",
+    "skills/",
+    "templates/",
+    ".harness/",
+    ".claude/",
+    ".github/"
+  ],
+  "docs": [
+    ".check-baseline",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "DECISIONS.md",
+    "GEMINI.md",
+    "LEARNINGS.md",
+    "PROGRESS.archive.md",
+    "PROGRESS.md",
+    "README.md",
+    "SPEC.md",
+    "TASKS.md",
+    "harness.default.json",
+    "harness.json",
+    "test-hashes.json"
+  ],
+  "harnessAllow": [
+    "install.sh",
+    "selftest.sh",
+    "driver.sh",
+    ".gitignore"
+  ],
+  "machinery": [
+    ".DS_Store",
+    ".check",
+    ".turbo",
+    ".venv",
+    "STOP",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "out",
+    "target"
+  ],
+  "_cost": "costSed extracts the run cost from what the agent printed, one sed -n expression. Empty output means no cost was reported and the run log's cost column stays empty; wall clock is always recorded. The default matches Claude Code's --output-format json.",
+  "costSed": "s/.*\"total_cost_usd\"[: ]*\\([0-9.]*\\).*/\\1/p"
+}
