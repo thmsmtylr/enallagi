@@ -1,137 +1,190 @@
 # harness
 
-An autonomous goal loop for coding agents: a directory of shell scripts, agent prompts and document
-templates copied into a repo. No dependency and no runtime beyond `bash` and `python3`.
+An autonomous goal loop for coding agents. Shell scripts, agent prompts and document templates that
+install into a git repository. No dependencies beyond `bash` and `python3`.
 
-It runs one task per fresh session, gates every claim against a command someone else can run, and
-keeps the whole decision trail in files so the next session can start cold and continue.
-
-## What it is made of
-
-**The floor.** The check command is yours; the harness never defines it. What the harness adds is a
-gate that verifies on **delta** against `.check-baseline` rather than on absolute zero. A tree whose
-exit criteria are not all covered cannot reach zero failures, so a gate demanding zero can never
-pass. `.check-baseline` only ever shrinks.
-
-**The roles.** Five agent prompts with separated authority:
-
-| Role | Does | May never |
-| --- | --- | --- |
-| `scout` | turns `FINDING` lines from `probes.sh` into `status: proposed` blocks | have a finding of its own, promote, or fix |
-| `adjudicator` | promotes a proposal to `ready` with runnable criteria, or kills it with the command that refutes it | write a proposal, or edit a file a block names |
-| `implementer` | one task, inside its `scope:` globs, test first | mark anything `done` |
-| `verifier` | fresh session, adversarial, promotes to `done` or rejects with reproducible reasons | fix code |
-| `researcher` | attaches a source to a decision already made | find anything, or amend a governing document |
-
-A single agent that selects its own work and then grades it measures self-consistency. SpecBench
-put the visible-versus-held-out gap for that arrangement at 43-48pp
-([arXiv:2605.21384](https://arxiv.org/pdf/2605.21384)).
-
-**The probes.** `.harness/hooks/probes.sh` is twelve analyses over the tree. It reports and never
-gates. Its `FINDING` lines are the only legal input to the queue (`anchored`): the scout transcribes
-them, the adjudicator re-runs the command and kills what does not reproduce.
-
-Eleven of them read text — test declarations, the exit-criteria table, `git ls-files`, `TASKS.md`
-fields, `PROGRESS.md` entries. The twelfth is `driver`, and it is the only one that exercises the
-built artifact through the surface a user touches. It is **off** until you set `driverCommand` in
-`harness.json` and `HARNESS_DRIVER=1` in the environment, and while it is off it prints
-`PROBE driver OFF` rather than a count of zero: a probe that did not run has found nothing, which is
-no evidence about the tree. Your driver exits 0 whenever it reached the artifact, whatever
-it found, and prints one line per shortfall beginning `FINDING `; a non-zero exit is
-`PROBE driver ERROR`, and nothing is proposed from a probe that could not run. It gets a throwaway
-working directory and a stripped environment, so if the thing you drive is itself an agent it does
-not inherit this loop's context. Watch the persistent effect, not the answer — diff the store, the
-file, the row your artifact was supposed to change.
-
-**The evals.** The role prompts are the one part of this that nothing else can test: `selftest.sh`
-tests the launcher *around* them, so a change to `roles/verifier.md` is otherwise unverifiable
-except by watching a run. `evals/run.sh` fixes that — one eval per directory, each three files
-(`setup.sh` builds a fixture repo with the harness freshly installed, `prompt.txt` is the request in
-the shape `loop.sh` sends it, `assert.sh` exits 0 when the role obeyed its rule), each in a throwaway
-repo with a fresh agent process. Three ship, one per queue-gating role: the scout must transcribe and
-never promote, the adjudicator must kill an unanchored proposal unread, the verifier must reject a
-task whose implementation was never committed. They need a real agent, so `./selftest.sh` asserts the
-runner rather than spawning one — and with no agent configured `run.sh` refuses instead of reporting
-a pass for something it never ran.
-
-**The write-path gate.** A repeated `friction:` line in `PROGRESS.md` becomes a rule in
-`LEARNINGS.md`, which every task reads at its start. `evals/run.sh --gate <name>` decides whether
-that rule earns its place. Three conditions, all required:
-
-| | |
-| --- | --- |
-| the eval passes with the rule | the rule fixes the case it came from |
-| the eval fails with the rule ablated | the case would not have passed anyway |
-| every other eval still passes | the rule regresses nothing that worked |
-
-Ablation is a per-eval `ablate.sh` that removes the rule from the fixture. `learning-ungated` then
-reports any dated `LEARNINGS.md` entry that names no eval, and any file over `learningsCap`.
-`install.sh` writes `evals/run.sh` into your repo, so a rule is gated where rules are written;
-your own evals there are never overwritten on upgrade.
-
-This is not a design preference. Self-written rules added without a gate are measurably worse than
-no rules at all: reflective memory made two ALFWorld environments strictly worse than a no-memory
-ablation — 7 trials against 1, and 8 against 1 — and across 16 frozen environments *"0 of 121
-reflections mention the correct target object"*, the authors concluding that *"write-path validation
-is as important as retrieval quality"*
-([arXiv:2605.29463](https://arxiv.org/html/2605.29463)). Sequential memory accumulated without
-admission control fell below its own no-skills baseline, 41.2% against 40.6%
-([arXiv:2605.29668](https://arxiv.org/abs/2605.29668)). And context that grows unchecked collapses:
-one measured step went from 18,282 tokens at 66.7% accuracy to 122 tokens at 57.1%, under a 63.7%
-baseline ([arXiv:2510.04618](https://arxiv.org/html/2510.04618v1)).
-
-Conditions 1 and 3 are GRASP's admission rule, `(F(c)-F0)-(R(c)-R0)>0` under a hard regression
-budget `R(c)<=R0`, evaluated on a balanced probe of previously-failing and previously-passing cases
-(18-18 at N=36), and GSE's two stages — *"proposals that fail to resolve their originating failure
-are discarded immediately"*, then a replay set that must *"maintain or improve"*
-([arXiv:2608.06153](https://arxiv.org/html/2608.06153)). Condition 2 is not in either: both ask
-whether the case passes now, neither asks whether it would have passed without the rule. The cap
-follows GRASP's capacity-bounded library, where an ADD at capacity is blocked unless a paired REMOVE
-frees a slot.
-
-**The documents.** The repository is the control plane. Sessions end, context compresses, and the
-next agent starts without the last one's reasoning:
-
-| File | Holds |
-| --- | --- |
-| `AGENTS.md` | the context file every agent loads every session. Deliberately short |
-| `SPEC.md` | the objective and the exit criteria, one row per behaviour, each named by its test |
-| `.harness/RAILS.md` | the rails in full, each naming what enforces it. Loaded on demand |
-| `TASKS.md` | the queue |
-| `PROGRESS.md` | one entry per iteration, append-only, read by its tail |
-| `LEARNINGS.md` | one line per mistake already paid for, each naming a file, command or hook |
-| `DECISIONS.md` | killed findings at the top, archived task blocks below |
-| `.check-baseline` | the inherited red, and it only shrinks |
+One task per fresh agent process, every claim gated on a re-runnable command, all state in files.
 
 ## Install
 
 ```bash
-git clone <this> ~/Documents/harness
-~/Documents/harness/install.sh /path/to/your/repo --dry-run   # read the plan first
-~/Documents/harness/install.sh /path/to/your/repo
+git clone <this> ~/harness
+~/harness/install.sh /path/to/repo --dry-run
+~/harness/install.sh /path/to/repo
 ```
 
-It writes `.harness/`, `.claude/agents/`, `.claude/hooks/`, seeds the documents **only if absent**, and
-wires the hooks into `.claude/settings.json` (printing the snippet instead if you already have one).
-Re-run it any time — substitution is idempotent, and it is also how you upgrade.
-
-Then:
+Then, in your repo:
 
 ```bash
-cd /path/to/your/repo
-$EDITOR harness.json               # check, spec, agentCommand
-~/Documents/harness/install.sh .
-git add .harness harness.json AGENTS.md
-.harness/hooks/probes.sh           # what the tree says about itself
-.harness/loop.sh 1                 # one iteration, attended, watch it work
+$EDITOR harness.json          # check, spec, agentCommand
+~/harness/install.sh .        # re-run after any edit; idempotent, and how you upgrade
+git add .harness evals harness.json AGENTS.md
+.harness/hooks/probes.sh      # what the tree says about itself
+.harness/loop.sh 1            # one iteration, attended
 ```
 
-`touch STOP` at the repo root stops the loop before its next stage. Delete it to resume.
+Documents are seeded only if absent, so re-running never overwrites your own. `--adapter claude`
+additionally writes `.claude/agents/` and `.claude/settings.json`.
 
-## Which agent it drives
+Installed layout:
 
-Any of them. `agentCommand` in `harness.json` is a word list with `{prompt}` and `{turns}` filled
-in per stage:
+```
+AGENTS.md                 context file, ~50 lines. CLAUDE.md/GEMINI.md/copilot-instructions.md point at it
+SPEC.md                   objective and exit criteria, one row per behaviour named by its test
+TASKS.md                  the queue
+PROGRESS.md               one entry per iteration, append-only, read by its tail
+LEARNINGS.md              one line per paid-for mistake, each naming a file, command or hook
+DECISIONS.md              killed findings, then archived task blocks
+.check-baseline           inherited failures; only ever shrinks
+.harness/loop.sh          the launcher
+.harness/worktree.sh      one lane in its own git worktree
+.harness/archive-done.sh  trims TASKS.md and PROGRESS.md
+.harness/hooks/           probes.sh, check-gate.sh, immutable.sh, verify-done.sh
+.harness/roles/           the five role prompts
+.harness/RAILS.md         the rails, each naming what enforces it
+evals/run.sh              the write-path gate for a new LEARNINGS.md rule
+```
+
+## Commands
+
+```bash
+.harness/loop.sh [n]              n iterations, default 3
+.harness/worktree.sh [n]          the same, in an isolated worktree, --ff-only back
+DRY_RUN=1 .harness/loop.sh 1      print the stage plan, spawn nothing
+BUDGET_USD=5 .harness/loop.sh 8   halt at a spend
+touch STOP                        halt before the next stage; delete to resume
+.harness/hooks/probes.sh          the findings
+.harness/watch.sh                 follow a run from another terminal
+evals/run.sh [--gate <name>]      test a role prompt, or decide a candidate rule
+./selftest.sh                     the package's own floor
+```
+
+## Roles
+
+Five prompts with separated authority. One fresh process per stage; role isolation does not use
+vendor subagents, which exist for Claude Code, Copilot and Cursor and not for Codex or Gemini.
+
+| Role | Does | May never |
+| --- | --- | --- |
+| `scout` | turns `FINDING` lines into `status: proposed` blocks | have a finding of its own, promote, or fix |
+| `adjudicator` | promotes a proposal to `ready`, or kills it with the command that refutes it | write a proposal, or edit a file a block names |
+| `implementer` | one task, inside its `scope:` globs, test first | mark anything `done` |
+| `verifier` | fresh session, promotes to `done` or rejects with reproducible reasons | fix code |
+| `researcher` | attaches a source to a decision already made | find anything, or amend a governing document |
+
+A single agent that selects its own work and grades it measures self-consistency; the measured
+visible-versus-held-out gap is 43-48pp (SpecBench).
+
+## Gates
+
+The launcher re-runs every verdict. A task at `done` is forced back to `ready` when:
+
+| Gate | Condition |
+| --- | --- |
+| `gate_verdict` | the tree is dirty — the implementation is not on the branch |
+| `gate_verdict` | the check is red on delta against `.check-baseline` |
+| `gate_scope` | the diff touches a file the task's `scope:` globs do not name |
+| `gate_scope` | the diff touches the harness under a task whose `rows:` is not `none — harness` |
+
+The check command is yours. The harness verifies on delta against `.check-baseline`, not on zero:
+a tree whose exit criteria are not all covered cannot reach zero failures. `.check-baseline` only
+ever shrinks.
+
+## Probes
+
+`.harness/hooks/probes.sh` runs thirteen analyses and reports; it never gates. `FINDING` lines are
+the only legal queue input: the scout transcribes, the adjudicator re-runs the command and kills
+what does not reproduce.
+
+| Probe | Reports |
+| --- | --- |
+| `spec-untested` | an exit-criteria row with no test |
+| `queue-uncovered` | an untested row no open task names, or a task naming a row that does not exist |
+| `rail-unenforced` | a rail naming enforcement that does not exist or does not run |
+| `hash-uncovered` | a file a `test-hashes.json` rail names with no key |
+| `learning-unenforced` | a LEARNINGS.md entry naming no file, command or hook |
+| `learning-ungated` | a dated rule with no eval, or a rule library over `learningsCap` |
+| `ponytail-ceiling` | a `ponytail:` shortcut marked in the source |
+| `rejection-stale` | a REJECTED note under a non-`ready` status, or a `needs-spec` block |
+| `queue-hygiene` | duplicate ids, missing fields, dangling `blockedBy` |
+| `friction-repeat` | the same `friction:` twice with no LEARNINGS.md rule |
+| `check-red` | the check is failing |
+| `litter` | a tracked or untracked file on no allowlist |
+| `driver` | whatever your driver reports (off by default) |
+
+A fresh install reports three findings and all three are correct: the seeded exit-criteria row has
+no test file, `test-hashes.json` does not exist yet, and `immutable.sh` carries one marked shortcut.
+
+## The driver
+
+Twelve probes read text. `driver` runs your artifact through the surface a user touches, which is
+the only source of capability findings. It is off until `driverCommand` is set and
+`HARNESS_DRIVER=1` is in the environment.
+
+Contract: exit 0 whenever you reached the artifact, whatever you found; print one line per shortfall
+beginning `FINDING `. A non-zero exit is `PROBE driver ERROR` and nothing is proposed from it. Off
+prints `PROBE driver OFF`, never a count of zero. The command runs in a throwaway directory under
+`env -i`, so an agent you drive inherits none of the loop's context.
+
+`.harness/driver.example.sh` is the skeleton. `driver.sh` in this package is a worked example that
+drives the harness itself.
+
+## Rules and the write-path gate
+
+A repeated `friction:` line in `PROGRESS.md` becomes a rule in `LEARNINGS.md`, which every task
+reads. `evals/run.sh --gate <name>` decides whether the rule earns its place:
+
+| Condition | Establishes |
+| --- | --- |
+| the eval passes with the rule | it fixes the case it came from |
+| the eval fails with the rule ablated | the case would not have passed anyway |
+| every other eval still passes | it regresses nothing that worked |
+
+Ablation is a per-eval `ablate.sh`. `learning-ungated` reports rules that skipped the gate and a
+library over `learningsCap` (default 12).
+
+Conditions 1 and 3 are GRASP's admission rule under a hard regression budget, and GSE's local plus
+replay validation. Condition 2 is not in either: both ask whether the case passes now, neither asks
+whether it would have passed without the rule. The cap follows GRASP's capacity-bounded library.
+Unvalidated self-written rules are measurably worse than none — see References.
+
+## Evals
+
+One directory per eval: `setup.sh` builds a fixture repo with the harness installed, `prompt.txt` is
+the request in the shape `loop.sh` sends it, `assert.sh` exits 0 when the role obeyed its rule,
+`ablate.sh` removes the rule for the gate. Each runs in a throwaway repo with a fresh agent process.
+
+Three ship, one per queue-gating role. They need a real agent, so `selftest.sh` asserts the runner
+rather than spawning one. With no agent configured, `run.sh` refuses rather than reporting a result.
+
+## Configuration
+
+`harness.json` at the repo root. Every key becomes a `__SCREAMING_SNAKE__` token that `install.sh`
+substitutes into the scripts and prompts; the installed harness reads no config at runtime.
+
+| Key | Default | |
+| --- | --- | --- |
+| `agentCommand` | `["claude","-p",…]` | headless invocation of your agent. Also accepts an object keyed by role |
+| `check` | `bun run check` | the floor. Anything that exits non-zero on failure |
+| `checkForce` | `bun run check -- --force` | the same, cache-defeating |
+| `failNameSed` | `s/.*(fail) //p` | extracts one failure name per line; this is what makes `.check-baseline` work |
+| `costSed` | matches `total_cost_usd` | extracts run cost from the agent's output |
+| `spec` | `SPEC.md` | the contract |
+| `rowsHeading` | `## 11. Exit criteria` | heading the probes slice for rows; `rowsEndHeading` terminates it |
+| `driverCommand` | `""` | the driver, off by default |
+| `learningsCap` | `12` | bound on the rule library |
+
+The rest tune `litter` and `spec-untested` to your layout: `sourceRoot`, `contractFile`,
+`testFileSuffixRe`, `testDeclPatterns`, `sourceExt`, `harnessFiles`, `harnessGlobs`,
+`allowedPrefixes`, `docs`, `harnessAllow`, `machinery`. Defaults in `harness.default.json`.
+
+`install.sh` greps the installed files for a surviving `__TOKEN__`, fails if it finds one, then
+`bash -n`s every script.
+
+`AGENTS.md` is the context file because it is an open format read by 20+ agents;
+`CLAUDE.md`, `GEMINI.md` and `.github/copilot-instructions.md` are generated one-line pointers at it.
+
+## Agents
 
 | Agent | `agentCommand` |
 | --- | --- |
@@ -143,30 +196,7 @@ in per stage:
 | Goose | `["goose","run","-t","{prompt}"]` |
 | Aider | `["aider","--message","{prompt}","--yes"]` |
 
-The launcher gets role isolation from **one fresh process per stage**, not from a vendor subagent
-mechanism — subagents exist for Claude Code, Copilot and Cursor and do not exist for Codex or Gemini
-([arXiv:2602.14690](https://arxiv.org/abs/2602.14690), Table 1). Each stage is pointed at
-`.harness/roles/<role>.md` and reads it. `adapters/README.md` has the rest.
-
-## Skills
-
-The role prompts name skills — TDD, systematic debugging, code review, minimalism — and degrade
-gracefully when one is missing. Skills are the **one extension mechanism that is genuinely
-portable**: all five tools in the cross-tool study support them, and ~48 clients implement the
-[agentskills.io](https://agentskills.io/) format.
-
-They install per tool, not per repository. Superpowers, the largest skills framework, says it
-plainly: *"Installation differs by harness. If you use more than one, install Superpowers separately
-for each one."* So this package does not vendor anyone's skills. What it ships is the project's own
-skill — `running-the-loop` — written to the same open format, installed into whichever
-`skillsDir` you name (`.claude/skills`, `.codex/skills`, `.gemini/skills`, `.cursor/skills`,
-`.github/skills`), so any skills-compatible agent discovers the task protocol on its own.
-
-Set `skillInvocation` in `harness.json` to whatever your tool calls it.
-
-### More than one model
-
-`agentCommand` also accepts an object keyed by role. A role it does not name uses `default`.
+Per-role commands, so a role can run on a different model or vendor:
 
 ```json
 "agentCommand": {
@@ -175,176 +205,82 @@ Set `skillInvocation` in `harness.json` to whatever your tool calls it.
 }
 ```
 
-Each stage is already a separate process, so a different command per role costs nothing extra. The
-reason to use it is measurement: a verifier running the model that wrote the code reports agreement
-between two samples of one model, not correctness. SpecBench measured 43-48pp visible-versus-held-out
-gaps for a single agent grading its own work ([arXiv:2605.21384](https://arxiv.org/pdf/2605.21384)).
-The scout and adjudicator are cheap and high-volume; a smaller model there and a larger one on
-`verifier` is the other common split.
+A role the object does not name uses `default`. `DRY_RUN=1 .harness/loop.sh 1` prints what each
+stage would spawn.
 
-`DRY_RUN=1 .harness/loop.sh 1` prints the command each stage would spawn.
+## Cost
 
-### What a run costs
+Every spawned stage appends a tab-separated record to `.harness/run.log`: UTC timestamp, iteration,
+role, task, seconds, exit code, cost. The log is git-ignored. Cost comes from `costSed` over the
+agent's own output; an agent that reports nothing leaves the column empty.
 
-Every spawned stage appends one tab-separated record to `.harness/run.log`: UTC timestamp,
-iteration, role, task id, seconds, exit code, and the cost the agent reported. The log is ignored
-by git — it is machinery, and a lane that stages everything would otherwise commit it.
+`BUDGET_SECONDS` and `BUDGET_USD` halt before the next stage once the total reaches either. They are
+checked at stage boundaries, so a budget stops the next agent rather than killing a running one.
 
-Cost is read from the agent's own output with `costSed`, one `sed -n` expression in `harness.json`.
-The default matches Claude Code's `--output-format json`. An agent that reports nothing leaves the
-column empty; wall clock is always recorded.
+## Skills
 
-`BUDGET_SECONDS` and `BUDGET_USD` halt the run before the next stage once the total reaches either.
-They are checked at stage boundaries and never inside a stage, so a budget stops the next agent
-rather than killing a running one. The digest prints the totals and a per-role breakdown.
-
-```bash
-BUDGET_USD=5 .harness/loop.sh 8
-```
-
-## Configuration
-
-One file, `harness.json`, at your repo root. Every key becomes a `__SCREAMING_SNAKE__` token that
-`install.sh` substitutes into the scripts and prompts, so **the installed harness is plain text with
-no runtime config to read**. Lists render as literals, strings render raw.
-
-Six keys matter on day one:
-
-| Key | Default | |
-| --- | --- | --- |
-| `agentCommand` | `["claude","-p",…]` | the headless invocation of your coding agent |
-| `check` | `bun run check` | the floor. Anything that exits non-zero on failure |
-| `checkForce` | `bun run check -- --force` | the same, cache-defeating. If your check has no cache, repeat `check` |
-| `failNameSed` | `s/.*(fail) //p` | how to extract one failure name per line from the output. This is what makes `.check-baseline` work |
-| `spec` | `SPEC.md` | the contract |
-| `driverCommand` | `""` (off) | the one probe that exercises the artifact instead of reading text. Also needs `HARNESS_DRIVER=1`. Name a script — `$HARNESS_ROOT/scripts/drive.sh` — because it runs from a throwaway directory |
-| `rowsHeading` | `## 11. Exit criteria` | the heading the probes slice for exit-criteria rows, and `rowsEndHeading` terminates it |
-
-The rest tune the `litter` and `spec-untested` probes to your layout: `sourceRoot`, `contractFile`,
-`testFileSuffixRe`, `testDeclPatterns`, `sourceExt`, `harnessFiles`, `harnessGlobs`,
-`allowedPrefixes`, `docs`, `harnessAllow`, `machinery`. Defaults in `harness.default.json`.
-
-`install.sh` greps the installed files for a surviving `__TOKEN__` and fails if it finds one, then
-`bash -n`s every script. A gate asserts what it executed.
-
-## Why AGENTS.md and not CLAUDE.md
-
-`AGENTS.md` is an open format read by 20+ agents and present in
-[60,000+ repositories](https://agents.md/). In a study of 2,926 engineered repositories, CLAUDE.md
-appeared in 45.4% and AGENTS.md in 40.6% — but AGENTS.md received by far the most **incoming
-references** (368), and `CLAUDE.md → AGENTS.md` was the single most common pair, 311 times. The
-authors' own recommendation is to keep AGENTS.md as the shared baseline and use "tool-specific files
-as adapters that reference a shared core file"
-([arXiv:2602.14690](https://arxiv.org/abs/2602.14690)). That is exactly what `install.sh` writes.
-
-Claude Code does not read AGENTS.md natively — the feature request has 4,300+ upvotes and the answer
-is "not planned" ([anthropics/claude-code#34235](https://github.com/anthropics/claude-code/issues/34235)) —
-so the generated `CLAUDE.md` uses the documented `@AGENTS.md` import.
-
-**The context file is short on purpose.** Across 138 real tasks and four agents, context files raised
-inference cost by over 20%; LLM-generated ones cost about 3% of success rate and human-written ones
-bought about 4% ([Gloaguen et al., arXiv:2602.11988](https://arxiv.org/abs/2602.11988)). Instructions
-are demonstrably *followed* — a tool named in the file is used ~1.6 times per task versus under 0.01
-when unnamed — so the risk is not that the file is ignored, it is that "unnecessary requirements from
-context files make tasks harder." The full rails live in `.harness/RAILS.md` and the task protocol in
-a skill, both loaded on demand. Only five rails and the commands are resident.
-
-## Checking the harness itself
-
-```bash
-./selftest.sh          # installs into a throwaway repo and asserts 20 things about the result
-KEEP=1 ./selftest.sh   # leave the scratch repo behind
-```
-
-It covers install and re-install, the launcher's queue resolution and `set_status`, the clarification
-halt firing on a bare marker and *not* on the template's own backticked mention of it, every probe
-running without erroring, and all five delta cases of the gate. Two of the bugs it was written to
-catch were template edits that silently broke the probes' row parser.
-
-**A fresh install reports three findings, and all three are correct.** `spec-untested` names the test
-file the seeded exit-criteria row points at, which you have not written; `rail-unenforced` says
-`test-hashes.json` does not exist, which it does not until you run your adapter's hash step; and
-`ponytail-ceiling` reports the one deliberate shortcut marked in `immutable.sh`. Nothing is clean on
-day one and the probes should not pretend otherwise.
+The role prompts name skills (TDD, systematic debugging, code review, minimalism) and continue when
+one is missing. Skills install per tool, not per repository, so this package vendors none. It ships
+its own procedure as a `SKILL.md` in `skillsDir` in the [agentskills.io](https://agentskills.io/)
+format, which ~48 clients read.
 
 ## Adapters
 
-The floor is language-specific and the harness does not pretend otherwise. `adapters/bun-turbo/`
-ships the five-stage `check.ts` this harness grew up on, plus the turbo-aware `check-covered.sh`
-that fails any changed file no executed build task covers. Install with `--adapter bun-turbo`.
+The floor is language-specific. `adapters/bun-turbo/` ships a five-stage `check.ts` and a turbo-aware
+`check-covered.sh` that fails any changed file no executed build task covered. Install with
+`--adapter bun-turbo`.
 
-Without an adapter you get the portable `check-gate.sh`: run the check, forgive only exact
-`.check-baseline` matches, and **fail closed when it cannot name what failed**. What you lose is the
-coverage assertion — that a changed file was actually reached by a task that ran. If your build tool
-can report its plan, write an adapter; it is forty lines.
+Without an adapter you get `check-gate.sh`: run the check, forgive only exact `.check-baseline`
+matches, fail closed when it cannot name what failed. You lose the coverage assertion. An adapter is
+about forty lines.
 
-## What the research changed
+## Not included
 
-Everything in this section is a change made because a cited source said so, not because it seemed
-better. What the same research says is still missing is under **What is not here** above.
-
-| Change | Grounded in |
+| | |
 | --- | --- |
-| `AGENTS.md` is the core context file; `CLAUDE.md`, `GEMINI.md` and `copilot-instructions.md` are generated one-line pointers | 60,000+ repos ([agents.md](https://agents.md/)); 368 incoming references and the 311× `CLAUDE.md→AGENTS.md` pair across 2,926 repos, and the authors' own "adapters that reference a shared core file" recommendation ([arXiv:2602.14690](https://arxiv.org/abs/2602.14690)) |
-| The context file is ~50 lines; rails moved to `.harness/RAILS.md`, the protocol to a skill | Context files cost >20% inference and ~3% success when auto-generated; "human-written context files should describe only minimal requirements" ([arXiv:2602.11988](https://arxiv.org/abs/2602.11988)) |
-| Roles moved from `.claude/agents/` to `.harness/roles/`, fed to a fresh process | Subagents exist for Claude, Copilot and Cursor and **not** for Codex or Gemini ([arXiv:2602.14690](https://arxiv.org/abs/2602.14690), Table 1) |
-| Hooks demoted to an adapter; every rail rests on the launcher's own gate | Hooks are per-tool and **Codex has none** (same table) |
-| `agentCommand` is configurable | Seven agent CLIs expose different headless invocations; Archon ([23.3k★](https://github.com/coleam00/Archon)) parameterises the binary for the same reason |
-| The project's own procedure ships as a `SKILL.md` in `skillsDir` | Skills are supported by all five studied tools and ~48 clients ([agentskills.io](https://agentskills.io/)); Superpowers ([280k★](https://github.com/obra/superpowers)): "Installation differs by harness" |
-| `archive-done.sh` and `watch.sh` guard on the configured binary, not `claude -p` | A process guard that recognises one vendor never fires for anyone else — caught by this package's own selftest |
+| A driver for your artifact | the probe, the skeleton and a worked example ship; the surface is yours |
+| Parallel lanes | `worktree.sh` isolates one. Several at once is not shipped |
+| A held-out suite | the verifier sees the same tests the implementer did |
+| `test-hashes.json` | `install.sh` does not write it; `hash-uncovered` reports that until you do |
+| Evals for `implementer` and `researcher` | three of five roles covered |
 
-A caution worth keeping: of 601 skills studied, **83.3% bundled no resources at all** and only 5.7%
-had a `scripts/` directory. "Configuration is currently used more as documentation than as
-automation." Executable harnesses are uncommon, which argues for keeping this one small.
+Fresh sessions isolate context; worktrees isolate the checkout. Every stage is already a new process
+that cannot see the last one's conversation, and all of them write to the same working tree, which
+is why `one checkout is one writer` is a rail rather than a mechanism.
 
-## What is not here, deliberately
+## When to use it
 
-**A driver for *your* artifact.** The probe is here, `.harness/driver.example.sh` is the skeleton to
-copy, and `driver.sh` in this package is a worked example — it installs the harness into four
-throwaway repos, drives one request through each with a lane that is sloppy in exactly one way, and
-reports which sloppiness the harness let through. What it cannot know is your artifact's surface.
-Until you fill the skeleton in and set `driverCommand`, every count the loop reads came from a grep
-over the repo, and capability shortfall is invisible to all of it.
+When the capability sequence is not known up front, when the failures that matter sit outside the
+tests you have, and when you intend to leave the thing running. If complete tests already describe
+the work, give an agent the tests instead.
 
-**Parallel lanes.** `.harness/worktree.sh` gives one lane its own checkout — `git worktree add`, the
-loop inside it, then `--ff-only` back, and if the parent moved it leaves the branch and says what a
-human has to decide. That is the isolation; running several of them at once is not shipped. The
-multi-worktree launcher in the repo this came from is 23KB, was unused for months, and its one
-load-bearing function (`gate_verdict`) is in `loop.sh` here. Add lanes when you have file-disjoint
-scopes to fight over, not before.
+Start with one exit-criteria row, one task, and `.harness/loop.sh 1`.
 
-Worth being precise about, because the two get conflated: **fresh sessions isolate context, worktrees
-isolate the checkout.** Every stage already runs as a new process that cannot see the last one's
-conversation — that is what `verifier-not-implementer` buys — and all of them still write to the same
-working tree, which is why `one checkout is one writer` is a rail rather than a mechanism.
+## Testing the harness
 
-**A held-out suite.** `verifier-not-implementer` gives you a fresh session and a separate process.
-A suite the implementer never sees is stronger, and it is yours to write.
-Freeze your **exam** with your tests while you are there — the corpus, the fixtures and the scoring
-rules belong in `test-hashes.json`, or a lane can retune what it is graded on.
+```bash
+./selftest.sh                    # installs into a throwaway repo and asserts against it
+HARNESS_DRIVER=1 ./selftest.sh   # plus the driver, ~90s
+KEEP=1 ./selftest.sh             # leave the scratch repo
+```
 
-**`test-hashes.json` itself.** `install.sh` does not write it, and a fresh install emits exactly one
-`hash-uncovered` finding naming `loop.sh` until you do. The hashes are yours to cut.
+Covers install and re-install, queue resolution, the clarification halt, every probe running without
+erroring, all five delta cases of the gate, both scope gates, worktree isolation and merge-back, the
+run log and budget halts, the eval runner, and all four write-path gate outcomes.
 
-**Evals for two of the five roles.** `evals/` covers the three that gate the queue. The implementer
-and the researcher have none; each is a fixture and two files, and the pattern is in place.
+## References
 
-## When not to use it
-
-Most tickets do not need any of this. If complete tests describe the work, give an agent the tests
-and let it finish. This earns its cost when the capability sequence is not known up front, when the
-failures that matter sit outside the tests you already have, and when you intend to leave the thing
-running.
-
-Start with one exit-criteria row, one task, and `.harness/loop.sh 1`. Add a control after a failure
-justifies it, not before.
-
-## Provenance
-
-Extracted from a working single-package repo where it ran for weeks. Every rail in the templates
-carries the measured finding behind it, and every seed line in `LEARNINGS.md` is a mistake that was
-actually paid for. It was then installed into its own repository and used to build its last three
-capabilities through its own queue — the driver, worktree isolation and the role evals — which is
-where the git history starts being the argument for it. That run found a task the loop should never
-have been offered, a gate that let uncommitted work reach `done`, and two fresh instances of the
-exact failure the whole harness is built around. None of the three came from reading the code.
+| Claim | Source |
+| --- | --- |
+| Self-graded work: 43-48pp visible-versus-held-out gap | [arXiv:2605.21384](https://arxiv.org/pdf/2605.21384) |
+| Fresh context per task: per-bug accuracy 58.9% → 36.5% when an agent inherits its own state | [arXiv:2607.27283](https://arxiv.org/html/2607.27283v1) |
+| Multi-turn degradation averages 39% | [arXiv:2505.06120](https://arxiv.org/abs/2505.06120) |
+| Context files cost >20% inference, ~3% success when auto-generated | [arXiv:2602.11988](https://arxiv.org/abs/2602.11988) |
+| `AGENTS.md` adoption; subagents and hooks are per-vendor | [arXiv:2602.14690](https://arxiv.org/abs/2602.14690), [agents.md](https://agents.md/) |
+| Read-only tests are the cheapest anti-reward-hacking mitigation; abort affordance cut cheating 54% → 9% | [arXiv:2510.20270](https://arxiv.org/html/2510.20270v1) |
+| "Please do not reward hack" fails in 70-95% of attempts | [METR](https://metr.org/blog/2025-06-05-recent-reward-hacking/) |
+| Rule admission under a hard regression budget; capacity-bounded library; ungated accumulation fell to 41.2% from a 40.6% baseline | [arXiv:2605.29668](https://arxiv.org/abs/2605.29668) |
+| Local then replay-driven validation of a candidate skill | [arXiv:2608.06153](https://arxiv.org/html/2608.06153) |
+| Unvalidated reflective memory worse than none; 0 of 121 reflections named the correct target | [arXiv:2605.29463](https://arxiv.org/html/2605.29463) |
+| Context collapse: 18,282 tokens at 66.7% → 122 tokens at 57.1%, baseline 63.7% | [arXiv:2510.04618](https://arxiv.org/html/2510.04618v1) |
+| Task length and reliability: T₉₀ ≈ ⅐ T₅₀ | [arXiv:2505.05115](https://arxiv.org/pdf/2505.05115) |
