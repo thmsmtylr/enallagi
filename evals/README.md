@@ -22,3 +22,17 @@ it buys.
 
 The agent comes from `EVAL_AGENT`, else `harness.json`'s `agentCommand`. With neither, `run.sh`
 refuses rather than reporting a result it did not measure.
+
+## What a REJECT looks like in practice
+
+Run against `claude -p` on 2026-09-02, `--gate verifier` rejected the rule it was holding:
+
+```
+GATE verifier REJECT the case passes with the rule ablated, so the rule changed no outcome
+```
+
+The rule was `verifier.md` step 0, which says uncommitted source is a rejection. With it removed,
+the model still rejected the uncommitted task. On that model and that fixture the line is not
+load-bearing. One sample is not a reason to delete it — a smaller or older model may need it — but
+it is the reason the ablation arm exists: without it, the same run reports a pass and the rule looks
+earned.
