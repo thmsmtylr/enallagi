@@ -54,8 +54,7 @@ Stopping with `BLOCKED` and a written reason is a success, not a failure.
 Every iteration's `PROGRESS.md` entry ends with `friction:` — one thing that cost time and a rule or
 a check could prevent, or `none`. The first occurrence is evidence and stays there. The **second**
 occurrence of the same thing becomes a line in `LEARNINGS.md`, and `probes.sh` → `friction-repeat`
-keeps emitting it until it is. A rule per surprise is how a harness rewrites its operating system
-every week and gets worse.
+keeps emitting it until it is. One rule per surprise rewrites the operating manual every week, which costs more than the friction it removes.
 
 ## The rails
 

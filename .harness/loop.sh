@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # The sequential agent loop: one lane, one task, one fresh session per task.
-# This is the whole harness's entrypoint. Multi-lane parallelism is deliberately
+# This is the harness entrypoint. Multi-lane parallelism is deliberately
 # not shipped — see README.md "What is not here".
 #
 # Tokens like ./selftest.sh are substituted by install.sh from harness.json.
 #
-# Each iteration = ONE task, FRESH context. This is the whole trick:
-# instead of one long session that degrades, you get N short sessions
-# that each read the repo state cold and leave it green.
+# Each iteration is one task in a fresh context: N short sessions that each
+# read the repo state cold and leave it green, rather than one long session
+# that degrades. Per-bug accuracy falls 58.9% -> 36.5% when an agent inherits
+# its own prior state (ChainSWE, via arXiv:2607.27283).
 #
 # Usage:  ./loop.sh [max_iterations]
 #         ./loop.sh --selftest        assert ready_unattended against a fixture queue
@@ -533,7 +534,7 @@ while [ "$i" -lt "$MAX_ITER" ]; do
     echo "=== Iteration $i: scout (queue empty, $DRY_ROUNDS dry rounds so far) ==="
     READY_BEFORE=$(ids_at ready); REJ_BEFORE=$(rejections)
     agent_for scout
-    run_agent "scout" "$LANE Read AGENTS.md and LEARNINGS.md. Your role is defined in .harness/roles/scout.md: read that file first and follow it exactly. Run .harness/hooks/probes.sh and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks and that is a success, not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop." 30 \
+    run_agent "scout" "$LANE Read AGENTS.md and LEARNINGS.md. Your role is defined in .harness/roles/scout.md: read that file first and follow it exactly. Run .harness/hooks/probes.sh and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop." 30 \
       || { echo "scout exited $? -- halting."; break; }
 
     stop_now && break

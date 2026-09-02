@@ -81,7 +81,7 @@ notes: |
 ## [T-003] the shipped prose is written for an audience that is not the reader
 scope: README.md, roles/*.md, templates/*.md, skills/**, harness/*.sh, harness/hooks/*.sh, install.sh, selftest.sh, driver.sh, evals/**
 blockedBy: none
-status: ready
+status: review
 rows: `selftest.sh::no shipped file carries rhetorical filler`
 criteria:
   - `./selftest.sh` greps every shipped file for a written list of rhetorical patterns and fails on
@@ -90,4 +90,13 @@ criteria:
   - Every hit in the current tree is rewritten to state the fact, keeping every citation, measured
     figure and file reference intact.
   - No claim, source or number is lost in the rewrite: `git diff` shows prose changes only.
-notes:
+notes: |
+  16 hits in the first scan. Each was replaced by the fact it was decorating, and where the fact was
+  a measurement the citation moved with it: the roles table's "one agent with extra steps" became
+  SpecBench's 43-48pp visible-versus-held-out gap (arXiv:2605.21384), and loop.sh's "this is the
+  whole trick" became ChainSWE's 58.9% -> 36.5% (arXiv:2607.27283).
+  The check greps the package source, not the throwaway install, so it covers what ships.
+  Scrutinise: the pattern list was narrowed after the first draft. `is not the ` and `and that is`
+  matched sentences carrying real information ("a testcase existing is not the check"), so the
+  automated list now covers unambiguous filler only and the ambiguous cases were rewritten by hand.
+  Evidence 2026-09-02: `./selftest.sh` -> "no shipped file carries rhetorical filler" ok.

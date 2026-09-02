@@ -5,16 +5,14 @@ all of them with the enforcement and the evidence, so the context file every age
 session stays short.
 
 Rails are named, never numbered. A prompt citing `the bounded rail` survives an edit to this file's
-ordering; one citing "rule 11" does not. **Every rail names what enforces it, because a rail with no
-enforcement is a wish** — and a rail enforced by an agent's judgment says so, rather than naming a
-mechanism that does not run.
+ordering; one citing "rule 11" does not. **Every rail names what enforces it.** A rail enforced by an
+agent's judgment says so, rather than naming a mechanism that does not run.
 
 ## Rails
 
 Rails are named, never numbered. A prompt citing `the bounded rail` survives an edit to this file's
-ordering; one citing "rule 11" does not. **Every rail names what enforces it, because a rail with no
-enforcement is a wish** — and a rail enforced by an agent prompt says so, rather than naming a
-mechanism that does not run.
+ordering; one citing "rule 11" does not. **Every rail names what enforces it.** A rail enforced by an
+agent prompt says so, rather than naming a mechanism that does not run.
 
 ### Product rails
 
@@ -42,7 +40,7 @@ Each exists because something specific went wrong.
 | `contracts` | Every shape crossing a boundary is declared once in `harness.default.json`, parsed at the write path, frozen for the milestone. Never invent an interface, import it. | `typecheck` |
 | `one-scope` | Touch only files inside the task's `scope:` globs. An out-of-scope need is a note on the task and a stop, never a quiet edit. | `.harness/loop.sh` → `gate_scope`, diffing the iteration's own commits against `scope:` · judgment — the verifier |
 | `minimal` | Walk the ladder: does it need to exist → already here → stdlib → the platform → an installed dependency → one line → only then a minimal build. Product rails are never on the chopping block. | judgment — the verifier |
-| `no-invented-strategy` | Never state a business model, sequence, price or market position that was not given to you. An open question is written as an open question. A plausible inference stated as fact is worse than a blank, because the next agent plans against it. | judgment — the verifier |
+| `no-invented-strategy` | Never state a business model, sequence, price or market position that was not given to you. An open question is written as an open question. An inference stated as fact is planned against by the next agent, so it costs more than a blank. | judgment — the verifier |
 | `tidy` | The tree holds the product and the documents that govern it. A throwaway experiment is deleted the moment its number exists. Gitignored is not absent. Deleted work stays citable by sha: `git show <sha>:<path>`. | `probes.sh` → `litter` |
 | `anchored` | A finding enters the queue only with the probe, the command and the output that produced it; an unanchored finding is a rejection, not a task. | judgment — the adjudicator |
 
@@ -60,10 +58,10 @@ Each exists because something specific went wrong.
 | `harness-immutable` | The build config, every preload, the check script **and `.harness/loop.sh` itself** are covered by the same hashes. The gate cannot be edited by the thing it gates, and the scheduler is part of the gate. Freeze the **exam** as well as the tests: whatever files hold your approved corpus, your fixtures and your scoring rules belong here too, or a lane can retune what it is graded on. | the verifier · `test-hashes.json`, and `probes.sh` → `hash-uncovered` for every file this row names |
 | `one-row` | A task is at most the exit-criteria rows it names under `rows:`. Split it if it is more. Write `PROGRESS.md` at the end of every iteration; re-read its tail, SPEC.md and `git log --oneline -20` at the start of the next. | `.harness/loop.sh` |
 | `minutes-not-hours` | No task is more than about 30 minutes of human-equivalent work. Split it if it is. | judgment — the adjudicator, at promotion |
-| `blocked-is-allowed` | A task may stop with `BLOCKED` and a written reason, and that is a success. A task may **never** be marked done without the exact command and its pasted output. | `.harness/loop.sh` → `gate_verdict` |
+| `blocked-is-allowed` | A task may stop with `BLOCKED` and a written reason, which is a success. A task may **never** be marked done without the exact command and its pasted output. | `.harness/loop.sh` → `gate_verdict` |
 | `no-clarification-left` | If any `[NEEDS CLARIFICATION]` marker exists in SPEC.md, the loop does not start. | `.harness/loop.sh` |
 | `harness-lane` | One round changes a product lever or the measure of that lever, never both. A diff touching the launcher, the hooks, the check script, `.check-baseline` or `test-hashes.json` belongs to a task that declared `rows: none — harness`. | `.harness/loop.sh` → `gate_scope` |
-| `friction` | Every iteration's PROGRESS.md entry ends with the round's question — what cost time that a rule or a check could prevent. The first occurrence is evidence and stays in PROGRESS.md; the **second** occurrence of the same thing becomes a line in LEARNINGS.md. A rule per surprise is how a harness rewrites its operating system every week and gets worse. | judgment — the verifier, for the line's presence · `probes.sh` → `friction-repeat`, for the second occurrence |
+| `friction` | Every iteration's PROGRESS.md entry ends with the round's question — what cost time that a rule or a check could prevent. The first occurrence is evidence and stays in PROGRESS.md; the **second** occurrence of the same thing becomes a line in LEARNINGS.md. One rule per surprise rewrites the operating manual every week, which costs more than the friction it removes. | judgment — the verifier, for the line's presence · `probes.sh` → `friction-repeat`, for the second occurrence |
 | `verifier-not-implementer` | Final acceptance runs in a fresh session that sees only the diff and the exit criteria. It never sees the implementation conversation. | `.harness/loop.sh` · `.harness/roles/verifier.md` |
 
 ## Task protocol

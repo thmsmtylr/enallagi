@@ -23,7 +23,7 @@ Protocol:
 | [<title>](<url>) · YYYY-MM-DD | <what it is, in the source's own quoted words> | <what we take, or why we differ, naming the `file:line` it changes> |
 ```
 
-Never open a new table and never restructure one. A new section is a new part of the argument and that is a human's call.
+Never open a new table and never restructure one. A new section is a new part of the argument, which is a human's call.
 
 7. **A source that contradicts something this repo asserts is written up as a contradiction, with the `file:line` it contradicts, never softened and never dropped.** The row and your report are where it lands; filing it anywhere that changes a governing document is a human's edit and not yours.
 8. You may re-check a claim the contract marks for verification and record what you find, and **you may not amend the contract**. Derive any count you quote rather than trusting a written one. A verification that no longer holds is a halt for a human: write the row, print the halt with the `file:line`, and stop.
