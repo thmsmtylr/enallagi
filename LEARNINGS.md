@@ -24,3 +24,8 @@
 - [seed] Never use a harness control token as an English word in an agent prompt. "STOP" as prose
   once had an agent run `touch STOP` and halt a six-task run after one → say `halt the task` when
   you mean one task.
+- [2026-09-02] Zero-as-pass came back twice in one run, both times in NEW code written to prevent
+  it: `selftest.sh` printed `ok` for an assertion it had skipped, and an eval fixture whose
+  `str.replace` matched nothing measured a state it never built → any check that can be SKIPPED
+  prints `skip`, never `ok` (`selftest.sh` → `skip()`), and any fixture that rewrites a file asserts
+  its own edit landed (`evals/verifier/setup.sh` → `assert src.count(was) == 1`).

@@ -291,6 +291,31 @@ git worktree remove --force "$LANE_DIR" >/dev/null 2>&1
 git branch -D "$(git branch --list 'lane/*' | tr -d ' *')" >/dev/null 2>&1
 rm -f src/wtlane.sh
 
+# --- the eval runner, against the role prompts -------------------------------
+# The evals themselves need a real agent, which `./selftest.sh` must not spawn. What is asserted
+# here is the RUNNER: that a role obeying its rule is a PASS, that one breaking it is a FAIL, and
+# that with nothing configured to spawn it refuses instead of reporting either.
+cat > src/evalobeys.sh <<'OBEYS'
+#!/usr/bin/env bash
+# the verifier's rule: uncommitted source means the work is not on the branch. Reject to ready.
+sed -i.bak 's/^status: review/status: ready/' TASKS.md && rm -f TASKS.md.bak
+OBEYS
+cat > src/evalbreaks.sh <<'BREAKS'
+#!/usr/bin/env bash
+# the false VERIFIED: promote it anyway
+sed -i.bak 's/^status: review/status: done/' TASKS.md && rm -f TASKS.md.bak
+BREAKS
+chmod +x src/evalobeys.sh src/evalbreaks.sh
+is "the eval runner passes a role that obeys its rule" "EVAL verifier PASS" \
+  "$(EVAL_AGENT="$T/src/evalobeys.sh {prompt}" "$SRC/evals/run.sh" verifier 2>/dev/null)"
+is "the eval runner fails a role that breaks its rule" "EVAL verifier FAIL" \
+  "$(EVAL_AGENT="$T/src/evalbreaks.sh {prompt}" "$SRC/evals/run.sh" verifier 2>/dev/null | tail -1)"
+# with no agent anywhere, a refusal — never a pass for something that was never run
+cp -R "$SRC" "$T/pkgcopy" 2>/dev/null; rm -f "$T/pkgcopy/harness.json"
+is "with no agent configured the evals refuse rather than report" "2" \
+  "$("$T/pkgcopy/evals/run.sh" verifier >/dev/null 2>&1; echo $?)"
+rm -rf "$T/pkgcopy" src/evalobeys.sh src/evalbreaks.sh
+
 # --- teardown ---------------------------------------------------------------
 cd /
 [ -n "${KEEP:-}" ] && echo "kept: $T" || rm -rf "$T"
