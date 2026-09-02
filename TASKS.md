@@ -56,7 +56,7 @@ notes: |
 ## [T-002] the loop reports no cost and enforces no budget
 scope: harness/loop.sh, harness.default.json, selftest.sh, README.md
 blockedBy: none
-status: ready
+status: review
 rows: `selftest.sh::every spawned stage appends one record to the run log`, `selftest.sh::the loop stops before a stage that would exceed the budget`
 criteria:
   - Every spawned stage appends one tab-separated record to `.harness/run.log`: ISO timestamp,
@@ -66,7 +66,17 @@ criteria:
     reached either. Zero or unset means no limit.
   - The digest prints total wall clock, total cost where known, and per-role totals.
   - `./selftest.sh` declares both rows' assertions and passes.
-notes:
+notes: |
+  Wall clock is portable and always recorded; cost is not, so it is extracted from the agent's own
+  output with `costSed` and left empty when nothing matches. Budgets are checked at stage
+  boundaries, never inside a stage.
+  Evidence 2026-09-02: one iteration with a lane reporting `{"total_cost_usd": 0.5}` wrote two
+  records; with `BUDGET_USD=0.4` the run halted after the first and the second stage never spawned
+  (one record, and `HALT: the run has spent` in the output).
+  Scrutinise: `.harness/run.log` had to become git-ignored. Written into the repo it was staged by
+  any lane running `git add -A`, which then failed the scope gate for a file the lane did not write,
+  and made the parent checkout dirty during a worktree run. install.sh writes
+  `.harness/.gitignore`, never the repository's own.
 
 ## [T-003] the shipped prose is written for an audience that is not the reader
 scope: README.md, roles/*.md, templates/*.md, skills/**, harness/*.sh, harness/hooks/*.sh, install.sh, selftest.sh, driver.sh, evals/**

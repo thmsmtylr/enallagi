@@ -150,6 +150,24 @@ The scout and adjudicator are cheap and high-volume; a smaller model there and a
 
 `DRY_RUN=1 .harness/loop.sh 1` prints the command each stage would spawn.
 
+### What a run costs
+
+Every spawned stage appends one tab-separated record to `.harness/run.log`: UTC timestamp,
+iteration, role, task id, seconds, exit code, and the cost the agent reported. The log is ignored
+by git — it is machinery, and a lane that stages everything would otherwise commit it.
+
+Cost is read from the agent's own output with `costSed`, one `sed -n` expression in `harness.json`.
+The default matches Claude Code's `--output-format json`. An agent that reports nothing leaves the
+column empty; wall clock is always recorded.
+
+`BUDGET_SECONDS` and `BUDGET_USD` halt the run before the next stage once the total reaches either.
+They are checked at stage boundaries and never inside a stage, so a budget stops the next agent
+rather than killing a running one. The digest prints the totals and a per-role breakdown.
+
+```bash
+BUDGET_USD=5 .harness/loop.sh 8
+```
+
 ## Configuration
 
 One file, `harness.json`, at your repo root. Every key becomes a `__SCREAMING_SNAKE__` token that

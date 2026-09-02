@@ -41,3 +41,13 @@ what happened: agentCommand now takes an object keyed by role as well as a word 
 renders one token per role; loop.sh selects by stage. No change to the stage prompts or the gates.
 friction: none.
 next: T-002, run log and budget.
+
+## 2026-09-02 — T-002 — landed
+rows: `selftest.sh::every spawned stage appends one record to the run log`, `selftest.sh::the loop stops before a stage that would exceed the budget`
+check: `./selftest.sh` -> all assertions that ran passed, 1 skipped.
+what happened: run log, cost extraction via costSed, BUDGET_SECONDS and BUDGET_USD halts at stage
+boundaries, totals in the digest.
+friction: writing the run log into the repository put a harness-authored file inside the diff the
+scope gate judges, which failed four unrelated assertions. Machinery the loop writes during a run
+belongs outside what git sees.
+next: T-003, the prose pass.
