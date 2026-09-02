@@ -91,3 +91,15 @@ friction: a log file written inside the fixture repo joined the diff the scope g
 because the fixture lane runs `git add -A`. Scratch output belongs outside the tree under test —
 which is the `tidy` rail pointed at a test's own working files.
 next: strip the dogfood install back out so the package ships as a starter harness.
+
+## 2026-09-02 — T-005 — landed
+rows: none — harness
+check: `HARNESS_DRIVER=1 ./selftest.sh` -> all assertions passed. `HARNESS_DRIVER=1 .harness/hooks/probes.sh` -> `PROBE driver 0`.
+what happened: closed the hole the driver found on its first run. `gate_verdict` now rejects a `done`
+whose tree is dirty — the implementation was never on the branch, and the check is green either way,
+so nothing the launcher ran could see it. The driver went from one finding to none, which is the
+criterion phrasing working exactly as written: what has to become true for the probe to stop saying
+that line.
+friction: the selftest's driver assertion required at least one finding, so closing the hole turned
+the floor red — a test that asserts a defect still exists. Assert the instrument, never the defect.
+next: strip the dogfood install out; the package ships as a starter harness.
