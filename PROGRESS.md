@@ -33,3 +33,11 @@ stays here. The **second** occurrence of the same thing becomes a line in LEARNI
 per surprise is how a harness rewrites its operating system every week and gets worse.
 
 ---
+
+## 2026-09-02 — T-001 — landed
+rows: `selftest.sh::a role with its own agent command is spawned with it`, `selftest.sh::a role with no agent command falls back to the default`
+check: `./selftest.sh` -> all assertions that ran passed, 1 skipped (driver, HARNESS_DRIVER unset).
+what happened: agentCommand now takes an object keyed by role as well as a word list. install.sh
+renders one token per role; loop.sh selects by stage. No change to the stage prompts or the gates.
+friction: none.
+next: T-002, run log and budget.

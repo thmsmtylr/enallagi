@@ -61,6 +61,7 @@ POINTERS=$(read_key pointerFiles)
 # install; a missing key leaves a token standing, and the assert at the end catches it.
 SUBST=$(python3 - <<'PY'
 import json, os, re, shlex, sys
+AGENT_ROLES = ['default', 'scout', 'adjudicator', 'implementer', 'verifier']
 defaults = json.load(open(os.path.join(os.environ['SRC'], 'harness.default.json')))
 answers = json.load(open(os.environ['CONFIG']))
 merged = {**defaults, **answers}
@@ -75,11 +76,26 @@ for key, value in merged.items():
                  'quote or a newline. Got: %r' % (key, value))
     token = '__' + re.sub(r'(?<!^)(?=[A-Z])', '_', key).upper() + '__'
     if key == 'agentCommand':
-        # a shell word list, quoted once here so a prompt with spaces cannot split
-        out[token] = ' '.join(shlex.quote(str(w)) for w in value)
-        # the binary alone, for the pgrep guards: one that recognises only one vendor's
-        # process never fires for anyone else
-        out['__AGENT_BINARY__'] = os.path.basename(str(value[0])) if value else 'agent'
+        # Either a word list for every role, or an object keyed by role with a 'default'.
+        # Renders one __AGENT_COMMAND_<ROLE>__ token per role; loop.sh picks by stage.
+        roles = value if isinstance(value, dict) else {'default': value}
+        if 'default' not in roles:
+            sys.exit('harness.json: agentCommand as an object needs a "default" key. Got: %r' % sorted(roles))
+        unknown = set(roles) - set(AGENT_ROLES)
+        if unknown:
+            sys.exit('harness.json: agentCommand names roles that do not exist: %s. Known: %s'
+                     % (sorted(unknown), AGENT_ROLES))
+        for role in AGENT_ROLES:
+            # a token per role whether or not harness.json names it, so loop.sh can reference all
+            # of them and install.sh's leftover-token check still means something
+            words = roles.get(role, roles['default'])
+            # a shell word list, quoted once here so a prompt with spaces cannot split
+            out['__AGENT_COMMAND_%s__' % role.upper()] = ' '.join(shlex.quote(str(w)) for w in words)
+        out[token] = out['__AGENT_COMMAND_DEFAULT__']
+        # the binaries, for the pgrep guards: one that recognises only one vendor's process
+        # never fires for anyone else
+        binaries = sorted(set(os.path.basename(str(w[0])) for w in roles.values() if w))
+        out['__AGENT_BINARY__'] = '|'.join(binaries) if binaries else 'agent'
     else:
         out[token] = json.dumps(value) if isinstance(value, (list, dict)) else str(value)
 json.dump(out, sys.stdout)

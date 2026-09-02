@@ -1,6 +1,6 @@
 {
   "_comment": "Answers install.sh substitutes into the harness. Copy to your repo root as harness.json, edit, re-run install.sh. Every key becomes a __SCREAMING_SNAKE__ token. Lists render as literals; agentCommand renders as a shell-quoted word list; strings render raw.",
-  "_agent": "agentCommand is the headless invocation of YOUR coding agent, as a word list. {prompt} and {turns} are filled in per stage. Known forms: claude -p | codex exec | gemini -p | opencode run | copilot -p | goose run | aider --message.",
+  "_agent": "agentCommand is the headless invocation of YOUR coding agent, as a word list. {prompt} and {turns} are filled in per stage. Known forms: claude -p | codex exec | gemini -p | opencode run | copilot -p | goose run | aider --message. It also accepts an object keyed by role -- default, scout, adjudicator, implementer, verifier -- so one role can run on a different model or vendor from another. A role the object does not name uses default. Independent verification is the reason to use this: a verifier on the model that wrote the code measures self-consistency.",
   "agentCommand": [
     "claude",
     "-p",
@@ -21,7 +21,7 @@
   "harnessDir": ".harness",
   "skillsDir": ".claude/skills",
   "skillInvocation": "invoke it via the Skill tool",
-  "_driver": "driverCommand is the ONLY probe that exercises the built artifact rather than reading text. Empty means off; it also needs HARNESS_DRIVER=1 in the environment, because it costs wall-clock on every scout round. It runs in a throwaway directory with a stripped environment, must exit 0 whenever it REACHED the artifact, and prints one line per shortfall beginning `FINDING `. No double quotes: it is spliced into a shell script, and $ and backticks in it expand where it is assigned — which is what makes `$HARNESS_ROOT/scripts/drive.sh` the right way to name a script, since the driver runs from a throwaway directory.",
+  "_driver": "driverCommand is the ONLY probe that exercises the built artifact rather than reading text. Empty means off; it also needs HARNESS_DRIVER=1 in the environment, because it costs wall-clock on every scout round. It runs in a throwaway directory with a stripped environment, must exit 0 whenever it REACHED the artifact, and prints one line per shortfall beginning `FINDING `. No double quotes: it is spliced into a shell script, and $ and backticks in it expand where it is assigned \u2014 which is what makes `$HARNESS_ROOT/scripts/drive.sh` the right way to name a script, since the driver runs from a throwaway directory.",
   "driverCommand": "",
   "check": "bun run check",
   "checkForce": "bun run check -- --force",
