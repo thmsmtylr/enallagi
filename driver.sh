@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # This package's own driver — the worked example of what `driverCommand` points at.
 #
-# The eleven other probes read text. This one reaches the artifact: it installs the package into a
+# The twelve other probes read text. This one reaches the artifact: it installs the package into a
 # throwaway repository and drives one request through the installed loop, four times, each with a
 # lane that is sloppy in exactly one way. Then it reads the PERSISTENT EFFECT — the task's status,
 # the working tree, the digest — and prints a `FINDING ` line for every sloppiness the harness let

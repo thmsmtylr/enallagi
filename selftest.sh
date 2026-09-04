@@ -5,6 +5,11 @@
 #
 #   ./selftest.sh          run it
 #   KEEP=1 ./selftest.sh   leave the scratch repo behind to poke at
+# shellcheck disable=SC2015 # the `<test> && ok "name" || bad "name"` assertion idiom below is safe
+# here because ok() and skip() cannot fail: each ends in an echo or an assignment, so the `||`
+# arm never runs after the `&&` arm did. ponytail: file-level, so a future `A && B || C` whose
+# middle term CAN fail is not flagged in this file. The two that could -- the teardown's
+# `rm -rf "$T"` and the AGENTS.md line count -- were rewritten as `if` instead of suppressed.
 set -u
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 T="${TMPDIR:-/tmp}/harness-selftest-$$"
@@ -97,7 +102,7 @@ grep -q 'AGENTS.md' GEMINI.md && ok "GEMINI.md is a pointer at it" || bad "GEMIN
 grep -q 'AGENTS.md' .github/copilot-instructions.md \
   && ok "copilot-instructions.md is a pointer at it" || bad "copilot-instructions.md is a pointer at it"
 is "the context file stays short" "under" \
-  "$([ "$(wc -l < AGENTS.md)" -lt 80 ] && echo under || wc -l < AGENTS.md)"
+  "$(if [ "$(wc -l < AGENTS.md)" -lt 80 ]; then echo under; else wc -l < AGENTS.md; fi)"
 grep -q '^name: running-the-loop' "$SKILLS/running-the-loop/SKILL.md" \
   && ok "the project skill is valid agentskills.io frontmatter" \
   || bad "the project skill is valid agentskills.io frontmatter"
@@ -107,6 +112,8 @@ is "the launcher parses no task blocks itself" "0" \
   "$(grep -cE '## \\\[T-|awk .*TASKS|sed .*TASKS' .harness/loop.sh)"
 is "tasks.py answers the queue against fixture files" "0" \
   "$(python3 .harness/tasks.py --selftest >/dev/null 2>&1; echo $?)"
+# shellcheck disable=SC2016 # the backticks are a literal markdown fence in the fixture, not a
+# command substitution -- this assertion checks that tasks.py ignores a heading inside a fence.
 printf '# TASKS\n\n```\n## [T-900] the example in the docs\nblockedBy:\nstatus: ready\n```\n\n## [T-901] the real one\nblockedBy: none\nstatus: ready\n' > /tmp/fence.$$.md
 is "a heading inside a code fence is not a task" "T-901" \
   "$(python3 .harness/tasks.py ready-unattended /tmp/fence.$$.md)"
@@ -140,6 +147,8 @@ is "the seeded learnings are all [seed] entries, which predate the gate" "0" \
 
 # a rule written from a repeated friction, with nothing that decided it was worth its place
 cp LEARNINGS.md "$T/learnings.bak"
+# shellcheck disable=SC2016 # literal backticks: this is a LEARNINGS.md line being appended as
+# text, and probes.sh greps it as text.
 echo '- [2026-09-02] the check cache served a green nobody ran -> always run `./selftest.sh` uncached.' >> LEARNINGS.md
 is "a dated learning with no eval is reported" "1" \
   "$(.harness/hooks/probes.sh 2>&1 | sed -n 's/^PROBE learning-ungated //p')"
@@ -293,6 +302,8 @@ is "and the rejection names the file it is rejecting" "1" \
 rm -f src/sneaky.ts
 is "a harness edit a harness task declared is allowed" "done" \
   "$(lane .check-baseline 'none — harness' .check-baseline)"
+# shellcheck disable=SC2016 # literal backticks: this is the `rows:` field's own text, quoted the
+# way TASKS.md writes it.
 is "the same edit under a product task is forced back to ready" "ready" \
   "$(lane .check-baseline '`src/thing.test.ts::a name copied from your suite`' .check-baseline)"
 # --- the run log and the budget ---------------------------------------------
@@ -452,6 +463,181 @@ is "with no agent configured the evals refuse rather than report" "2" \
   "$("$T/pkgcopy/evals/run.sh" verifier >/dev/null 2>&1; echo $?)"
 rm -rf "$T/pkgcopy" src/evalobeys.sh src/evalbreaks.sh
 
+# --- the bootstrap record ---------------------------------------------------
+# The README claims this package built itself. `docs/bootstrap.sh` reads that claim out of
+# `git log` alone, and the assertion that matters is the second one: a check that cannot fail is
+# not a check. The fixture is a history the script has never seen, built outside "$T" so the
+# scratch repo's `git add -A` never swallows it as a gitlink.
+FIX="${TMPDIR:-/tmp}/harness-bootstrap-$$"
+mkdir -p "$FIX" && git -C "$FIX" init -q || exit 2
+fixcommit() { git -C "$FIX" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "$1"; }
+fixcommit 'init'
+fixcommit 'chore(dogfood): install the harness'
+fixcommit 'feat(x): T-001 a thing'
+fixcommit 'verify: T-001 VERIFIED'
+fixcommit 'chore: strip the dogfood instance'
+fixcommit 'chore(dogfood): install the harness'
+fixcommit 'fix(y): T-002 another thing'
+fixcommit 'chore: strip the round-2 dogfood instance'
+# rounds, and a verifier that never refused: the claim is unsupported and --check must say so
+# The cd is guarded: a failed cd is itself status 1, the value this assertion wants, so an absent
+# fixture would print `ok` for a run in which bootstrap.sh never executed (LEARNINGS.md,
+# zero-as-pass). The inner subshell exits 99 — a status the assertion cannot want — and the outer
+# one still reports it, so a broken fixture reads FAIL.
+is "a history with no rejection fails the bootstrap check" "1" \
+  "$( (cd "$FIX" || exit 99; "$SRC/docs/bootstrap.sh" --check >/dev/null 2>&1); echo $?)"
+fixcommit 'chore(dogfood): install the harness'
+fixcommit 'verify: T-003 REJECTED — a skipped assertion printed ok'
+fixcommit 'chore: strip the round-3 dogfood instance'
+# three rounds read out of a repository whose history was written a moment ago, so the record is
+# derived rather than transcribed; and --check passes on this package's own history
+FIXROUNDS=$(cd "$FIX" && "$SRC/docs/bootstrap.sh" | grep -c '^round ')
+FIXRC=$(cd "$FIX" && "$SRC/docs/bootstrap.sh" --check >/dev/null 2>&1; echo $?)
+SELFRC=$(cd "$SRC" && ./docs/bootstrap.sh --check >/dev/null 2>&1; echo $?)
+is "the bootstrap record is derived from git" "3 0 0" "$FIXROUNDS $FIXRC $SELFRC"
+rm -rf "$FIX"
+
+# --- the immutability hashes ------------------------------------------------
+# `tests-immutable` and `harness-immutable` (.harness/RAILS.md:57-58) name `test-hashes.json` as
+# their enforcement, and nothing else recomputes it here: harness.json `check` is `./selftest.sh`
+# and it has no precheck stage, so a hash file only the PreToolUse hook reads enforces nothing.
+# Checked against the package source, not the throwaway install. The expected value lists the keys
+# instead of counting them, so a key DELETED to make this pass is the thing that fails it
+# (LEARNINGS.md, zero-as-pass) -- as does an empty `{}`.
+# test-hashes.json is INSTANCE state, not package state: its keys are this dogfood instance's
+# .harness/loop.sh and harness.json. The package branch carries no instance, so the file is absent
+# there and this assertion cannot run. It reads `skip`, never `ok` -- a hash file that is not there
+# enforces nothing, and reporting that as a pass is the zero-as-pass failure this suite exists to
+# refuse (LEARNINGS.md).
+if [ ! -f "$SRC/test-hashes.json" ]; then
+  skip "every file test-hashes.json covers still hashes to its recorded digest" \
+       "no test-hashes.json in $SRC: this is the package tree, which carries no installed instance."
+else
+HASHED=$(cd "$SRC" && python3 - <<'PY'
+import hashlib, json
+covered = json.load(open('test-hashes.json'))
+bad = []
+for key, want in sorted(covered.items()):
+    got = hashlib.sha256(open(key, 'rb').read()).hexdigest()
+    if got != want:
+        bad.append('%s: recorded %s, on disk %s' % (key, want[:12], got[:12]))
+print('; '.join(bad) if bad else ' '.join(sorted(covered)) + ' match')
+PY
+)
+is "every file test-hashes.json covers still hashes to its recorded digest" \
+  ".harness/loop.sh harness.json selftest.sh match" "$HASHED"
+fi
+
+
+# --- the shellcheck floor ---------------------------------------------------
+# Checked against the package SOURCE, never the scratch install: `.harness/**` is install.sh's
+# output, generated from `harness/**`, so linting a copy of a file already linted at its source
+# proves nothing. Full severity -- no `-S` downgrade -- which is what SPEC.md's row says.
+# `$SCANNED` carries the file list's own emptiness into the expected value: an empty list makes
+# both greps below succeed with nothing, and `xargs` on empty input exits 0 (LEARNINGS.md,
+# zero-as-pass). Both assertions `skip` when shellcheck is not installed.
+if command -v shellcheck >/dev/null 2>&1; then
+  SHLIST=$(cd "$SRC" && git ls-files "*.sh" | grep -v "^\.harness/")
+  SCANNED=$([ -n "$SHLIST" ] && echo scanned || echo "no .sh files matched")
+
+  SHOUT=$(cd "$SRC" && printf '%s\n' "$SHLIST" | xargs shellcheck 2>&1); SHRC=$?
+  is "every shipped script passes shellcheck at full severity" "scanned 0" "$SCANNED $SHRC"
+  [ "$SHRC" -eq 0 ] || printf '%s\n' "$SHOUT" | grep '^In ' | sed 's/^/      /'
+
+  # A suppression is bare unless the same line ends `disable=<codes> # <reason>`. Two shapes count,
+  # and shellcheck honours both: an inline directive in a script, where shellcheck accepts any
+  # whitespace between the `#` and the word (`#shellcheck disable[=]SC2034` with no space at all is
+  # live, checked at 0.11.0), and a file-wide `disable=` line in a `.shellcheckrc`, which silences a
+  # code across every script under it and takes a same-line `#` comment too. The rc files are found
+  # rather than named so a new one in a subdirectory is scanned as well. `disable[=]` need not be
+  # the FIRST key: `# shellcheck source[=]/dev/null disable[=]SC1091` is honoured at 0.11.0, so the
+  # pattern spans keys with `[^#]*` rather than requiring adjacency. The pattern is written
+  # `disable[=]` so that this file, which the scan covers, does not report itself (TASKS.md T-013:
+  # a check that plants the token it looks for).
+  RCLIST=$(cd "$SRC" && git ls-files ".shellcheckrc" "*/.shellcheckrc" | grep -v "^\.harness/")
+  BARE=$(cd "$SRC" && printf '%s\n' "$SHLIST" "$RCLIST" \
+           | xargs grep -nE '#[[:space:]]*shellcheck[[:space:]][^#]*disable[=]|^[[:space:]]*disable[=]' \
+           | grep -vE 'disable=[A-Z0-9,]+ +# *[^ ]' || true)
+  is "every shellcheck suppression names its reason" "scanned " "$SCANNED $BARE"
+else
+  skip "every shipped script passes shellcheck at full severity" "shellcheck is not installed"
+  skip "every shellcheck suppression names its reason" "shellcheck is not installed"
+fi
+
+# --- the floor, on a machine that is not the author's ------------------------
+# Reads `.github/workflows/ci.yml`, never merely asserts it exists. The runners are pulled out of
+# the `os:` list itself, so one commented out or moved into prose stops counting; an absent file
+# yields an empty list, which cannot match the expected value (LEARNINGS.md, zero-as-pass) and is
+# reported as its own token rather than as a silent pass. Two runners on purpose: macos-latest is
+# bash 3.2 and BSD sed, ubuntu-latest is bash 5 and GNU sed, and both parser defects this package
+# has had were that difference. HARNESS_EVALS is asserted ABSENT: the evals spawn a real agent, and
+# a CI job holding a model credential is the blast radius this package argues against.
+#
+# The runner list and the invocation are both read out of the `floor:` job's OWN block, not out of
+# the whole file, because the row claims the floor runs on BOTH userlands: the same step moved into
+# the single-runner `shfmt:` job leaves the `os:` list untouched and runs on ubuntu only, which is a
+# restructure rather than a sabotage and read `ok` until the verifier ablated it. An absent or
+# renamed `floor:` job yields an empty block, so the list is empty and the count is 0 -- neither can
+# match the expected value (LEARNINGS.md, zero-as-pass), and both are reported as their own token.
+#
+# THREE patterns carry an exclusion and each is named here, because the previous pass documented an
+# anchor on the block and shipped one of its greps without it. `^[^#]*` on the `./selftest.sh` grep
+# and on the `HARNESS_EVALS` grep, so a line of ci.yml's own prose cannot stand in for the thing it
+# describes (T-013, a check that plants the token it looks for); and `-v '^[^#]*name:'` on the
+# `./selftest.sh` grep, because a step `name:` mentioning the floor beside `run: true` is a label,
+# not an invocation. `^[^#]*` and NOT `^[[:space:]]*run:`: a `run: |` block invoking the floor on a
+# later line is legitimate and a `run:`-anchored pattern would call it absent. HARNESS_EVALS stays
+# whole-file on purpose -- scoped to the floor block it would miss the variable set at workflow
+# top level, which is strictly worse than reading the whole file.
+#
+# The `if:` count is asserted 0 at BOTH depths, under the ONE pattern that ships here,
+# `^[[:space:]]*(-[[:space:]]+)?if:` -- not `^    if:`, which reads the job key and misses the step
+# key, and not the dash-less form, which misses `- if:`. A job-level
+# `if: github.event_name != 'pull_request'` is the ordinary CI-minutes edit, and the same shape is
+# already in this file on the `scorecard:` job, so the floor can be switched off on a pull request
+# with every other token still reading as expected. The floor job legitimately carries no `if:` at
+# either depth, so the count is 0 and nothing else. The optional dash is the same idiom the pin
+# assertion below uses: `- if: false` as a step's FIRST key is legal YAML, and it disables the floor
+# exactly as `if:` on a later line of the same step does.
+#
+# Three shapes are KNOWN LIMITATIONS, not defects, and each fails loudly rather than silently:
+# flow-style `os: [ubuntu-latest, macos-latest]`, which is legal YAML the matrix awk does not read;
+# `./selftest.sh` moved into a step `env:` value beside `run: true`; and the string inside an echo
+# (`run: echo 'to reproduce locally, run ./selftest.sh'`). The last two are one class -- a mention
+# standing in for the thing -- and no line-oriented grep closes it; closing it needs a YAML parser
+# plus shell parsing, which is not justified for one row.
+CI=".github/workflows/ci.yml"
+if [ -f "$SRC/$CI" ]; then
+  # literal two spaces, not `[[:space:]]{2}`: ERE interval expressions are not portable across the
+  # awk on macOS and the one on ubuntu, and this matrix exists because of exactly that class of gap.
+  FLOORJOB=$(awk '/^  floor:/ { f = 1; next } f && /^  [a-z]/ { f = 0 } f' "$SRC/$CI")
+  CIOS=$(printf '%s\n' "$FLOORJOB" \
+    | awk '/^[[:space:]]*os:/ { f = 1; next } f && /^[[:space:]]*-[[:space:]]/ { print $2; next } f { f = 0 }' \
+    | sort | tr '\n' ' ')
+  CISELF=$(printf '%s\n' "$FLOORJOB" | grep -E '^[^#]*\./selftest\.sh' | grep -cvE '^[^#]*name:' || true)
+  if [ "${CISELF:-0}" -gt 0 ]; then CISELF=invoked; else CISELF=absent; fi
+  CIIF=$(printf '%s\n' "$FLOORJOB" | grep -cE '^[[:space:]]*(-[[:space:]]+)?if:' || true)
+  CIGOT="${CIOS}selftest:$CISELF if:${CIIF:-?} evals:$(grep -cE '^[^#]*HARNESS_EVALS' "$SRC/$CI" || true)"
+else
+  CIGOT="no $CI"
+fi
+is "ci runs the floor on a GNU and a BSD userland" \
+  "macos-latest ubuntu-latest selftest:invoked if:0 evals:0" "$CIGOT"
+
+# A tag moves and a SHA does not, so a `uses:` pinned to a tag is an unreviewed third party running
+# with the workflow's token. Every one carries its version in a trailing comment, which is how
+# bats-core pins in `.github/workflows/scorecard.yml`. `/dev/null` is appended to the file list so
+# grep always has a file argument: on an empty list GNU xargs would otherwise run grep with none
+# and it would read stdin (LEARNINGS.md, zero-as-pass), and `$WFSCAN` carries that emptiness into
+# the expected value regardless. grep's stderr is folded in so a tracked workflow file deleted
+# from disk lands in the GOT string instead of scrolling past as terminal noise.
+WFLIST=$(cd "$SRC" && git ls-files ".github/workflows/*.yml" ".github/workflows/*.yaml")
+WFSCAN=$([ -n "$WFLIST" ] && echo scanned || echo "no workflow files matched")
+UNPINNED=$(cd "$SRC" && printf '%s\n' "$WFLIST" /dev/null \
+  | xargs grep -nE '^[[:space:]]*(-[[:space:]]+)?uses:' 2>&1 \
+  | grep -vE 'uses:[[:space:]]*[^@[:space:]]+@[0-9a-f]{40}[[:space:]]+#[[:space:]]*[^[:space:]]' || true)
+is "every github action is pinned to a commit sha" "scanned " "$WFSCAN $UNPINNED"
+
 # --- shipped prose ----------------------------------------------------------
 # This is a public repository. The patterns below are rhetoric, not information: antithesis,
 # appeals to the point, and self-congratulation. Every one of them can be replaced by the fact it
@@ -468,7 +654,9 @@ is "no shipped file carries rhetorical filler" "" "$HITS"
 
 # --- teardown ---------------------------------------------------------------
 cd /
-[ -n "${KEEP:-}" ] && echo "kept: $T" || rm -rf "$T"
+# Never `[ -n "$KEEP" ] && echo ... || rm -rf "$T"`: a failed echo would run the rm and delete
+# the scratch repo the operator asked to keep.
+if [ -n "${KEEP:-}" ]; then echo "kept: $T"; else rm -rf "$T"; fi
 echo
 if [ "$FAIL" -ne 0 ]; then
   echo "harness selftest: FAILURES above."

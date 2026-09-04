@@ -1,0 +1,96 @@
+# The floor, on a machine that is not the author's. Two runners on purpose: macos-latest ships
+# bash 3.2 and BSD sed, ubuntu-latest ships bash 5 and GNU sed, and both parser defects this
+# package has had were that difference. The matrix is the regression test for bugs already paid for.
+#
+# Every `uses:` is pinned to a 40-character commit SHA with its tag in a trailing comment, and
+# `selftest.sh::every github action is pinned to a commit sha` fails on any that is not. The SHAs
+# were resolved on 2026-09-04 with `gh api repos/<repo>/commits/<tag> --jq .sha`.
+#
+# HARNESS_EVALS is deliberately NOT set anywhere in this file: the evals spawn a real agent, and a
+# CI job holding a model credential is the blast radius this package argues against. Those
+# assertions report `skip`.
+name: ci
+
+on:
+  push:
+  pull_request:
+  branch_protection_rule:
+  schedule:
+    - cron: '19 4 * * 2'
+
+permissions:
+  contents: read
+
+jobs:
+  floor:
+    name: floor (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      # fetch-depth: 0 because docs/bootstrap.sh reads the dogfood rounds out of the whole log;
+      # at the default depth of 1 it has no history to derive the record from.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # preinstalled on the ubuntu image, absent from the macOS one
+      - name: shellcheck is on the runner
+        run: command -v shellcheck || brew install shellcheck
+      - name: every script parses on this bash
+        run: git ls-files '*.sh' | xargs -n1 bash -n
+      # full severity, no -S downgrade. .harness/** is install.sh's output, linted at its source.
+      - name: shellcheck at full severity
+        run: git ls-files '*.sh' | grep -v '^\.harness/' | xargs shellcheck
+      - name: the queue parser answers its own fixtures
+        run: python3 harness/tasks.py --selftest
+      - name: the bootstrap record holds against this history
+        run: ./docs/bootstrap.sh --check
+      - name: the floor
+        run: ./selftest.sh
+
+  # Its own job, as bats-core runs shfmt and shellcheck separately: a formatting failure never
+  # masks a correctness one. shfmt is not on either runner image; go is on the ubuntu one.
+  shfmt:
+    name: shfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: every shipped script is shfmt clean
+        run: |
+          go install mvdan.cc/sh/v3/cmd/shfmt@v3.14.0
+          git ls-files '*.sh' | grep -v '^\.harness/' | xargs "$(go env GOPATH)/bin/shfmt" --diff
+
+  # Scorecard refuses on anything but the default branch, and publishing needs an OIDC token a
+  # pull_request run does not get, so this job is skipped there rather than failed.
+  scorecard:
+    name: openssf scorecard
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'branch_protection_rule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true

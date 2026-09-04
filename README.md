@@ -1,5 +1,11 @@
 # harness
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/thmsmtylr/harness/badge)](https://scorecard.dev/viewer/?uri=github.com/thmsmtylr/harness)
+<!-- The badge goes live on the first push. The slug is the owner from `gh api user --jq .login`
+     (thmsmtylr, 2026-09-04) and this file's own name; `git remote -v` was empty on that date, so
+     it is the intended slug rather than a confirmed one. Correct it here if the repository lands
+     under another name -- nothing reads it but a human. -->
+
 An autonomous goal loop for coding agents. Shell scripts, agent prompts and document templates that
 install into a git repository. No dependencies beyond `bash` and `python3`.
 
@@ -113,7 +119,7 @@ ever shrinks.
 
 ## Probes
 
-`.harness/hooks/probes.sh` runs thirteen analyses and reports; it never gates. `FINDING` lines are
+`.harness/hooks/probes.sh` runs fourteen analyses and reports; it never gates. `FINDING` lines are
 the only legal queue input: the scout transcribes, the adjudicator re-runs the command and kills
 what does not reproduce.
 
@@ -123,6 +129,7 @@ what does not reproduce.
 | `queue-uncovered` | an untested row no open task names, or a task naming a row that does not exist |
 | `rail-unenforced` | a rail naming enforcement that does not exist or does not run |
 | `hash-uncovered` | a file a `test-hashes.json` rail names with no key |
+| `check-unnamed` | the context file’s Commands section names a check other than `harness.json`’s |
 | `learning-unenforced` | a LEARNINGS.md entry naming no file, command or hook |
 | `learning-ungated` | a dated rule with no eval, or a rule library over `learningsCap` |
 | `ponytail-ceiling` | a `ponytail:` shortcut marked in the source |
@@ -138,7 +145,7 @@ no test file, `test-hashes.json` does not exist yet, and `immutable.sh` carries 
 
 ## The driver
 
-Twelve probes read text. `driver` runs your artifact through the surface a user touches, which is
+Thirteen probes read text. `driver` runs your artifact through the surface a user touches, which is
 the only source of capability findings. It is off until `driverCommand` is set and
 `HARNESS_DRIVER=1` is in the environment.
 
@@ -288,6 +295,52 @@ KEEP=1 ./selftest.sh             # leave the scratch repo
 Covers install and re-install, queue resolution, the clarification halt, every probe running without
 erroring, all five delta cases of the gate, both scope gates, worktree isolation and merge-back, the
 run log and budget halts, the eval runner, and all four write-path gate outcomes.
+
+It also runs `shellcheck` at full severity over every tracked `*.sh` outside `.harness/` — which is
+`install.sh`'s generated output, linted at its source in `harness/` instead — and fails on any
+`# shellcheck disable=` that does not name its reason in a comment on the same line. The two
+file-wide disables in `.shellcheckrc` carry theirs there. Both assertions `skip` where shellcheck
+is not installed.
+
+`.github/workflows/ci.yml` runs that floor on every push and pull request, on a matrix of
+`ubuntu-latest` and `macos-latest`: bash 5 with GNU `sed` and bash 3.2 with BSD `sed`. Both parser
+defects this package has had were that difference, so the matrix is the regression test for bugs
+already paid for. Each runner also runs `bash -n` over every script, `harness/tasks.py --selftest`
+and `docs/bootstrap.sh --check`; `shfmt` and the OpenSSF Scorecard analysis are their own jobs, as
+bats-core keeps them, so a formatting failure never masks a correctness one. `HARNESS_EVALS` is
+never set there — the evals spawn a real agent, and a CI job holding a model credential is the
+blast radius this package argues against — so those assertions report `skip`. Every `uses:` is
+pinned to a commit SHA with its tag in a trailing comment, and `selftest.sh` fails on any that is
+not.
+
+## The bootstrap record
+
+This package was built by the loop it ships. `docs/bootstrap.sh` reads that record out of `git log`
+and nothing else: a round runs from a `chore(dogfood):` commit to the commit that strips the
+installed instance again.
+
+```bash
+docs/bootstrap.sh          # one line per round
+docs/bootstrap.sh --check  # non-zero when the history stops supporting the claim
+```
+
+At `cb86de0`:
+
+```
+round 1  f6b7215..c70b042  2026-09-02..2026-09-02  14 commits (7 naming a task, 4 verify, 1 rejected)
+round 2  eb03797..5400211  2026-09-02..2026-09-02  6 commits (3 naming a task, 1 verify, 0 rejected)
+round 3  15e9f47..f2d4c47  2026-09-02..2026-09-02  5 commits (2 naming a task, 1 verify, 0 rejected)
+round 4  0a68252..365c7cc  2026-09-02..2026-09-02  4 commits (1 naming a task, 1 verify, 0 rejected)
+round 5  b110ceb..70ba363  2026-09-02..2026-09-02  3 commits (0 naming a task, 1 verify, 0 rejected)
+round 6  37449d9..cb86de0  2026-09-03..2026-09-03  8 commits (4 naming a task, 1 verify, 0 rejected) (in flight)
+```
+
+The counts are of commits, not of tasks: one `verify:` commit can carry several rows, and a task can
+take more than one commit. `--check` fails on a history with no rounds, and on a history in which no
+commit is a `REJECTED` verdict — a verifier that never refused is a verifier that is not running.
+The rejection here is `74eaa47 verify: T-001 REJECTED — a skipped assertion printed ok`: the loop
+caught its own test harness reporting `ok` for an assertion that never executed, which is why
+`skip()` exists and returns a third verdict.
 
 ## References
 
