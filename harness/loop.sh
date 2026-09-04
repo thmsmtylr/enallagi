@@ -67,6 +67,8 @@ selftest() {
 
 # A backticked mention is prose about the marker -- the rail's own definition is one -- and a bare
 # one is a real marker. Never use a harness control token as an English word (LEARNINGS.md).
+# shellcheck disable=SC2016 # the single quotes are deliberate: the backticks and the brackets are
+# literal characters in __SPEC__'s prose, and expanding either would make the filter match nothing.
 CLARIFY=$(grep -n '\[NEEDS CLARIFICATION\]' __SPEC__ 2>/dev/null | grep -v '`\[NEEDS CLARIFICATION\]`' | head -3)
 [ -n "$CLARIFY" ] && {
   echo "HALT: __SPEC__ carries [NEEDS CLARIFICATION]. The loop does not start."
@@ -130,7 +132,11 @@ while [ "$i" -lt "$MAX_ITER" ]; do
       && echo "  stages: implement $TASK -> verify $TASK -> commit the verdict -> assert PROGRESS.md grew" \
       || echo "  stages: scout -> adjudicate -> commit the round -> re-check ready_unattended ($DRY_ROUNDS dry rounds so far, 2 ends the run)"
     echo "  probes, which are the scout's whole input:"
-    __HARNESS_DIR__/hooks/probes.sh || true
+    # HARNESS_DRIVER here and at the scout below, never exported at the top of this file: the
+    # driver installs throwaway repos and costs ~45s, and a global export would also reach every
+    # lane's __CHECK__ run. The scout is the only stage whose input is probe output, and the dry
+    # run has to print what that scout will actually see.
+    HARNESS_DRIVER=1 __HARNESS_DIR__/hooks/probes.sh || true
   fi
 
   # An empty queue used to `break` here, which called an unfinished milestone finished. It is
@@ -154,7 +160,7 @@ while [ "$i" -lt "$MAX_ITER" ]; do
     echo "=== Iteration $i: scout (queue empty, $DRY_ROUNDS dry rounds so far) ==="
     READY_BEFORE=$(ids_at ready); REJ_BEFORE=$(rejections)
     agent_for scout
-    run_agent "scout" "$LANE Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/roles/scout.md: read that file first and follow it exactly. Run __HARNESS_DIR__/hooks/probes.sh and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop." 30 \
+    HARNESS_DRIVER=1 run_agent "scout" "$LANE Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/roles/scout.md: read that file first and follow it exactly. Run __HARNESS_DIR__/hooks/probes.sh and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop." 30 \
       || { echo "scout exited $? -- halting."; break; }
 
     stop_now && break
@@ -206,14 +212,14 @@ while [ "$i" -lt "$MAX_ITER" ]; do
   over_budget && break
   echo "=== Iteration $i: implement $TASK ==="
   agent_for implementer
-  run_agent "$TASK implement" "$LANE Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __HARNESS_DIR__/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason -- and include it in that commit. An implementation left uncommitted is a lost iteration." 60 \
+  run_agent "$TASK implement" "$LANE Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __HARNESS_DIR__/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason -- and include it in that commit. An implementation left uncommitted is a lost iteration." 120 \
     || { echo "implement exited $? -- halting rather than reporting a finished iteration."; break; }
 
   stop_now && break
   over_budget && break
   echo "=== Iteration $i: verify $TASK ==="
   agent_for verifier
-  run_agent "$TASK verify" "$LANE Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Your role is defined in __HARNESS_DIR__/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons, and commit the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop." 40 \
+  run_agent "$TASK verify" "$LANE Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Your role is defined in __HARNESS_DIR__/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons, and commit the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop." 100 \
     || { echo "verify exited $? -- halting."; break; }
 
   # The verifier writes its verdict into the working tree and stops. Nothing here

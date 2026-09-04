@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Thirteen probes over the tree. Reports; never gates, and is wired into no hook and no build task.
+# Fourteen probes over the tree. Reports; never gates, and is wired into no hook and no build task.
 # Tokens like __CHECK__ are substituted by install.sh from harness.json. Edit harness.json, re-install.
 # Exit 0 when every probe ran, non-zero only when one could not.
 set -u
 ROOT="${1:-${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}}"
 # `cd ""` returns 0, so an empty root has to be caught before the cd, not by it
-[ -n "$ROOT" ] && cd "$ROOT" || { echo "probes: no project root" >&2; exit 2; }
+if [ -z "$ROOT" ] || ! cd "$ROOT"; then echo "probes: no project root" >&2; exit 2; fi
 
 # the force variant, because a cached green is a green nobody ran (LEARNINGS.md, 2026-08-27)
 if [ -n "${TURBO_HASH:-}" ]; then
@@ -15,7 +15,7 @@ else
 fi
 
 # The one probe that does not read text: it drives the built artifact through the surface a user
-# touches and prints what fell short. The other eleven read the repo, so the floor and the direction
+# touches and prints what fell short. The other twelve read the repo, so the floor and the direction
 # signal are the same instrument and capability shortfall is invisible to them.
 # Off unless harness.json names a driverCommand AND HARNESS_DRIVER is set, because it costs
 # wall-clock on every scout round and has to earn it.
@@ -28,6 +28,9 @@ fi
 # persistent effect, not the answer -- diff the store, the file, the row it was supposed to change.
 # set before the assignment on purpose: the driver runs from a throwaway directory, so a relative
 # path in driverCommand cannot work, and `$HARNESS_ROOT/scripts/drive.sh` resolves right here.
+# shellcheck disable=SC2034 # live, and unseeable here: install.sh substitutes __DRIVER_COMMAND__
+# with driverCommand verbatim, whose $ expands at the assignment below, so a driverCommand of
+# `$HARNESS_ROOT/scripts/drive.sh` reads it (harness.default.json:24).
 HARNESS_ROOT="$ROOT"
 DRIVER="__DRIVER_COMMAND__"
 DRIVER_STATUS=off
@@ -337,11 +340,51 @@ def learning_entries():
     return entries
 
 
+# The context file is read by every lane at the start of every task, and it is seeded ONCE --
+# install.sh writes a document only when it is absent, so a later change to harness.json `check`
+# never reaches it. This repository ran for six rounds with AGENTS.md telling every lane to verify
+# with a command that did not exist in it; a lane hit it, worked around it locally, and the source
+# stayed wrong (DECISIONS.md:709). Nothing caught it because twelve probes read these documents for
+# SHAPE -- that an entry names a file, that a row names a test -- and none for TRUTH.
+# ponytail: the context file only. The same staleness in SPEC.md or LEARNINGS.md is real and is not
+# reported here, because detecting "a command that is not the check" needs to know what a check
+# looks like, and a fuzzy match on a document full of shell examples cries wolf. Widen it when a
+# second document is measured to have drifted.
+def check_unnamed():
+    if not CHECK:
+        return []
+    if not os.path.exists(CONTEXT_FILE):
+        return [(CONTEXT_FILE, 0, 'the context file every lane reads does not exist')]
+    # The Commands section only. The check is usually named again further down, where the `green`
+    # rail is explained, and a document that still explains the rail correctly while telling a lane
+    # to run the wrong command is exactly the state this probe exists to catch -- so a match
+    # anywhere in the file is not a match.
+    commands, start = [], 0
+    for at, line in enumerate(lines_of(CONTEXT_FILE), 1):
+        if line.startswith('## '):
+            if commands or start:
+                break
+            if line[3:].strip().lower() == 'commands':
+                start = at
+            continue
+        if start:
+            commands.append(line)
+    if not start:
+        return [(CONTEXT_FILE, 0, 'has no "## Commands" section, so no lane is told how to verify')]
+    if any(CHECK in line for line in commands):
+        return []
+    return [(CONTEXT_FILE, start,
+             'the Commands section names no command matching harness.json check (%s), so every '
+             'lane is told to verify with something else' % CHECK)]
+
+
 def learning_unenforced():
     return [('LEARNINGS.md', at, 'entry names no file, command or hook: %s' % text.strip()[:90])
             for at, text in learning_entries() if not cites_something(text)]
 
 
+CHECK = '__CHECK__'
+CONTEXT_FILE = '__CONTEXT_FILE__'
 LEARNINGS_CAP = __LEARNINGS_CAP__
 DATED = re.compile(r'^- \[\d{4}-\d{2}-\d{2}\]')
 
@@ -509,6 +552,7 @@ probe('spec-untested', spec_untested)
 probe('queue-uncovered', queue_uncovered)
 probe('rail-unenforced', rail_unenforced)
 probe('hash-uncovered', hash_uncovered)
+probe('check-unnamed', check_unnamed)
 probe('learning-unenforced', learning_unenforced)
 probe('learning-ungated', learning_ungated)
 probe('ponytail-ceiling', ponytail_ceiling)

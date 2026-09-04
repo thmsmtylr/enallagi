@@ -109,7 +109,7 @@ echo "installing the harness into $TARGET${DRY:+  (dry run)}"
 run mkdir -p "$TARGET/$HARNESS_DIR/hooks" "$TARGET/$HARNESS_DIR/lib" "$TARGET/$HARNESS_DIR/roles" "$TARGET/$SKILLS_DIR"
 
 place() { # $1 = source file, $2 = destination
-  if [ -n "$DRY" ]; then say "would write: ${2#$TARGET/}"; return 0; fi
+  if [ -n "$DRY" ]; then say "would write: ${2#"$TARGET"/}"; return 0; fi
   mkdir -p "$(dirname "$2")"
   SUBST="$SUBST" python3 - "$1" "$2" <<'PY'
 import json, os, sys
@@ -119,9 +119,9 @@ for token, value in subs.items():
     text = text.replace(token, value)
 open(sys.argv[2], 'w', encoding='utf-8').write(text)
 PY
-  say "wrote: ${2#$TARGET/}"
+  say "wrote: ${2#"$TARGET"/}"
 }
-seed() { [ -s "$2" ] && { say "kept: ${2#$TARGET/} (already has content)"; return 0; }; place "$1" "$2"; }
+seed() { [ -s "$2" ] && { say "kept: ${2#"$TARGET"/} (already has content)"; return 0; }; place "$1" "$2"; }
 
 for f in "$SRC"/harness/*.sh;       do place "$f" "$TARGET/$HARNESS_DIR/$(basename "$f")"; done
 for f in "$SRC"/harness/hooks/*.sh; do place "$f" "$TARGET/$HARNESS_DIR/hooks/$(basename "$f")"; done
@@ -133,12 +133,16 @@ run chmod +x "$TARGET/$HARNESS_DIR"/*.sh "$TARGET/$HARNESS_DIR/hooks"/*.sh "$TAR
 # The run log is machinery, not content: a lane that stages everything would otherwise commit it,
 # and the scope gate would reject that lane for a file it did not write. Scoped to the harness
 # directory, so the repository's own .gitignore is never touched.
-[ -n "$DRY" ] || [ -e "$TARGET/$HARNESS_DIR/.gitignore" ] || printf 'run.log\n' > "$TARGET/$HARNESS_DIR/.gitignore"
+# Every path in here is written BY the harness, never by a lane, and gate_verdict reads
+# `git status --porcelain` to decide whether a lane left its work off the branch -- so an
+# un-ignored file the harness wrote itself reads as an uncommitted implementation and forces a
+# verified task back to ready. It did, on 2026-09-04, to T-004 on its fourth pass.
+[ -n "$DRY" ] || [ -e "$TARGET/$HARNESS_DIR/.gitignore" ] || printf 'run.log\n*.log\nlogs/\n' > "$TARGET/$HARNESS_DIR/.gitignore"
 
 # Skills install per tool, not per repository (superpowers: "Installation differs by harness").
 # What ships here is this project's OWN skill, in the format ~48 clients read.
 while IFS= read -r -d '' f; do
-  place "$f" "$TARGET/$SKILLS_DIR/${f#$SRC/skills/}"
+  place "$f" "$TARGET/$SKILLS_DIR/${f#"$SRC"/skills/}"
 done < <(find "$SRC/skills" -type f -print0)
 
 # The write-path gate lives where the rules are written. The runner is replaced on upgrade; the
@@ -171,9 +175,11 @@ fi
 for p in $POINTERS; do
   [ "$p" = "$CONTEXT_FILE" ] && continue
   if [ -s "$TARGET/$p" ]; then
-    grep -q "$CONTEXT_FILE" "$TARGET/$p" 2>/dev/null \
-      && say "kept: $p (already points at $CONTEXT_FILE)" \
-      || say "kept: $p — add a line pointing at $CONTEXT_FILE, or delete it"
+    if grep -q "$CONTEXT_FILE" "$TARGET/$p" 2>/dev/null; then
+      say "kept: $p (already points at $CONTEXT_FILE)"
+    else
+      say "kept: $p — add a line pointing at $CONTEXT_FILE, or delete it"
+    fi
   else
     place "$SRC/templates/pointer.md" "$TARGET/$p"
   fi
@@ -198,7 +204,7 @@ if [ -z "$DRY" ]; then
   LEFT=$(grep -rlE '__[A-Z][A-Z_]+__' "$TARGET/$HARNESS_DIR" "$TARGET/$SKILLS_DIR" "$TARGET/$CONTEXT_FILE" 2>/dev/null || true)
   if [ -n "$LEFT" ]; then
     echo; echo "install FAILED: a token survived substitution, so harness.json is missing a key:" >&2
-    for f in $LEFT; do echo "  ${f#$TARGET/}: $(grep -ohE '__[A-Z][A-Z_]+__' "$f" | sort -u | tr '\n' ' ')" >&2; done
+    for f in $LEFT; do echo "  ${f#"$TARGET"/}: $(grep -ohE '__[A-Z][A-Z_]+__' "$f" | sort -u | tr '\n' ' ')" >&2; done
     exit 2
   fi
   for f in "$TARGET/$HARNESS_DIR"/*.sh "$TARGET/$HARNESS_DIR/hooks"/*.sh "$TARGET/$HARNESS_DIR/lib"/*.sh; do

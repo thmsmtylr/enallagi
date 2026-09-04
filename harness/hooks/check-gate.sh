@@ -13,7 +13,13 @@
 # Tokens like __CHECK__ are substituted by install.sh from harness.json.
 set -u
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}"
-[ -n "$ROOT" ] && cd "$ROOT" || { echo "check-gate: no project root" >&2; exit 2; }
+# `if`, never `A && B || C`: the `&&` arm here CAN fail — a $ROOT that was deleted or is
+# unreadable makes `cd` non-zero — and this gate decides whether a red check is forgiven,
+# so the branch may not be approximate (SC2015, T-008).
+if [ -z "$ROOT" ] || ! cd "$ROOT"; then
+  echo "check-gate: no project root" >&2
+  exit 2
+fi
 
 OUT=$(__CHECK__ 2>&1); RED=$?
 [ "$RED" -eq 0 ] && exit 0

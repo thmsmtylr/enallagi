@@ -1,0 +1,9 @@
+# Package-wide shellcheck configuration. Everything here is file-wide, so it is deliberately short:
+# anything narrower than "true of every script in this package" belongs in an inline
+# `# shellcheck disable` directive, with its reason on the same line, at the line it excuses.
+
+# SC1090/SC1091 cannot be followed by construction. Every module is sourced through a path that
+# only exists after install.sh substitutes __HARNESS_DIR__ into it (harness/loop.sh:38-40), and the
+# evals source a fixture written by their own setup.sh at run time (evals/scout/assert.sh:4).
+# There is no checkout in which the target of either source is a resolvable literal path.
+disable=SC1090,SC1091 # no source target is a resolvable literal path in any checkout (above)

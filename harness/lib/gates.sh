@@ -13,7 +13,9 @@ gate_verdict() { # $1 = task id
   # in the tree, the check is green either way, and the task reached `done` with the implementation
   # on no branch — a merge would take none of it. `verifier.md` step 0 says reject, and a prompt is
   # not a gate. ponytail: STOP is the harness's own marker and never a lane's work; anything else
-  # untracked at this point is.
+  # untracked at this point is -- which holds only because __HARNESS_DIR__/.gitignore covers what the
+  # harness itself writes (run.log, *.log, logs/). It did not, and on 2026-09-04 a loop redirected
+  # into the harness directory forced a VERIFIED T-004 back to ready over its own log file.
   left=$(git status --porcelain 2>/dev/null | grep -v ' STOP$' | grep -c . || true)
   if [ "${left:-0}" -gt 0 ]; then
     echo "  !! [$task] GATE FAILED -- done, and $left path(s) are uncommitted. The implementation is not on the branch."
@@ -45,9 +47,34 @@ in_scope() { # $1 = path, then the glob patterns
   local f="$1" pat; shift
   for pat in "$@"; do
     [ -n "$pat" ] || continue
+    # shellcheck disable=SC2254 # $pat is unquoted on purpose: it is a scope glob and must match as
+    # a pattern, not a literal. Quoting it here would make every scope line match nothing.
     case "$f" in $pat) return 0 ;; esac
   done
   return 1
+}
+
+# test-hashes.json is exempt from `harness-lane` when every key it re-cut names a file the task's
+# own `scope:` line already covers. SPEC.md §0.2 `tests-immutable` is the authority and states the
+# conditional form -- "a re-cut key that does not correspond to a file on the task's scope: line is
+# a rejection" -- which makes one that DOES correspond an ordinary event. This gate and RAILS.md
+# both carried the unconditional form, and that deadlocked the queue: selftest.sh is hashed, every
+# SPEC.md §11 row is a `selftest.sh::` row, so any task adding an assertion had to re-cut a hash,
+# which forced `rows: none — harness`, which forbade it from claiming the row it had just turned
+# green. No product row could ever land. The loop found it and halted rather than picking a side.
+hash_recut_in_scope() { # $1 = base sha, then the scope globs
+  local base="$1" keys k; shift
+  keys=$(git diff "$base" HEAD -- test-hashes.json 2>/dev/null | python3 -c '
+import sys, re
+print("\n".join(sorted({m.group(1) for m in
+    (re.match(r"[+-]\s*\"([^\"]+)\"\s*:", l) for l in sys.stdin if l[:1] in "+-") if m})))
+') || return 1
+  [ -n "$keys" ] || return 1
+  while IFS= read -r k; do
+    [ -n "$k" ] || continue
+    in_scope "$k" "$@" || return 1
+  done <<< "$keys"
+  return 0
 }
 
 # Every task writes these by protocol, so they are in scope for all of them.
@@ -72,7 +99,16 @@ gate_scope() { # $1 = task id, $2 = the sha the iteration started at
     [ -n "$f" ] || continue
     case " $BOOKKEEPING " in *" $f "*) continue ;; esac
     case "$f" in
-      __HARNESS_DIR__/*|*/hooks/*|.check-baseline|test-hashes.json|harness.json) harness_hit="$harness_hit $f" ;;
+      test-hashes.json)
+        # Exempt from BOTH axes, not just the harness one. The first version of this cleared
+        # harness_hit and then fell through to the in_scope check below, which reported the file
+        # as out_of because no task names test-hashes.json on its scope line -- so the deadlock
+        # moved rather than lifted, and T-002 was forced back to ready by it. The keys are the
+        # thing being authorised and hash_recut_in_scope has already checked them against the
+        # scope line; the file itself never needs naming.
+        if hash_recut_in_scope "$base" ${pats[@]+"${pats[@]}"}; then continue; fi
+        harness_hit="$harness_hit $f" ;;
+      __HARNESS_DIR__/*|*/hooks/*|.check-baseline|harness.json) harness_hit="$harness_hit $f" ;;
     esac
     # `${pats[@]+...}`, never `${pats+...}`: bash 3.2 is macOS's /bin/bash and expands an empty
     # array as an unbound variable under `set -u` even when the array itself is set.

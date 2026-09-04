@@ -16,10 +16,31 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 DRY=""
 [ "${1:-}" = "--dry-run" ] && DRY=1
 
-# TASKS.md is the bus. Rewriting it under a live agent is LEARNINGS 2026-08-25, so the guard is
-# on the agent process rather than the loop script that legitimately calls this. The binary comes
-# from harness.json: a guard that only recognises one vendor's process never fires for anyone else.
-if pgrep -f '__AGENT_BINARY__' >/dev/null; then
+# TASKS.md is the bus. Rewriting it under a live agent is LEARNINGS 2026-08-25, one checkout is one
+# writer. The guard used to be `pgrep -f` on the agent binary, which asks the wrong question: it
+# scans every command line on the machine, and Claude Desktop's renderer argv carries the literal
+# `claude-media` in --standard-schemes, so it was true with no agent running anywhere and nothing
+# has ever archived. It cannot be narrowed either -- the binary token is a `|` alternation of every
+# vendor the config names, and a pattern loose enough to match a vendor's CLI matches that vendor's
+# desktop app too. The question is whether a LANE is live in THIS checkout, and only the launcher
+# knows: a lane is spawned by spin() inside loop.sh (lib/agent.sh:45), so it is a descendant of a
+# running loop.sh. This script's OWN lane is excluded: walking up from a candidate, an ancestor on
+# this script's chain means the candidate is our own lane's work (the tool shells a lane spawns all
+# carry `claude` in their argv), and the loop that spawned that lane is its PARENT, not a competing
+# writer (loop.sh:81). Only a loop.sh reached before that chain is a second writer.
+AGENT_PID=$(ps -eo pid=,ppid=,args= | awk -v me="$$" -v bin='__AGENT_BINARY__' -v loop='__HARNESS_DIR__/loop.sh' '
+  { pid = $1 + 0; ppid[pid] = $2 + 0; sub(/^ *[0-9]+ +[0-9]+ +/, ""); args[pid] = $0 }
+  END {
+    for (p = me; (p in ppid) && p > 1; p = ppid[p]) mine[p] = 1
+    for (p in args) {
+      if ((p in mine) || args[p] !~ bin) continue
+      for (q = ppid[p]; (q in ppid) && q > 1; q = ppid[q]) {
+        if (q in mine) break
+        if (index(args[q], loop)) { print p; exit }
+      }
+    }
+  }')
+if [ -n "$AGENT_PID" ]; then
   echo "archive: an agent is running — TASKS.md is its bus, not touching it"
   exit 1
 fi

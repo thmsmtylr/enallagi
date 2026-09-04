@@ -35,6 +35,8 @@ agent_for() { # $1 = role
   AGENT_ROLE="$1"
 }
 
+# shellcheck disable=SC1003 # not an escaped quote: inside single quotes a backslash is literal,
+# and these are the four spinner frames | / - \ that spin() cycles through.
 FRAMES='|/-\'
 spin() {
   local label="$1"; shift
@@ -96,6 +98,8 @@ SPENT_USD=0
 ROLE_SECONDS=""
 
 log_stage() { # $1 = role, $2 = task, $3 = seconds, $4 = exit code, $5 = cost or empty
+  # shellcheck disable=SC2154 # $i is the launcher's iteration counter (harness/loop.sh:33 sets it,
+  # :106 increments it); this file is a module loop.sh sources, so shellcheck cannot see it.
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$i" "$1" "${2:--}" "$3" "$4" "${5:-}" >> "$RUN_LOG"
   SPENT_SECONDS=$((SPENT_SECONDS + $3))

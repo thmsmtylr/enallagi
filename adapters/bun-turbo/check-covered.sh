@@ -3,7 +3,10 @@ set -u
 BASE="${1:-}"
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}"
 # `cd ""` returns 0, so an empty root has to be caught before the cd, not by it
-[ -n "$ROOT" ] && cd "$ROOT" || { echo "check-covered: no project root" >&2; exit 2; }
+if [ -z "$ROOT" ] || ! cd "$ROOT"; then
+  echo "check-covered: no project root" >&2
+  exit 2
+fi
 [ -f package.json ] || { echo "check-covered: no package.json in $PWD" >&2; exit 2; }
 
 CHANGED=$( { git status --porcelain -uall | sed 's/^...//'
@@ -48,7 +51,7 @@ BASELINE=$([ -f .check-baseline ] && sed 's/#.*//; s/[[:space:]]*$//' .check-bas
 FORGIVEN=$(printf '%s\n' "$FAILED" | grep -xF -f <(printf '%s\n' "$BASELINE"))
 UNFORGIVEN=$(printf '%s\n' "$FAILED" | grep -vxF -f <(printf '%s\n' "$BASELINE"))
 # a task that failed without printing a bun test name has nothing the baseline can forgive
-NOT_A_TEST=$(printf '%s\n' "$OUT" | sed -n 's/^[[:space:]]*Failed:[[:space:]]*//p' | tr ' ,' '\n\n' | grep -v '#test$' | grep -v '^$')
+NOT_A_TEST=$(printf '%s\n' "$OUT" | sed -n 's/^[[:space:]]*Failed:[[:space:]]*//p' | tr ' ,' '\n' | grep -v '#test$' | grep -v '^$')
 
 [ -n "$FORGIVEN" ] && { echo "check-covered: forgiven by .check-baseline:" >&2; printf '%s\n' "$FORGIVEN" | sed 's/^/  /' >&2; }
 [ -n "$FAILED" ] && [ -z "$UNFORGIVEN" ] && [ -z "$NOT_A_TEST" ] && exit 0
