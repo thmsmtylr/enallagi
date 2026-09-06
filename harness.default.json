@@ -21,6 +21,44 @@
   "harnessDir": ".harness",
   "skillsDir": ".claude/skills",
   "skillInvocation": "invoke it via the Skill tool",
+  "_skills": "The skills the roles rely on. Six are named in a role prompt and `superpowers:brainstorming` is not: here criteria are written into the queue before code rather than in a chat, which is what its gate records. A prompt asks for one and continues when it is missing, so a skill is a soft dependency and only its gate makes it non-optional: `gate` names the probe, rail or hook that fails without the behaviour, or the literal `none` where nothing yet does. Nothing here is fetched and there is no `rev`: skills install per tool, not per repository, and this package vendors none. Rename a skill in roles/ and rename it here.",
+  "skills": [
+    {
+      "name": "superpowers:test-driven-development",
+      "why": "the failing test that encodes the acceptance criteria is written before the code",
+      "gate": "none"
+    },
+    {
+      "name": "ponytail",
+      "why": "the ladder is walked before any new code, and a shortcut taken anyway is marked",
+      "gate": "ponytail-ceiling"
+    },
+    {
+      "name": "superpowers:systematic-debugging",
+      "why": "a finding carries the command that reproduces it rather than a theory about it",
+      "gate": "anchored"
+    },
+    {
+      "name": "superpowers:receiving-code-review",
+      "why": "a rejected task answers every rejection point before it is re-implemented",
+      "gate": "none"
+    },
+    {
+      "name": "superpowers:verification-before-completion",
+      "why": "no completion claim without the exact command and its pasted output",
+      "gate": "blocked-is-allowed"
+    },
+    {
+      "name": "superpowers:requesting-code-review",
+      "why": "the verifier works a checklist rather than reading the diff for whatever stands out",
+      "gate": "none"
+    },
+    {
+      "name": "superpowers:brainstorming",
+      "why": "criteria are written before code, which here happens in the queue and not in a chat",
+      "gate": "queue-uncovered"
+    }
+  ],
   "_driver": "driverCommand is the ONLY probe that exercises the built artifact rather than reading text. Empty means off; it also needs HARNESS_DRIVER=1 in the environment, because it costs wall-clock on every scout round. It runs in a throwaway directory with a stripped environment, must exit 0 whenever it REACHED the artifact, and prints one line per shortfall beginning `FINDING `. No double quotes: it is spliced into a shell script, and $ and backticks in it expand where it is assigned \u2014 which is what makes `$HARNESS_ROOT/scripts/drive.sh` the right way to name a script, since the driver runs from a throwaway directory.",
   "driverCommand": "",
   "check": "bun run check",

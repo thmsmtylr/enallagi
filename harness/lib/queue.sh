@@ -13,9 +13,9 @@ tasks() { python3 __HARNESS_DIR__/tasks.py "$@" "${TASKS_FILE:-TASKS.md}"; }
 # First task that is ready, unattended, and whose blockers are all done. Takes an optional file so
 # a fixture can be resolved without touching the queue.
 ready_unattended() { python3 __HARNESS_DIR__/tasks.py ready-unattended "${1:-${TASKS_FILE:-TASKS.md}}"; }
-ids_at()     { tasks ids-at "$1"; }              # every id at one status
-block()      { tasks block "$1"; }               # one block, verbatim
-field()      { tasks field "$1" "$2"; }          # one field of one block
-unblock()    { tasks unblock; }                  # blocked -> ready where every blocker is done
+ids_at() { tasks ids-at "$1"; }    # every id at one status
+block() { tasks block "$1"; }      # one block, verbatim
+field() { tasks field "$1" "$2"; } # one field of one block
+unblock() { tasks unblock; }       # blocked -> ready where every blocker is done
 set_status() { tasks set-status "$1" "$2" "${3:-}"; }
 rejections() { python3 __HARNESS_DIR__/tasks.py rejections DECISIONS.md; }

@@ -32,7 +32,7 @@ for key in keys:
     if "#" in key: continue
     if os.path.realpath(os.path.join(root, key)) == target:
         print(key); break
-' <<< "$INPUT") || exit 0
+' <<<"$INPUT") || exit 0
 [ -z "$HIT" ] && exit 0
 echo "immutable: $HIT is covered by test-hashes.json (SPEC.md §0.2, tests-immutable and harness-immutable). This edit is refused. If the change is genuinely needed, stop the task and write it into the task notes." >&2
 exit 2

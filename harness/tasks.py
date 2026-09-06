@@ -8,6 +8,7 @@ in the template was a task a lane could take.
 
 Every question the launcher asks about the queue is answered here.
 
+    tasks.py list [file]                    id, title, status -- one line per block, file order
     tasks.py ready-unattended [file]        first ready, unattended, unblocked id
     tasks.py ids-at <status> [file]         every id at one status
     tasks.py block <id> [file]              one block, verbatim
@@ -22,7 +23,7 @@ import os
 import re
 import sys
 
-HEADING = re.compile(r'^## \[(T-\d+)\]')
+HEADING = re.compile(r'^## \[(T-\d+)\]\s*(.*)')
 FENCE = re.compile(r'^\s*(```|~~~)')
 
 
@@ -40,7 +41,8 @@ def parse(text):
         if not fenced:
             found = HEADING.match(line)
             if found:
-                current = {'id': found.group(1), 'line': index + 1, 'body': []}
+                current = {'id': found.group(1), 'title': found.group(2).strip(),
+                           'line': index + 1, 'body': []}
                 blocks.append(current)
                 continue
             if line.startswith('## ') or line.startswith('# '):
@@ -123,6 +125,15 @@ def load(argv, position):
 
 def main(argv):
     command = argv[1] if len(argv) > 1 else ''
+
+    if command == 'list':
+        # File order, never sorted: ready_unattended takes the FIRST ready block in file order, so
+        # position in the file is queue priority and re-ordering the view would lie about it.
+        _, text = load(argv, 2)
+        for block in parse(text):
+            print(u'%s  %s  \u2192 %s'
+                  % (block['id'], block['title'][:44], field(block, 'status') or '?'))
+        return 0
 
     if command == 'ready-unattended':
         _, text = load(argv, 2)
@@ -253,6 +264,8 @@ def selftest():
             failures.append(name)
 
     blocks = parse(FIXTURE)
+    check('a title is read off the heading', 'the one a lane may take',
+          [b['title'] for b in blocks if b['id'] == 'T-004'][0])
     check('a heading inside a code fence is not a task', False, 'T-042' in [b['id'] for b in blocks])
     check('every real block is parsed', 8, len(blocks))
     check('a ready task whose blocker is not done is not selected', True,

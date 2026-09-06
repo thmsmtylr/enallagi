@@ -16,29 +16,53 @@
 #   evals/                 the write-path gate for a new LEARNINGS.md rule
 #   documents              TASKS.md, PROGRESS.md, LEARNINGS.md, DECISIONS.md, .check-baseline
 #
-# Adapters (optional): --adapter claude also writes .claude/agents/ and .claude/settings.json;
+# Adapters (optional): --adapter claude also writes .claude/agents/, .claude/settings.json and
+# the UserPromptSubmit skill hook it registers;
 # --adapter bun-turbo writes the five-stage check.ts floor. See adapters/*/README.md.
 set -u
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET=""; DRY=""; ADAPTERS=()
+TARGET=""
+DRY=""
+ADAPTERS=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dry-run) DRY=1 ;;
-    --adapter) shift; ADAPTERS+=("${1:-}") ;;
-    -*) echo "install: unknown flag $1" >&2; exit 2 ;;
-    *)  TARGET="$1" ;;
+  --dry-run) DRY=1 ;;
+  --adapter)
+    shift
+    ADAPTERS+=("${1:-}")
+    ;;
+  -*)
+    echo "install: unknown flag $1" >&2
+    exit 2
+    ;;
+  *) TARGET="$1" ;;
   esac
   shift
 done
 
-[ -n "$TARGET" ] || { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
-TARGET="$(cd "$TARGET" 2>/dev/null && pwd)" || { echo "install: $TARGET is not a directory" >&2; exit 2; }
-git -C "$TARGET" rev-parse --git-dir >/dev/null 2>&1 \
-  || { echo "install: $TARGET is not a git repository. The harness records its own history there; git init first." >&2; exit 2; }
+[ -n "$TARGET" ] || {
+  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  exit 2
+}
+TARGET="$(cd "$TARGET" 2>/dev/null && pwd)" || {
+  echo "install: $TARGET is not a directory" >&2
+  exit 2
+}
+git -C "$TARGET" rev-parse --git-dir >/dev/null 2>&1 ||
+  {
+    echo "install: $TARGET is not a git repository. The harness records its own history there; git init first." >&2
+    exit 2
+  }
 
 say() { echo "  $*"; }
-run() { [ -n "$DRY" ] && { say "would: $*"; return 0; }; "$@"; }
+run() {
+  [ -n "$DRY" ] && {
+    say "would: $*"
+    return 0
+  }
+  "$@"
+}
 
 CONFIG="$TARGET/harness.json"
 if [ ! -f "$CONFIG" ]; then
@@ -56,13 +80,16 @@ if v is None:
     v=json.load(open(os.path.join(os.environ['SRC'],'harness.default.json'))).get('$1')
 print(v if not isinstance(v,list) else ' '.join(v))"; }
 
-SPEC_FILE=$(read_key spec);        HARNESS_DIR=$(read_key harnessDir)
-SKILLS_DIR=$(read_key skillsDir);  CONTEXT_FILE=$(read_key contextFile)
+SPEC_FILE=$(read_key spec)
+HARNESS_DIR=$(read_key harnessDir)
+SKILLS_DIR=$(read_key skillsDir)
+CONTEXT_FILE=$(read_key contextFile)
 POINTERS=$(read_key pointerFiles)
 
 # Merging defaults under your answers means a new key in a later version does not break an old
 # install; a missing key leaves a token standing, and the assert at the end catches it.
-SUBST=$(python3 - <<'PY'
+SUBST=$(
+  python3 - <<'PY'
 import json, os, re, shlex, sys
 AGENT_ROLES = ['default', 'scout', 'adjudicator', 'implementer', 'verifier']
 defaults = json.load(open(os.path.join(os.environ['SRC'], 'harness.default.json')))
@@ -109,7 +136,10 @@ echo "installing the harness into $TARGET${DRY:+  (dry run)}"
 run mkdir -p "$TARGET/$HARNESS_DIR/hooks" "$TARGET/$HARNESS_DIR/lib" "$TARGET/$HARNESS_DIR/roles" "$TARGET/$SKILLS_DIR"
 
 place() { # $1 = source file, $2 = destination
-  if [ -n "$DRY" ]; then say "would write: ${2#"$TARGET"/}"; return 0; fi
+  if [ -n "$DRY" ]; then
+    say "would write: ${2#"$TARGET"/}"
+    return 0
+  fi
   mkdir -p "$(dirname "$2")"
   SUBST="$SUBST" python3 - "$1" "$2" <<'PY'
 import json, os, sys
@@ -121,13 +151,19 @@ open(sys.argv[2], 'w', encoding='utf-8').write(text)
 PY
   say "wrote: ${2#"$TARGET"/}"
 }
-seed() { [ -s "$2" ] && { say "kept: ${2#"$TARGET"/} (already has content)"; return 0; }; place "$1" "$2"; }
+seed() {
+  [ -s "$2" ] && {
+    say "kept: ${2#"$TARGET"/} (already has content)"
+    return 0
+  }
+  place "$1" "$2"
+}
 
-for f in "$SRC"/harness/*.sh;       do place "$f" "$TARGET/$HARNESS_DIR/$(basename "$f")"; done
+for f in "$SRC"/harness/*.sh; do place "$f" "$TARGET/$HARNESS_DIR/$(basename "$f")"; done
 for f in "$SRC"/harness/hooks/*.sh; do place "$f" "$TARGET/$HARNESS_DIR/hooks/$(basename "$f")"; done
-for f in "$SRC"/harness/lib/*.sh;   do place "$f" "$TARGET/$HARNESS_DIR/lib/$(basename "$f")"; done
+for f in "$SRC"/harness/lib/*.sh; do place "$f" "$TARGET/$HARNESS_DIR/lib/$(basename "$f")"; done
 place "$SRC/harness/tasks.py" "$TARGET/$HARNESS_DIR/tasks.py"
-for f in "$SRC"/roles/*.md;         do place "$f" "$TARGET/$HARNESS_DIR/roles/$(basename "$f")"; done
+for f in "$SRC"/roles/*.md; do place "$f" "$TARGET/$HARNESS_DIR/roles/$(basename "$f")"; done
 place "$SRC/templates/RAILS.md" "$TARGET/$HARNESS_DIR/RAILS.md"
 run chmod +x "$TARGET/$HARNESS_DIR"/*.sh "$TARGET/$HARNESS_DIR/hooks"/*.sh "$TARGET/$HARNESS_DIR/tasks.py"
 # The run log is machinery, not content: a lane that stages everything would otherwise commit it,
@@ -137,7 +173,14 @@ run chmod +x "$TARGET/$HARNESS_DIR"/*.sh "$TARGET/$HARNESS_DIR/hooks"/*.sh "$TAR
 # `git status --porcelain` to decide whether a lane left its work off the branch -- so an
 # un-ignored file the harness wrote itself reads as an uncommitted implementation and forces a
 # verified task back to ready. It did, on 2026-09-04, to T-004 on its fourth pass.
-[ -n "$DRY" ] || [ -e "$TARGET/$HARNESS_DIR/.gitignore" ] || printf 'run.log\n*.log\nlogs/\n' > "$TARGET/$HARNESS_DIR/.gitignore"
+# `worktrees/` is APPENDED rather than seeded: the seed only fires when the file is absent, so an
+# install that predates worktree.sh moving its checkout in here already has the file and would
+# never get the cover. Both happen in this one run, so the ignore is in place before the new
+# worktree.sh can create the directory.
+[ -n "$DRY" ] || {
+  [ -e "$TARGET/$HARNESS_DIR/.gitignore" ] || printf 'run.log\n*.log\nlogs/\n' >"$TARGET/$HARNESS_DIR/.gitignore"
+  grep -qx 'worktrees/' "$TARGET/$HARNESS_DIR/.gitignore" || printf 'worktrees/\n' >>"$TARGET/$HARNESS_DIR/.gitignore"
+}
 
 # Skills install per tool, not per repository (superpowers: "Installation differs by harness").
 # What ships here is this project's OWN skill, in the format ~48 clients read.
@@ -156,8 +199,8 @@ seed "$SRC/evals/README.md" "$TARGET/evals/README.md"
 for f in "$SRC"/templates/*; do
   base="$(basename "$f")"
   case "$base" in
-    RAILS.md|SPEC.section.md|AGENTS.md|pointer.md) continue ;;
-    dot.*) base=".${base#dot.}" ;;
+  RAILS.md | SPEC.section.md | AGENTS.md | pointer.md) continue ;;
+  dot.*) base=".${base#dot.}" ;;
   esac
   seed "$f" "$TARGET/$base"
 done
@@ -186,16 +229,25 @@ for p in $POINTERS; do
 done
 
 for a in ${ADAPTERS+"${ADAPTERS[@]}"}; do
-  [ -d "$SRC/adapters/$a" ] || { echo "install: no adapter named $a" >&2; exit 2; }
+  [ -d "$SRC/adapters/$a" ] || {
+    echo "install: no adapter named $a" >&2
+    exit 2
+  }
   echo "adapter: $a"
   case "$a" in
-    claude)
-      for f in "$SRC"/roles/*.md; do place "$f" "$TARGET/.claude/agents/$(basename "$f")"; done
-      seed "$SRC/adapters/claude/settings.json" "$TARGET/.claude/settings.json" ;;
-    *)
-      for f in "$SRC/adapters/$a"/*.sh; do [ -e "$f" ] && place "$f" "$TARGET/$HARNESS_DIR/hooks/$(basename "$f")"; done
-      for f in "$SRC/adapters/$a"/*.ts; do [ -e "$f" ] && place "$f" "$TARGET/$(basename "$f")"; done
-      run chmod +x "$TARGET/$HARNESS_DIR/hooks"/*.sh ;;
+  claude)
+    for f in "$SRC"/roles/*.md; do place "$f" "$TARGET/.claude/agents/$(basename "$f")"; done
+    # The hook scripts go where the portable ones already live, so settings.json can point at
+    # __HARNESS_DIR__/hooks/ for all of them and nothing tool-specific ends up outside .claude/.
+    for f in "$SRC"/adapters/claude/*.sh; do place "$f" "$TARGET/$HARNESS_DIR/hooks/$(basename "$f")"; done
+    run chmod +x "$TARGET/$HARNESS_DIR/hooks"/*.sh
+    seed "$SRC/adapters/claude/settings.json" "$TARGET/.claude/settings.json"
+    ;;
+  *)
+    for f in "$SRC/adapters/$a"/*.sh; do [ -e "$f" ] && place "$f" "$TARGET/$HARNESS_DIR/hooks/$(basename "$f")"; done
+    for f in "$SRC/adapters/$a"/*.ts; do [ -e "$f" ] && place "$f" "$TARGET/$(basename "$f")"; done
+    run chmod +x "$TARGET/$HARNESS_DIR/hooks"/*.sh
+    ;;
   esac
 done
 
@@ -203,17 +255,25 @@ done
 if [ -z "$DRY" ]; then
   LEFT=$(grep -rlE '__[A-Z][A-Z_]+__' "$TARGET/$HARNESS_DIR" "$TARGET/$SKILLS_DIR" "$TARGET/$CONTEXT_FILE" 2>/dev/null || true)
   if [ -n "$LEFT" ]; then
-    echo; echo "install FAILED: a token survived substitution, so harness.json is missing a key:" >&2
+    echo
+    echo "install FAILED: a token survived substitution, so harness.json is missing a key:" >&2
     for f in $LEFT; do echo "  ${f#"$TARGET"/}: $(grep -ohE '__[A-Z][A-Z_]+__' "$f" | sort -u | tr '\n' ' ')" >&2; done
     exit 2
   fi
   for f in "$TARGET/$HARNESS_DIR"/*.sh "$TARGET/$HARNESS_DIR/hooks"/*.sh "$TARGET/$HARNESS_DIR/lib"/*.sh; do
-    bash -n "$f" || { echo "install FAILED: $f is not valid bash after substitution" >&2; exit 2; }
+    bash -n "$f" || {
+      echo "install FAILED: $f is not valid bash after substitution" >&2
+      exit 2
+    }
   done
-  python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$TARGET/$HARNESS_DIR/tasks.py" \
-    || { echo "install FAILED: tasks.py is not valid python after substitution" >&2; exit 2; }
+  python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$TARGET/$HARNESS_DIR/tasks.py" ||
+    {
+      echo "install FAILED: tasks.py is not valid python after substitution" >&2
+      exit 2
+    }
   COUNT=$(find "$TARGET/$HARNESS_DIR" "$TARGET/$SKILLS_DIR" -type f | wc -l | tr -d ' ')
-  echo; echo "installed $COUNT files, every token substituted, every script parses."
+  echo
+  echo "installed $COUNT files, every token substituted, every script parses."
 fi
 
 cat <<NEXT

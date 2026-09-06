@@ -26,11 +26,11 @@ AGENT_ROLE=default
 # install time, so every branch here is defined.
 agent_for() { # $1 = role
   case "$1" in
-    scout)       AGENT_CMD=("${AGENT_CMD_SCOUT[@]}") ;;
-    adjudicator) AGENT_CMD=("${AGENT_CMD_ADJUDICATOR[@]}") ;;
-    implementer) AGENT_CMD=("${AGENT_CMD_IMPLEMENTER[@]}") ;;
-    verifier)    AGENT_CMD=("${AGENT_CMD_VERIFIER[@]}") ;;
-    *)           AGENT_CMD=("${AGENT_CMD_DEFAULT[@]}") ;;
+  scout) AGENT_CMD=("${AGENT_CMD_SCOUT[@]}") ;;
+  adjudicator) AGENT_CMD=("${AGENT_CMD_ADJUDICATOR[@]}") ;;
+  implementer) AGENT_CMD=("${AGENT_CMD_IMPLEMENTER[@]}") ;;
+  verifier) AGENT_CMD=("${AGENT_CMD_VERIFIER[@]}") ;;
+  *) AGENT_CMD=("${AGENT_CMD_DEFAULT[@]}") ;;
   esac
   AGENT_ROLE="$1"
 }
@@ -39,7 +39,8 @@ agent_for() { # $1 = role
 # and these are the four spinner frames | / - \ that spin() cycles through.
 FRAMES='|/-\'
 spin() {
-  local label="$1"; shift
+  local label="$1"
+  shift
   local tty=1
   { exec 3>/dev/tty; } 2>/dev/null || tty=
   "$@" </dev/null &
@@ -51,13 +52,20 @@ spin() {
       f=$((f + 1))
       sleep 0.2
     else
-      [ $((e - last)) -ge 60 ] && { printf '  ... %s %dm%02ds\n' "$label" $((e / 60)) $((e % 60)); last=$e; }
+      [ $((e - last)) -ge 60 ] && {
+        printf '  ... %s %dm%02ds\n' "$label" $((e / 60)) $((e % 60))
+        last=$e
+      }
       sleep 5
     fi
   done
-  wait "$pid"; local rc=$?
+  wait "$pid"
+  local rc=$?
   e=$((SECONDS - start))
-  [ -n "$tty" ] && { printf '\r\033[2K  %s  %dm%02ds\n' "$label" $((e / 60)) $((e % 60)) >&3; exec 3>&-; }
+  [ -n "$tty" ] && {
+    printf '\r\033[2K  %s  %dm%02ds\n' "$label" $((e / 60)) $((e % 60)) >&3
+    exec 3>&-
+  }
   return $rc
 }
 
@@ -83,11 +91,16 @@ RESET
 sleep_until() {
   local left="$1"
   while [ "$left" -gt 0 ]; do
-    [ -f STOP ] && { echo "STOP during limit wait."; return 1; }
+    [ -f STOP ] && {
+      echo "STOP during limit wait."
+      return 1
+    }
     printf '\r\033[2K  waiting out session limit: %dm left' $((left / 60))
-    sleep $(( left < 60 ? left : 60 )); left=$((left - 60))
+    sleep $((left < 60 ? left : 60))
+    left=$((left - 60))
   done
-  printf '\r\033[2K'; return 0
+  printf '\r\033[2K'
+  return 0
 }
 
 # One record per spawned stage. Wall clock is portable; cost is not, so it is read from whatever
@@ -101,7 +114,7 @@ log_stage() { # $1 = role, $2 = task, $3 = seconds, $4 = exit code, $5 = cost or
   # shellcheck disable=SC2154 # $i is the launcher's iteration counter (harness/loop.sh:33 sets it,
   # :106 increments it); this file is a module loop.sh sources, so shellcheck cannot see it.
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$i" "$1" "${2:--}" "$3" "$4" "${5:-}" >> "$RUN_LOG"
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$i" "$1" "${2:--}" "$3" "$4" "${5:-}" >>"$RUN_LOG"
   SPENT_SECONDS=$((SPENT_SECONDS + $3))
   ROLE_SECONDS="${ROLE_SECONDS}$1 $3"$'\n'
   [ -n "${5:-}" ] && SPENT_USD=$(python3 -c "print(round($SPENT_USD + $5, 4))" 2>/dev/null || echo "$SPENT_USD")
@@ -112,9 +125,13 @@ log_stage() { # $1 = role, $2 = task, $3 = seconds, $4 = exit code, $5 = cost or
 # Unset or zero means no limit.
 over_budget() {
   [ "${BUDGET_SECONDS:-0}" -gt 0 ] && [ "$SPENT_SECONDS" -ge "${BUDGET_SECONDS:-0}" ] && {
-    halt "the run has spent ${SPENT_SECONDS}s of its ${BUDGET_SECONDS}s budget."; return 0; }
+    halt "the run has spent ${SPENT_SECONDS}s of its ${BUDGET_SECONDS}s budget."
+    return 0
+  }
   [ -n "${BUDGET_USD:-}" ] && [ "$(python3 -c "print(1 if $SPENT_USD >= ${BUDGET_USD:-0} else 0)" 2>/dev/null || echo 0)" = "1" ] && {
-    halt "the run has spent \$$SPENT_USD of its \$$BUDGET_USD budget."; return 0; }
+    halt "the run has spent \$$SPENT_USD of its \$$BUDGET_USD budget."
+    return 0
+  }
   return 1
 }
 
@@ -131,7 +148,8 @@ run_agent() {
     out=$(mktemp)
     local cmd=() word
     for word in "${AGENT_CMD[@]}"; do
-      word="${word//\{prompt\}/$prompt}"; word="${word//\{turns\}/$turns}"
+      word="${word//\{prompt\}/$prompt}"
+      word="${word//\{turns\}/$turns}"
       cmd+=("$word")
     done
     spin "$label" "${cmd[@]}" >"$out" 2>&1
@@ -140,10 +158,12 @@ run_agent() {
     hit=$(grep -m1 -i "__RATE_LIMIT_PATTERN__" "$out" || true)
     cost=$(sed -n '__COST_SED__' "$out" | tail -1)
     rm -f "$out"
-    [ -n "$hit" ] || { log_stage "${AGENT_ROLE:-default}" "${TASK:-}" $((SECONDS - started)) "$rc" "$cost"; return $rc; }
+    [ -n "$hit" ] || {
+      log_stage "${AGENT_ROLE:-default}" "${TASK:-}" $((SECONDS - started)) "$rc" "$cost"
+      return $rc
+    }
     wait_s=$(seconds_until_reset "$hit") || wait_s=1800
     echo "  session limit. sleeping $((wait_s / 60))m, then retrying $label."
     sleep_until "$wait_s" || return 1
   done
 }
-

@@ -13,12 +13,12 @@ set -u
 
 CHECK=""
 case "${1:-}" in
-  "") ;;
-  --check) CHECK=1 ;;
-  *)
-    echo "usage: bootstrap.sh [--check]" >&2
-    exit 2
-    ;;
+"") ;;
+--check) CHECK=1 ;;
+*)
+  echo "usage: bootstrap.sh [--check]" >&2
+  exit 2
+  ;;
 esac
 
 if ! git rev-parse --git-dir >/dev/null 2>&1; then

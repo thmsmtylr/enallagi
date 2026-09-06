@@ -11,6 +11,51 @@ install into a git repository. No dependencies beyond `bash` and `python3`.
 
 One task per fresh agent process, every claim gated on a re-runnable command, all state in files.
 
+## Sixty seconds
+
+```bash
+git clone <this> ~/harness && ~/harness/docs/demo.sh
+```
+
+No arguments, no credential, no network. It installs the package into a throwaway repository,
+drives one iteration with a fixture script standing in for the coding agent, and deletes the
+directory on its way out — so the launcher, the hooks and the gates you are watching are the real
+ones and nothing lands on your machine. Its own output, from `./docs/demo.sh` on 2026-09-06, cut
+only where marked:
+
+```
+== install into a throwaway repo  (/var/folders/.../T/tmp.n9wrCjgJcV)
+installed 22 files, every token substituted, every script parses.
+
+== the queue
+T-001  <the first task>  → ready
+
+== one iteration: an implementer process, then a separate verifier process
+=== Iteration 1: implement T-001 ===
+=== Iteration 1: verify T-001 ===
+  gate: T-001 done, and the gate agrees.
+  scope: T-001 stayed inside its scope.
+
+=== digest: 1 iteration(s) ===
+wall clock: 10s across 2 stage(s), cost $0
+tasks landed: T-001
+rows turned green:
+  T-001: none — harness
+...                                     (findings promoted, findings killed, halts, warnings)
+
+== what persisted, read back off the tree and not off anything an agent said
+T-001  status: done
+commit  verify: T-001 verdict
+commit  feat: T-001 the work
+PROGRESS.md ends: ## demo — T-001 — landed
+```
+
+The two lines worth stopping on are `gate:` and `scope:`. The verifier is an agent, and an agent
+reporting on its own work is not evidence — so after the verdict is written the launcher re-runs
+the check itself and diffs the iteration's own commits against the task's `scope:` line. A `done`
+the tree cannot support is forced back to `ready` with the reason recorded. Everything else in this
+file is detail behind those two lines.
+
 ## Install
 
 ```bash
@@ -30,7 +75,9 @@ git add .harness evals harness.json AGENTS.md
 ```
 
 Documents are seeded only if absent, so re-running never overwrites your own. `--adapter claude`
-additionally writes `.claude/agents/` and `.claude/settings.json`.
+additionally writes `.claude/agents/`, `.claude/settings.json`, and the
+`.harness/hooks/skill-hook.sh` that settings.json registers on `UserPromptSubmit` — it prints the
+`skills` block from `harness.json` on every prompt, and only reports: it never blocks one.
 
 Installed layout:
 
@@ -46,6 +93,7 @@ DECISIONS.md              killed findings, then archived task blocks
 .harness/lib/             its modules — queue.sh, agent.sh, gates.sh
 .harness/tasks.py         the one parser for TASKS.md
 .harness/worktree.sh      one lane in its own git worktree
+.harness/worktrees/       where that lane's checkout lives, ignored, removed on merge-back
 .harness/archive-done.sh  trims TASKS.md and PROGRESS.md
 .harness/hooks/           probes.sh, check-gate.sh, immutable.sh, verify-done.sh
 .harness/roles/           the five role prompts
@@ -61,6 +109,7 @@ evals/run.sh              the write-path gate for a new LEARNINGS.md rule
 DRY_RUN=1 .harness/loop.sh 1      print the stage plan, spawn nothing
 BUDGET_USD=5 .harness/loop.sh 8   halt at a spend
 touch STOP                        halt before the next stage; delete to resume
+.harness/tasks.py list            the queue, one line per task, in file order
 .harness/hooks/probes.sh          the findings
 .harness/watch.sh                 follow a run from another terminal
 evals/run.sh [--gate <name>]      test a role prompt, or decide a candidate rule
@@ -119,7 +168,7 @@ ever shrinks.
 
 ## Probes
 
-`.harness/hooks/probes.sh` runs fourteen analyses and reports; it never gates. `FINDING` lines are
+`.harness/hooks/probes.sh` runs sixteen analyses and reports; it never gates. `FINDING` lines are
 the only legal queue input: the scout transcribes, the adjudicator re-runs the command and kills
 what does not reproduce.
 
@@ -132,20 +181,27 @@ what does not reproduce.
 | `check-unnamed` | the context file’s Commands section names a check other than `harness.json`’s |
 | `learning-unenforced` | a LEARNINGS.md entry naming no file, command or hook |
 | `learning-ungated` | a dated rule with no eval, or a rule library over `learningsCap` |
-| `ponytail-ceiling` | a `ponytail:` shortcut marked in the source |
+| `skill-ungated` | a declared skill with `gate: none`, or naming a gate that does not exist |
+| `ponytail-ceiling` | a `ponytail:` shortcut marked in the source, unless a dated kill line under DECISIONS.md `## Rejected findings` already carries the marker’s own text — the text, because a marker that moves is the same marker |
 | `rejection-stale` | a REJECTED note under a non-`ready` status, or a `needs-spec` block |
 | `queue-hygiene` | duplicate ids, missing fields, dangling `blockedBy` |
 | `friction-repeat` | the same `friction:` twice with no LEARNINGS.md rule |
 | `check-red` | the check is failing |
 | `litter` | a tracked or untracked file on no allowlist |
+| `install-stale` | an installed harness file that differs from the source install.sh built it from, compared after that same substitution — reported only in the package's own checkout, since a repository that merely installed the harness has no source beside it |
 | `driver` | whatever your driver reports (off by default) |
 
-A fresh install reports three findings and all three are correct: the seeded exit-criteria row has
-no test file, `test-hashes.json` does not exist yet, and `immutable.sh` carries one marked shortcut.
+A fresh install reports seventeen findings and every one of them is correct
+(`.harness/hooks/probes.sh | grep -c '^FINDING '` on a seeded install, `git add -A` run so the tree
+is tracked, 2026-09-06): the seeded exit-criteria row has no test file, `test-hashes.json` does not
+exist yet, the seeded `check` fails, three of the declared skills carry `gate: none`, and eight
+`ponytail:` shortcuts are marked in the shipped hooks and libraries. `install-stale` reports
+nothing there, correctly — a repository that installed the harness has no source tree to compare
+its instance against.
 
 ## The driver
 
-Thirteen probes read text. `driver` runs your artifact through the surface a user touches, which is
+Fourteen probes read text. `driver` runs your artifact through the surface a user touches, which is
 the only source of capability findings. It is off until `driverCommand` is set and
 `HARNESS_DRIVER=1` is in the environment.
 
@@ -155,7 +211,24 @@ prints `PROBE driver OFF`, never a count of zero. The command runs in a throwawa
 `env -i`, so an agent you drive inherits none of the loop's context.
 
 `.harness/driver.example.sh` is the skeleton. `driver.sh` in this package is a worked example that
-drives the harness itself.
+drives the harness itself: one installed repo and one iteration per mode, each with a lane sloppy
+in exactly one way.
+
+| mode | what it reports |
+| --- | --- |
+| `uncommitted` | a lane whose implementation never reached the branch, and the task still `done` |
+| `no-progress` | a lane that wrote no `PROGRESS.md` entry, and a digest that did not say so |
+| `out-of-scope` | a lane that edited a file off its `scope:` line, and the task still `done` |
+| `red-check` | a lane that reached `done` with the floor red |
+
+`./driver.sh --unlabelled` is a separate reading, not a mode: every commit in the repository you run
+it from whose message names no `T-###` — work that did not go through the queue. It counts rather
+than accuses, because every gate binds a lane and none binds the operator, so releases, halt
+resolutions and contract edits are expected to appear. It is deliberately not one of the modes
+above: a driven round happens inside a `mktemp -d` that is deleted before the probe prints, so a
+commit found there names nothing an operator can open. It reads the whole history it is given
+(`git log --format='%h %s' | grep -vc 'T-[0-9][0-9][0-9]'` → 57 of 171 commits here at 5842a69,
+2026-09-06), so the boundary is yours to choose.
 
 ## Rules and the write-path gate
 
@@ -252,6 +325,11 @@ one is missing. Skills install per tool, not per repository, so this package ven
 its own procedure as a `SKILL.md` in `skillsDir` in the [agentskills.io](https://agentskills.io/)
 format, which ~48 clients read.
 
+A soft dependency is a dependency nobody notices breaking, so `skills` in `harness.default.json`
+records each one with a `why` and a `gate`: the probe or rail that fails when the behaviour is
+absent, or `none` where nothing yet does. `selftest.sh` rejects a `gate` naming an enforcement that
+does not exist.
+
 ## Adapters
 
 The floor is language-specific. `adapters/bun-turbo/` ships a five-stage `check.ts` and a turbo-aware
@@ -288,7 +366,7 @@ Start with one exit-criteria row, one task, and `.harness/loop.sh 1`.
 
 ```bash
 ./selftest.sh                    # installs into a throwaway repo and asserts against it
-HARNESS_DRIVER=1 ./selftest.sh   # plus the driver, ~90s
+HARNESS_DRIVER=1 ./selftest.sh   # plus the driver: ~3:15 against ~2:21 without it, at 195eb0e
 KEEP=1 ./selftest.sh             # leave the scratch repo
 ```
 
@@ -302,16 +380,30 @@ It also runs `shellcheck` at full severity over every tracked `*.sh` outside `.h
 file-wide disables in `.shellcheckrc` carry theirs there. Both assertions `skip` where shellcheck
 is not installed.
 
+`shfmt` runs over that same list, with no flags on purpose: given none it reads `.editorconfig`,
+which is where this repo's format lives (`[*.sh] indent_style = space, indent_size = 2`), so the
+floor and the CI job cannot enforce two different shapes. That assertion `skip`s the same way when
+shfmt is not installed.
+
 `.github/workflows/ci.yml` runs that floor on every push and pull request, on a matrix of
 `ubuntu-latest` and `macos-latest`: bash 5 with GNU `sed` and bash 3.2 with BSD `sed`. Both parser
 defects this package has had were that difference, so the matrix is the regression test for bugs
 already paid for. Each runner also runs `bash -n` over every script, `harness/tasks.py --selftest`
-and `docs/bootstrap.sh --check`; `shfmt` and the OpenSSF Scorecard analysis are their own jobs, as
-bats-core keeps them, so a formatting failure never masks a correctness one. `HARNESS_EVALS` is
+and `docs/bootstrap.sh --check`; `shfmt`, the driver and the OpenSSF Scorecard analysis are their
+own jobs, as bats-core keeps them, so a formatting failure never masks a correctness one.
+
+The driver job is the one that sets `HARNESS_DRIVER=1`, and it is the only place in CI that does.
+Without it the assertion that reaches the built artifact — the rest read text — prints `skip` on
+every CI run, and a gate asserts what it executed. `selftest.sh` reads four things out of that job
+and fails on any of them: the job is there, the variable is set to something non-empty, the floor
+is the command, and there is no `if:` switching the job off with the row still green. It installs five throwaway repos and drives five
+loop iterations, so it runs beside the fast floor rather than inside it. `HARNESS_EVALS` is
 never set there — the evals spawn a real agent, and a CI job holding a model credential is the
 blast radius this package argues against — so those assertions report `skip`. Every `uses:` is
 pinned to a commit SHA with its tag in a trailing comment, and `selftest.sh` fails on any that is
-not.
+not. That assertion is proven firing rather than merely passing: the same scan runs a second time
+over a scratch workflow carrying a tag pin and a comment-less SHA, and reports both while leaving
+the correctly pinned line beside them alone.
 
 ## The bootstrap record
 

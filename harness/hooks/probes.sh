@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
-# Fourteen probes over the tree. Reports; never gates, and is wired into no hook and no build task.
+# Sixteen probes over the tree. Reports; never gates, and is wired into no hook and no build task.
 # Tokens like __CHECK__ are substituted by install.sh from harness.json. Edit harness.json, re-install.
 # Exit 0 when every probe ran, non-zero only when one could not.
 set -u
 ROOT="${1:-${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}}"
 # `cd ""` returns 0, so an empty root has to be caught before the cd, not by it
-if [ -z "$ROOT" ] || ! cd "$ROOT"; then echo "probes: no project root" >&2; exit 2; fi
+if [ -z "$ROOT" ] || ! cd "$ROOT"; then
+  echo "probes: no project root" >&2
+  exit 2
+fi
 
 # the force variant, because a cached green is a green nobody ran (LEARNINGS.md, 2026-08-27)
 if [ -n "${TURBO_HASH:-}" ]; then
-  CHECK_LOG="nested under turbo, the check would recurse"; CHECK_STATUS=nested
+  CHECK_LOG="nested under turbo, the check would recurse"
+  CHECK_STATUS=nested
 else
-  CHECK_LOG=$(__CHECK_FORCE__ 2>&1); CHECK_STATUS=$?
+  CHECK_LOG=$(__CHECK_FORCE__ 2>&1)
+  CHECK_STATUS=$?
 fi
 
 # The one probe that does not read text: it drives the built artifact through the surface a user
@@ -44,7 +49,7 @@ fi
 export DRIVER DRIVER_STATUS DRIVER_LOG
 
 CHECK_LOG="$CHECK_LOG" CHECK_STATUS="$CHECK_STATUS" python3 - <<'PY'
-import glob, json, os, re, subprocess, sys
+import glob, json, os, re, shutil, subprocess, sys, tempfile
 
 SRC = '__SOURCE_ROOT__'
 SPEC = '__SPEC__'
@@ -416,15 +421,97 @@ def learning_ungated():
     return found
 
 
-def ponytail_ceiling():
+CONFIG = 'harness.json'
+# the package's own contract, which ships only in the package repo. install.sh seeds harness.json
+# from it (install.sh:67-70), so an installed target reads the first name and never the second.
+DEFAULTS = 'harness.default.json'
+PROBES_FILE = '__HARNESS_DIR__/hooks/probes.sh'
+
+
+def skill_ungated():
+    """A `skills` entry that lists a name and nothing that fails without it is prose claiming to be
+    a mechanism: `gate: none` reads identically to a real enforcement unless something says so
+    out loud. The list is read at run time, harness.json first and the package contract behind it:
+    the same fallback install.sh read_key() applies (install.sh:75-81), and it is exact, because a
+    top-level key in harness.json replaces the default wholesale (install.sh:97,
+    `{**defaults, **answers}`). It is never substituted in as a literal. This file is one of the
+    two selftest.sh greps for a declared gate name, so a literal here writes every gate name into
+    that text and an invented one then finds ITSELF defined -- which it did, and cost the rejection
+    of 211e355.
+    An empty or missing list is one FINDING, never a count of zero (LEARNINGS.md, zero-as-pass)."""
+    skills = None
+    for path in (CONFIG, DEFAULTS):
+        try:
+            skills = json.load(open(path)).get('skills')
+        except Exception:
+            skills = None
+        if skills is not None:
+            break
+    if not isinstance(skills, list) or not skills:
+        return [(CONFIG, 0, 'declares no skills, so nothing records what the role prompts rely on '
+                            'or what fails without each one')]
+    known = '\n'.join(read(f) for f in (PROBES_FILE, RAILS_FILE) if os.path.exists(f))
     found = []
+    for entry in skills:
+        name = entry.get('name', '?')
+        gate = entry.get('gate') or 'none'
+        if gate == 'none':
+            found.append((CONFIG, 0, '%s is declared with gate: none -- nothing fails without it, '
+                                     'so relying on it is a hope' % name))
+        # word-boundary, not substring: a short gate name matches some word in every file otherwise.
+        # The same two files and the same test selftest.sh applies to the package default.
+        elif not re.search(r'\b%s\b' % re.escape(gate), known):
+            found.append((CONFIG, 0, '%s names gate %s, which neither %s nor %s defines'
+                          % (name, gate, PROBES_FILE, RAILS_FILE)))
+    return found
+
+
+REJECTED = '## Rejected findings'
+REF = re.compile(r'`([\w./-]+):(\d+)`')
+
+
+def kill_lines():
+    """Every dated line under DECISIONS.md's `## Rejected findings`, which is where the adjudicator
+    writes what it killed and the command that refutes it. The lines, never the task ids in them:
+    an id is spent once and the same finding comes back under a new one."""
+    if not os.path.exists('DECISIONS.md'):
+        return []
+    inside, found = False, []
+    for line in lines_of('DECISIONS.md'):
+        if line.startswith('## '):
+            inside = line.strip() == REJECTED
+        elif inside and DATED.match(line):
+            found.append(line)
+    return found
+
+
+def ponytail_ceiling():
+    """A marker whose kill is already written down is a settled decision, and reporting it again is
+    the churn this loop measured: 22 scout blocks in one 2026-09-04 round, 21 killed, every one of
+    them from this probe (TASKS.md T-070; one marker was killed five times in two days under five
+    ids). So a marker is skipped when a kill line carries its TEXT -- quoted outright, or standing
+    at a `path:line` some kill names. The text and not the line number, because a marker that MOVED
+    is the same marker: `gates.sh:42` came back as `:44` and `:65` as `:92`, and the installed copy
+    of a file moves independently of the package one.
+    Not a count of zero when nothing has been killed: an empty section suppresses nothing and every
+    marker is reported, which is what a fresh install shows (LEARNINGS.md, zero-as-pass)."""
     marker = 'ponytail' + ':'
+    quoted = '\n'.join(kill_lines())
+    settled, seen = set(), {}
+    for path, at in REF.findall(quoted):
+        if path not in seen:
+            seen[path] = lines_of(path) if os.path.isfile(path) else []
+        body, index = seen[path], int(at) - 1
+        if 0 <= index < len(body) and marker in body[index]:
+            settled.add(body[index].strip())
+    found = []
     for path in tracked():
-        if not path.endswith(SOURCE_EXT) or not os.path.exists(path):
+        if not path.endswith(SOURCE_EXT) or not os.path.isfile(path):
             continue
         for index, line in enumerate(lines_of(path)):
-            if marker in line:
-                found.append((path, index + 1, line.strip()[:100]))
+            text = line.strip()
+            if marker in line and text not in settled and text not in quoted:
+                found.append((path, index + 1, text[:100]))
     return found
 
 
@@ -548,6 +635,54 @@ def litter():
     return sorted(found)
 
 
+# The files install.sh always overwrites. The seeded documents -- TASKS.md, PROGRESS.md, the
+# context file, evals/README.md -- are deliberately absent: `seed()` never overwrites one, so a
+# repository's own record legitimately differs from the template it started as.
+PLACED_DIRS = ['__HARNESS_DIR__', '__SKILLS_DIR__']
+PLACED_FILES = ['evals/run.sh']
+
+
+def install_stale():
+    # Only the package's own checkout can answer this. A repository that merely INSTALLED the
+    # harness has no `harness/**` beside its `__HARNESS_DIR__/**`, and nothing to compare against.
+    if not (os.path.exists('install.sh') and os.path.isdir('harness/hooks')):
+        return []
+    # Substitution is what makes a plain diff useless: `harness/loop.sh` carries `__HARNESS_DIR__`
+    # where the installed copy carries `.harness`, so comparing the trees raw reports every file
+    # forever. Rather than reimplement the token map, run the installer into a throwaway tree with
+    # this repository's own harness.json and compare against what it produced.
+    tmp = tempfile.mkdtemp(prefix='install-stale.')
+    try:
+        subprocess.run(['git', 'init', '-q', tmp], check=True, stdout=subprocess.DEVNULL)
+        shutil.copyfile('harness.json', os.path.join(tmp, 'harness.json'))
+        out = subprocess.run(['bash', 'install.sh', tmp],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if out.returncode != 0:
+            raise RuntimeError('install.sh into a throwaway tree exited %d: %s'
+                               % (out.returncode, out.stdout.decode('utf-8', 'replace').strip()[-200:]))
+        fresh = list(PLACED_FILES)
+        for base in PLACED_DIRS:
+            for dirpath, _, names in os.walk(os.path.join(tmp, base)):
+                fresh += [os.path.relpath(os.path.join(dirpath, n), tmp) for n in names]
+        found = []
+        for rel in fresh:
+            built = os.path.join(tmp, rel)
+            if not os.path.exists(built):
+                continue
+            if not os.path.exists(rel):
+                found.append((rel, 0, 'install.sh writes this file and the instance does not have it; '
+                                      're-run ./install.sh .'))
+            elif open(built, 'rb').read() != open(rel, 'rb').read():
+                found.append((rel, 0, 'the installed copy differs from the source it was built from; '
+                                      're-run ./install.sh .'))
+        return sorted(found)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    # ponytail: only files the installer wrote into THIS tmp tree are compared, so an adapter the
+    # target installed with --adapter and this run did not is invisible. Pass the adapter list
+    # through harness.json if a repository ever installs one it needs watched.
+
+
 probe('spec-untested', spec_untested)
 probe('queue-uncovered', queue_uncovered)
 probe('rail-unenforced', rail_unenforced)
@@ -555,12 +690,14 @@ probe('hash-uncovered', hash_uncovered)
 probe('check-unnamed', check_unnamed)
 probe('learning-unenforced', learning_unenforced)
 probe('learning-ungated', learning_ungated)
+probe('skill-ungated', skill_ungated)
 probe('ponytail-ceiling', ponytail_ceiling)
 probe('rejection-stale', rejection_stale)
 probe('queue-hygiene', queue_hygiene)
 probe('friction-repeat', friction_repeat)
 probe('check-red', check_red)
 probe('litter', litter)
+probe('install-stale', install_stale)
 if os.environ['DRIVER_STATUS'] == 'off':
     # not a count of zero: a probe that did not run has found nothing, which is no evidence about
     # the tree (LEARNINGS.md, zero-as-pass). The scout reports this line and proposes from it.
