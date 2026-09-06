@@ -20,5 +20,5 @@ blockedBy: none
 status: review'''))
 PY
 # the work exists in the tree and on no commit: this is what a terminated lane leaves behind
-echo "export const greeting = 'hello'" > src/greeting.ts
-printf 'notes: implemented and ready for review. Ran the check, it was green.\n' >> TASKS.md
+echo "export const greeting = 'hello'" >src/greeting.ts
+printf 'notes: implemented and ready for review. Ran the check, it was green.\n' >>TASKS.md

@@ -43,18 +43,27 @@ done
 # asserted there against its own fixtures; this runs that suite rather than duplicating it.
 SELFTEST_FAIL=0
 assert() {
-  [ "$2" = "$3" ] && { echo "ok    $1"; return; }
-  echo "FAIL  $1"; echo "      want [$2] got [$3]"; SELFTEST_FAIL=1
+  [ "$2" = "$3" ] && {
+    echo "ok    $1"
+    return
+  }
+  echo "FAIL  $1"
+  echo "      want [$2] got [$3]"
+  SELFTEST_FAIL=1
 }
 
 selftest() {
   python3 __HARNESS_DIR__/tasks.py --selftest || SELFTEST_FAIL=1
 
   # in_scope decides every scope rejection, so it is asserted rather than trusted.
-  in_scope "src/a.ts" "src/*.ts" "docs/*"; assert "a file the scope names is in scope" "0" "$?"
-  in_scope "docs/x.md" "src/*.ts"; assert "a file no glob names is out of scope" "1" "$?"
-  in_scope "src/deep/a.ts" "src/**"; assert "a glob covers what is nested under it" "0" "$?"
-  in_scope "src/a.ts"; assert "an empty scope line puts every file out of scope" "1" "$?"
+  in_scope "src/a.ts" "src/*.ts" "docs/*"
+  assert "a file the scope names is in scope" "0" "$?"
+  in_scope "docs/x.md" "src/*.ts"
+  assert "a file no glob names is out of scope" "1" "$?"
+  in_scope "src/deep/a.ts" "src/**"
+  assert "a glob covers what is nested under it" "0" "$?"
+  in_scope "src/a.ts"
+  assert "an empty scope line puts every file out of scope" "1" "$?"
   return "$SELFTEST_FAIL"
 }
 
@@ -63,7 +72,10 @@ selftest() {
 # implemented it and the rail was a wish.
 
 # After the definitions: the selftest asserts set_status, and needs no contract to do it.
-[ "${1:-}" = "--selftest" ] && { selftest; exit $?; }
+[ "${1:-}" = "--selftest" ] && {
+  selftest
+  exit $?
+}
 
 # A backticked mention is prose about the marker -- the rail's own definition is one -- and a bare
 # one is a real marker. Never use a harness control token as an English word (LEARNINGS.md).
@@ -84,12 +96,30 @@ or agent process in ps is your PARENT process, not a competing writer: LEARNINGS
 rule is about a second operator, and it does not apply to the process that started you."
 
 # Accumulated as the run goes, because by the end the tree no longer says what moved.
-LANDED=""; ROWS=""; PROMOTED=""; KILLED=""; HALTS=""; WARNINGS=""; HALTED=""; DRY_ROUNDS=0
-halt() { HALTED=1; HALTS="${HALTS}  $1"$'\n'; echo "HALT: $1"; }
-listing() { echo "$1"; [ -n "$2" ] && printf '%s' "$2" || echo "  none"; }
+LANDED=""
+ROWS=""
+PROMOTED=""
+KILLED=""
+HALTS=""
+WARNINGS=""
+HALTED=""
+DRY_ROUNDS=0
+halt() {
+  HALTED=1
+  HALTS="${HALTS}  $1"$'\n'
+  echo "HALT: $1"
+}
+listing() {
+  echo "$1"
+  [ -n "$2" ] && printf '%s' "$2" || echo "  none"
+}
 
 # `touch STOP` has to land between stages too: a round is now up to four agents long.
-stop_now() { [ -f STOP ] || return 1; echo "STOP file found, exiting."; return 0; }
+stop_now() {
+  [ -f STOP ] || return 1
+  echo "STOP file found, exiting."
+  return 0
+}
 
 # Three blocks already sit at needs-spec (T-044, T-057, T-064 at 14261a7), so halting on the
 # status itself would end every run before its first task. The halt is on a NEW one appearing.
@@ -105,7 +135,7 @@ needs_spec_halt() {
 }
 
 while [ "$i" -lt "$MAX_ITER" ]; do
-  i=$((i+1))
+  i=$((i + 1))
   stop_now && break
   over_budget && break
   needs_spec_halt && break
@@ -128,9 +158,9 @@ while [ "$i" -lt "$MAX_ITER" ]; do
 
   if [ -n "${DRY_RUN:-}" ]; then
     echo "=== Iteration $i: DRY_RUN plan ==="
-    [ -n "$TASK" ] \
-      && echo "  stages: implement $TASK -> verify $TASK -> commit the verdict -> assert PROGRESS.md grew" \
-      || echo "  stages: scout -> adjudicate -> commit the round -> re-check ready_unattended ($DRY_ROUNDS dry rounds so far, 2 ends the run)"
+    [ -n "$TASK" ] &&
+      echo "  stages: implement $TASK -> verify $TASK -> commit the verdict -> assert PROGRESS.md grew" ||
+      echo "  stages: scout -> adjudicate -> commit the round -> re-check ready_unattended ($DRY_ROUNDS dry rounds so far, 2 ends the run)"
     echo "  probes, which are the scout's whole input:"
     # HARNESS_DRIVER here and at the scout below, never exported at the top of this file: the
     # driver installs throwaway repos and costs ~45s, and a global export would also reach every
@@ -149,27 +179,38 @@ while [ "$i" -lt "$MAX_ITER" ]; do
     # only once a scout+adjudicate round has already left nothing takeable (2026-08-31).
     if [ "$DRY_ROUNDS" -ge 1 ]; then
       for t in $(ids_at ready); do
-        [ "$(field "$t" attended)" = "true" ] \
-          && { halt "$t is attended: true and it is all that is left. A human has to run it."; break; }
+        [ "$(field "$t" attended)" = "true" ] &&
+          {
+            halt "$t is attended: true and it is all that is left. A human has to run it."
+            break
+          }
       done
       [ -n "$HALTED" ] && break
     fi
 
     stop_now && break
-  over_budget && break
+    over_budget && break
     echo "=== Iteration $i: scout (queue empty, $DRY_ROUNDS dry rounds so far) ==="
-    READY_BEFORE=$(ids_at ready); REJ_BEFORE=$(rejections)
+    READY_BEFORE=$(ids_at ready)
+    REJ_BEFORE=$(rejections)
     agent_for scout
-    HARNESS_DRIVER=1 run_agent "scout" "$LANE Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/roles/scout.md: read that file first and follow it exactly. Run __HARNESS_DIR__/hooks/probes.sh and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop." 30 \
-      || { echo "scout exited $? -- halting."; break; }
+    HARNESS_DRIVER=1 run_agent "scout" "$LANE Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/roles/scout.md: read that file first and follow it exactly. Run __HARNESS_DIR__/hooks/probes.sh and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop." 30 ||
+      {
+        echo "scout exited $? -- halting."
+        break
+      }
 
     stop_now && break
-  over_budget && break
+    over_budget && break
     echo "=== Iteration $i: adjudicate ==="
     ADJ_OUT=$(mktemp)
     agent_for adjudicator
     run_agent "adjudicate" "$LANE Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/roles/adjudicator.md: read that file first and follow it exactly. Act on every block with 'status: proposed' in TASKS.md, in file order. Promote it to 'status: ready' with a scope and criteria an agent that has read only CLAUDE.md, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or CLAUDE.md is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop." 40 2>&1 | tee "$ADJ_OUT"
-    [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "adjudicate exited non-zero -- halting."; rm -f "$ADJ_OUT"; break; }
+    [ "${PIPESTATUS[0]}" -eq 0 ] || {
+      echo "adjudicate exited non-zero -- halting."
+      rm -f "$ADJ_OUT"
+      break
+    }
 
     if [ -z "${DRY_RUN:-}" ]; then
       git add TASKS.md DECISIONS.md 2>/dev/null
@@ -185,8 +226,11 @@ while [ "$i" -lt "$MAX_ITER" ]; do
     [ -n "$NEW_READY" ] && PROMOTED="$PROMOTED $NEW_READY"
 
     for t in $(ids_at proposed); do
-      block "$t" | grep -qE '__SPEC__|__CONTEXT_FILE__' \
-        && { halt "$t is still proposed and its fix names __SPEC__ or CLAUDE.md. Neither is a lane's to edit."; break; }
+      block "$t" | grep -qE '__SPEC__|__CONTEXT_FILE__' &&
+        {
+          halt "$t is still proposed and its fix names __SPEC__ or CLAUDE.md. Neither is a lane's to edit."
+          break
+        }
     done
     [ -n "$HALTED" ] && break
     needs_spec_halt && break
@@ -199,7 +243,10 @@ while [ "$i" -lt "$MAX_ITER" ]; do
     else
       DRY_ROUNDS=$((DRY_ROUNDS + 1))
       echo "  dry round $DRY_ROUNDS: nothing a lane can take."
-      [ "$DRY_ROUNDS" -ge 2 ] && { echo "Two consecutive dry rounds. Nothing left to do."; break; }
+      [ "$DRY_ROUNDS" -ge 2 ] && {
+        echo "Two consecutive dry rounds. Nothing left to do."
+        break
+      }
     fi
     continue
   fi
@@ -212,15 +259,21 @@ while [ "$i" -lt "$MAX_ITER" ]; do
   over_budget && break
   echo "=== Iteration $i: implement $TASK ==="
   agent_for implementer
-  run_agent "$TASK implement" "$LANE Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __HARNESS_DIR__/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason -- and include it in that commit. An implementation left uncommitted is a lost iteration." 120 \
-    || { echo "implement exited $? -- halting rather than reporting a finished iteration."; break; }
+  run_agent "$TASK implement" "$LANE Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __HARNESS_DIR__/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason -- and include it in that commit. An implementation left uncommitted is a lost iteration." 120 ||
+    {
+      echo "implement exited $? -- halting rather than reporting a finished iteration."
+      break
+    }
 
   stop_now && break
   over_budget && break
   echo "=== Iteration $i: verify $TASK ==="
   agent_for verifier
-  run_agent "$TASK verify" "$LANE Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Your role is defined in __HARNESS_DIR__/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons, and commit the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop." 100 \
-    || { echo "verify exited $? -- halting."; break; }
+  run_agent "$TASK verify" "$LANE Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Your role is defined in __HARNESS_DIR__/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons, and commit the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop." 100 ||
+    {
+      echo "verify exited $? -- halting."
+      break
+    }
 
   # The verifier writes its verdict into the working tree and stops. Nothing here
   # committed it, so a rejection could sit uncommitted until a human noticed.
@@ -232,13 +285,16 @@ while [ "$i" -lt "$MAX_ITER" ]; do
     gate_scope "$TASK" "$ITER_BASE" || true
 
     case "$(field "$TASK" status)" in
-      done) LANDED="$LANDED $TASK"; R=$(field "$TASK" rows); [ -n "$R" ] && ROWS="${ROWS}  $TASK: $R"$'\n' ;;
-      *) WARNINGS="${WARNINGS}  $TASK ended the iteration at $(field "$TASK" status), not done."$'\n' ;;
+    done)
+      LANDED="$LANDED $TASK"
+      R=$(field "$TASK" rows)
+      [ -n "$R" ] && ROWS="${ROWS}  $TASK: $R"$'\n'
+      ;;
+    *) WARNINGS="${WARNINGS}  $TASK ended the iteration at $(field "$TASK" status), not done."$'\n' ;;
     esac
     # The entry is all the next iteration inherits, so a silent iteration is itself the finding.
-    [ "$(cat PROGRESS.md 2>/dev/null | wc -c)" -gt "$PROG_BEFORE" ] \
-      || WARNINGS="${WARNINGS}  iteration $i wrote no PROGRESS.md entry for $TASK."$'\n'
-
+    [ "$(cat PROGRESS.md 2>/dev/null | wc -c)" -gt "$PROG_BEFORE" ] ||
+      WARNINGS="${WARNINGS}  iteration $i wrote no PROGRESS.md entry for $TASK."$'\n'
 
     needs_spec_halt && break
   fi
@@ -247,7 +303,7 @@ done
 
 echo
 echo "=== digest: $i iteration(s) ==="
-echo "wall clock: ${SPENT_SECONDS}s across $(wc -l < "$RUN_LOG" 2>/dev/null | tr -d ' ') stage(s)${SPENT_USD:+, cost \$$SPENT_USD}"
+echo "wall clock: ${SPENT_SECONDS}s across $(wc -l <"$RUN_LOG" 2>/dev/null | tr -d ' ') stage(s)${SPENT_USD:+, cost \$$SPENT_USD}"
 [ -n "$ROLE_SECONDS" ] && printf '%s' "$ROLE_SECONDS" | awk 'NF{t[$1]+=$2} END{for(r in t) printf "  %s: %ds\n", r, t[r]}' | sort
 echo "tasks landed:${LANDED:- none}"
 listing "rows turned green:" "$ROWS"

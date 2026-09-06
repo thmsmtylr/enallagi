@@ -8,7 +8,7 @@ while :; do
   echo "loop: $(pgrep -f '__HARNESS_DIR__/loop.sh' >/dev/null && echo running || echo stopped)   $(date +%H:%M:%S)"
   echo "phase: $(grep '^=== Iteration' "$LOG" 2>/dev/null | tail -1)   agent up $(ps -o etime= -p "$(pgrep -f '__AGENT_BINARY__' | head -1)" 2>/dev/null | tr -d ' ' || echo -)"
   echo
-  grep -E '^## \[T-|^status:' TASKS.md | paste - - | sed -E 's/^## \[(T-[0-9]+)\] (.{0,44}).*status: /\1  \2  → /'
+  python3 __HARNESS_DIR__/tasks.py list
   echo
   git log --oneline -3
   echo

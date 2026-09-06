@@ -21,7 +21,8 @@ if [ -z "$ROOT" ] || ! cd "$ROOT"; then
   exit 2
 fi
 
-OUT=$(__CHECK__ 2>&1); RED=$?
+OUT=$(__CHECK__ 2>&1)
+RED=$?
 [ "$RED" -eq 0 ] && exit 0
 
 # One failure name per line, extracted with the project's own pattern.
@@ -37,7 +38,10 @@ BASELINE=$([ -f .check-baseline ] && sed 's/#.*//; s/[[:space:]]*$//' .check-bas
 FORGIVEN=$(printf '%s\n' "$FAILED" | grep -xF -f <(printf '%s\n' "$BASELINE"))
 UNFORGIVEN=$(printf '%s\n' "$FAILED" | grep -vxF -f <(printf '%s\n' "$BASELINE"))
 
-[ -n "$FORGIVEN" ] && { echo "check-gate: forgiven by .check-baseline:" >&2; printf '%s\n' "$FORGIVEN" | sed 's/^/  /' >&2; }
+[ -n "$FORGIVEN" ] && {
+  echo "check-gate: forgiven by .check-baseline:" >&2
+  printf '%s\n' "$FORGIVEN" | sed 's/^/  /' >&2
+}
 [ -z "$UNFORGIVEN" ] && exit 0
 
 echo "check RED, not on the baseline:" >&2

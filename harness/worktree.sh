@@ -13,16 +13,27 @@ set -u
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 PARENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-[ "$PARENT_BRANCH" = "HEAD" ] && { echo "worktree: the parent checkout is detached; check out a branch first" >&2; exit 1; }
+[ "$PARENT_BRANCH" = "HEAD" ] && {
+  echo "worktree: the parent checkout is detached; check out a branch first" >&2
+  exit 1
+}
 LANE="lane/$(date +%Y%m%d-%H%M%S)-$$"
-DIR="$(cd .. && pwd)/$(basename "$PWD")-$(basename "$LANE")"
+# Under the harness directory, never beside the repository: a sibling path put a lane's whole
+# checkout in the operator's home directory, where it read as litter (T-077). `worktrees/` is in
+# __HARNESS_DIR__/.gitignore, which install.sh writes, so the parent's `git status` stays empty
+# while a lane runs -- an untracked directory here is what gate_verdict (lib/gates.sh:17) counts as
+# "the lane left its work off the branch". Same convention as Claude Code's .claude/worktrees/.
+DIR="$PWD/__HARNESS_DIR__/worktrees/$(basename "$LANE")"
 
-git worktree add -b "$LANE" "$DIR" >/dev/null 2>&1 \
-  || { echo "worktree: could not create $DIR" >&2; exit 1; }
+git worktree add -b "$LANE" "$DIR" >/dev/null 2>&1 ||
+  {
+    echo "worktree: could not create $DIR" >&2
+    exit 1
+  }
 echo "worktree: $LANE in $DIR, from $PARENT_BRANCH at $(git rev-parse --short HEAD)"
 
 # The loop runs entirely in there. Its gates, its commits and its STOP file are all the lane's.
-( cd "$DIR" && ./__HARNESS_DIR__/loop.sh "${1:-3}" )
+(cd "$DIR" && ./__HARNESS_DIR__/loop.sh "${1:-3}")
 LOOP_RC=$?
 
 # Uncommitted work in the lane is the lane's to finish, not ours to throw away: a terminated

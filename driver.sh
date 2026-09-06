@@ -4,9 +4,17 @@
 # The twelve other probes read text. This one reaches the artifact: it installs the package into a
 # throwaway repository and drives one request through the installed loop, four times, each with a
 # lane that is sloppy in exactly one way. Then it reads the PERSISTENT EFFECT — the task's status,
-# the working tree, the digest — and prints a `FINDING ` line for every sloppiness the harness let
-# through. Nothing it prints comes from what the loop SAID; a loop can describe the correct verdict
-# without reaching it.
+# the working tree, the digest, the log — and prints a `FINDING ` line for every sloppiness the
+# harness let through. Nothing it prints comes from what the loop SAID; a loop can describe the
+# correct verdict without reaching it.
+#
+# `unlabelled` is not one of those four and is reached only as `--unlabelled`: it counts rather than
+# accuses, reading the `git log` of the repository it is run FROM for commits naming no task. It is
+# deliberately not driven. `drive()` works inside a `mktemp -d` that is `rm -rf`'d before the probe
+# prints, so a sha read out of there resolves nowhere, and the one unlabelled commit in that sandbox
+# is made by this file's own lane fixture — a finding manufactured by the instrument. It has no
+# round boundary either (`git log --format='%h %s' | grep -vc 'T-[0-9][0-9][0-9]'` → 57 of 171
+# commits in this repository at 5842a69, 2026-09-06), so the caller chooses the history.
 #
 # Contract (the same one harness.json documents for any driver):
 #   exit 0  whenever it REACHED the artifact, whatever it found
@@ -26,12 +34,12 @@ drive() { # $1 = the lane's sloppiness
   (
     cd "$d" || exit 3
     git init -q && git config user.email driver@local && git config user.name driver
-    mkdir -p src && echo 'export const x = 1' > src/schema.ts
-    git add -A && git commit -qm init >/dev/null
+    mkdir -p src && echo 'export const x = 1' >src/schema.ts
+    git add -A && git commit -qm 'chore: T-001 init' >/dev/null
 
     "$PKG/install.sh" "$d" >/dev/null 2>&1 || exit 3
 
-    cat > src/lane.sh <<'LANE'
+    cat >src/lane.sh <<'LANE'
 #!/usr/bin/env bash
 # Stands in for the coding agent. Does the work, and is sloppy in exactly one way.
 case "$1" in
@@ -70,7 +78,7 @@ scope: src/allowed.ts
 blockedBy: none''')
 open('TASKS.md', 'w').write(s)
 TASK
-    git add -A && git commit -qm setup >/dev/null
+    git add -A && git commit -qm 'chore: T-001 setup' >/dev/null
 
     MODE="$mode" .harness/loop.sh 1 2>&1
     # the persistent effect, read from the tree and not from anything the loop said
@@ -82,24 +90,45 @@ TASK
   return $rc
 }
 
+# The operator's half, on the repo at $PWD. It reports and blocks nothing: a release, a halt
+# resolution or a contract edit is the operator's by the rails and is expected to appear here.
+# The count is the signal. Reached only as `--unlabelled`, never from `drive()` — see the header.
+unlabelled() {
+  git log --format='%h %s' |
+    grep -v 'T-[0-9][0-9][0-9]' |
+    sed 's/^/FINDING a commit on this round names no task: /'
+}
+if [ "${1:-}" = "--unlabelled" ]; then
+  unlabelled
+  exit 0
+fi
+
 status_of() { printf '%s\n' "$1" | sed -n 's/^EFFECT status=//p' | tail -1; }
 unreached=0
 
 for mode in uncommitted no-progress out-of-scope red-check; do
-  out=$(drive "$mode") || { echo "driver: could not reach the artifact in mode $mode" >&2
-                            printf '%s\n' "$out" | tail -5 >&2; unreached=1; continue; }
+  out=$(drive "$mode") || {
+    echo "driver: could not reach the artifact in mode $mode" >&2
+    printf '%s\n' "$out" | tail -5 >&2
+    unreached=1
+    continue
+  }
   status=$(status_of "$out")
   dirty=$(printf '%s\n' "$out" | sed -n 's/^EFFECT dirty=//p' | tail -1)
   case "$mode" in
-    uncommitted)
-      [ "$status" = "done" ] && [ "${dirty:-0}" -gt 0 ] && echo "FINDING a lane left its implementation uncommitted and the task still reached done with $dirty dirty path(s). Nothing the launcher runs reads the working tree; only verifier.md step 0 does, and a prompt is not a gate." ;;
-    no-progress)
-      printf '%s\n' "$out" | grep -q 'wrote no PROGRESS.md entry' \
-        || echo "FINDING a lane wrote no PROGRESS.md entry and the digest did not say so. The next iteration inherits nothing and cannot tell that it is the second attempt." ;;
-    out-of-scope)
-      [ "$status" = "done" ] && echo "FINDING a lane edited a file outside its scope: globs and the task still reached done. The one-scope rail is not enforced on this tree." ;;
-    red-check)
-      [ "$status" = "done" ] && echo "FINDING a lane reached done with the floor red. The green rail is not enforced on this tree." ;;
+  uncommitted)
+    [ "$status" = "done" ] && [ "${dirty:-0}" -gt 0 ] && echo "FINDING a lane left its implementation uncommitted and the task still reached done with $dirty dirty path(s). Nothing the launcher runs reads the working tree; only verifier.md step 0 does, and a prompt is not a gate."
+    ;;
+  no-progress)
+    printf '%s\n' "$out" | grep -q 'wrote no PROGRESS.md entry' ||
+      echo "FINDING a lane wrote no PROGRESS.md entry and the digest did not say so. The next iteration inherits nothing and cannot tell that it is the second attempt."
+    ;;
+  out-of-scope)
+    [ "$status" = "done" ] && echo "FINDING a lane edited a file outside its scope: globs and the task still reached done. The one-scope rail is not enforced on this tree."
+    ;;
+  red-check)
+    [ "$status" = "done" ] && echo "FINDING a lane reached done with the floor red. The green rail is not enforced on this tree."
+    ;;
   esac
 done
 

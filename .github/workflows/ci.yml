@@ -73,6 +73,36 @@ jobs:
           go install mvdan.cc/sh/v3/cmd/shfmt@v3.14.0
           git ls-files '*.sh' | grep -v '^\.harness/' | xargs "$(go env GOPATH)/bin/shfmt" --diff
 
+  # Its own job for the same reason shfmt is: it installs five throwaway repos and drives five loop
+  # iterations through the installed package, so this job's own command takes 3:13.77 against the
+  # 2:05.57 the floor above takes without it (`time HARNESS_DRIVER=1 ./selftest.sh` and
+  # `time ./selftest.sh`, on the author's machine on this tree, 2026-09-06). `HARNESS_DRIVER=1` is
+  # set HERE and nowhere
+  # else in this file. Without it, `the package driver reports shortfalls as FINDING lines` — the
+  # only assertion in selftest.sh that reaches the built artifact rather than reading text — prints
+  # `skip` on every run, including every CI run, and a gate asserts what it EXECUTED.
+  # `selftest.sh::ci runs the floor with the driver reaching the artifact` fails if this job goes
+  # away, if its variable does, if the variable is set to the empty string, and if the job is left
+  # here but switched off with an `if:` — that last one is the shape T-004 was rejected for
+  # (`aff0b33`), where the row stays green while nothing runs.
+  driver:
+    name: driver
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      # fetch-depth: 0 for the floor job's reason: the floor runs `docs/bootstrap.sh --check`
+      # (selftest.sh:574), which derives its record from the whole log and has none at depth 1.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: the floor, with the driver reaching the artifact
+        env:
+          HARNESS_DRIVER: '1'
+        run: ./selftest.sh
+
   # Scorecard refuses on anything but the default branch, and publishing needs an OIDC token a
   # pull_request run does not get, so this job is skipped there rather than failed.
   scorecard:

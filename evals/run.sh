@@ -40,26 +40,31 @@ PKG="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AGENT=()
 if [ -n "${EVAL_AGENT:-}" ]; then
   # ponytail: space-split, so an argument with a space in it needs harness.json instead
-  read -r -a AGENT <<< "$EVAL_AGENT"
+  read -r -a AGENT <<<"$EVAL_AGENT"
 else
   # harness.json if this package sits in a configured repo, harness.default.json otherwise — the
   # package itself ships without a harness.json, and the evals still have to be runnable from it
   for config in "$PKG/harness.json" "$PKG/harness.default.json"; do
     [ -f "$config" ] || continue
     while IFS= read -r word; do AGENT+=("$word"); done < <(
-      python3 -c "import json,sys;[print(w) for w in json.load(open(sys.argv[1]))['agentCommand']]" "$config")
+      python3 -c "import json,sys;[print(w) for w in json.load(open(sys.argv[1]))['agentCommand']]" "$config"
+    )
     break
   done
 fi
 [ "${#AGENT[@]}" -gt 0 ] || {
   echo "evals: no agent configured. Set EVAL_AGENT, or put an agentCommand in harness.json." >&2
   echo "evals: refusing to report a result for something that was never run." >&2
-  exit 2; }
+  exit 2
+}
 
 GATE=""
 if [ "${1:-}" = "--gate" ]; then
   GATE="${2:-}"
-  [ -n "$GATE" ] || { echo "evals: --gate needs an eval name" >&2; exit 2; }
+  [ -n "$GATE" ] || {
+    echo "evals: --gate needs an eval name" >&2
+    exit 2
+  }
   shift 2
 fi
 
@@ -72,7 +77,7 @@ run_one() { # $1 = eval name, $2 = "ablate" to remove the rule from the fixture 
   (
     cd "$dir" || exit 3
     git init -q && git config user.email eval@local && git config user.name eval
-    mkdir -p src && echo 'export const x = 1' > src/schema.ts
+    mkdir -p src && echo 'export const x = 1' >src/schema.ts
     git add -A && git commit -qm init >/dev/null
     "$PKG/install.sh" "$dir" >/dev/null 2>&1 || exit 3
     EVAL_PKG="$PKG" bash "$PKG/evals/$name/setup.sh" || exit 3
@@ -87,7 +92,8 @@ run_one() { # $1 = eval name, $2 = "ablate" to remove the rule from the fixture 
     prompt=$(cat "$PKG/evals/$name/prompt.txt")
     cmd=()
     for word in "${AGENT[@]}"; do
-      word="${word//\{prompt\}/$prompt}"; word="${word//\{turns\}/40}"
+      word="${word//\{prompt\}/$prompt}"
+      word="${word//\{turns\}/40}"
       cmd+=("$word")
     done
     "${cmd[@]}" >/dev/null 2>&1
@@ -101,33 +107,58 @@ run_one() { # $1 = eval name, $2 = "ablate" to remove the rule from the fixture 
 
 report() { # $1 = name, $2 = exit status. Returns 0 when the eval passed.
   case "$2" in
-    0) echo "EVAL $1 PASS"; return 0 ;;
-    3) echo "EVAL $1 ERROR (the fixture could not be built — nothing was measured)"; return 2 ;;
-    *) echo "EVAL $1 FAIL"; return 1 ;;
+  0)
+    echo "EVAL $1 PASS"
+    return 0
+    ;;
+  3)
+    echo "EVAL $1 ERROR (the fixture could not be built — nothing was measured)"
+    return 2
+    ;;
+  *)
+    echo "EVAL $1 FAIL"
+    return 1
+    ;;
   esac
 }
 
 if [ -n "$GATE" ]; then
   [ -f "$PKG/evals/$GATE/ablate.sh" ] || {
     echo "GATE $GATE REJECT no ablate.sh: without one, nothing can tell a rule that works from a rule that is never consulted" >&2
-    exit 2; }
+    exit 2
+  }
 
-  run_one "$GATE"; with=$?
+  run_one "$GATE"
+  with=$?
   report "$GATE" "$with" >/dev/null
-  [ "$with" -eq 0 ] || { echo "GATE $GATE REJECT the rule does not fix the case it came from (its eval fails with the rule in place)"; exit 1; }
+  [ "$with" -eq 0 ] || {
+    echo "GATE $GATE REJECT the rule does not fix the case it came from (its eval fails with the rule in place)"
+    exit 1
+  }
 
-  run_one "$GATE" ablate; without=$?
-  [ "$without" -eq 3 ] && { echo "GATE $GATE REJECT the ablated fixture could not be built, so nothing was measured"; exit 1; }
-  [ "$without" -eq 0 ] && { echo "GATE $GATE REJECT the case passes with the rule ablated, so the rule changed no outcome"; exit 1; }
+  run_one "$GATE" ablate
+  without=$?
+  [ "$without" -eq 3 ] && {
+    echo "GATE $GATE REJECT the ablated fixture could not be built, so nothing was measured"
+    exit 1
+  }
+  [ "$without" -eq 0 ] && {
+    echo "GATE $GATE REJECT the case passes with the rule ablated, so the rule changed no outcome"
+    exit 1
+  }
 
   regressed=""
   while IFS= read -r d; do
     other="$(basename "$d")"
     [ "$other" = "$GATE" ] && continue
-    run_one "$other"; rc=$?
+    run_one "$other"
+    rc=$?
     [ "$rc" -eq 0 ] || regressed="$regressed $other"
   done < <(find "$PKG/evals" -mindepth 1 -maxdepth 1 -type d | sort)
-  [ -n "$regressed" ] && { echo "GATE $GATE REJECT it regresses evals that were passing:$regressed"; exit 1; }
+  [ -n "$regressed" ] && {
+    echo "GATE $GATE REJECT it regresses evals that were passing:$regressed"
+    exit 1
+  }
 
   echo "GATE $GATE ACCEPT fixes its case, fails without itself, regresses nothing"
   exit 0
@@ -136,9 +167,12 @@ fi
 failed=0
 for name in ${NAMES[@]+"${NAMES[@]}"}; do
   if [ ! -f "$PKG/evals/$name/assert.sh" ]; then
-    echo "EVAL $name ERROR (no such eval)"; failed=1; continue
+    echo "EVAL $name ERROR (no such eval)"
+    failed=1
+    continue
   fi
-  run_one "$name"; rc=$?
+  run_one "$name"
+  rc=$?
   report "$name" "$rc" || failed=1
 done
 exit "$failed"

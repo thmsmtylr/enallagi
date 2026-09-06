@@ -44,7 +44,8 @@ gate_verdict() { # $1 = task id
 # ponytail: permissive matching lets a nested file through a shallow glob; fnmatch in python if
 # a lane ever exploits that.
 in_scope() { # $1 = path, then the glob patterns
-  local f="$1" pat; shift
+  local f="$1" pat
+  shift
   for pat in "$@"; do
     [ -n "$pat" ] || continue
     # shellcheck disable=SC2254 # $pat is unquoted on purpose: it is a scope glob and must match as
@@ -63,7 +64,8 @@ in_scope() { # $1 = path, then the glob patterns
 # which forced `rows: none — harness`, which forbade it from claiming the row it had just turned
 # green. No product row could ever land. The loop found it and halted rather than picking a side.
 hash_recut_in_scope() { # $1 = base sha, then the scope globs
-  local base="$1" keys k; shift
+  local base="$1" keys k
+  shift
   keys=$(git diff "$base" HEAD -- test-hashes.json 2>/dev/null | python3 -c '
 import sys, re
 print("\n".join(sorted({m.group(1) for m in
@@ -73,7 +75,7 @@ print("\n".join(sorted({m.group(1) for m in
   while IFS= read -r k; do
     [ -n "$k" ] || continue
     in_scope "$k" "$@" || return 1
-  done <<< "$keys"
+  done <<<"$keys"
   return 0
 }
 
@@ -94,30 +96,34 @@ gate_scope() { # $1 = task id, $2 = the sha the iteration started at
   local -a pats
   [ "$(field "$task" status)" = "done" ] || return 0
   [ -n "$base" ] || return 0
-  IFS=' ' read -r -a pats <<< "$(field "$task" scope | tr -d '` ' | tr ',' ' ')"
+  IFS=' ' read -r -a pats <<<"$(field "$task" scope | tr -d '` ' | tr ',' ' ')"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case " $BOOKKEEPING " in *" $f "*) continue ;; esac
     case "$f" in
-      test-hashes.json)
-        # Exempt from BOTH axes, not just the harness one. The first version of this cleared
-        # harness_hit and then fell through to the in_scope check below, which reported the file
-        # as out_of because no task names test-hashes.json on its scope line -- so the deadlock
-        # moved rather than lifted, and T-002 was forced back to ready by it. The keys are the
-        # thing being authorised and hash_recut_in_scope has already checked them against the
-        # scope line; the file itself never needs naming.
-        if hash_recut_in_scope "$base" ${pats[@]+"${pats[@]}"}; then continue; fi
-        harness_hit="$harness_hit $f" ;;
-      __HARNESS_DIR__/*|*/hooks/*|.check-baseline|harness.json) harness_hit="$harness_hit $f" ;;
+    test-hashes.json)
+      # Exempt from BOTH axes, not just the harness one. The first version of this cleared
+      # harness_hit and then fell through to the in_scope check below, which reported the file
+      # as out_of because no task names test-hashes.json on its scope line -- so the deadlock
+      # moved rather than lifted, and T-002 was forced back to ready by it. The keys are the
+      # thing being authorised and hash_recut_in_scope has already checked them against the
+      # scope line; the file itself never needs naming.
+      if hash_recut_in_scope "$base" ${pats[@]+"${pats[@]}"}; then continue; fi
+      harness_hit="$harness_hit $f"
+      ;;
+    __HARNESS_DIR__/* | */hooks/* | .check-baseline | harness.json) harness_hit="$harness_hit $f" ;;
     esac
     # `${pats[@]+...}`, never `${pats+...}`: bash 3.2 is macOS's /bin/bash and expands an empty
     # array as an unbound variable under `set -u` even when the array itself is set.
     in_scope "$f" ${pats[@]+"${pats[@]}"} || out_of="$out_of $f"
-  done <<< "$(git diff --name-only "$base" HEAD 2>/dev/null)"
+  done <<<"$(git diff --name-only "$base" HEAD 2>/dev/null)"
 
   rows=$(field "$task" rows)
   case "$rows" in *none*harness*) harness_hit="" ;; esac
-  [ -z "$out_of" ] && [ -z "$harness_hit" ] && { echo "  scope: $task stayed inside its scope."; return 0; }
+  [ -z "$out_of" ] && [ -z "$harness_hit" ] && {
+    echo "  scope: $task stayed inside its scope."
+    return 0
+  }
 
   reason=""
   [ -n "$out_of" ] && reason="touched ${out_of# }, which the scope line does not name"
@@ -129,4 +135,3 @@ gate_scope() { # $1 = task id, $2 = the sha the iteration started at
   WARNINGS="${WARNINGS}  $task was forced back to ready by the scope gate: $reason."$'\n'
   return 1
 }
-
