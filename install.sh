@@ -10,7 +10,7 @@
 #   .harness/              loop.sh, worktree.sh, archive-done.sh, watch.sh, driver.example.sh, RAILS.md
 #   .harness/lib/          the launcher's modules: queue.sh, agent.sh, gates.sh
 #   .harness/tasks.py      the one parser for TASKS.md
-#   .harness/hooks/        probes.sh, check-gate.sh, verify-done.sh, immutable.sh
+#   .harness/hooks/        probes.sh, check-gate.sh, verify-done.sh, immutable.sh, one-writer.sh
 #   .harness/roles/        the five role prompts the launcher feeds to a fresh agent process
 #   <skillsDir>/           this project's own Agent Skill, in the agentskills.io format
 #   evals/                 the write-path gate for a new LEARNINGS.md rule

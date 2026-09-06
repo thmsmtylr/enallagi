@@ -292,12 +292,25 @@ def normal(text):
     return re.sub(r'\s+', ' ', re.sub(r'[^a-z0-9 ]', ' ', text.lower())).strip()
 
 
+# Jaccard over the normalised tokens of the `friction:` line, and the number is measured rather
+# than picked. Against the five sightings of "a check firing on the prose that documents it" in
+# this package's own record (PROGRESS.archive.md:213, :312, :428 and :477, at 2026-09-06) every
+# pair of them scores 0.500 or higher -- 0.875 for :428/:477, 0.500 for the widest pair
+# :213/:477 -- and the closest pair that is NOT a repeat, two entries opening "none new. One
+# thing worth the next lane's time" at :1253 and :1351, scores 0.476. So 0.5 separates the whole
+# of the evidence, by 0.024 at its narrowest. The command that produced those numbers is in
+# TASKS.md [T-045] notes.
+FRICTION_OVERLAP = 0.5
+
+
 def friction_repeat():
     """The round-end question, enforced. First occurrence is evidence and stays in PROGRESS.md;
-    the SECOND becomes a rule in LEARNINGS.md, or the loop is paying for it every round.
-    ponytail: exact normalised match, so a reworded repeat escapes it -- token overlap if that
-    turns out to be the common case."""
-    seen = {}
+    the SECOND becomes a rule in LEARNINGS.md, or the loop is paying for it every round. Exact
+    text match missed five reworded sightings of one friction, which is why this is an overlap.
+    ponytail: greedy, and each group is compared against its FIRST member only, so an A-B-C chain
+    whose ends do not overlap stays two groups -- n is the friction lines in one PROGRESS.md
+    window, so nothing here needs a real clustering."""
+    groups = []
     for index, line in enumerate(lines_of('PROGRESS.md')):
         if not line.startswith('friction:'):
             continue
@@ -305,12 +318,18 @@ def friction_repeat():
         key = normal(text)
         if not key or key in ('none', 'na', 'nothing'):
             continue
-        seen.setdefault(key, []).append((index + 1, text))
+        tokens = set(key.split())
+        for first, hits in groups:
+            if len(first & tokens) / len(first | tokens) >= FRICTION_OVERLAP:
+                hits.append((index + 1, text))
+                break
+        else:
+            groups.append((tokens, [(index + 1, text)]))
     learned = normal(read('LEARNINGS.md')) if os.path.exists('LEARNINGS.md') else ''
     return [('PROGRESS.md', hits[-1][0],
              'the same friction is recorded %d times and LEARNINGS.md carries no rule for it: %s'
              % (len(hits), hits[-1][1][:90]))
-            for key, hits in sorted(seen.items()) if len(hits) > 1 and key not in learned]
+            for _, hits in groups if len(hits) > 1 and normal(hits[0][1]) not in learned]
 
 
 def driver():
