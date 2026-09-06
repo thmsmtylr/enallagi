@@ -95,7 +95,7 @@ DECISIONS.md              killed findings, then archived task blocks
 .harness/worktree.sh      one lane in its own git worktree
 .harness/worktrees/       where that lane's checkout lives, ignored, removed on merge-back
 .harness/archive-done.sh  trims TASKS.md and PROGRESS.md
-.harness/hooks/           probes.sh, check-gate.sh, immutable.sh, verify-done.sh
+.harness/hooks/           probes.sh, check-gate.sh, immutable.sh, one-writer.sh, verify-done.sh
 .harness/roles/           the five role prompts
 .harness/RAILS.md         the rails, each naming what enforces it
 evals/run.sh              the write-path gate for a new LEARNINGS.md rule
@@ -185,7 +185,7 @@ what does not reproduce.
 | `ponytail-ceiling` | a `ponytail:` shortcut marked in the source, unless a dated kill line under DECISIONS.md `## Rejected findings` already carries the marker’s own text — the text, because a marker that moves is the same marker |
 | `rejection-stale` | a REJECTED note under a non-`ready` status, or a `needs-spec` block |
 | `queue-hygiene` | duplicate ids, missing fields, dangling `blockedBy` |
-| `friction-repeat` | the same `friction:` twice with no LEARNINGS.md rule |
+| `friction-repeat` | the same `friction:` twice with no LEARNINGS.md rule — matched on token overlap (Jaccard ≥ 0.5) rather than identical text, because the same friction is written up in different words each round |
 | `check-red` | the check is failing |
 | `litter` | a tracked or untracked file on no allowlist |
 | `install-stale` | an installed harness file that differs from the source install.sh built it from, compared after that same substitution — reported only in the package's own checkout, since a repository that merely installed the harness has no source beside it |
@@ -233,7 +233,10 @@ commit found there names nothing an operator can open. It reads the whole histor
 ## Rules and the write-path gate
 
 A repeated `friction:` line in `PROGRESS.md` becomes a rule in `LEARNINGS.md`, which every task
-reads. `evals/run.sh --gate <name>` decides whether the rule earns its place:
+reads. "Repeated" is token overlap, not identical text: five reworded sightings of one friction sat
+in this package's own record while the exact-match probe reported 0 (`PROGRESS.archive.md` lines
+213, 312, 428 and 477, 2026-09-06). `evals/run.sh --gate <name>` decides whether the rule earns its
+place:
 
 | Condition | Establishes |
 | --- | --- |
@@ -351,8 +354,12 @@ about forty lines.
 | Evals for `implementer` and `researcher` | three of five roles covered |
 
 Fresh sessions isolate context; worktrees isolate the checkout. Every stage is already a new process
-that cannot see the last one's conversation, and all of them write to the same working tree, which
-is why `one checkout is one writer` is a rail rather than a mechanism.
+that cannot see the last one's conversation, and all of them write to the same working tree. With
+`--adapter claude`, `one-writer.sh` is the mechanism behind that rail on the write path: while a
+lane is live it refuses an `Edit`/`Write` from any session that is not that lane, and when the loop
+is idle it allows every one — an operator resolving a halt is working precisely because the loop
+has stopped. It shares `immutable.sh`'s ceiling: a `sed -i` from Bash never reaches a `PreToolUse`
+matcher, so it makes the bypass deliberate rather than impossible.
 
 ## When to use it
 

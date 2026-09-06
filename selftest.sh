@@ -192,6 +192,43 @@ is "a learnings file over its cap is reported" "1" \
   "$(.harness/hooks/probes.sh 2>&1 | grep -c 'against a cap of 12')"
 cp "$T/learnings.bak" LEARNINGS.md && rm -f "$T/learnings.bak" && rm -rf evals
 
+# --- a reworded friction is the same friction --------------------------------
+# The exact-match key this replaced never collided, so five sightings of one friction sat in the
+# record and the probe read 0 (TASKS.md [T-045]). The firing pair below is two of those five, taken
+# verbatim from this package's own PROGRESS.archive.md:428 and :477 -- a FOURTH and a FIFTH sighting
+# of the same thing, worded differently. The pair under it is the guard, and it is the closest
+# measured NON-repeat in the same record (:1253 and :1351): two different frictions that open with
+# the same eleven words. Both are asserted because either alone passes on a broken probe. Measured
+# against this fixture, 2026-09-06: at a threshold of 0.4 or 0.3 the guard pair reads as a repeat of
+# itself and the count is 2; at 0.9, and with the exact text match this replaced, it is 0; at 0.05
+# every friction here folds into one group and the count is 1 again, but the finding then says
+# `recorded 5 times` and quotes the guard -- which is the case only the second assertion catches.
+cp PROGRESS.md "$T/progress.bak"
+cat >>PROGRESS.md <<'FRICTION'
+
+## fixture — a friction
+friction: FOURTH sighting of a check firing on the prose that documents it, and the first where the
+next: nothing
+
+## fixture — the same one, reworded
+friction: FIFTH sighting of a check firing on the prose that documents it - and the first where the
+next: nothing
+
+## fixture — a different friction that shares an opening
+friction: none new. One thing worth the next lane's time, not a rule: `.harness/hooks/probes.sh`
+next: nothing
+
+## fixture — and another, sharing the same opening
+friction: none new. One thing worth the next lane's time: the selftest assertion deliberately does
+next: nothing
+FRICTION
+FR=$(.harness/hooks/probes.sh 2>&1)
+is "a reworded repeat of one friction is reported" "1" \
+  "$(printf '%s\n' "$FR" | sed -n 's/^PROBE friction-repeat //p')"
+is "and two frictions that merely share words are not collapsed into it" "1" \
+  "$(printf '%s\n' "$FR" | grep -c '^FINDING friction-repeat PROGRESS.md:.*recorded 2 times.*FIFTH sighting')"
+cp "$T/progress.bak" PROGRESS.md && rm -f "$T/progress.bak"
+
 # --- the PROGRESS.md rollover -----------------------------------------------
 for n in 1 2 3 4 5 6; do printf '\n## fixture entry %s\nfriction: none\nnext: nothing\n' "$n" >>PROGRESS.md; done
 git add -A && git commit -qm progress >/dev/null 2>&1
@@ -204,6 +241,48 @@ is "the entry format the next iteration needs stays" "1" "$(grep -c '^## Entry f
 is "the split lands on an entry heading, never inside one" "## fixture entry 6" \
   "$(awk '/^<!-- Entries before this point/{f=1; next} f && NF {print; exit}' PROGRESS.md)"
 git add -A && git commit -qm rolled >/dev/null 2>&1
+
+# --- one checkout, one writer ------------------------------------------------
+# The lane-liveness question is archive-done.sh's process-tree walk and one-writer.sh calls it
+# rather than carrying a second copy, so the fixture is a tree of the shape that walk looks for: a
+# parent whose argv carries `.harness/loop.sh` and a child whose argv carries the agent binary
+# harness.json names. Both are children of this shell, never ancestors of it, which is what makes
+# the caller "not that lane". Every pattern that reads ps is bracketed (`[f]akeagent`) so the
+# reading process cannot match itself.
+# The second assertion is the one that matters: a hook that refuses every write is an outage, and
+# an operator resolving a needs-spec halt is working precisely because the loop has stopped.
+# awk rather than `ps | grep`, for the same reason archive-done.sh uses it: shellcheck's SC2009
+# points at pgrep, and pgrep -f is the question this whole task was told not to ask.
+lane_in_ps() { ps -eo args= | awk '/[f]akeagent.sh one-writer-fixture/ {n++} END {exit !n}'; }
+WRITE='{"tool_input":{"file_path":"TASKS.md"}}'
+bash -c 'echo .harness/loop.sh one-writer-fixture >/dev/null; bash -c "echo ./src/fakeagent.sh one-writer-fixture >/dev/null; sleep 30" & wait' &
+FAKELOOP=$!
+LANE=""
+for _ in $(seq 50); do
+  lane_in_ps && {
+    LANE=live
+    break
+  }
+  sleep 0.2
+done
+if [ -z "$LANE" ]; then
+  skip "a write from a session that is not the live lane is refused" "the fixture lane never appeared in ps"
+  skip "the same write is allowed when no lane is live" "the fixture lane never appeared in ps"
+else
+  REFUSED=$(printf '%s' "$WRITE" | .harness/hooks/one-writer.sh 2>&1)
+  RRC=$?
+  is "a write from a session that is not the live lane is refused" "2 T-001" \
+    "$RRC $(printf '%s\n' "$REFUSED" | grep -o 'T-001' | head -1)"
+  [ "$RRC" -eq 2 ] || printf '%s\n' "$REFUSED" | sed 's/^/      /'
+  { kill "$FAKELOOP" && wait "$FAKELOOP"; } >/dev/null 2>&1
+  for p in $(ps -eo pid=,args= | awk '/[f]akeagent.sh one-writer-fixture/ {print $1}'); do kill "$p" 2>/dev/null; done
+  for _ in $(seq 50); do
+    lane_in_ps || break
+    sleep 0.2
+  done
+  ALLOWED=$(printf '%s' "$WRITE" | .harness/hooks/one-writer.sh 2>&1)
+  is "the same write is allowed when no lane is live" "0 " "$? $ALLOWED"
+fi
 
 # --- the driver, the only probe that does not read text ---------------------
 printf '#!/usr/bin/env bash\necho "FINDING the artifact answered but wrote nothing to the store"\n' >src/fakedriver.sh
