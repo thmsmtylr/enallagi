@@ -1,0 +1,233 @@
+# Every answer the harness substitutes into roles, hooks and gates. Copy the
+# keys you want to change into harness.toml at your repo root; this file is
+# embedded in the binary and is the base every harness.toml is merged over.
+# Tables merge key by key. Arrays -- including [[pipeline]], [[stage]] and
+# [[skill]] -- replace the default array whole.
+
+# preset is the headless invocation of YOUR coding agent, named rather than
+# spelled out: claude, codex, gemini, opencode, copilot, goose, aider, amp,
+# cursor, kimi, qwen, omp, pi, or "custom" with an explicit command list.
+# [agent.<role>] overrides it per role -- [agent.scout], [agent.adjudicator],
+# [agent.implementer], [agent.verifier], [agent.researcher] -- each taking its
+# own preset, command, model or usage, so one role can run on a different
+# model or vendor from another. Any other key of [agent] is refused, because a
+# misspelled role would otherwise never apply. Independent verification is the
+# reason to use this: a verifier on the model that wrote the code measures
+# self-consistency.
+[agent]
+preset = "claude"
+rate_limit_pattern = "hit your session limit"
+
+# command is what runs to decide whether the tree is green, and force is the
+# same check with its cache defeated. fail_name lifts the failing test's name
+# out of the output; capture group 1 is the name.
+[check]
+command = "bun run check"
+force = "bun run check -- --force"
+fail_name = '\(fail\) (.+?)(?: \[[0-9.]+m?s\])?$'
+
+[layout]
+# AGENTS.md is the core context file: an open format read by 20+ tools and
+# present in 60,000+ repos (agents.md, 2026). pointer_files are one-line
+# adapters for tools that read their own file instead; Claude Code does not
+# read AGENTS.md natively (anthropics/claude-code#34235).
+context_file = "AGENTS.md"
+pointer_files = ["CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md"]
+
+# harness_dir holds the launcher, hooks and roles and is vendor-neutral.
+# skills_dir is your tool's Agent Skills directory (.claude/skills,
+# .codex/skills, .gemini/skills, .cursor/skills, .github/skills); unset means
+# the preset's own directory.
+harness_dir = ".harness"
+skill_invocation = "invoke it via the Skill tool"
+
+# driver_command is the ONLY probe that exercises the built artifact rather
+# than reading text. Empty means off; it also needs HARNESS_DRIVER=1 in the
+# environment, because it costs wall-clock on every scout round. It runs in a
+# throwaway directory with a stripped environment, must exit 0 whenever it
+# REACHED the artifact, and prints one line per shortfall beginning `FINDING `.
+driver_command = ""
+
+spec = "SPEC.md"
+rows_heading = "## 11. Exit criteria"
+rows_end_heading = "## 12."
+source_root = "src"
+contract_file = "src/schema.ts"
+test_file_suffix_re = '\.test\.ts'
+test_decl_patterns = ["test('{name}'", 'test("{name}"']
+source_ext = [".ts", ".tsx", ".js", ".mjs", ".cjs", ".sh", ".py"]
+
+harness_files = [
+  "package.json",
+  "turbo.json",
+  "check.ts",
+  "bunfig.toml",
+  "Makefile",
+  "pyproject.toml",
+]
+harness_globs = ["packages/*/package.json"]
+allowed_prefixes = [
+  "src/",
+  "packages/",
+  "evals/",
+  ".harness/",
+  ".claude/",
+  ".github/",
+  ".codex/",
+  ".gemini/",
+  ".cursor/",
+]
+docs = [
+  ".check-baseline",
+  "AGENTS.md",
+  "README.md",
+  "LICENSE",
+  "LICENCE",
+  "NOTICE",
+  "BLOCKED.md",
+  "CLAUDE.md",
+  "DECISIONS.md",
+  "GEMINI.md",
+  "LEARNINGS.md",
+  "PROGRESS.archive.md",
+  "PROGRESS.md",
+  "REFERENCES.md",
+  "SPEC.md",
+  "TASKS.md",
+  "harness.default.toml",
+  "harness.toml",
+  "test-hashes.json",
+]
+harness_allow = [
+  "package.json",
+  "turbo.json",
+  "tsconfig.json",
+  "bunfig.toml",
+  "check.ts",
+  "bun.lock",
+  ".gitignore",
+  "Makefile",
+  "pyproject.toml",
+]
+machinery = [
+  ".DS_Store",
+  ".check",
+  ".turbo",
+  ".venv",
+  "STOP",
+  "__pycache__",
+  "build",
+  "dist",
+  "node_modules",
+  "out",
+  "target",
+]
+
+# learnings_cap bounds LEARNINGS.md, which every task reads at its start.
+# GRASP keeps a capacity-bounded skill library, 10 in its experiments, where
+# an ADD at capacity is blocked unless a paired REMOVE frees a slot
+# (arXiv:2605.29668); its ungated baseline regressed below the no-skills
+# baseline as memory accumulated. Context files also cost: over 20% more
+# inference, and about 3% of success rate when LLM-generated
+# (arXiv:2602.11988). 12 here because an entry is one line and five ship as
+# seeds.
+learnings_cap = 12
+
+[[pipeline]]
+name = "task"
+when = "queue.takeable"
+stages = ["implement", "verify"]
+
+[[pipeline]]
+name = "discover"
+when = "!queue.takeable"
+stages = ["scout", "adjudicate"]
+end_after_dry_rounds = 2
+
+[[stage]]
+name = "implement"
+role = "implementer"
+turns = 120
+post = ["implementer-not-done"]
+
+[[stage]]
+name = "verify"
+role = "verifier"
+turns = 100
+post = ["commit-verdict", "verdict", "scope"]
+
+[[stage]]
+name = "scout"
+role = "scout"
+turns = 30
+env = { HARNESS_DRIVER = "1" }
+
+[[stage]]
+name = "adjudicate"
+role = "adjudicator"
+turns = 40
+post = ["commit-round", "adjudicator-halt", "dry-round"]
+
+# The skills the roles rely on. Six are named in a role prompt and
+# brainstorming is not: here criteria are written into the queue before code
+# rather than in a chat, which is what its gate records. A prompt asks for one
+# and continues when it is missing, so a skill is a soft dependency and only
+# its gate makes it non-optional: `gate` names the probe, rail or hook that
+# fails without the behaviour, or the literal `none` where nothing yet does.
+# Rename a skill's id here and in roles/.
+
+[[skill]]
+id = "tdd"
+source = "github:obra/superpowers"
+path = "skills/test-driven-development"
+rev = "v6.3.0"
+gate = "none"
+why = "the failing test that encodes the acceptance criteria is written before the code"
+
+[[skill]]
+id = "ponytail"
+source = "github:thmsmtylr/ponytail"
+path = "skills/ponytail"
+rev = "main"
+gate = "ponytail-ceiling"
+why = "the ladder is walked before any new code, and a shortcut taken anyway is marked"
+
+[[skill]]
+id = "debugging"
+source = "github:obra/superpowers"
+path = "skills/systematic-debugging"
+rev = "v6.3.0"
+gate = "anchored"
+why = "a finding carries the command that reproduces it rather than a theory about it"
+
+[[skill]]
+id = "review-received"
+source = "github:obra/superpowers"
+path = "skills/receiving-code-review"
+rev = "v6.3.0"
+gate = "none"
+why = "a rejected task answers every rejection point before it is re-implemented"
+
+[[skill]]
+id = "verify-before-done"
+source = "github:obra/superpowers"
+path = "skills/verification-before-completion"
+rev = "v6.3.0"
+gate = "blocked-is-allowed"
+why = "no completion claim without the exact command and its pasted output"
+
+[[skill]]
+id = "review-requested"
+source = "github:obra/superpowers"
+path = "skills/requesting-code-review"
+rev = "v6.3.0"
+gate = "none"
+why = "the verifier works a checklist rather than reading the diff for whatever stands out"
+
+[[skill]]
+id = "brainstorming"
+source = "github:obra/superpowers"
+path = "skills/brainstorming"
+rev = "v6.3.0"
+gate = "queue-uncovered"
+why = "criteria are written before code, which here happens in the queue and not in a chat"
