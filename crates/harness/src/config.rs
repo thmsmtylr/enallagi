@@ -57,6 +57,7 @@ pub enum ConfigError {
     #[error(
         "stage {stage}: preset {preset} caps turns by neither a flag nor its own config, so the stage needs a timeout"
     )]
+    // Also raised for a time-capped preset, whose cap *is* the timeout.
     NoTurnCapNoTimeout { stage: String, preset: String },
     #[error("agent preset `{0}` is not known")]
     UnknownPreset(String),
@@ -416,7 +417,13 @@ pub fn validate(
         } else {
             match presets.get(&preset) {
                 None => errs.push(ConfigError::UnknownPreset(preset)),
-                Some(p) if p.turn_cap == TurnCap::None && st.timeout.is_none() => {
+                // Time is here with None because a time-capped preset spends
+                // its {timeout} word on the stage's timeout; without one there
+                // is nothing to substitute and the cap is not applied.
+                Some(p)
+                    if matches!(p.turn_cap, TurnCap::None | TurnCap::Time)
+                        && st.timeout.is_none() =>
+                {
                     errs.push(ConfigError::NoTurnCapNoTimeout {
                         stage: st.name.clone(),
                         preset,
@@ -956,6 +963,24 @@ mod tests {
         assert!(errs[0].to_string().contains("verify"));
 
         // A timeout on that stage settles it.
+        c.stage[1].timeout = Some("30m".into());
+        assert!(validate(&c, &crate::agent::presets(), &|_| Some(String::new())).is_ok());
+    }
+
+    #[test]
+    fn a_time_capped_preset_needs_a_timeout() {
+        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        c.agent.roles.insert(
+            "verifier".into(),
+            AgentOverride {
+                preset: Some("omp".into()),
+                ..AgentOverride::default()
+            },
+        );
+        let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
+        assert_eq!(errs.len(), 1, "only the verifier stage lacks a timeout");
+        assert!(errs[0].to_string().contains("omp"));
+
         c.stage[1].timeout = Some("30m".into());
         assert!(validate(&c, &crate::agent::presets(), &|_| Some(String::new())).is_ok());
     }
