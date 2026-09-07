@@ -7,13 +7,16 @@ use crate::config::{Config, SkillDecl};
 use crate::events::{Kind, Writer};
 use crate::git;
 use sha2::{Digest, Sha256};
+use std::ffi::OsStr;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SkillError {
     #[error("skill {id}: source {spec} is not github:<owner>/<repo>, git+<url> or path:<dir>")]
     BadSource { id: String, spec: String },
+    #[error("skill id `{id}` must match ^[a-z0-9-]+$")]
+    BadId { id: String },
     #[error("skill {id} is not declared in harness.toml")]
     Undeclared { id: String },
     #[error("skill {id} is unresolved: {why}")]
@@ -76,6 +79,23 @@ pub fn write_lock(root: &Path, lock: &Lock) -> Result<(), SkillError> {
     Ok(())
 }
 
+/// `^[a-z0-9-]+$`. The id is joined onto a filesystem path and written into
+/// the lock, so anything else -- a `..`, a separator, a shell metacharacter --
+/// is refused before it can be either.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// A skill's `path` is joined onto a directory the harness fetched, so it must
+/// stay inside it. Empty means the source root itself.
+pub fn valid_path(path: &str) -> bool {
+    let p = Path::new(path);
+    p.is_relative() && !p.components().any(|c| c == Component::ParentDir)
+}
+
 /// The `{{skill:<id>}}` tokens of a role prompt, in order, deduped.
 pub fn required_ids(role_text: &str) -> Vec<String> {
     let mut ids: Vec<String> = Vec::new();
@@ -112,10 +132,16 @@ pub struct ResolveOpts {
 impl Default for ResolveOpts {
     fn default() -> Self {
         ResolveOpts {
-            frozen: false,
+            frozen: frozen_from_env(std::env::var_os("CI").as_deref()),
             cache_dir: default_cache_dir(),
         }
     }
+}
+
+/// CI freezes skills the way `--frozen` does: an unattended run must fail on a
+/// stale lock rather than fetch new instructions and carry on.
+fn frozen_from_env(ci: Option<&OsStr>) -> bool {
+    ci.is_some()
 }
 
 fn default_cache_dir() -> PathBuf {
@@ -153,6 +179,11 @@ pub fn resolve(
     let mut dirty = false;
 
     for id in ids {
+        // `validate` refuses these at load; this is the second lock on the
+        // door, because the id is about to become a directory name.
+        if !valid_id(id) {
+            return Err(SkillError::BadId { id: id.clone() });
+        }
         let decl = cfg
             .skill
             .iter()
@@ -294,8 +325,9 @@ fn fetch(
     Ok((dir, Some(commit)))
 }
 
-/// `<cache>/git/<host>/<owner>/<repo>/<rev>`. The three name segments are read
-/// off the end of the URL, so a `file://` source keys on its own path.
+/// `<cache>/git/<host>/<every path segment>/<rev>`. Every segment of the URL
+/// is kept, so two repositories that share a trailing `<owner>/<repo>` under
+/// different prefixes cannot land on the same checkout.
 fn cache_path(cache_dir: &Path, url: &str, rev: &str) -> PathBuf {
     let rest = match url.split_once("://") {
         Some((_, r)) => r.to_string(),
@@ -305,42 +337,76 @@ fn cache_path(cache_dir: &Path, url: &str, rev: &str) -> PathBuf {
             .map_or(url, |(_, r)| r)
             .replace(':', "/"),
     };
-    let mut segs: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
-    let repo = segs.pop().unwrap_or("repo").trim_end_matches(".git");
-    let owner = segs.pop().unwrap_or("_");
-    let host = segs.first().copied().unwrap_or("_");
-    cache_dir
-        .join("git")
-        .join(host)
-        .join(owner)
-        .join(repo)
-        .join(rev.replace('/', "-"))
+    let segs: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
+    let last = segs.len().saturating_sub(1);
+    let mut dir = cache_dir.join("git");
+    for (i, seg) in segs.iter().enumerate() {
+        let seg = if i == last {
+            seg.trim_end_matches(".git")
+        } else {
+            seg
+        };
+        dir.push(segment(seg));
+    }
+    dir.push(segment(&rev.replace('/', "-")));
+    dir
+}
+
+/// One path segment of the cache, with `.` and `..` neutered: a URL is
+/// attacker-supplied as far as this function is concerned, and it is being
+/// turned into a filesystem path.
+fn segment(s: &str) -> String {
+    if s.is_empty() || s.chars().all(|c| c == '.') {
+        return "_".to_string();
+    }
+    s.to_string()
 }
 
 /// A cache directory that already exists is a pinned checkout and is reused
-/// without touching the network.
+/// without touching the network. A new one is cloned beside it and renamed
+/// into place, so a directory under that name is always a complete checkout
+/// and never a half-finished or abandoned clone.
 fn clone(url: &str, rev: Option<&str>, dir: &Path) -> Result<(), SkillError> {
     if dir.exists() {
         return Ok(());
     }
     let parent = dir.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(parent)?;
-    let target = dir.to_string_lossy().to_string();
+    // Not `with_extension`: a rev like `v1.2` would lose its `.2`.
+    let tmp = PathBuf::from(format!("{}.tmp", dir.display()));
+    let _ = fs::remove_dir_all(&tmp);
 
-    if let Some(rev) = rev {
-        if git::git_ok(
-            parent,
-            &["clone", "--depth", "1", "--branch", rev, url, &target],
-        ) {
-            return Ok(());
+    if let Err(e) = clone_into(url, rev, parent, &tmp) {
+        let _ = fs::remove_dir_all(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp, dir) {
+        let _ = fs::remove_dir_all(&tmp);
+        // Losing the race to another process is not a failure: what it put
+        // there is the same checkout this one just made.
+        if !dir.exists() {
+            return Err(e.into());
         }
-        // --branch takes a branch or a tag, never a commit sha.
-        let _ = fs::remove_dir_all(dir);
-        git::git(parent, &["clone", url, &target])?;
-        git::git(dir, &["checkout", "-q", rev])?;
+    }
+    Ok(())
+}
+
+fn clone_into(url: &str, rev: Option<&str>, parent: &Path, tmp: &Path) -> Result<(), SkillError> {
+    let target = tmp.to_string_lossy().to_string();
+    let Some(rev) = rev else {
+        git::git(parent, &["clone", "--depth", "1", url, &target])?;
+        return Ok(());
+    };
+    if git::git_ok(
+        parent,
+        &["clone", "--depth", "1", "--branch", rev, url, &target],
+    ) {
         return Ok(());
     }
-    git::git(parent, &["clone", "--depth", "1", url, &target])?;
+    // --branch takes a branch or a tag, never a commit sha.
+    let _ = fs::remove_dir_all(tmp);
+    git::git(parent, &["clone", url, &target])?;
+    git::git(tmp, &["checkout", "-q", rev])?;
     Ok(())
 }
 
@@ -646,5 +712,119 @@ mod tests {
         )
         .expect_err("bad source");
         assert!(matches!(err, SkillError::BadSource { .. }));
+    }
+
+    /// A bare repo at `<home>/<rel>` holding `skills/tdd/SKILL.md`, as a
+    /// `git+file://` source. No network: the upstream is a fixture.
+    fn bare_source(home: &Path, rel: &str, body: &str) -> String {
+        let upstream = Repo::new();
+        upstream.write("skills/tdd/SKILL.md", body);
+        upstream.commit_all("skill");
+        let bare = home.join(rel);
+        if let Some(parent) = bare.parent() {
+            fs::create_dir_all(parent).expect("parents");
+        }
+        let from = upstream.root.to_string_lossy().to_string();
+        let to = bare.to_string_lossy().to_string();
+        crate::git::git(home, &["clone", "--bare", "-q", &from, &to]).expect("bare clone");
+        format!("git+file://{}", bare.display())
+    }
+
+    #[test]
+    fn an_id_that_is_not_a_plain_name_is_refused_before_it_becomes_a_path() {
+        assert!(valid_id("tdd-2") && !valid_id("Tdd") && !valid_id("") && !valid_id(".."));
+        assert!(valid_path("skills/x") && valid_path("") && !valid_path("../x"));
+        assert!(!valid_path("a/../../b") && !valid_path("/abs"));
+
+        let repo = Repo::new();
+        let mut cfg = config("path:vendor/tdd", "", None);
+        cfg.skill[0].id = "../escape".into();
+        let mut w = writer(&repo.root);
+        let err = resolve(
+            &repo.root,
+            &cfg,
+            &preset("claude"),
+            &["../escape".to_string()],
+            &opts(&repo, false),
+            &mut w,
+        )
+        .expect_err("bad id");
+        assert!(matches!(err, SkillError::BadId { .. }));
+    }
+
+    #[test]
+    fn two_urls_sharing_their_last_segments_do_not_share_a_cache() {
+        let home = tempfile::TempDir::new().expect("tempdir");
+        let a = bare_source(home.path(), "a/sub/repo.git", "A body\n");
+        let b = bare_source(home.path(), "b/sub/repo.git", "B body\n");
+
+        let repo = Repo::new();
+        let mut cfg = config(&a, "skills/tdd", None);
+        cfg.skill[0].id = "one".into();
+        cfg.skill.push(SkillDecl {
+            id: "two".into(),
+            source: b,
+            path: "skills/tdd".into(),
+            rev: None,
+            gate: "none".into(),
+            why: "because".into(),
+        });
+        let mut w = writer(&repo.root);
+        resolve(
+            &repo.root,
+            &cfg,
+            &preset("claude"),
+            &["one".to_string(), "two".to_string()],
+            &opts(&repo, false),
+            &mut w,
+        )
+        .expect("resolve");
+
+        let body = |id: &str| {
+            fs::read_to_string(repo.root.join(format!(".claude/skills/{id}/SKILL.md")))
+                .expect("vendored")
+        };
+        assert_eq!(body("one"), "A body\n");
+        assert_eq!(body("two"), "B body\n");
+    }
+
+    #[test]
+    fn an_abandoned_partial_clone_is_thrown_away() {
+        let home = tempfile::TempDir::new().expect("tempdir");
+        let source = bare_source(home.path(), "up.git", BODY);
+        let repo = Repo::new();
+        let cfg = config(&source, "skills/tdd", None);
+
+        // What a clone killed halfway through leaves behind.
+        let url = source.trim_start_matches("git+");
+        let dir = cache_path(&repo.root.join("cache"), url, "HEAD");
+        let tmp = PathBuf::from(format!("{}.tmp", dir.display()));
+        fs::create_dir_all(&tmp).expect("mkdir");
+        fs::write(tmp.join("junk.txt"), "half a clone").expect("junk");
+
+        let mut w = writer(&repo.root);
+        resolve(
+            &repo.root,
+            &cfg,
+            &preset("claude"),
+            &["tdd".to_string()],
+            &opts(&repo, false),
+            &mut w,
+        )
+        .expect("resolve");
+
+        assert_eq!(
+            fs::read_to_string(repo.root.join(".claude/skills/tdd/SKILL.md")).expect("vendored"),
+            BODY
+        );
+        assert!(!tmp.exists(), "the .tmp clone must not survive");
+        assert!(!dir.join("junk.txt").exists(), "junk must not be adopted");
+        assert!(dir.join("skills/tdd/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn ci_freezes_the_default_options() {
+        assert!(frozen_from_env(Some(OsStr::new("true"))));
+        assert!(!frozen_from_env(None));
     }
 }
