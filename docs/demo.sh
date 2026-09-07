@@ -26,6 +26,7 @@ cd "$D" || exit 3
 git init -q
 git config user.email demo@local
 git config user.name demo
+git config commit.gpgsign false # a signing key on this machine is not the demo's business
 mkdir -p src && echo 'export const x = 1' >src/schema.ts
 git add -A && git commit -qm 'chore: init' >/dev/null
 
