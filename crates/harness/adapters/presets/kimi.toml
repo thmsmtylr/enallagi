@@ -1,0 +1,5 @@
+name = "kimi"
+argv = ["kimi", "-p", "{prompt}", "--output-format", "stream-json", "--yolo"]
+turn_cap = "config"
+model_flag = "--model"
+skills_dir = ".agents/skills"

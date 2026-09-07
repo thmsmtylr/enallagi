@@ -1,0 +1,11 @@
+name = "gemini"
+argv = ["gemini", "-p", "{prompt}", "--output-format", "stream-json", "--yolo"]
+turn_cap = "config"
+model_flag = "--model"
+instruction_file = "GEMINI.md"
+hooks_file = ".gemini/settings.json"
+
+[hook_events]
+pre_tool_use = "BeforeTool"
+stop = "AfterAgent"
+prompt_submit = "BeforeAgent"
