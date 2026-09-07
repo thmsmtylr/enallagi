@@ -108,3 +108,53 @@ fn events_since_keeps_only_events_at_or_after() {
     assert_eq!(stdout.lines().count(), 1);
     assert!(stdout.contains("\"reason\":\"late\""));
 }
+
+#[test]
+fn skills_check_refuses_what_sync_then_locks() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(
+        root.join("harness.toml"),
+        "[[skill]]\nid = \"tdd\"\nsource = \"path:vendor/tdd\"\npath = \"\"\ngate = \"none\"\nwhy = \"x\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("vendor/tdd")).unwrap();
+    std::fs::write(root.join("vendor/tdd/SKILL.md"), "body\n").unwrap();
+
+    let harness = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_harness"))
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("run harness skills")
+    };
+
+    let out = harness(&["skills", "check"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("tdd"));
+
+    let out = harness(&["skills", "list"]);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim_end(),
+        "tdd  path:vendor/tdd  unlocked"
+    );
+
+    let out = harness(&["skills", "sync"]);
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim_end(),
+        "tdd  fetched"
+    );
+    assert!(root.join(".claude/skills/tdd/SKILL.md").is_file());
+    assert!(root.join("harness.lock").is_file());
+
+    let out = harness(&["skills", "check"]);
+    assert!(out.status.success(), "{out:?}");
+
+    let out = harness(&["skills", "list"]);
+    let listed = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        listed.starts_with("tdd  path:vendor/tdd  sha256:"),
+        "{listed}"
+    );
+}
