@@ -95,6 +95,14 @@ and no answer will come, so never end a turn on a question -- decide and act. A 
 or agent process in ps is your PARENT process, not a competing writer: LEARNINGS.md's one-checkout-one-writer
 rule is about a second operator, and it does not apply to the process that started you."
 
+# "Is a loop running in THIS checkout?" is this file, and only this file, and it is answered by a
+# pid: archive-done.sh and one-writer.sh read it and ask whether they are under that process.
+# Scanning `ps` for a loop.sh anywhere on the machine answered for every checkout at once.
+# ponytail: a pid can be reused after a crash left the file behind; `kill -0` on a stranger
+# then reads as live until the next loop overwrites it. A start time in the file if that bites.
+echo $$ >__HARNESS_DIR__/loop.pid
+trap 'rm -f __HARNESS_DIR__/loop.pid' EXIT
+
 # Accumulated as the run goes, because by the end the tree no longer says what moved.
 LANDED=""
 ROWS=""
@@ -205,9 +213,14 @@ while [ "$i" -lt "$MAX_ITER" ]; do
     echo "=== Iteration $i: adjudicate ==="
     ADJ_OUT=$(mktemp)
     agent_for adjudicator
-    run_agent "adjudicate" "$LANE Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/roles/adjudicator.md: read that file first and follow it exactly. Act on every block with 'status: proposed' in TASKS.md, in file order. Promote it to 'status: ready' with a scope and criteria an agent that has read only CLAUDE.md, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or CLAUDE.md is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop." 40 2>&1 | tee "$ADJ_OUT"
-    [ "${PIPESTATUS[0]}" -eq 0 ] || {
-      echo "adjudicate exited non-zero -- halting."
+    # Never `run_agent ... | tee`: a pipeline stage is a subshell, and the seconds and cost
+    # log_stage adds to SPENT_SECONDS/SPENT_USD died with it, so every scout round under-counted
+    # the budget by exactly the adjudicator's share and the digest lost its row.
+    run_agent "adjudicate" "$LANE Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/roles/adjudicator.md: read that file first and follow it exactly. Act on every block with 'status: proposed' in TASKS.md, in file order. Promote it to 'status: ready' with a scope and criteria an agent that has read only CLAUDE.md, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or CLAUDE.md is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop." 40 >"$ADJ_OUT" 2>&1
+    ADJ_RC=$?
+    cat "$ADJ_OUT"
+    [ "$ADJ_RC" -eq 0 ] || {
+      echo "adjudicate exited $ADJ_RC -- halting."
       rm -f "$ADJ_OUT"
       break
     }
@@ -251,7 +264,7 @@ while [ "$i" -lt "$MAX_ITER" ]; do
     continue
   fi
 
-  PROG_BEFORE=$(cat PROGRESS.md 2>/dev/null | wc -c)
+  PROG_BEFORE=$(wc -c <PROGRESS.md 2>/dev/null || echo 0)
   # the sha the iteration starts at: everything gate_scope judges is committed after this point
   ITER_BASE=$(git rev-parse HEAD 2>/dev/null || true)
 
@@ -264,6 +277,18 @@ while [ "$i" -lt "$MAX_ITER" ]; do
       echo "implement exited $? -- halting rather than reporting a finished iteration."
       break
     }
+
+  # `verifier-not-implementer`, enforced here rather than by roles/implementer.md alone: the task
+  # was `ready` when this stage started, so `done` now was written by the agent whose work it is.
+  # Forced back to ready and the verify stage skipped -- there is nothing at review to verify.
+  if [ -z "${DRY_RUN:-}" ] && [ "$(field "$TASK" status)" = "done" ]; then
+    echo "  !! [$TASK] GATE FAILED -- the implementer marked its own task done. Forced back to ready."
+    set_status "$TASK" "ready" "the implementer set done; only the verifier may, and the launcher gates that"
+    git add TASKS.md 2>/dev/null
+    git diff --cached --quiet 2>/dev/null || git commit -q -m "chore($TASK): the implementer marked its own task done"
+    WARNINGS="${WARNINGS}  $TASK was forced back to ready: the implementer marked it done itself."$'\n'
+    continue
+  fi
 
   stop_now && break
   over_budget && break
@@ -293,7 +318,7 @@ while [ "$i" -lt "$MAX_ITER" ]; do
     *) WARNINGS="${WARNINGS}  $TASK ended the iteration at $(field "$TASK" status), not done."$'\n' ;;
     esac
     # The entry is all the next iteration inherits, so a silent iteration is itself the finding.
-    [ "$(cat PROGRESS.md 2>/dev/null | wc -c)" -gt "$PROG_BEFORE" ] ||
+    [ "$(wc -c <PROGRESS.md 2>/dev/null || echo 0)" -gt "$PROG_BEFORE" ] ||
       WARNINGS="${WARNINGS}  iteration $i wrote no PROGRESS.md entry for $TASK."$'\n'
 
     needs_spec_halt && break

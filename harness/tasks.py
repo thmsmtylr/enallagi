@@ -33,14 +33,23 @@ def read(path):
 
 
 def parse(text):
-    """Blocks in file order. A heading inside a fenced code block is documentation, not a task."""
-    blocks, current, fenced = [], None, False
+    """Blocks in file order. A heading inside a fenced code block is documentation, not a task.
+
+    A queue this cannot read unambiguously is refused, loudly: an unterminated fence used to hide
+    every block after it from the launcher, and a duplicate id made both gates return without
+    running (each read two status lines, neither equal to `done`). Zero blocks is not a verdict."""
+    blocks, current, fenced, opened, seen = [], None, False, 0, {}
     for index, line in enumerate(text.split('\n')):
         if FENCE.match(line):
             fenced = not fenced
+            opened = index + 1
         if not fenced:
             found = HEADING.match(line)
             if found:
+                if found.group(1) in seen:
+                    raise SystemExit('tasks.py: duplicate id %s at lines %d and %d -- the queue is '
+                                     'ambiguous and nothing here will guess' % (found.group(1), seen[found.group(1)], index + 1))
+                seen[found.group(1)] = index + 1
                 current = {'id': found.group(1), 'title': found.group(2).strip(),
                            'line': index + 1, 'body': []}
                 blocks.append(current)
@@ -50,14 +59,20 @@ def parse(text):
                 continue
         if current is not None:
             current['body'].append((index + 1, line))
+    if fenced:
+        raise SystemExit('tasks.py: the code fence opened at line %d never closes, so every block '
+                         'after it would be invisible. Close it.' % opened)
     return blocks
 
 
 def field(block, key):
-    """The first `key: value` line of a block. Values are stripped; a missing field is None."""
+    """The first `key: value` line of a block. Values are stripped; a missing field is None.
+    `status` is its first word: everything after it is the reason (`deferred -- out of scope`),
+    and a gate that compared the whole line to `done` skipped itself on any verdict with prose."""
     for _, line in block['body']:
         if line.startswith(key + ':'):
-            return line.split(':', 1)[1].strip()
+            value = line.split(':', 1)[1].strip()
+            return value.split()[0] if key == 'status' and value else value
     return None
 
 
@@ -291,6 +306,23 @@ def selftest():
     check('set-status rewrites exactly one status line', 1, changed.count('gate: '))
     check('set-status leaves the file otherwise intact', True, '## [T-009]' in changed)
     check('set-status on an unknown id changes nothing', FIXTURE, set_status(FIXTURE, 'T-999', 'done'))
+
+    suffixed = FIXTURE.replace('status: done', 'status: done \u2014 VERIFIED, the check was green')
+    check('a status is its first word; the rest is the reason', 'done',
+          field([b for b in parse(suffixed) if b['id'] == 'T-001'][0], 'status'))
+
+    def refuses(text):
+        try:
+            parse(text)
+        except SystemExit as stop:
+            return str(stop).split(' -- ')[0].split('. ')[0]
+        return 'parsed'
+    check('a duplicate id is refused, not resolved',
+          'tasks.py: duplicate id T-001 at lines 13 and 17',
+          refuses(FIXTURE.replace('## [T-002]', '## [T-001]')))
+    check('an unterminated fence is refused, not silently swallowed',
+          'tasks.py: the code fence opened at line 26 never closes, so every block after it would be invisible',
+          refuses(FIXTURE.replace('## [T-004]', '```\n## [T-004]')))
 
     print('tasks.py selftest: %s' % ('all assertions passed.' if not failures else 'FAILURES above.'))
     return 1 if failures else 0

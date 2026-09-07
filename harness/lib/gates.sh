@@ -7,8 +7,12 @@
 # agent reporting on itself; this runs the gate and forces a `done` the tree cannot support back to
 # `ready`. `blocked-is-allowed` names this function as its enforcement.
 gate_verdict() { # $1 = task id
-  local task="$1" out left
-  [ "$(field "$task" status)" = "done" ] || return 0
+  local task="$1" out left status
+  status=$(field "$task" status) || {
+    unreadable "$task"
+    return 1
+  }
+  [ "$status" = "done" ] || return 0
   # Found by driver.sh on 2026-09-02, and by nothing else: a lane that never commits leaves the work
   # in the tree, the check is green either way, and the task reached `done` with the implementation
   # on no branch — a merge would take none of it. `verifier.md` step 0 says reject, and a prompt is
@@ -37,6 +41,14 @@ gate_verdict() { # $1 = task id
   git diff --cached --quiet 2>/dev/null || git commit -q -m "chore($task): harness gate rejected a false VERIFIED"
   WARNINGS="${WARNINGS}  $task was forced back to ready by the gate: the verifier said done, the gate was red."$'\n'
   return 1
+}
+
+# A queue tasks.py refuses to read (duplicate id, unterminated fence) is not a pass for the task
+# in it. Nothing can be forced back to ready in a file that cannot be addressed, so this records
+# the refusal where the digest reads it: the iteration ends with a warning, not a landed task.
+unreadable() {
+  echo "  !! [$1] GATE FAILED -- TASKS.md cannot be read (see tasks.py above), so nothing about $1 is verified."
+  WARNINGS="${WARNINGS}  $1: TASKS.md could not be read; the gate did not run."$'\n'
 }
 
 # The matcher, split out so the selftest can assert it with no git history. `case` globs are
@@ -92,9 +104,13 @@ BOOKKEEPING="TASKS.md PROGRESS.md PROGRESS.archive.md DECISIONS.md LEARNINGS.md"
 # article's rule is that one round may not do both. ponytail: the harness set is this literal list,
 # so a project whose check script lives elsewhere adds it here.
 gate_scope() { # $1 = task id, $2 = the sha the iteration started at
-  local task="$1" base="$2" rows out_of="" harness_hit="" f reason
+  local task="$1" base="$2" rows out_of="" harness_hit="" grew="" f reason status
   local -a pats
-  [ "$(field "$task" status)" = "done" ] || return 0
+  status=$(field "$task" status) || {
+    unreadable "$task"
+    return 1
+  }
+  [ "$status" = "done" ] || return 0
   [ -n "$base" ] || return 0
   IFS=' ' read -r -a pats <<<"$(field "$task" scope | tr -d '` ' | tr ',' ' ')"
   while IFS= read -r f; do
@@ -120,7 +136,11 @@ gate_scope() { # $1 = task id, $2 = the sha the iteration started at
 
   rows=$(field "$task" rows)
   case "$rows" in *none*harness*) harness_hit="" ;; esac
-  [ -z "$out_of" ] && [ -z "$harness_hit" ] && {
+  # `green`: the baseline only ever shrinks. A harness task may edit it -- that is what clearing
+  # an inherited failure looks like -- but a line ADDED is a red check made green by hand, under
+  # any rows: value, and until this ran nothing enforced the sentence RAILS.md names this file for.
+  git diff "$base" HEAD -- .check-baseline 2>/dev/null | grep -q '^+[^+#]' && grew=1
+  [ -z "$out_of" ] && [ -z "$harness_hit" ] && [ -z "$grew" ] && {
     echo "  scope: $task stayed inside its scope."
     return 0
   }
@@ -128,6 +148,7 @@ gate_scope() { # $1 = task id, $2 = the sha the iteration started at
   reason=""
   [ -n "$out_of" ] && reason="touched ${out_of# }, which the scope line does not name"
   [ -n "$harness_hit" ] && reason="${reason:+$reason; }touched the harness (${harness_hit# }) with rows: ${rows:-unset}, not \`none — harness\`"
+  [ -n "$grew" ] && reason="${reason:+$reason; }added a line to .check-baseline, and the baseline only ever shrinks"
   echo "  !! [$task] SCOPE FAILED -- $reason. Forced back to ready."
   set_status "$task" "ready" "the verifier returned done and the scope gate rejected it: $reason"
   git add TASKS.md 2>/dev/null

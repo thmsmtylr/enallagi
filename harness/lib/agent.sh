@@ -118,12 +118,21 @@ log_stage() { # $1 = role, $2 = task, $3 = seconds, $4 = exit code, $5 = cost or
   SPENT_SECONDS=$((SPENT_SECONDS + $3))
   ROLE_SECONDS="${ROLE_SECONDS}$1 $3"$'\n'
   [ -n "${5:-}" ] && SPENT_USD=$(python3 -c "print(round($SPENT_USD + $5, 4))" 2>/dev/null || echo "$SPENT_USD")
+  # A dollar budget over a cost nothing reports is no budget: the shipped `claude -p` prints text
+  # unless --output-format json is on the command, so costSed matched nothing and BUDGET_USD
+  # never halted anything. Recorded here, read by over_budget at the next stage boundary.
+  [ -n "${BUDGET_USD:-}" ] && [ -z "${5:-}" ] && COST_MISSING=1
   return 0
 }
+COST_MISSING=""
 
 # Checked before every stage, never during one: a half-finished stage is worse than a slow run.
 # Unset or zero means no limit.
 over_budget() {
+  [ -n "$COST_MISSING" ] && {
+    halt "BUDGET_USD is set and the last stage reported no cost, so the budget cannot be enforced. agentCommand must print a cost costSed can read (claude: add --output-format json), or unset BUDGET_USD."
+    return 0
+  }
   [ "${BUDGET_SECONDS:-0}" -gt 0 ] && [ "$SPENT_SECONDS" -ge "${BUDGET_SECONDS:-0}" ] && {
     halt "the run has spent ${SPENT_SECONDS}s of its ${BUDGET_SECONDS}s budget."
     return 0
@@ -136,7 +145,7 @@ over_budget() {
 }
 
 run_agent() {
-  local label="$1" prompt="$2" turns="$3" out rc hit wait_s started cost
+  local label="$1" prompt="$2" turns="$3" out rc hit wait_s started cost tries=0
   # DRY_RUN reads the run without buying it: every stage announces itself here and nothing spawns.
   if [ -n "${DRY_RUN:-}" ]; then
     echo "  DRY_RUN would spawn: $label as role ${AGENT_ROLE:-default} via ${AGENT_CMD[0]} (turns: $turns)"
@@ -158,12 +167,16 @@ run_agent() {
     hit=$(grep -m1 -i "__RATE_LIMIT_PATTERN__" "$out" || true)
     cost=$(sed -n '__COST_SED__' "$out" | tail -1)
     rm -f "$out"
-    [ -n "$hit" ] || {
+    # A limit is a notice with a reset time in it. The words alone are not one: a lane working on
+    # this file quotes them, and the launcher slept a day on its own comment. Two retries, then
+    # halt -- an agent that prints the notice forever would otherwise hold the run forever.
+    if [ -z "$hit" ] || ! wait_s=$(seconds_until_reset "$hit") || [ "$tries" -ge 2 ]; then
+      [ -n "$hit" ] && [ "$tries" -ge 2 ] && echo "  session limit persisted after $tries retries -- giving up on $label."
       log_stage "${AGENT_ROLE:-default}" "${TASK:-}" $((SECONDS - started)) "$rc" "$cost"
       return $rc
-    }
-    wait_s=$(seconds_until_reset "$hit") || wait_s=1800
-    echo "  session limit. sleeping $((wait_s / 60))m, then retrying $label."
+    fi
+    tries=$((tries + 1))
+    echo "  session limit. sleeping $((wait_s / 60))m, then retrying $label ($tries of 2)."
     sleep_until "$wait_s" || return 1
   done
 }

@@ -17,30 +17,25 @@ DRY=""
 [ "${1:-}" = "--dry-run" ] && DRY=1
 
 # TASKS.md is the bus. Rewriting it under a live agent is LEARNINGS 2026-08-25, one checkout is one
-# writer. The guard used to be `pgrep -f` on the agent binary, which asks the wrong question: it
-# scans every command line on the machine, and Claude Desktop's renderer argv carries the literal
-# `claude-media` in --standard-schemes, so it was true with no agent running anywhere and nothing
-# has ever archived. It cannot be narrowed either -- the binary token is a `|` alternation of every
-# vendor the config names, and a pattern loose enough to match a vendor's CLI matches that vendor's
-# desktop app too. The question is whether a LANE is live in THIS checkout, and only the launcher
-# knows: a lane is spawned by spin() inside loop.sh (lib/agent.sh:45), so it is a descendant of a
-# running loop.sh. This script's OWN lane is excluded: walking up from a candidate, an ancestor on
-# this script's chain means the candidate is our own lane's work (the tool shells a lane spawns all
-# carry `claude` in their argv), and the loop that spawned that lane is its PARENT, not a competing
-# writer (loop.sh:81). Only a loop.sh reached before that chain is a second writer.
-AGENT_PID=$(ps -eo pid=,ppid=,args= | awk -v me="$$" -v bin='__AGENT_BINARY__' -v loop='__HARNESS_DIR__/loop.sh' '
-  { pid = $1 + 0; ppid[pid] = $2 + 0; sub(/^ *[0-9]+ +[0-9]+ +/, ""); args[pid] = $0 }
-  END {
-    for (p = me; (p in ppid) && p > 1; p = ppid[p]) mine[p] = 1
-    for (p in args) {
-      if ((p in mine) || args[p] !~ bin) continue
-      for (q = ppid[p]; (q in ppid) && q > 1; q = ppid[q]) {
-        if (q in mine) break
-        if (index(args[q], loop)) { print p; exit }
-      }
-    }
-  }')
-if [ -n "$AGENT_PID" ]; then
+# writer. Liveness is `loop.pid`: loop.sh writes its pid on start and removes it on exit, and a
+# process is that loop's own lane exactly when the pid is among its ancestors. The guard used to
+# scan `ps` for a loop.sh anywhere on the machine, which answered for every checkout at once and
+# read a different repository's loop as this one's. one-writer.sh calls this with --dry-run rather
+# than carrying a copy of the question.
+PIDFILE="__HARNESS_DIR__/loop.pid"
+loop_live() { # a loop is running here, and this process is not under it
+  local pid p
+  [ -s "$PIDFILE" ] || return 1
+  pid=$(tr -d ' \n' <"$PIDFILE")
+  kill -0 "$pid" 2>/dev/null || return 1
+  p=$$
+  while [ "${p:-0}" -gt 1 ]; do
+    [ "$p" = "$pid" ] && return 1
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+  done
+  return 0
+}
+if loop_live; then
   echo "archive: an agent is running — TASKS.md is its bus, not touching it"
   exit 1
 fi
@@ -51,33 +46,42 @@ if [ -z "$DRY" ] && ! git diff --quiet -- TASKS.md; then
   exit 1
 fi
 
-python3 - "$DRY" <<'PY'
-import re, subprocess, sys
+# no bytecode: `import tasks` wrote .harness/__pycache__/ and the next lane's `git add -A` shipped
+# it, which the scope gate rejected -- on Linux only, a global gitignore hid it on the author's mac
+PYTHONDONTWRITEBYTECODE=1 python3 - "$DRY" <<'PY'
+import subprocess, sys
+sys.path.insert(0, "__HARNESS_DIR__")
+import tasks  # the one parser: a splitter of its own read a fenced heading as a block and a
+              # column-0 `# ` line in notes as the end of one, and neither matched what the launcher saw
 
 dry = bool(sys.argv[1])
 sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode().strip()
 src = open("TASKS.md").read()
+lines = src.split("\n")
+blocks = tasks.parse(src)  # refuses an ambiguous queue, which is the right answer here too
 
-# A block runs to the next task or the next top-level heading, so the M2 divider stays put.
-parts = re.split(r"(?m)^(?=## \[T-\d+\])", src)
-head, blocks, archived, out = parts[0], parts[1:], [], []
-
+archived, out, cursor = [], [], 0
 for b in blocks:
-    body, sep, tail = b.partition("\n# ")
-    tail = sep + tail if sep else ""
-    title = body.splitlines()[0]
-    tid = re.match(r"## \[(T-\d+)\]", title).group(1)
-    status = re.search(r"(?m)^status:[ \t]*(\S+)", body)
-    if not status or status.group(1) != "done" or re.search(r"(?m)^archived:", body):
-        out.append(b)
+    start = b["line"] - 1
+    stop = start + len(b["body"]) + 1
+    out.extend(lines[cursor:start])  # whatever sits between blocks: the header, a divider
+    body, cursor = lines[start:stop], stop
+    if tasks.field(b, "status") != "done" or tasks.field(b, "archived") is not None:
+        out.extend(body)
         continue
     # Every field the two resolvers read is kept, so their view of the queue is
     # byte-identical before and after. Only the verdict prose moves.
-    keep = [re.search(rf"(?m)^{k}:.*$", body) for k in ("blockedBy", "scope", "attended")]
-    stub = ([title] + [m.group(0) for m in keep if m] + ["status: done",
-            f"archived: DECISIONS.md — full block at `git show {sha}:TASKS.md`", "", ""])
-    out.append("\n".join(stub) + tail.lstrip("\n") if tail else "\n".join(stub))
-    archived.append((tid, body.rstrip() + "\n"))
+    # the FIRST of each, which is the one field() reads; a quoted block in the notes has its own
+    keep, seen = [], set()
+    for l in body[1:]:
+        key = l.split(":", 1)[0]
+        if key in ("blockedBy", "scope", "attended") and key not in seen:
+            keep.append(l)
+            seen.add(key)
+    out.extend([body[0]] + keep + ["status: done",
+                f"archived: DECISIONS.md — full block at `git show {sha}:TASKS.md`", ""])
+    archived.append((b["id"], "\n".join(body).rstrip() + "\n"))
+out.extend(lines[cursor:])
 
 if not archived:
     print("archive: nothing to archive")
@@ -94,7 +98,7 @@ except FileNotFoundError:
            "The queue stays small; the audit trail stays whole. Each block is the implementer's and\n"
            "the verifier's own words, never summarised on the way in.\n")
 open("DECISIONS.md", "w").write(dec.rstrip() + "\n\n" + "\n\n".join(b for _, b in archived))
-open("TASKS.md", "w").write(head + "".join(out))
+open("TASKS.md", "w").write("\n".join(out))
 PY
 rc=$?
 [ "$rc" -ne 0 ] && exit "$rc"
