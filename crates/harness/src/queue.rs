@@ -47,7 +47,7 @@ fn match_heading(line: &str) -> Option<(String, String)> {
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    let title = rest[close + 1..].trim_start().to_string();
+    let title = rest[close + 1..].trim().to_string();
     Some((id.to_string(), title))
 }
 
@@ -168,7 +168,7 @@ pub fn block_text(b: &Block) -> String {
     lines.join("\n")
 }
 
-/// Rewrite one block's status in place, recording the reason next to it (`status: ready -- why`).
+/// Rewrite one block's status in place, recording why next to it as a `gate:` line.
 pub fn set_status(
     text: &str,
     task: &str,
@@ -185,11 +185,10 @@ pub fn set_status(
                 continue;
             }
             let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
-            lines[*at - 1] = if reason.is_empty() {
-                format!("status: {status}")
-            } else {
-                format!("status: {status} -- {reason}")
-            };
+            lines[*at - 1] = format!("status: {status}");
+            if !reason.is_empty() {
+                lines.insert(*at, format!("gate: {reason}"));
+            }
             return Ok(lines.join("\n"));
         }
     }
@@ -258,7 +257,9 @@ pub fn list(blocks: &[Block]) -> String {
     blocks
         .iter()
         .map(|b| {
-            let status = field(b, "status").unwrap_or_else(|| "?".to_string());
+            let status = field(b, "status")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "?".to_string());
             let head = format!("{}  {:<44.44}", b.id, b.title);
             format!("{}  \u{2192} {}", head.trim_end(), status)
         })
@@ -340,7 +341,7 @@ mod tests {
     #[test]
     fn set_status_writes_reason_and_keeps_rest() {
         let out = set_status(Q, "T-001", "ready", "gate said so").unwrap();
-        assert!(out.contains("status: ready -- gate said so"));
+        assert!(out.contains("status: ready\ngate: gate said so"));
         assert!(out.contains("## [T-002] second"));
     }
 
@@ -351,6 +352,18 @@ mod tests {
                 .unwrap();
         let l = list(&b);
         assert!(l.starts_with("T-1  01234567890123456789012345678901234567890123  \u{2192} ready"));
+    }
+
+    #[test]
+    fn heading_title_trims_both_ends() {
+        let b = parse("## [T-1]   a title   \nstatus: ready\n").unwrap();
+        assert_eq!(b[0].title, "a title");
+    }
+
+    #[test]
+    fn list_shows_question_mark_for_empty_status_value() {
+        let b = parse("## [T-1] a\nstatus:\n").unwrap();
+        assert_eq!(list(&b), "T-1  a  \u{2192} ?");
     }
 
     #[test]
@@ -451,22 +464,18 @@ mod tests {
         assert_eq!(field(t007, "status").as_deref(), Some("blocked"));
     }
 
-    // set-status: the reason is recorded next to the status it explains (`status: X -- reason`),
-    // matching how `field` already reads a status's first word as the value and the rest as the
-    // reason -- not tasks.py's separate `gate: reason` line, which that read side never parsed.
-
     #[test]
     fn set_status_rewrites_the_named_block() {
         let changed = set_status(FIXTURE, "T-004", "ready", "the gate was red").unwrap();
         assert!(changed.contains(
-            "## [T-004] the one a lane may take\nblockedBy: T-001\nstatus: ready -- the gate was red"
+            "## [T-004] the one a lane may take\nblockedBy: T-001\nstatus: ready\ngate: the gate was red"
         ));
     }
 
     #[test]
     fn set_status_rewrites_exactly_one_status_line() {
         let changed = set_status(FIXTURE, "T-004", "ready", "the gate was red").unwrap();
-        assert_eq!(changed.matches("-- the gate was red").count(), 1);
+        assert_eq!(changed.matches("gate: ").count(), 1);
     }
 
     #[test]
