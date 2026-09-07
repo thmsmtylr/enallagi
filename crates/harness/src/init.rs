@@ -110,8 +110,11 @@ pub enum InitError {
         "{0} is not a git repository. The harness records its own history there; git init first."
     )]
     NotGit(String),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    #[error("{path}: {source}")]
+    Io {
+        path: String,
+        source: std::io::Error,
+    },
     #[error(transparent)]
     Config(#[from] config::ConfigError),
     #[error("no adapter named {0}")]
@@ -122,6 +125,15 @@ pub enum InitError {
     InvalidJson { path: String, message: String },
     #[error("a token survived substitution, so harness.toml is missing a key: {}: {}", .0, .1.join(" "))]
     TokenSurvived(String, Vec<String>),
+    #[error("the leftover-token pattern does not compile ({0}); this is a defect in the binary")]
+    BadPattern(String),
+}
+
+/// An io error that names the path it happened to, which `std::io::Error`
+/// does not carry.
+fn io(path: impl std::fmt::Display) -> impl FnOnce(std::io::Error) -> InitError {
+    let path = path.to_string();
+    move |source| InitError::Io { path, source }
 }
 
 /// Every file `install` would write, as `(relative path, content)`. The
@@ -137,23 +149,25 @@ pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
 
     // Assert what was executed, never merely that nothing failed -- and assert
     // it before the first write, so a missing answer leaves no half-install.
+    let pattern = regex::Regex::new(TOKEN).map_err(|e| InitError::BadPattern(e.to_string()))?;
     for file in &plan {
-        let left = tokens(&file.content);
+        let left = tokens(&pattern, &file.content);
         if !left.is_empty() {
             return Err(InitError::TokenSurvived(file.path.clone(), left));
         }
     }
 
     for file in &plan {
+        if !opts.dry_run {
+            let path = root.join(&file.path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(io(parent.display()))?;
+            }
+            fs::write(&path, &file.content).map_err(io(path.display()))?;
+        }
+        // reported only once it is on disk: a caller that sees `wrote` sees
+        // what a reader of the tree would see
         report.wrote.push(file.path.clone());
-        if opts.dry_run {
-            continue;
-        }
-        let path = root.join(&file.path);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&path, &file.content)?;
     }
 
     // The old answers moved aside only once the new file holds them, and only
@@ -161,10 +175,8 @@ pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
     let migrated = root.join("harness.json").is_file()
         && report.wrote.iter().any(|path| path == "harness.toml");
     if !opts.dry_run && migrated {
-        fs::rename(
-            root.join("harness.json"),
-            root.join("harness.json.migrated"),
-        )?;
+        let json = root.join("harness.json");
+        fs::rename(&json, root.join("harness.json.migrated")).map_err(io(json.display()))?;
     }
     Ok(report)
 }
@@ -284,7 +296,8 @@ fn seed_config(
     }
     let json = root.join("harness.json");
     let text = if has_content(&json) {
-        let (text, renamed) = config::migrate_json(&fs::read_to_string(&json)?)?;
+        let read = fs::read_to_string(&json).map_err(io(json.display()))?;
+        let (text, renamed) = config::migrate_json(&read)?;
         report.notes.push(
             "migrated: harness.json -> harness.toml; the old file is now harness.json.migrated"
                 .to_string(),
@@ -304,8 +317,9 @@ fn seed_config(
 /// The merged configuration a `harness.toml` that is about to be written would
 /// produce. `config::load` reads a directory, so the pending text gets one.
 fn config_from(text: &str) -> Result<Config, InitError> {
-    let dir = tempfile::TempDir::new()?;
-    fs::write(dir.path().join("harness.toml"), text)?;
+    let dir = tempfile::TempDir::new().map_err(io("a temporary directory"))?;
+    let path = dir.path().join("harness.toml");
+    fs::write(&path, text).map_err(io(path.display()))?;
     Ok(config::load(dir.path())?)
 }
 
@@ -329,35 +343,41 @@ fn seed_context(
         report.kept.push(path);
         return;
     };
-    let (command, force) = default_check();
-    let mut text = before.clone();
-    for (default, configured) in [
-        (command, cfg.check.command.clone()),
-        (force, cfg.check.force.clone()),
-    ] {
-        if default != configured {
-            text = text.replace(&format!("`{default}`"), &format!("`{configured}`"));
+    match resync(&before, default_check().as_ref(), &cfg.check) {
+        None => report.kept.push(path),
+        Some(text) => {
+            report
+                .notes
+                .push(format!("updated: {path} now names `{}`", cfg.check.command));
+            plan.push(write(path, text));
         }
-    }
-    if text == before {
-        report.kept.push(path);
-    } else {
-        report
-            .notes
-            .push(format!("updated: {path} now names `{}`", cfg.check.command));
-        plan.push(write(path, text));
     }
 }
 
-/// The check the embedded default names, which is what a first install
-/// substituted into the context file.
-fn default_check() -> (String, String) {
-    match config_from("") {
-        Ok(cfg) => (cfg.check.command, cfg.check.force),
-        // unreachable short of a broken embedded default; a resync that cannot
-        // read the default rewrites nothing rather than guessing
-        Err(_) => (String::new(), String::new()),
+/// The kept context file with the default check strings rewritten to the
+/// configured ones, or None when nothing changed -- including when the default
+/// could not be read, since a resync that does not know what the template wrote
+/// would rewrite the wrong lines.
+fn resync(
+    text: &str,
+    defaults: Option<&(String, String)>,
+    check: &config::CheckConfig,
+) -> Option<String> {
+    let (command, force) = defaults?;
+    let mut out = text.to_string();
+    for (default, configured) in [(command, &check.command), (force, &check.force)] {
+        if default != configured {
+            out = out.replace(&format!("`{default}`"), &format!("`{configured}`"));
+        }
     }
+    (out != text).then_some(out)
+}
+
+/// The check the embedded default names, which is what a first install
+/// substituted into the context file. None short of a broken embedded default.
+fn default_check() -> Option<(String, String)> {
+    let cfg = config_from("").ok()?;
+    Some((cfg.check.command, cfg.check.force))
 }
 
 /// One-line pointers, for tools that read their own file rather than the open
@@ -390,7 +410,9 @@ fn seed_pointer(
     }
 }
 
-fn skills_root(cfg: &Config, preset: Option<&Preset>) -> PathBuf {
+/// Where the project skill lands, which `install-stale` also has to know to
+/// tell an overwritten file from a seeded one.
+pub(crate) fn skills_root(cfg: &Config, preset: Option<&Preset>) -> PathBuf {
     match preset {
         Some(preset) => skills::skills_dir(cfg, preset),
         // `custom`, which has no directory of its own
@@ -428,6 +450,17 @@ fn adapter(
         }
     }
 
+    // A tool that reads its own instruction file rather than the open format
+    // gets the same one-line pointer the configured ones get -- unless
+    // pointer_files already names it, which is the common case. Written before
+    // the hooks, because a tool with no hooks file still reads its own file.
+    if let Some(file) = preset.instruction_file.as_deref() {
+        let planned = plan.iter().any(|p| p.path == file);
+        if file != cfg.layout.context_file && !planned && !has_content(&root.join(file)) {
+            plan.push(write(file.to_string(), sub(POINTER)));
+        }
+    }
+
     let Some(hooks_file) = preset.hooks_file.as_deref() else {
         report.notes.push(format!(
             "adapter {name}: no hooks file; hooks are code or absent for this tool"
@@ -436,7 +469,7 @@ fn adapter(
     };
 
     let ours = if name == "claude" {
-        claude_settings()?
+        claude_settings(sub)?
     } else {
         // The vendor shapes are close enough for v1: gemini, qwen, copilot,
         // cursor and codex all read a list of command hooks under an event
@@ -449,24 +482,15 @@ fn adapter(
         None => pretty(&ours),
     };
     plan.push(write(hooks_file.to_string(), content));
-
-    // A tool that reads its own instruction file rather than the open format
-    // gets the same one-line pointer the configured ones get -- unless
-    // pointer_files already names it, which is the common case.
-    if let Some(file) = preset.instruction_file.as_deref() {
-        let planned = plan.iter().any(|p| p.path == file);
-        if file != cfg.layout.context_file && !planned && !has_content(&root.join(file)) {
-            plan.push(write(file.to_string(), sub(POINTER)));
-        }
-    }
     Ok(())
 }
 
-/// The shipped Claude settings with every hook command rewritten to the
-/// binary's own: the hooks are subcommands now, not scripts in the tree.
-fn claude_settings() -> Result<Value, InitError> {
+/// The shipped Claude settings, substituted like every other shipped file, with
+/// every hook command rewritten to the binary's own: the hooks are subcommands
+/// now, not scripts in the tree.
+fn claude_settings(sub: &dyn Fn(&str) -> String) -> Result<Value, InitError> {
     let mut value: Value =
-        serde_json::from_str(CLAUDE_SETTINGS).map_err(|e| InitError::InvalidJson {
+        serde_json::from_str(&sub(CLAUDE_SETTINGS)).map_err(|e| InitError::InvalidJson {
             path: "adapters/claude/settings.json".to_string(),
             message: e.to_string(),
         })?;
@@ -628,11 +652,10 @@ fn track_paths(plan: &[Planned], report: &InitReport) -> Vec<String> {
     out
 }
 
-fn tokens(text: &str) -> Vec<String> {
-    let Ok(token) = regex::Regex::new(r"__[A-Z][A-Z_]+__") else {
-        return Vec::new();
-    };
-    let found: BTreeSet<String> = token
+const TOKEN: &str = r"__[A-Z][A-Z_]+__";
+
+fn tokens(pattern: &regex::Regex, text: &str) -> Vec<String> {
+    let found: BTreeSet<String> = pattern
         .find_iter(text)
         .map(|m| m.as_str().to_string())
         .collect();
@@ -645,4 +668,28 @@ fn has_content(path: &Path) -> bool {
 
 fn rel(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The resync rewrites the strings the TEMPLATE wrote. Without the default
+    /// to recognise it cannot tell those from the project's own prose, so it
+    /// leaves a kept context file exactly as it found it.
+    #[test]
+    fn a_resync_that_cannot_read_the_default_rewrites_nothing() {
+        let cfg = config_from("[check]\ncommand = \"make check\"\n").expect("config");
+        let text = "- Verify, and this is what done means: `bun run check`\n";
+        assert_eq!(resync(text, None, &cfg.check), None);
+
+        let defaults = (
+            "bun run check".to_string(),
+            "bun run check -- --force".to_string(),
+        );
+        assert_eq!(
+            resync(text, Some(&defaults), &cfg.check).as_deref(),
+            Some("- Verify, and this is what done means: `make check`\n")
+        );
+    }
 }
