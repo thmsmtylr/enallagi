@@ -117,10 +117,6 @@ pub fn matches(paths: &[String], pattern: &str) -> Res<Vec<String>> {
         .collect())
 }
 
-pub fn glob(root: &Path, pattern: &str) -> Res<Vec<String>> {
-    matches(&walk(root), pattern)
-}
-
 /// How a test declares its name is language-specific: the patterns come from
 /// `layout.test_decl_patterns`.
 pub fn declares(root: &Path, rel: &str, name: &str, patterns: &[String]) -> Res<bool> {
@@ -155,9 +151,7 @@ pub struct SpecRow {
     pub line: usize,
 }
 
-fn separator(line: &str) -> Res<bool> {
-    Ok(re(r"^\|[\s:|-]+\|\s*$")?.is_match(line))
-}
+const SEPARATOR: &str = r"^\|[\s:|-]+\|\s*$";
 
 /// The same slice and cell pattern the floor's own row parser uses; a second
 /// parser must read what it reads.
@@ -191,9 +185,10 @@ pub fn spec_rows(ctx: &ProbeCtx) -> Res<Vec<SpecRow>> {
         })
         .collect();
 
+    let separator = re(SEPARATOR)?;
     let mut shaped = 0usize;
     for line in section.split('\n') {
-        if !line.starts_with('|') || separator(line)? {
+        if !line.starts_with('|') || separator.is_match(line) {
             continue;
         }
         let cells: Vec<&str> = line.split('|').collect();
@@ -230,6 +225,7 @@ pub fn rail_rows(ctx: &ProbeCtx) -> Res<Vec<RailRow>> {
             "{file} does not exist -- the rails are unwritten, so nothing here is enforced"
         ));
     }
+    let separator = re(SEPARATOR)?;
     let mut rows = Vec::new();
     let (mut inside, mut seen) = (false, false);
     for (index, line) in lines_of(ctx.root, &file)?.iter().enumerate() {
@@ -241,7 +237,7 @@ pub fn rail_rows(ctx: &ProbeCtx) -> Res<Vec<RailRow>> {
         if inside && !line.starts_with('|') {
             inside = false;
         }
-        if !inside || separator(line)? {
+        if !inside || separator.is_match(line) {
             continue;
         }
         let parts: Vec<&str> = line.split('|').collect();
