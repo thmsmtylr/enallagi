@@ -660,13 +660,7 @@ mod tests {
     fn a_stop_file_during_the_limit_wait_stops_the_run() {
         let r = crate::fixture::Repo::new();
         std::fs::write(r.root.join("STOP"), "").unwrap();
-        let reset = jiff::Zoned::now()
-            .in_tz("UTC")
-            .unwrap()
-            .checked_add(jiff::Span::new().minutes(1))
-            .unwrap();
-        let notice = reset.strftime("hit your session limit resets %-I:%M%P (UTC)");
-        let argv = r.stub_agent(&format!("echo '{notice}'"));
+        let argv = r.stub_agent(FRESH_NOTICE);
         let mut w = Writer::new(Log::open(&r.root.join(".harness")));
         let err = spawn(
             &spawner(argv, &r.root),
@@ -687,18 +681,21 @@ mod tests {
         );
     }
 
+    /// A notice is only a limit while its reset is still ahead, so the stub
+    /// prints a *fresh* one on every run: a fixed timestamp would be in the
+    /// past by the second retry and roll over to the next day, which is a
+    /// real 24-hour sleep rather than a test.
+    const FRESH_NOTICE: &str = concat!(
+        "date -u -v+1M '+hit your session limit resets %I:%M%p (UTC)' 2>/dev/null",
+        " || date -u -d '+1 minute' '+hit your session limit resets %I:%M%p (UTC)'"
+    );
+
     #[test]
     #[ignore = "sleeps up to four minutes waiting out two synthetic session limits"]
     fn rate_limit_is_retried_at_most_twice() {
         let r = crate::fixture::Repo::new();
-        let reset = jiff::Zoned::now()
-            .in_tz("UTC")
-            .unwrap()
-            .checked_add(jiff::Span::new().minutes(1))
-            .unwrap();
-        let notice = reset.strftime("hit your session limit resets %-I:%M%P (UTC)");
         let runs = r.root.join("runs");
-        let argv = r.stub_agent(&format!("echo x >> {}; echo '{notice}'", runs.display()));
+        let argv = r.stub_agent(&format!("echo x >> {}; {FRESH_NOTICE}", runs.display()));
         let mut w = Writer::new(Log::open(&r.root.join(".harness")));
         let res = spawn(
             &spawner(argv, &r.root),
