@@ -148,7 +148,7 @@ fn probes_exit_0_every_probe_ran() {
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     assert_eq!(errors(&results), Vec::<&str>::new());
-    assert_eq!(results.len(), 16, "{}", render(&results));
+    assert_eq!(results.len(), 21, "{}", render(&results));
 }
 
 #[test]

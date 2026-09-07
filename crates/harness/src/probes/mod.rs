@@ -9,6 +9,7 @@
 //! Exit 0 when every probe ran, non-zero only when one could not.
 
 pub mod common;
+pub mod telemetry;
 
 mod check_red;
 mod check_unnamed;
@@ -89,10 +90,9 @@ pub const NAMES: &[&str] = &[
 
 type ProbeFn = fn(&ProbeCtx) -> ProbeResult;
 
-/// The order the scout reads them in. The five telemetry probes over
-/// `events.jsonl` are Task 10's and are not here yet; naming one explicitly
-/// reports ERROR rather than a silent zero.
-fn registry() -> [(&'static str, ProbeFn); 16] {
+/// The order the scout reads them in: the text probes, the five over
+/// `events.jsonl`, and the driver last.
+fn registry() -> [(&'static str, ProbeFn); 21] {
     [
         ("spec-untested", spec_untested::probe),
         ("queue-uncovered", queue_uncovered::probe),
@@ -109,8 +109,67 @@ fn registry() -> [(&'static str, ProbeFn); 16] {
         ("check-red", check_red::probe),
         ("litter", litter::probe),
         ("install-stale", install_stale::probe),
+        ("verdict-flip", telemetry_probe::verdict_flip),
+        ("rejection-repeat", telemetry_probe::rejection_repeat),
+        ("stage-outlier", telemetry_probe::stage_outlier),
+        ("turns-exhausted", telemetry_probe::turns_exhausted),
+        ("limit-repeat", telemetry_probe::limit_repeat),
         ("driver", driver::probe),
     ]
+}
+
+/// The telemetry probes read the event log under the harness directory and
+/// speak their own result type; this is the one place the two meet.
+mod telemetry_probe {
+    use super::{telemetry, Finding, ProbeCtx, ProbeResult};
+    use crate::events::Log;
+
+    fn log_of(ctx: &ProbeCtx) -> Log {
+        Log::open(&ctx.root.join(&ctx.cfg.layout.harness_dir))
+    }
+
+    /// No log at all means nothing has run yet: OFF, like an unconfigured
+    /// driver. A log that exists and cannot be read is the ERROR case.
+    fn run(ctx: &ProbeCtx, probe: impl Fn(&Log) -> telemetry::ProbeResult) -> ProbeResult {
+        let log = log_of(ctx);
+        if !log.path.exists() {
+            return ProbeResult::Off(
+                "no events.jsonl yet -- nothing has run in this checkout".to_string(),
+            );
+        }
+        lift(probe(&log))
+    }
+
+    fn lift(r: telemetry::ProbeResult) -> ProbeResult {
+        match r {
+            telemetry::ProbeResult::Count(f) => ProbeResult::Count(
+                f.into_iter()
+                    .map(|f| Finding {
+                        path: f.path,
+                        line: f.line,
+                        message: f.message,
+                    })
+                    .collect(),
+            ),
+            telemetry::ProbeResult::Error(e) => ProbeResult::Error(e),
+        }
+    }
+
+    pub fn verdict_flip(ctx: &ProbeCtx) -> ProbeResult {
+        run(ctx, telemetry::verdict_flip)
+    }
+    pub fn rejection_repeat(ctx: &ProbeCtx) -> ProbeResult {
+        run(ctx, telemetry::rejection_repeat)
+    }
+    pub fn stage_outlier(ctx: &ProbeCtx) -> ProbeResult {
+        run(ctx, telemetry::stage_outlier)
+    }
+    pub fn turns_exhausted(ctx: &ProbeCtx) -> ProbeResult {
+        run(ctx, |log| telemetry::turns_exhausted(log, ctx.cfg))
+    }
+    pub fn limit_repeat(ctx: &ProbeCtx) -> ProbeResult {
+        run(ctx, telemetry::limit_repeat)
+    }
 }
 
 pub fn run_all(ctx: &ProbeCtx, names: &[String]) -> Vec<(String, ProbeResult)> {
