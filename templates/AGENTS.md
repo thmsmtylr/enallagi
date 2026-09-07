@@ -8,8 +8,8 @@
 
 - Verify, and this is what done means: `__CHECK__`
 - Uncached, for any number you quote to a human: `__CHECK_FORCE__`
-- One loop iteration: `__HARNESS_DIR__/loop.sh 1`; `touch STOP` halts it
-- What the tree says about itself: `__HARNESS_DIR__/hooks/probes.sh`
+- One loop iteration: `harness run 1`; `touch STOP` halts it
+- What the tree says about itself: `harness probe`
 
 ## How work moves
 
