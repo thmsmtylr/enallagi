@@ -5,6 +5,16 @@ use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
 use std::collections::BTreeSet;
 
+/// The subcommand names clap knows, so a rail naming `harness <sub>` is
+/// checked against the binary rather than a hand-kept list.
+fn subcommands() -> Vec<String> {
+    use clap::CommandFactory;
+    crate::cli::Cli::command()
+        .get_subcommands()
+        .map(|c| c.get_name().to_string())
+        .collect()
+}
+
 /// The tokens that are paths rather than the name of a function or a hook.
 pub fn is_path(token: &str) -> Res<bool> {
     Ok(common::re(r"\.(sh|ts|tsx|js|json|toml|md|lock)$")?.is_match(token))
@@ -121,6 +131,21 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
                             ));
                         }
                     }
+                }
+                continue;
+            }
+            if let Some(rest) = token.strip_prefix("harness ") {
+                // The binary IS the enforcement now: `harness run`, `harness
+                // gate`, `harness probe`, `harness hook verify-done`. A rail
+                // naming a subcommand the binary does not have enforces
+                // nothing, which is the same failure as a missing script.
+                let sub = rest.split_whitespace().next().unwrap_or("");
+                if !subcommands().iter().any(|s| s == sub) {
+                    found.push(common::finding(
+                        &rails,
+                        row.line,
+                        format!("enforced by `{token}`, and the binary has no {sub} subcommand"),
+                    ));
                 }
                 continue;
             }
