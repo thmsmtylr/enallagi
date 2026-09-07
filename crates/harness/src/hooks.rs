@@ -45,8 +45,8 @@ pub fn immutable(root: &Path, input: &str) -> (i32, String) {
     (0, String::new())
 }
 
-/// `{"tool_input":{"file_path": "..."}}` -> the target, resolved against `root` and lexically
-/// normalized. `None` on anything that does not parse -- the shell exits 0 on the same failure.
+/// `{"tool_input":{"file_path": "..."}}` -> the target, resolved against `root` and realpath'd.
+/// `None` on anything that does not parse -- the shell exits 0 on the same failure.
 fn tool_input_path(root: &Path, input: &str) -> Option<PathBuf> {
     let v: serde_json::Value = serde_json::from_str(input).ok()?;
     let path = v.get("tool_input")?.get("file_path")?.as_str()?;
@@ -62,11 +62,35 @@ fn normalize(root: &Path, rel: &str) -> PathBuf {
     } else {
         root.join(rel)
     };
-    lexical_normalize(&joined)
+    realpath_like(&joined)
 }
 
-/// Collapses `.` and `..` without touching the filesystem -- the target of an edit may not exist
-/// yet, so this cannot require it to (unlike `Path::canonicalize`).
+/// `os.path.realpath`: resolves symlinks in every path component that exists, so a symlinked
+/// alias of a covered file or a locked skill's directory is not a way around either hook. The
+/// target of an edit, or a key of `test-hashes.json`, may name a file that does not exist yet
+/// (a create), so this cannot require existence the way `Path::canonicalize` does -- it walks up
+/// to the nearest existing ancestor, canonicalizes that, then appends the missing tail lexically
+/// normalized (`.`/`..` collapsed, nothing resolved -- there is nothing on disk left to resolve).
+fn realpath_like(p: &Path) -> PathBuf {
+    let normalized = lexical_normalize(p);
+    let mut existing = normalized.clone();
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    while !existing.exists() {
+        let Some(name) = existing.file_name() else {
+            break;
+        };
+        tail.push(name.to_os_string());
+        existing = existing.parent().map(Path::to_path_buf).unwrap_or_default();
+    }
+    let mut resolved = std::fs::canonicalize(&existing).unwrap_or(existing);
+    for comp in tail.into_iter().rev() {
+        resolved.push(comp);
+    }
+    resolved
+}
+
+/// Collapses `.` and `..` without touching the filesystem -- `realpath_like`'s fallback for the
+/// tail of a path that does not exist.
 fn lexical_normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for comp in p.components() {
@@ -109,7 +133,7 @@ fn hashed_hit(root: &Path, target: &Path) -> Option<String> {
             }
         }
         for found in covered {
-            if lexical_normalize(&found) == *target {
+            if realpath_like(&found) == *target {
                 let rel = found.strip_prefix(root).unwrap_or(&found);
                 return Some(format!(
                     "{} (its scripts, via package.json#scripts)",
@@ -376,6 +400,17 @@ mod tests {
         config::load(root).unwrap_or_default()
     }
 
+    /// Kills and waits on its child even if the test panics before reaching an explicit cleanup
+    /// -- an assertion failure between spawn and kill used to leak the `sleep 30`.
+    struct Reaper(std::process::Child);
+
+    impl Drop for Reaper {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
     fn input(path: &str) -> String {
         format!(r#"{{"tool_input":{{"file_path":"{path}"}}}}"#)
     }
@@ -420,6 +455,44 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn immutable_refuses_a_symlinked_alias_of_a_hashed_file() {
+        let r = Repo::new();
+        r.write("src/a.ts", "export const a = 1\n");
+        r.write("test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
+        std::os::unix::fs::symlink(r.root.join("src/a.ts"), r.root.join("src/b.ts"))
+            .expect("symlink");
+        let (code, msg) = immutable(&r.root, &input("src/b.ts"));
+        assert_eq!(code, 2, "{msg}");
+        assert!(msg.contains("covered by test-hashes.json"), "{msg}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn immutable_refuses_a_symlinked_directory_containing_a_locked_skill() {
+        let r = Repo::new();
+        r.write(".claude/skills/tdd/SKILL.md", "# tdd\n");
+        r.write(
+            "harness.lock",
+            "version = 1\n\n[[skill]]\nid = \"tdd\"\nsource = \"path:skills/tdd\"\nsha256 = \"ab\"\n",
+        );
+        std::os::unix::fs::symlink(r.root.join(".claude/skills/tdd"), r.root.join("alias"))
+            .expect("symlink");
+        let (code, msg) = immutable(&r.root, &input("alias/SKILL.md"));
+        assert_eq!(code, 2, "{msg}");
+        assert!(msg.contains("harness.lock"), "{msg}");
+    }
+
+    #[test]
+    fn immutable_normalizes_a_nonexistent_target_under_an_existing_directory() {
+        let r = Repo::new();
+        r.write("test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
+        // src/ already exists (Repo::new seeds src/schema.ts); this file under it does not.
+        let (code, msg) = immutable(&r.root, &input("src/does-not-exist-yet.ts"));
+        assert_eq!(code, 0, "{msg}");
+    }
+
+    #[test]
     fn immutable_refuses_a_workspace_package_json_when_scripts_are_hashed() {
         let r = Repo::new();
         r.write(
@@ -450,19 +523,17 @@ mod tests {
             "## [T-001] x\nstatus: review\nblockedBy: none\n",
         );
         r.commit_all("seed");
-        let mut child = StdCommand::new("sleep")
+        let child = StdCommand::new("sleep")
             .arg("30")
             .spawn()
             .expect("spawn sleep");
         r.write(".harness/loop.pid", &child.id().to_string());
+        let _reaper = Reaper(child);
 
         let (code, msg) = one_writer(&r.root, &input("TASKS.md"));
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("one-writer:"), "{msg}");
         assert!(msg.contains("T-001"), "{msg}");
-
-        let _ = child.kill();
-        let _ = child.wait();
     }
 
     #[test]
@@ -476,13 +547,12 @@ mod tests {
     #[test]
     fn a_pid_file_left_by_a_loop_that_is_gone_is_not_a_live_loop() {
         let r = Repo::new();
-        let mut child = StdCommand::new("sleep")
+        let child = StdCommand::new("sleep")
             .arg("30")
             .spawn()
             .expect("spawn sleep");
         let pid = child.id();
-        let _ = child.kill();
-        let _ = child.wait();
+        drop(Reaper(child)); // kills and waits immediately: the pid file must name a dead loop
         r.write(".harness/loop.pid", &pid.to_string());
 
         let (code, msg) = one_writer(&r.root, &input("TASKS.md"));
