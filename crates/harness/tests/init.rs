@@ -181,6 +181,7 @@ fn init_writes_the_harness_gitignore() {
             "worktrees/",
             "loop.pid",
             "skills/",
+            "run/",
             "__pycache__/",
         ]
     );

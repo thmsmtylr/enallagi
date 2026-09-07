@@ -79,7 +79,8 @@ const CLAUDE_SETTINGS: &str = include_str!("../../../adapters/claude/settings.js
 /// otherwise commit it, and the scope gate would reject that lane for a file it
 /// did not write. Scoped to the harness directory, so the repository's own
 /// .gitignore is never touched.
-const GITIGNORE: &str = "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nskills/\n__pycache__/\n";
+const GITIGNORE: &str =
+    "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nskills/\nrun/\n__pycache__/\n";
 
 // ----------------------------------------------------------------- the API
 
