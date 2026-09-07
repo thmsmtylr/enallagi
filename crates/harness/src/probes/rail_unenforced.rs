@@ -37,8 +37,10 @@ fn harness_text(ctx: &ProbeCtx) -> Res<String> {
         .filter(|f| common::exists(ctx.root, f))
         .cloned()
         .collect();
+    // one walk answers every pattern: a repo with a node_modules is walked once
+    let tree = common::walk(ctx.root);
     for pattern in &layout.harness_globs {
-        files.extend(common::glob(ctx.root, pattern)?);
+        files.extend(common::matches(&tree, pattern)?);
     }
     // enforcement is: the check runs it, the tool's settings wire it, or a hash covers it
     let wired = [
@@ -53,7 +55,7 @@ fn harness_text(ctx: &ProbeCtx) -> Res<String> {
         ".*/settings.local.json".to_string(),
         format!("{dir}/roles/*.md"),
     ] {
-        files.extend(common::glob(ctx.root, &pattern)?);
+        files.extend(common::matches(&tree, &pattern)?);
     }
 
     let mut text = String::new();
