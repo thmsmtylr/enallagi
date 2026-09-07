@@ -375,7 +375,7 @@ pub fn validate(
             }),
             Some(text) => {
                 if checked_roles.insert(role.as_str()) {
-                    for id in skill_ids(&text) {
+                    for id in crate::skills::required_ids(&text) {
                         if !declared.contains(id.as_str()) {
                             errs.push(ConfigError::UndeclaredSkill {
                                 role: role.clone(),
@@ -417,21 +417,6 @@ pub fn validate(
     } else {
         Err(errs)
     }
-}
-
-/// The `{{skill:<id>}}` tokens of a role prompt, in order, deduped.
-fn skill_ids(text: &str) -> Vec<String> {
-    let mut ids: Vec<String> = Vec::new();
-    for tail in text.split("{{skill:").skip(1) {
-        let Some((id, _)) = tail.split_once("}}") else {
-            continue;
-        };
-        let id = id.trim();
-        if !id.is_empty() && !ids.iter().any(|seen| seen == id) {
-            ids.push(id.to_string());
-        }
-    }
-    ids
 }
 
 /// The `__SCREAMING_SNAKE__` tokens of a role prompt or template.
@@ -921,7 +906,7 @@ mod tests {
         };
         assert!(validate(&c, &crate::agent::presets(), &roles).is_ok());
         assert_eq!(
-            skill_ids("{{skill:tdd}} {{skill:tdd}} {{skill:x}} {{skill:"),
+            crate::skills::required_ids("{{skill:tdd}} {{skill:tdd}} {{skill:x}} {{skill:"),
             vec!["tdd".to_string(), "x".to_string()]
         );
     }
