@@ -5,76 +5,23 @@ use harness::config::{self, Config};
 use harness::fixture::Repo;
 use harness::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
 use std::fs;
-use std::path::PathBuf;
 
 // ------------------------------------------------------------------ the seed
 
-fn templates() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../templates")
-}
-
-fn template(name: &str, cfg: &Config) -> String {
-    let text = fs::read_to_string(templates().join(name)).expect("read template");
-    config::subst(&text, cfg)
-}
-
-/// What `harness init` (Task 13) seeds. Until it lands the tests write the
-/// documents themselves, from the same templates through the same `subst`.
-///
-/// The three placeholders under the harness directory stand in for the
-/// installed launcher and its hooks: the seeded RAILS.md names them as the
-/// enforcement the check runs, and `rail-unenforced` asks whether they exist
-/// and whether anything runs them. Without them a fresh tree reports every
-/// process rail, which is the install being absent rather than a rail being
-/// unenforced.
-fn seed(repo: &Repo, cfg: &Config) {
-    let dir = &cfg.layout.harness_dir;
-    for (name, target) in [
-        ("TASKS.md", "TASKS.md".to_string()),
-        ("PROGRESS.md", "PROGRESS.md".to_string()),
-        ("LEARNINGS.md", "LEARNINGS.md".to_string()),
-        ("DECISIONS.md", "DECISIONS.md".to_string()),
-        ("dot.check-baseline", ".check-baseline".to_string()),
-        ("AGENTS.md", cfg.layout.context_file.clone()),
-        ("SPEC.section.md", cfg.layout.spec.clone()),
-        ("RAILS.md", format!("{dir}/RAILS.md")),
-    ] {
-        repo.write(&target, &template(name, cfg));
-    }
-    repo.write(
-        &format!("{dir}/loop.sh"),
-        &format!(
-            "#!/usr/bin/env bash\n\
-             # Stands in for the installed launcher until `harness init` writes one. The rails\n\
-             # name these as the enforcement the check runs, and the probe reads this file to\n\
-             # find out: {dir}/loop.sh {dir}/hooks/check-gate.sh {dir}/hooks/probes.sh\n"
-        ),
-    );
-    repo.write(
-        &format!("{dir}/hooks/check-gate.sh"),
-        "#!/usr/bin/env bash\n",
-    );
-    repo.write(&format!("{dir}/hooks/probes.sh"), "#!/usr/bin/env bash\n");
-    repo.write(&format!("{dir}/roles/verifier.md"), "# verifier\n");
-    repo.commit_all("harness");
-}
-
-/// A repo with the documents seeded and the default configuration.
-fn seeded() -> (Repo, Config) {
-    let repo = Repo::new();
-    let cfg = config::load(&repo.root).expect("default config");
-    seed(&repo, &cfg);
-    (repo, cfg)
-}
-
-/// A repo whose `harness.toml` carries `overrides`, seeded from the merged
-/// configuration and with that file tracked.
+/// A repo with `harness init` run in it and `overrides` as its `harness.toml`,
+/// committed. The install is the seed: the documents, the rails and the roles
+/// all come from the binary, so a probe reads the tree an operator would get.
 fn seeded_with(overrides: &str) -> (Repo, Config) {
     let repo = Repo::new();
-    repo.write("harness.toml", overrides);
+    repo.init_harness(overrides);
+    repo.commit_all("harness");
     let cfg = config::load(&repo.root).expect("config");
-    seed(&repo, &cfg);
     (repo, cfg)
+}
+
+/// A repo installed with the default configuration.
+fn seeded() -> (Repo, Config) {
+    seeded_with("")
 }
 
 /// The check is stubbed green: `check-red` is asserted by Task 8's gate tests,
@@ -186,7 +133,10 @@ fn the_seeded_criterion_is_untested_and_no_task_in_flight_names_it() {
 }
 
 #[test]
-fn harness_immutable_names_loop_and_no_test_hashes_covers_it() {
+fn harness_immutable_names_the_config_and_no_test_hashes_covers_it() {
+    // `selftest.sh`'s `harness-immutable names loop.sh ...`. The rail names the
+    // file that is the gate; with the launcher a binary rather than an
+    // installed `loop.sh`, that file is `harness.toml`.
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     let found = findings(&results, "hash-uncovered");
@@ -194,7 +144,7 @@ fn harness_immutable_names_loop_and_no_test_hashes_covers_it() {
     assert!(
         found[0]
             .message
-            .contains("`harness-immutable` names .harness/loop.sh"),
+            .contains("`harness-immutable` names harness.toml"),
         "{}",
         found[0].message
     );
