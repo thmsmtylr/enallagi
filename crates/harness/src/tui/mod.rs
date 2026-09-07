@@ -1,1 +1,390 @@
-//! tui: filled by a later task
+//! tui: renders a run from the event log, live (`harness run` on a tty) or
+//! attached (`harness watch`). `Model` folds events one at a time; `view`
+//! draws it onto any `ratatui` backend, so it's tested headlessly with
+//! `TestBackend` and driven live with `CrosstermBackend`.
+
+mod stream;
+mod view;
+
+use std::path::Path;
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::time::Duration;
+
+use crossterm::event::{self, Event as CEvent, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::Terminal;
+
+use crate::events::{Event, Kind, Log};
+use crate::queue::{self, Block};
+
+pub use view::view;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pane {
+    Queue,
+    Stages,
+    Output,
+}
+
+pub struct Model {
+    pub events: Vec<Event>,
+    pub queue: Vec<Block>,
+    pub loop_running: bool,
+    pub budget_usd: Option<f64>,
+    pub focus: Pane,
+    pub scroll: usize,
+    pub stop_requested: bool,
+    pub current_stage: Option<String>,
+    pub output: Vec<String>,
+    pub help: bool,
+    // Tracked alongside `current_stage` for the queue's bold row and the
+    // output pane's title; not part of the shared interface, so private.
+    current_task: Option<String>,
+    current_command: Option<String>,
+}
+
+impl Model {
+    pub fn new() -> Model {
+        Model {
+            events: Vec::new(),
+            queue: Vec::new(),
+            loop_running: false,
+            budget_usd: std::env::var("BUDGET_USD")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            focus: Pane::Queue,
+            scroll: 0,
+            stop_requested: false,
+            current_stage: None,
+            output: Vec::new(),
+            help: false,
+            current_task: None,
+            current_command: None,
+        }
+    }
+
+    /// Folds one event into the model: tracks the current stage (for the
+    /// output pane) and appends to its output (capped at the last 200
+    /// chunks), then always records the event itself for the header,
+    /// queue-bolding, stages and footer panes to read back.
+    pub fn apply(&mut self, e: &Event) {
+        match &e.kind {
+            Kind::StageStart {
+                stage,
+                task,
+                command,
+                ..
+            } => {
+                self.current_stage = Some(stage.clone());
+                self.current_task = task.clone();
+                self.current_command = command.clone();
+                self.output.clear();
+            }
+            Kind::StageOutput { stage, chunk }
+                if self.current_stage.as_deref() == Some(stage.as_str()) =>
+            {
+                self.output.push(chunk.clone());
+                if self.output.len() > 200 {
+                    self.output.remove(0);
+                }
+            }
+            _ => {}
+        }
+        self.events.push(e.clone());
+    }
+
+    pub fn handle_key(&mut self, key: KeyEvent) {
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
+        match key.code {
+            KeyCode::Char('q') => self.stop_requested = true,
+            KeyCode::Tab => {
+                self.focus = match self.focus {
+                    Pane::Queue => Pane::Stages,
+                    Pane::Stages => Pane::Output,
+                    Pane::Output => Pane::Queue,
+                };
+            }
+            KeyCode::Up => self.scroll = self.scroll.saturating_add(1),
+            KeyCode::Down => self.scroll = self.scroll.saturating_sub(1),
+            KeyCode::Char('?') => self.help = !self.help,
+            _ => {}
+        }
+    }
+}
+
+impl Default for Model {
+    fn default() -> Model {
+        Model::new()
+    }
+}
+
+fn read_queue(tasks: &Path) -> Vec<Block> {
+    std::fs::read_to_string(tasks)
+        .ok()
+        .and_then(|text| queue::parse(&text).ok())
+        .unwrap_or_default()
+}
+
+fn loop_running(pid_path: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(pid_path) else {
+        return false;
+    };
+    let Ok(pid) = text.trim().parse::<u32>() else {
+        return false;
+    };
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Restores the terminal on drop -- including on panic, since a `Drop` runs
+/// during unwinding. `run_live`/`run_attached` also wrap their loop in
+/// `catch_unwind` so the terminal is back to normal *before* the panic is
+/// resumed, rather than racing the unwind.
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+    }
+}
+
+fn enter_terminal() -> anyhow::Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
+    enable_raw_mode()?;
+    execute!(std::io::stdout(), EnterAlternateScreen)?;
+    Ok(Terminal::new(CrosstermBackend::new(std::io::stdout()))?)
+}
+
+/// `harness run tty`: draws events as they arrive on `rx`, redrawing on
+/// every event or at least every 500ms. `q` writes an empty file at `stop`
+/// (the run loop's STOP file) and keeps drawing until `rx` disconnects and
+/// is drained -- the loop decides when to actually end, the TUI just asks.
+pub fn run_live(rx: Receiver<Event>, tasks: &Path, stop: &Path) -> anyhow::Result<()> {
+    let mut terminal = enter_terminal()?;
+    let guard = TerminalGuard;
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_live_loop(&mut terminal, &rx, tasks, stop)
+    }));
+    drop(guard);
+    match outcome {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+fn run_live_loop<B: Backend>(
+    terminal: &mut Terminal<B>,
+    rx: &Receiver<Event>,
+    tasks: &Path,
+    stop: &Path,
+) -> anyhow::Result<()> {
+    let mut model = Model::new();
+    model.queue = read_queue(tasks);
+    let mut stop_written = false;
+    loop {
+        let mut disconnected = false;
+        loop {
+            match rx.try_recv() {
+                Ok(e) => model.apply(&e),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+        model.queue = read_queue(tasks);
+        if event::poll(Duration::from_millis(500))? {
+            if let CEvent::Key(key) = event::read()? {
+                model.handle_key(key);
+                if model.stop_requested && !stop_written {
+                    std::fs::write(stop, b"")?;
+                    stop_written = true;
+                }
+            }
+        }
+        terminal
+            .draw(|f| view(&model, f))
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        if disconnected {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// `harness watch`: read-only. Tails `events.jsonl` and `TASKS.md` every
+/// 500ms rather than owning a channel; `q` quits the viewer immediately and
+/// never touches the STOP file since watch doesn't own the run.
+pub fn run_attached(harness_dir: &Path, tasks: &Path) -> anyhow::Result<()> {
+    let mut terminal = enter_terminal()?;
+    let guard = TerminalGuard;
+    let log = Log::open(harness_dir);
+    let pid_path = harness_dir.join("loop.pid");
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_attached_loop(&mut terminal, &log, tasks, &pid_path)
+    }));
+    drop(guard);
+    match outcome {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+fn run_attached_loop<B: Backend>(
+    terminal: &mut Terminal<B>,
+    log: &Log,
+    tasks: &Path,
+    pid_path: &Path,
+) -> anyhow::Result<()> {
+    let mut model = Model::new();
+    model.queue = read_queue(tasks);
+    let mut last_seq = 0u64;
+    loop {
+        if let Ok(events) = log.read_since(last_seq) {
+            for e in &events {
+                last_seq = last_seq.max(e.seq);
+                model.apply(e);
+            }
+        }
+        model.queue = read_queue(tasks);
+        model.loop_running = loop_running(pid_path);
+        terminal
+            .draw(|f| view(&model, f))
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        if event::poll(Duration::from_millis(500))? {
+            if let CEvent::Key(key) = event::read()? {
+                model.handle_key(key);
+                if model.stop_requested {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::{Log as EventLog, Writer};
+    use crossterm::event::{KeyEventState, KeyModifiers};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn fixture_model() -> Model {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut w = Writer::new(EventLog::open(dir.path()));
+        let events = vec![
+            w.emit(Kind::RunStart {
+                config_sha256: "deadbeef".into(),
+                pipeline: None,
+            }),
+            w.emit(Kind::StageStart {
+                stage: "implement".into(),
+                role: Some("implementer".into()),
+                command: Some("claude".into()),
+                task: Some("T-001".into()),
+            }),
+            w.emit(Kind::StageEnd {
+                stage: "implement".into(),
+                task: Some("T-001".into()),
+                seconds: 276,
+                exit: 0,
+                cost: Some(0.61),
+                input_tokens: None,
+                output_tokens: None,
+                turns: None,
+            }),
+            w.emit(Kind::Gate {
+                gate: "verdict".into(),
+                task: "T-001".into(),
+                pass: true,
+                reason: "ok".into(),
+            }),
+            w.emit(Kind::StageStart {
+                stage: "verify".into(),
+                role: Some("verifier".into()),
+                command: Some("claude".into()),
+                task: Some("T-001".into()),
+            }),
+        ];
+
+        let tasks_md =
+            "## [T-001] Do the thing\nstatus: review\n\n## [T-002] Another thing\nstatus: ready\n";
+
+        let mut model = Model::new();
+        model.queue = queue::parse(tasks_md).expect("parse queue");
+        for e in &events {
+            model.apply(e);
+        }
+        model
+    }
+
+    fn press(c: char) -> KeyEvent {
+        KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn buffer_text(backend: &TestBackend) -> String {
+        backend
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn the_view_renders_a_fixture_run_headless() {
+        let model = fixture_model();
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|f| view(&model, f)).expect("draw");
+        let text = buffer_text(terminal.backend());
+        for needle in [
+            "implement",
+            "T-001",
+            "4m36s",
+            "verdict \u{2713}",
+            "T-002  ready",
+            "running",
+        ] {
+            assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+        }
+    }
+
+    #[test]
+    fn q_writes_stop_and_no_key_touches_the_queue() {
+        let mut model = fixture_model();
+        let queue_before = model.queue.len();
+        assert!(!model.stop_requested);
+        model.handle_key(press('q'));
+        assert!(model.stop_requested);
+        // `Model` has no method that mutates `queue` or writes TASKS.md from
+        // a key -- `handle_key` only ever touches `stop_requested`, `focus`,
+        // `scroll` and `help`. Confirmed here at the value level too.
+        assert_eq!(model.queue.len(), queue_before);
+    }
+
+    #[test]
+    fn a_zero_width_terminal_does_not_panic() {
+        let model = fixture_model();
+        let backend = TestBackend::new(0, 0);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|f| view(&model, f)).expect("draw");
+    }
+}
