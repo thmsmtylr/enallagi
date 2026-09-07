@@ -54,9 +54,12 @@ pub fn diff_names(root: &Path, base: &str) -> Vec<String> {
 }
 
 pub fn commit_paths(root: &Path, paths: &[&str], msg: &str) -> Result<bool, GitError> {
-    let mut a = vec!["add", "--"];
-    a.extend(paths);
-    let _ = git(root, &a);
+    // One `git add -- a b` fails as a whole when any path is missing, so a
+    // caller naming a file the repo does not have (DECISIONS.md before the
+    // first rejection) staged nothing at all and this silently no-opped.
+    for path in paths.iter().filter(|p| root.join(p).exists()) {
+        let _ = git(root, &["add", "--", path]);
+    }
     if git_ok(root, &["diff", "--cached", "--quiet"]) {
         return Ok(false);
     }
@@ -81,5 +84,13 @@ mod tests {
         assert!(commit_paths(&r.root, &["src/a.ts"], "add").unwrap());
         assert!(!commit_paths(&r.root, &["src/a.ts"], "again").unwrap());
         assert_eq!(diff_names(&r.root, "HEAD~1"), vec!["src/a.ts".to_string()]);
+    }
+
+    #[test]
+    fn a_missing_path_does_not_stop_the_others_from_being_committed() {
+        let r = Repo::new();
+        r.write("TASKS.md", "queue\n");
+        assert!(commit_paths(&r.root, &["TASKS.md", "DECISIONS.md"], "queue").unwrap());
+        assert_eq!(diff_names(&r.root, "HEAD~1"), vec!["TASKS.md".to_string()]);
     }
 }

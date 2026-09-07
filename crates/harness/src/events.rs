@@ -178,12 +178,17 @@ impl Log {
     }
 }
 
+/// A live listener on the writer. It is called from inside `emit`, so a stage's
+/// output reaches it while the agent is still running rather than after it.
+pub type Sink = Box<dyn FnMut(&Event) + Send>;
+
 pub struct Writer {
     pub log: Log,
     pub run: String,
     pub iter: u32,
     seq: u64,
     last_error: Option<String>,
+    sink: Option<Sink>,
 }
 
 impl Writer {
@@ -198,7 +203,14 @@ impl Writer {
             iter: 0,
             seq: 0,
             last_error: None,
+            sink: None,
         }
+    }
+
+    /// Everything this writer emits from here on also goes to `sink`, in order,
+    /// as it happens. One listener: the run has one caller.
+    pub fn set_sink(&mut self, sink: Sink) {
+        self.sink = Some(sink);
     }
 
     pub fn emit(&mut self, kind: Kind) -> Event {
@@ -215,6 +227,9 @@ impl Writer {
         // in-memory `Event`; the failure is recorded in `last_error` for a
         // caller that wants to notice.
         self.last_error = self.log.append(&event).err().map(|err| err.to_string());
+        if let Some(sink) = &mut self.sink {
+            sink(&event);
+        }
         event
     }
 
