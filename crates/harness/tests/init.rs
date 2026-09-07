@@ -3,6 +3,7 @@
 
 use harness::fixture::Repo;
 use harness::init::{self, InitOpts, InitReport};
+use harness::probes::{self, CheckOutcome, Finding, ProbeCtx, ProbeResult};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -23,6 +24,29 @@ fn adapter(name: &str) -> InitOpts {
 
 fn read(repo: &Repo, rel: &str) -> String {
     fs::read_to_string(repo.root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
+}
+
+/// What `install-stale` says about this tree.
+fn stale(repo: &Repo) -> Vec<Finding> {
+    let cfg = harness::config::load(&repo.root).expect("config");
+    let check = CheckOutcome {
+        ran: true,
+        red: false,
+        output: String::new(),
+    };
+    let ctx = ProbeCtx {
+        root: &repo.root,
+        cfg: &cfg,
+        check: Some(&check),
+        driver: false,
+    };
+    match probes::run_all(&ctx, &["install-stale".to_string()])
+        .into_iter()
+        .find(|(name, _)| name == "install-stale")
+    {
+        Some((_, ProbeResult::Count(found))) => found,
+        other => panic!("install-stale did not report a count: {other:?}"),
+    }
 }
 
 /// Every file under `root` except git's own, relative to it.
@@ -188,6 +212,43 @@ fn the_context_file_is_resynced_to_the_configured_check() {
     assert!(!context.contains("`bun run check`"));
 }
 
+// ----------------------------------------------------- selftest.sh:1179-1225
+
+#[test]
+fn an_installed_file_that_drifted_from_its_source_is_reported() {
+    let repo = Repo::new();
+    install(&repo);
+    // 0 on the freshly installed tree is what stops the probe being a permanent
+    // finding nobody reads
+    assert_eq!(stale(&repo), Vec::new());
+
+    // one installed file edited and another deleted; the two FINDINGs are what
+    // prove it reports the file that drifted rather than a count
+    repo.write(".harness/roles/scout.md", "# not what init wrote\n");
+    fs::remove_file(repo.root.join(".harness/roles/verifier.md")).expect("rm");
+    let found = stale(&repo);
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(
+        found.iter().any(|f| f.path == ".harness/roles/scout.md"
+            && f.message.contains("differs from the source")),
+        "{found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|f| f.path == ".harness/roles/verifier.md"
+                && f.message.contains("does not have it")),
+        "{found:?}"
+    );
+
+    // a document the project has edited is not drift: seed never overwrites one
+    repo.write("TASKS.md", "# my own queue\n");
+    assert_eq!(stale(&repo).len(), 2);
+
+    install(&repo);
+    assert_eq!(stale(&repo), Vec::new());
+}
+
 // ------------------------------------------------------------- migration
 
 #[test]
@@ -232,6 +293,7 @@ fn the_claude_adapter_writes_agents_and_merges_settings() {
       { "matcher": "Edit", "hooks": [ { "type": "command", "command": "./theirs.sh" } ] }
     ]
   },
+  "permissions": { "deny": [ "Bash(sudo:*)" ] },
   "model": "opus"
 }
 "#,
@@ -272,6 +334,10 @@ fn the_claude_adapter_writes_agents_and_merges_settings() {
         text.contains("Bash(git push:*)"),
         "the deny rules were not added"
     );
+    assert!(
+        text.contains("Bash(sudo:*)"),
+        "a deny rule of theirs was dropped"
+    );
 
     // and merging twice adds nothing twice
     let before = read(&repo, ".claude/settings.json");
@@ -311,6 +377,35 @@ fn the_adapter_points_its_own_instruction_file_at_the_context_file() {
         1,
         "{:?}",
         report.wrote
+    );
+}
+
+#[test]
+fn a_settings_file_that_is_not_json_is_refused() {
+    let repo = Repo::new();
+    repo.write(".claude/settings.json", "{ not json at all\n");
+    let err = init::install(&repo.root, &adapter("claude")).expect_err("invalid json");
+    assert!(
+        matches!(err, init::InitError::InvalidJson { ref path, .. } if path == ".claude/settings.json"),
+        "{err}"
+    );
+    // and it refused before writing anything
+    assert!(!repo.root.join(".claude/agents").exists());
+    assert!(!repo.root.join(".harness").exists());
+}
+
+#[test]
+fn a_preset_with_no_hooks_file_still_points_its_instruction_file_at_the_context_file() {
+    let repo = Repo::new();
+    let report = with(&repo, &adapter("omp"));
+    assert!(read(&repo, ".omp/AGENTS.md").contains("AGENTS.md"));
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.starts_with("adapter omp: no hooks file")),
+        "{:?}",
+        report.notes
     );
 }
 

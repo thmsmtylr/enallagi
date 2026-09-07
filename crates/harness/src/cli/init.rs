@@ -47,13 +47,20 @@ Next, in {root}:
   1. Edit harness.toml — 'check.command', 'layout.spec' and 'agent.preset' are the three that matter.
   2. Re-run `harness init`. Substitution is idempotent.
   3. Write your exit criteria into {spec} under the heading harness.toml names.
-  4. git add {track}
+  4. git add harness.toml{track}
      # everything this run wrote. gate_verdict counts an untracked path as work off the branch,
      # so a document left untracked here fails the first verdict.
   5. harness probe     # what the tree says about itself
   6. harness run 1     # one iteration, attended, watch it work",
         root = root.display(),
-        track = report.track.join(" "),
+        // harness.toml is named unconditionally: on a re-run it is neither
+        // written nor kept, and leaving it off the line leaves the answers
+        // untracked
+        track = report
+            .track
+            .iter()
+            .filter(|path| *path != "harness.toml")
+            .fold(String::new(), |line, path| line + " " + path),
     );
     Ok(0)
 }
