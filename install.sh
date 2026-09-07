@@ -104,6 +104,8 @@ for key, value in merged.items():
     if key in SHELL_SPLICED and ('"' in str(value) or '\n' in str(value)):
         sys.exit('harness.json: %r is spliced into a shell script, so it cannot contain a double '
                  'quote or a newline. Got: %r' % (key, value))
+    if key in ('check', 'checkForce') and not str(value).strip():
+        sys.exit('harness.json: %r is empty. The gate would run nothing and call it green.' % key)
     token = '__' + re.sub(r'(?<!^)(?=[A-Z])', '_', key).upper() + '__'
     if key == 'agentCommand':
         # Either a word list for every role, or an object keyed by role with a 'default'.
@@ -128,6 +130,10 @@ for key, value in merged.items():
         out['__AGENT_BINARY__'] = '|'.join(binaries) if binaries else 'agent'
     else:
         out[token] = json.dumps(value) if isinstance(value, (list, dict)) else str(value)
+        # __KEY_JSON__ is the same value as a JSON literal, which is also a Python literal: the
+        # Python heredocs read that form, so an apostrophe in `check` is a character, not a
+        # SyntaxError that takes all sixteen probes down with it
+        out[token[:-2] + '_JSON__'] = json.dumps(value)
 json.dump(out, sys.stdout)
 PY
 ) || exit 2
@@ -135,7 +141,14 @@ PY
 echo "installing the harness into $TARGET${DRY:+  (dry run)}"
 run mkdir -p "$TARGET/$HARNESS_DIR/hooks" "$TARGET/$HARNESS_DIR/lib" "$TARGET/$HARNESS_DIR/roles" "$TARGET/$SKILLS_DIR"
 
+TRACK="" # every top-level path this run wrote or seeded, for the `git add` at the end
+track() {
+  local rel="${1#"$TARGET"/}"
+  rel="${rel%%/*}"
+  case " $TRACK " in *" $rel "*) ;; *) TRACK="$TRACK $rel" ;; esac
+}
 place() { # $1 = source file, $2 = destination
+  track "$2"
   if [ -n "$DRY" ]; then
     say "would write: ${2#"$TARGET"/}"
     return 0
@@ -152,6 +165,7 @@ PY
   say "wrote: ${2#"$TARGET"/}"
 }
 seed() {
+  track "$2"
   [ -s "$2" ] && {
     say "kept: ${2#"$TARGET"/} (already has content)"
     return 0
@@ -180,6 +194,8 @@ run chmod +x "$TARGET/$HARNESS_DIR"/*.sh "$TARGET/$HARNESS_DIR/hooks"/*.sh "$TAR
 [ -n "$DRY" ] || {
   [ -e "$TARGET/$HARNESS_DIR/.gitignore" ] || printf 'run.log\n*.log\nlogs/\n' >"$TARGET/$HARNESS_DIR/.gitignore"
   grep -qx 'worktrees/' "$TARGET/$HARNESS_DIR/.gitignore" || printf 'worktrees/\n' >>"$TARGET/$HARNESS_DIR/.gitignore"
+  grep -qx 'loop.pid' "$TARGET/$HARNESS_DIR/.gitignore" || printf 'loop.pid\n' >>"$TARGET/$HARNESS_DIR/.gitignore"
+  grep -qx '__pycache__/' "$TARGET/$HARNESS_DIR/.gitignore" || printf '__pycache__/\n' >>"$TARGET/$HARNESS_DIR/.gitignore"
 }
 
 # Skills install per tool, not per repository (superpowers: "Installation differs by harness").
@@ -205,6 +221,23 @@ for f in "$SRC"/templates/*; do
   seed "$f" "$TARGET/$base"
 done
 seed "$SRC/templates/AGENTS.md" "$TARGET/$CONTEXT_FILE"
+# The context file is seeded on the FIRST run, when harness.json is still the defaults, so it
+# names the default check. On a re-run with a real `check`, the lines the template wrote from the
+# default are rewritten -- only those: a backticked default is the template's text, never yours.
+[ -n "$DRY" ] || [ ! -s "$TARGET/$CONTEXT_FILE" ] || python3 - "$TARGET/$CONTEXT_FILE" <<'RESYNC'
+import json, os, sys
+src, cfg = os.environ['SRC'], os.environ['CONFIG']
+d = json.load(open(os.path.join(src, 'harness.default.json')))
+c = {**d, **json.load(open(cfg))}
+path = sys.argv[1]
+text = before = open(path, encoding='utf-8').read()
+for key in ('check', 'checkForce'):
+    if c[key] != d[key]:
+        text = text.replace('`%s`' % d[key], '`%s`' % c[key])
+if text != before:
+    open(path, 'w', encoding='utf-8').write(text)
+    print('  updated: %s now names `%s`' % (os.path.basename(path), c['check']))
+RESYNC
 if [ -s "$TARGET/$SPEC_FILE" ]; then
   say "kept: $SPEC_FILE — merge $SRC/templates/SPEC.section.md into it by hand"
 else
@@ -241,7 +274,40 @@ for a in ${ADAPTERS+"${ADAPTERS[@]}"}; do
     # __HARNESS_DIR__/hooks/ for all of them and nothing tool-specific ends up outside .claude/.
     for f in "$SRC"/adapters/claude/*.sh; do place "$f" "$TARGET/$HARNESS_DIR/hooks/$(basename "$f")"; done
     run chmod +x "$TARGET/$HARNESS_DIR/hooks"/*.sh
-    seed "$SRC/adapters/claude/settings.json" "$TARGET/.claude/settings.json"
+    if [ -n "$DRY" ] || [ ! -s "$TARGET/.claude/settings.json" ]; then
+      place "$SRC/adapters/claude/settings.json" "$TARGET/.claude/settings.json"
+    else
+      # every repo already on Claude Code has one, and `seed` kept it and wired no hook at all.
+      # Hooks are added by command; a deny rule by text; anything else in the file is left alone.
+      SUBST="$SUBST" python3 - "$SRC/adapters/claude/settings.json" "$TARGET/.claude/settings.json" <<'MERGE' || exit 2
+import json, os, sys
+subs = json.loads(os.environ['SUBST'])
+ours = open(sys.argv[1], encoding='utf-8').read()
+for token, value in subs.items():
+    ours = ours.replace(token, value)
+ours = json.loads(ours)
+try:
+    theirs = json.load(open(sys.argv[2], encoding='utf-8'))
+except ValueError as why:
+    sys.exit('install: %s is not valid JSON (%s); fix it or move it aside, nothing here will guess' % (sys.argv[2], why))
+added = 0
+for event, groups in ours.get('hooks', {}).items():
+    have = theirs.setdefault('hooks', {}).setdefault(event, [])
+    known = {h.get('command') for g in have for h in g.get('hooks', [])}
+    for g in groups:
+        new = [h for h in g['hooks'] if h.get('command') not in known]
+        if new:
+            have.append({**g, 'hooks': new})
+            added += len(new)
+deny = theirs.setdefault('permissions', {}).setdefault('deny', [])
+for rule in ours.get('permissions', {}).get('deny', []):
+    if rule not in deny:
+        deny.append(rule)
+json.dump(theirs, open(sys.argv[2], 'w', encoding='utf-8'), indent=2)
+open(sys.argv[2], 'a').write('\n')
+print('  merged: .claude/settings.json (%d hook(s) added, the rest kept)' % added)
+MERGE
+    fi
     ;;
   *)
     for f in "$SRC/adapters/$a"/*.sh; do [ -e "$f" ] && place "$f" "$TARGET/$HARNESS_DIR/hooks/$(basename "$f")"; done
@@ -253,11 +319,12 @@ done
 
 # --- assert what was executed, never merely that nothing failed -------------
 if [ -z "$DRY" ]; then
-  LEFT=$(grep -rlE '__[A-Z][A-Z_]+__' "$TARGET/$HARNESS_DIR" "$TARGET/$SKILLS_DIR" "$TARGET/$CONTEXT_FILE" 2>/dev/null || true)
+  # shellcheck disable=SC2086 # $POINTERS is a space-separated list on purpose
+  LEFT=$(cd "$TARGET" && { grep -rlE '__[A-Z][A-Z_]+__' "$HARNESS_DIR" "$SKILLS_DIR" "$CONTEXT_FILE" $POINTERS 2>/dev/null || true; })
   if [ -n "$LEFT" ]; then
     echo
     echo "install FAILED: a token survived substitution, so harness.json is missing a key:" >&2
-    for f in $LEFT; do echo "  ${f#"$TARGET"/}: $(grep -ohE '__[A-Z][A-Z_]+__' "$f" | sort -u | tr '\n' ' ')" >&2; done
+    for f in $LEFT; do echo "  $f: $(grep -ohE '__[A-Z][A-Z_]+__' "$TARGET/$f" | sort -u | tr '\n' ' ')" >&2; done
     exit 2
   fi
   for f in "$TARGET/$HARNESS_DIR"/*.sh "$TARGET/$HARNESS_DIR/hooks"/*.sh "$TARGET/$HARNESS_DIR/lib"/*.sh; do
@@ -282,7 +349,9 @@ Next, in $TARGET:
   1. Edit harness.json — 'check', 'spec' and 'agentCommand' are the three that matter.
   2. Re-run this script. Substitution is idempotent.
   3. Write your exit criteria into $SPEC_FILE under the heading harness.json names.
-  4. git add $HARNESS_DIR $SKILLS_DIR harness.json $CONTEXT_FILE   # the harness is tracked, on purpose
+  4. git add harness.json$TRACK
+     # everything this run wrote. gate_verdict counts an untracked path as work off the branch,
+     # so a document left untracked here fails the first verdict.
   5. $HARNESS_DIR/hooks/probes.sh     # what the tree says about itself
   6. $HARNESS_DIR/loop.sh 1           # one iteration, attended, watch it work
 NEXT

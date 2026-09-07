@@ -109,6 +109,10 @@
   "docs": [
     ".check-baseline",
     "AGENTS.md",
+    "README.md",
+    "LICENSE",
+    "LICENCE",
+    "NOTICE",
     "BLOCKED.md",
     "CLAUDE.md",
     "DECISIONS.md",

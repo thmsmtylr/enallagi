@@ -51,11 +51,11 @@ export DRIVER DRIVER_STATUS DRIVER_LOG
 CHECK_LOG="$CHECK_LOG" CHECK_STATUS="$CHECK_STATUS" python3 - <<'PY'
 import glob, json, os, re, shutil, subprocess, sys, tempfile
 
-SRC = '__SOURCE_ROOT__'
-SPEC = '__SPEC__'
-ROWS_HEADING = '__ROWS_HEADING__'
-ROWS_END_HEADING = '__ROWS_END_HEADING__'
-ROW_COUNT_FILE = '__ROW_COUNT_FILE__'
+SRC = __SOURCE_ROOT_JSON__
+SPEC = __SPEC_JSON__
+ROWS_HEADING = __ROWS_HEADING_JSON__
+ROWS_END_HEADING = __ROWS_END_HEADING_JSON__
+ROW_COUNT_FILE = __ROW_COUNT_FILE_JSON__
 TEST_DECL = __TEST_DECL_PATTERNS__
 SOURCE_EXT = tuple(__SOURCE_EXT__)
 errors = 0
@@ -180,12 +180,12 @@ def harness_text():
 
 def rail_rows():
     rows = []
-    inside = False
+    inside = seen = False
     if not os.path.exists(RAILS_FILE):
         raise RuntimeError('%s does not exist -- the rails are unwritten, so nothing here is enforced' % RAILS_FILE)
     for index, line in enumerate(lines_of(RAILS_FILE)):
         if line.strip() == RAILS_HEADER:
-            inside = True
+            inside = seen = True
             continue
         if inside and not line.startswith('|'):
             inside = False
@@ -194,6 +194,9 @@ def rail_rows():
         cells = line.split('|')[1:-1]
         if len(cells) >= 3:
             rows.append((index + 1, cells))
+    if not seen:
+        # a renamed column read as "no rails at all", which is 0 for two probes -- zero-as-pass
+        raise RuntimeError('%s has no table headed `%s`, so no rail can be read' % (RAILS_FILE, RAILS_HEADER))
     return rows
 
 
@@ -325,11 +328,18 @@ def friction_repeat():
                 break
         else:
             groups.append((tokens, [(index + 1, text)]))
-    learned = normal(read('LEARNINGS.md')) if os.path.exists('LEARNINGS.md') else ''
+    # A rule covers a friction when most of the friction's words appear in one rule line. The
+    # grouping above is overlap, and a verbatim-substring test here meant a rule written in
+    # LEARNINGS.md's own format never silenced the probe it was written for. ponytail: containment
+    # in the rule's word set, one line at a time; a rule that paraphrases every word escapes it.
+    learned = [set(normal(l).split()) for l in lines_of('LEARNINGS.md') if l.startswith('- ')] \
+        if os.path.exists('LEARNINGS.md') else []
+    def covered(first):
+        return any(len(first & rule) / len(first) >= FRICTION_OVERLAP for rule in learned if rule)
     return [('PROGRESS.md', hits[-1][0],
              'the same friction is recorded %d times and LEARNINGS.md carries no rule for it: %s'
              % (len(hits), hits[-1][1][:90]))
-            for _, hits in groups if len(hits) > 1 and normal(hits[0][1]) not in learned]
+            for first, hits in groups if len(hits) > 1 and not covered(first)]
 
 
 def driver():
@@ -407,8 +417,8 @@ def learning_unenforced():
             for at, text in learning_entries() if not cites_something(text)]
 
 
-CHECK = '__CHECK__'
-CONTEXT_FILE = '__CONTEXT_FILE__'
+CHECK = __CHECK_JSON__
+CONTEXT_FILE = __CONTEXT_FILE_JSON__
 LEARNINGS_CAP = __LEARNINGS_CAP__
 DATED = re.compile(r'^- \[\d{4}-\d{2}-\d{2}\]')
 
