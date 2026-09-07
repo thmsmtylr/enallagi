@@ -52,9 +52,11 @@ impl Repo {
         "./src/fakecheck.sh".to_string()
     }
 
-    /// Filled in by Task 13; until then it writes only `harness.toml`.
+    /// `harness.toml` = the embedded default plus `toml_overrides`, then a full
+    /// install: the roles, the rails, the skill and the documents.
     pub fn init_harness(&self, toml_overrides: &str) {
         self.write("harness.toml", toml_overrides);
+        crate::init::install(&self.root, &crate::init::InitOpts::default()).expect("install");
     }
 
     fn write_script(&self, rel: &str, script_body: &str) {
