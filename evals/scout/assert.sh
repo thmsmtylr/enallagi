@@ -13,8 +13,10 @@ now_proposed=$(grep -c '^status: proposed' TASKS.md)
   echo "  scout promoted: ready went $before_ready -> $now_ready" >&2
   exit 1
 }
-[ -z "$(git diff --name-only HEAD -- . ':!TASKS.md')" ] || {
-  echo "  scout edited a file that is not TASKS.md: $(git diff --name-only HEAD -- . ':!TASKS.md' | tr '\n' ' ')" >&2
+# `git status`, never `git diff HEAD`: a diff against HEAD is blind to a NEW file, and a scout that
+# implements the fix it found writes new files
+[ -z "$(git status --porcelain -- . ':!TASKS.md')" ] || {
+  echo "  scout touched a file that is not TASKS.md: $(git status --porcelain -- . ':!TASKS.md' | tr '\n' ' ')" >&2
   exit 1
 }
 exit 0
