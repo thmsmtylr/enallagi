@@ -13,3 +13,4 @@ criteria:
   - the check runs faster
 notes: proposed without a probe line.
 BLOCK
+git add TASKS.md && git commit -qm 'eval: one unanchored proposal' >/dev/null

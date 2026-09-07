@@ -70,6 +70,12 @@ fi
 
 NAMES=("$@")
 [ "$#" -eq 0 ] && while IFS= read -r d; do NAMES+=("$(basename "$d")"); done < <(find "$PKG/evals" -mindepth 1 -maxdepth 1 -type d | sort)
+[ "${#NAMES[@]}" -gt 0 ] || {
+  # a fresh install has this runner and no evals: exit 0 here read as "every eval passed"
+  echo "evals: nothing under $PKG/evals to run. An eval is a directory with setup.sh, prompt.txt and assert.sh." >&2
+  echo "evals: refusing to report a result for something that was never run." >&2
+  exit 2
+}
 
 run_one() { # $1 = eval name, $2 = "ablate" to remove the rule from the fixture first
   local name="$1" mode="${2:-}" dir
@@ -80,14 +86,17 @@ run_one() { # $1 = eval name, $2 = "ablate" to remove the rule from the fixture 
     mkdir -p src && echo 'export const x = 1' >src/schema.ts
     git add -A && git commit -qm init >/dev/null
     "$PKG/install.sh" "$dir" >/dev/null 2>&1 || exit 3
-    EVAL_PKG="$PKG" bash "$PKG/evals/$name/setup.sh" || exit 3
-    # the ablation runs after setup and before the agent: the fixture is identical either way,
+    # the ablation runs before setup and before the agent: the fixture is identical either way,
     # and the only difference is whether the rule is present when the agent reads its prompt
     if [ "$mode" = "ablate" ]; then
       [ -f "$PKG/evals/$name/ablate.sh" ] || exit 3
       EVAL_PKG="$PKG" bash "$PKG/evals/$name/ablate.sh" || exit 3
     fi
+    # committed BEFORE setup.sh, so a setup that leaves work uncommitted on purpose -- the
+    # verifier's, whose whole case is a terminated lane -- is what the agent sees. A commit
+    # here after setup erased that case, and the eval passed having tested a tree it never built.
     git add -A && git commit -qm fixture >/dev/null
+    EVAL_PKG="$PKG" bash "$PKG/evals/$name/setup.sh" || exit 3
 
     prompt=$(cat "$PKG/evals/$name/prompt.txt")
     cmd=()
@@ -96,7 +105,8 @@ run_one() { # $1 = eval name, $2 = "ablate" to remove the rule from the fixture 
       word="${word//\{turns\}/40}"
       cmd+=("$word")
     done
-    "${cmd[@]}" >/dev/null 2>&1
+    # an agent that did not run is not a role that disobeyed: 4, reported as ERROR, never FAIL
+    "${cmd[@]}" >/dev/null 2>&1 || exit 4
 
     bash "$PKG/evals/$name/assert.sh"
   )
@@ -115,6 +125,10 @@ report() { # $1 = name, $2 = exit status. Returns 0 when the eval passed.
     echo "EVAL $1 ERROR (the fixture could not be built — nothing was measured)"
     return 2
     ;;
+  4)
+    echo "EVAL $1 ERROR (the agent exited non-zero — nothing was measured)"
+    return 2
+    ;;
   *)
     echo "EVAL $1 FAIL"
     return 1
@@ -131,6 +145,10 @@ if [ -n "$GATE" ]; then
   run_one "$GATE"
   with=$?
   report "$GATE" "$with" >/dev/null
+  [ "$with" -eq 3 ] || [ "$with" -eq 4 ] && {
+    echo "GATE $GATE REJECT the fixture could not be built or the agent did not run ($with), so nothing was measured"
+    exit 1
+  }
   [ "$with" -eq 0 ] || {
     echo "GATE $GATE REJECT the rule does not fix the case it came from (its eval fails with the rule in place)"
     exit 1
@@ -138,8 +156,8 @@ if [ -n "$GATE" ]; then
 
   run_one "$GATE" ablate
   without=$?
-  [ "$without" -eq 3 ] && {
-    echo "GATE $GATE REJECT the ablated fixture could not be built, so nothing was measured"
+  [ "$without" -eq 3 ] || [ "$without" -eq 4 ] && {
+    echo "GATE $GATE REJECT the ablated arm could not be built or its agent did not run ($without), so nothing was measured"
     exit 1
   }
   [ "$without" -eq 0 ] && {
