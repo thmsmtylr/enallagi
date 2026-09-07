@@ -13,6 +13,15 @@ use crate::agent::{Presets, TurnCap};
 /// The default answers, embedded so a fresh repo needs no file.
 pub const DEFAULT_TOML: &str = include_str!("../harness.default.toml");
 
+/// The roles a stage can name, and so the only keys `[agent.<role>]` accepts.
+pub const ROLE_NAMES: &[&str] = &[
+    "scout",
+    "adjudicator",
+    "implementer",
+    "verifier",
+    "researcher",
+];
+
 /// Post-stage gates, by name. A `stage.post` entry outside this list is refused.
 pub const GATE_NAMES: &[&str] = &[
     "implementer-not-done",
@@ -55,12 +64,18 @@ pub enum ConfigError {
     CustomWithoutCommand(String),
     #[error("check.command is empty")]
     EmptyCheck,
+    #[error("[agent.{role}] is not a role ({})", ROLE_NAMES.join(", "))]
+    UnknownRole { role: String },
+    #[error("two [[stage]] tables are both named {0}")]
+    DuplicateStage(String),
+    #[error("two [[skill]] tables both have id {0}")]
+    DuplicateSkill(String),
     #[error("stage {stage}: timeout `{value}` is not <n>s, <n>m or <n>h")]
     BadTimeout { stage: String, value: String },
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub agent: AgentConfig,
     pub check: CheckConfig,
@@ -78,12 +93,15 @@ pub struct AgentConfig {
     pub model: Option<String>,
     pub usage: Option<UsagePaths>,
     pub rate_limit_pattern: String,
-    /// Per-role overrides, keyed by role name.
+    /// Per-role overrides: any other key of `[agent]` is `[agent.<role>]`.
+    /// Flattened, so `deny_unknown_fields` cannot also apply here; `validate`
+    /// refuses a key that is not a role instead.
+    #[serde(flatten)]
     pub roles: BTreeMap<String, AgentOverride>,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AgentOverride {
     pub preset: Option<String>,
     pub command: Option<Vec<String>>,
@@ -92,7 +110,7 @@ pub struct AgentOverride {
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CheckConfig {
     pub command: String,
     /// The check with its cache defeated. Follows `command` unless pinned.
@@ -101,7 +119,7 @@ pub struct CheckConfig {
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Layout {
     pub harness_dir: String,
     /// None means the agent preset's own skills directory.
@@ -128,7 +146,7 @@ pub struct Layout {
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Pipeline {
     pub name: String,
     pub when: String,
@@ -137,7 +155,7 @@ pub struct Pipeline {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Stage {
     pub name: String,
     pub role: Option<String>,
@@ -173,20 +191,25 @@ impl Stage {
             stage: self.name.clone(),
             value: value.to_string(),
         };
-        let (digits, unit) = value.split_at(value.len().saturating_sub(1));
-        let scale = match unit {
-            "s" => 1,
-            "m" => 60,
-            "h" => 3600,
+        // char, not byte: `30м` (Cyrillic) must be refused, not split mid-scalar.
+        let unit = value.chars().last().ok_or_else(bad)?;
+        let scale: u64 = match unit {
+            's' => 1,
+            'm' => 60,
+            'h' => 3600,
             _ => return Err(bad()),
         };
+        let digits = &value[..value.len() - unit.len_utf8()];
         let n: u64 = digits.parse().map_err(|_| bad())?;
-        Ok(Some(Duration::from_secs(n * scale)))
+        // `18446744073709551615h` is a config typo, not a duration.
+        Ok(Some(Duration::from_secs(
+            n.checked_mul(scale).ok_or_else(bad)?,
+        )))
     }
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SkillDecl {
     pub id: String,
     pub source: String,
@@ -291,7 +314,20 @@ pub fn validate(
         errs.push(ConfigError::EmptyCheck);
     }
 
-    let stage_names: BTreeSet<&str> = cfg.stage.iter().map(|s| s.name.as_str()).collect();
+    // [agent.<role>] is flattened, so a misspelled role parses happily into
+    // the map and would silently never apply. Catch it here instead.
+    for role in cfg.agent.roles.keys() {
+        if !ROLE_NAMES.contains(&role.as_str()) {
+            errs.push(ConfigError::UnknownRole { role: role.clone() });
+        }
+    }
+
+    let mut stage_names: BTreeSet<&str> = BTreeSet::new();
+    for st in &cfg.stage {
+        if !stage_names.insert(st.name.as_str()) {
+            errs.push(ConfigError::DuplicateStage(st.name.clone()));
+        }
+    }
     for p in &cfg.pipeline {
         if let Err(e) = parse_when(&p.when) {
             errs.push(e);
@@ -306,7 +342,12 @@ pub fn validate(
         }
     }
 
-    let declared: BTreeSet<&str> = cfg.skill.iter().map(|s| s.id.as_str()).collect();
+    let mut declared: BTreeSet<&str> = BTreeSet::new();
+    for sk in &cfg.skill {
+        if !declared.insert(sk.id.as_str()) {
+            errs.push(ConfigError::DuplicateSkill(sk.id.clone()));
+        }
+    }
     let mut checked_roles: BTreeSet<&str> = BTreeSet::new();
 
     for st in &cfg.stage {
@@ -397,12 +438,11 @@ fn skill_ids(text: &str) -> Vec<String> {
 pub fn subst(text: &str, cfg: &Config) -> String {
     let l = &cfg.layout;
     let cap = l.learnings_cap.to_string();
-    let tokens: [(&str, &str); 13] = [
+    let mut tokens: Vec<(&str, &str)> = vec![
         ("__CHECK__", &cfg.check.command),
         ("__CHECK_FORCE__", &cfg.check.force),
         ("__SPEC__", &l.spec),
         ("__HARNESS_DIR__", &l.harness_dir),
-        ("__SKILLS_DIR__", l.skills_dir.as_deref().unwrap_or("")),
         ("__CONTEXT_FILE__", &l.context_file),
         ("__CONTRACT_FILE__", &l.contract_file),
         ("__SKILL_INVOCATION__", &l.skill_invocation),
@@ -412,6 +452,11 @@ pub fn subst(text: &str, cfg: &Config) -> String {
         ("__SOURCE_ROOT__", &l.source_root),
         ("__LEARNINGS_CAP__", &cap),
     ];
+    // Unset means the preset's own directory, which only skills::skills_dir
+    // knows. Leave the token standing rather than substituting an empty path.
+    if let Some(dir) = l.skills_dir.as_deref() {
+        tokens.push(("__SKILLS_DIR__", dir));
+    }
     tokens.iter().fold(text.to_string(), |acc, (token, value)| {
         acc.replace(token, value)
     })
@@ -480,10 +525,8 @@ pub fn migrate_json(json: &str) -> Result<(String, Vec<String>), ConfigError> {
                             if role == "default" {
                                 agent.push(format!("command = {}", scalar(argv)));
                             } else {
-                                agent_roles.push(format!(
-                                    "\n[agent.roles.{role}]\ncommand = {}",
-                                    scalar(argv)
-                                ));
+                                agent_roles
+                                    .push(format!("\n[agent.{role}]\ncommand = {}", scalar(argv)));
                             }
                         }
                     }
@@ -498,9 +541,16 @@ pub fn migrate_json(json: &str) -> Result<(String, Vec<String>), ConfigError> {
             }
             _ => {
                 let snake = snake_case(key);
-                if let Some(v) = json_to_toml(value) {
-                    layout.push(format!("{snake} = {v}"));
-                    renamed.push(format!("{key} -> layout.{snake}"));
+                let line = json_to_toml(value).map(|v| format!("{snake} = {v}"));
+                // A key with no Layout field -- rowCountFile, or anything a
+                // repo invented -- would make the migrated file unloadable now
+                // that unknown keys are refused. Report it as dropped instead.
+                match line.filter(|l| toml::from_str::<Layout>(l).is_ok()) {
+                    Some(line) => {
+                        layout.push(line);
+                        renamed.push(format!("{key} -> layout.{snake}"));
+                    }
+                    None => renamed.push(format!("{key} -> dropped, no longer used")),
                 }
             }
         }
@@ -516,7 +566,7 @@ pub fn migrate_json(json: &str) -> Result<(String, Vec<String>), ConfigError> {
         if !body.is_empty() {
             out.push_str(&format!("\n{heading}\n{}\n", body.join("\n")));
         }
-        if heading == "[agent]" {
+        if heading == "[agent.usage]" {
             for role in &agent_roles {
                 out.push_str(role);
                 out.push('\n');
@@ -791,7 +841,18 @@ mod tests {
                 Some(Duration::from_secs(secs))
             );
         }
-        for bad in ["30", "", "m", "1d", "-5s"] {
+        // A multibyte last char must not split mid-scalar, and a product that
+        // does not fit must not overflow. Both used to panic.
+        for bad in [
+            "30",
+            "",
+            "m",
+            "1d",
+            "-5s",
+            "30м",
+            "м",
+            "18446744073709551615h",
+        ] {
             st.timeout = Some(bad.into());
             assert!(st.timeout_duration().is_err(), "{bad} should not parse");
         }
@@ -867,13 +928,24 @@ mod tests {
 
     #[test]
     fn subst_covers_every_token() {
-        let c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
         let text = "__CHECK__|__CHECK_FORCE__|__SPEC__|__HARNESS_DIR__|__SKILLS_DIR__|\
                     __CONTEXT_FILE__|__CONTRACT_FILE__|__SKILL_INVOCATION__|__DRIVER_COMMAND__|\
                     __ROWS_HEADING__|__ROWS_END_HEADING__|__SOURCE_ROOT__|__LEARNINGS_CAP__";
-        let out = subst(text, &c);
-        assert!(!out.contains("__"), "{out}");
+        let mut out = subst(text, &c);
+        assert_eq!(
+            out.matches("__").count(),
+            2,
+            "only __SKILLS_DIR__ is left standing: {out}"
+        );
+        assert!(out.contains("__SKILLS_DIR__"));
         assert!(out.contains("SPEC.md") && out.contains("## 12.") && out.contains("|12"));
+
+        // Set, it substitutes like any other token.
+        c.layout.skills_dir = Some(".codex/skills".into());
+        out = subst(text, &c);
+        assert!(!out.contains("__"), "{out}");
+        assert!(out.contains(".codex/skills"));
     }
 
     /// The shipped sed expression has to produce the shipped regex.
@@ -905,6 +977,11 @@ mod tests {
             .iter()
             .any(|r| r == "learningsCap -> layout.learnings_cap"));
         assert!(!renamed.iter().any(|r| r.starts_with('_')), "{renamed:?}");
+        // Layout has no row_count_file; with unknown keys refused, migration
+        // has to drop it rather than write a file that will not load.
+        assert!(renamed
+            .iter()
+            .any(|r| r == "rowCountFile -> dropped, no longer used"));
 
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("harness.toml"), &text).unwrap();
@@ -936,11 +1013,84 @@ mod tests {
             r#"{"check":"make","agentCommand":{"default":["a","{prompt}"],"verifier":["b","{prompt}"]}}"#,
         )
         .unwrap();
+        assert!(text.contains("[agent.verifier]"), "the spec form: {text}");
+        assert!(!text.contains("[agent.roles."), "{text}");
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("harness.toml"), &text).unwrap();
         let c = load(d.path()).unwrap();
         assert_eq!(c.agent.command.as_ref().unwrap()[0], "a");
         assert_eq!(c.agent.roles["verifier"].command.as_ref().unwrap()[0], "b");
+    }
+
+    /// `[agent.<role>]` is the spec form and the only one; the named fields of
+    /// `[agent]` stay named fields beside it.
+    #[test]
+    fn a_role_table_is_a_plain_agent_subtable() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join("harness.toml"),
+            "[agent]\npreset = 'goose'\n\n[agent.usage]\ncost = 'c'\n\n\
+             [agent.verifier]\npreset = 'gemini'\nmodel = 'g'\n",
+        )
+        .unwrap();
+        let c = load(d.path()).unwrap();
+        assert_eq!(c.agent.preset, "goose");
+        assert_eq!(c.agent.rate_limit_pattern, "hit your session limit");
+        assert_eq!(c.agent.usage.as_ref().unwrap().cost.as_deref(), Some("c"));
+        assert_eq!(c.agent.roles.len(), 1);
+        assert_eq!(c.agent.roles["verifier"].preset.as_deref(), Some("gemini"));
+        assert_eq!(c.agent.roles["verifier"].model.as_deref(), Some("g"));
+        assert!(validate(&c, &crate::agent::presets(), &|_| Some(String::new())).is_ok());
+    }
+
+    #[test]
+    fn a_misspelled_role_table_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join("harness.toml"),
+            "[agent.verifer]\npreset = 'codex'\n",
+        )
+        .unwrap();
+        let c = load(d.path()).unwrap();
+        let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.to_string().contains("verifer")),
+            "{errs:?}"
+        );
+    }
+
+    /// A config that does not validate refuses to run, and a key in the wrong
+    /// table is exactly the typo that would otherwise run with a stale value.
+    #[test]
+    fn an_unknown_key_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        for text in [
+            "harness_dir = 'x'\n",                   // meant [layout]
+            "[layout]\nharnesdir = 'x'\n",           // misspelled
+            "[check]\ncomand = 'make'\n",            // misspelled
+            "[[stage]]\nname = 'x'\nturn = 10\n",    // misspelled
+            "[[skill]]\nid = 'x'\nsrc = 'y'\n",      // misspelled
+            "[agent.verifier]\npresett = 'codex'\n", // inside a role table
+            "[[pipeline]]\nname = 'x'\nwen = 'y'\n", // misspelled
+        ] {
+            std::fs::write(d.path().join("harness.toml"), text).unwrap();
+            assert!(load(d.path()).is_err(), "should be refused: {text}");
+        }
+    }
+
+    #[test]
+    fn duplicate_stage_names_and_skill_ids_are_refused() {
+        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        c.stage.push(c.stage[0].clone());
+        c.skill.push(c.skill[0].clone());
+        let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
+        let text = errs
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("both named implement"), "{text}");
+        assert!(text.contains("both have id tdd"), "{text}");
     }
 
     #[test]

@@ -7,10 +7,12 @@
 # preset is the headless invocation of YOUR coding agent, named rather than
 # spelled out: claude, codex, gemini, opencode, copilot, goose, aider, amp,
 # cursor, kimi, qwen, omp, pi, or "custom" with an explicit command list.
-# [agent.roles.<role>] overrides it per role -- scout, adjudicator,
-# implementer, verifier, researcher -- so one role can run on a different
-# model or vendor from another. Independent verification is the reason to
-# use this: a verifier on the model that wrote the code measures
+# [agent.<role>] overrides it per role -- [agent.scout], [agent.adjudicator],
+# [agent.implementer], [agent.verifier], [agent.researcher] -- each taking its
+# own preset, command, model or usage, so one role can run on a different
+# model or vendor from another. Any other key of [agent] is refused, because a
+# misspelled role would otherwise never apply. Independent verification is the
+# reason to use this: a verifier on the model that wrote the code measures
 # self-consistency.
 [agent]
 preset = "claude"
