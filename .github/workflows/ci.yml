@@ -1,10 +1,14 @@
 # The floor, on a machine that is not the author's. Two runners on purpose: macos-latest ships
 # bash 3.2 and BSD sed, ubuntu-latest ships bash 5 and GNU sed, and both parser defects this
 # package has had were that difference. The matrix is the regression test for bugs already paid for.
+# The `rust` job runs the same two-runner matrix for the crate replacing this package: its own
+# `cargo test` on both userlands, not a re-check of the shell floor. `cross-build` proves the four
+# binaries this project ships at release actually compile, cross-compiled from Linux with zig.
 #
 # Every `uses:` is pinned to a 40-character commit SHA with its tag in a trailing comment, and
 # `selftest.sh::every github action is pinned to a commit sha` fails on any that is not. The SHAs
-# were resolved on 2026-09-04 with `gh api repos/<repo>/commits/<tag> --jq .sha`.
+# were resolved on 2026-09-04 with `gh api repos/<repo>/commits/<tag> --jq .sha`, and the
+# 2026-09-08 addition (the rust and cross-build jobs) the same way.
 #
 # HARNESS_EVALS is deliberately NOT set anywhere in this file: the evals spawn a real agent, and a
 # CI job holding a model credential is the blast radius this package argues against. Those
@@ -102,6 +106,84 @@ jobs:
         env:
           HARNESS_DRIVER: '1'
         run: ./selftest.sh
+
+  # The crate's own floor: fmt, clippy at -D warnings, and its test suite, on both userlands
+  # for the same reason the `floor` job above is a matrix.
+  rust:
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+      - name: cargo clippy -D warnings
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+  # Proves the four binaries the release job ships actually compile, cross-compiled from a single
+  # ubuntu-latest runner with zig as the linker (cargo-zigbuild) rather than four separate runners.
+  # No release is cut here; the outputs are CI artifacts only, retained for inspection.
+  cross-build:
+    name: cross-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,x86_64-apple-darwin,aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: '0.13.0'
+      - name: cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
+      - name: x86_64-unknown-linux-musl
+        run: cargo zigbuild --release --target x86_64-unknown-linux-musl
+      - name: aarch64-unknown-linux-musl
+        run: cargo zigbuild --release --target aarch64-unknown-linux-musl
+      - name: x86_64-apple-darwin
+        run: cargo zigbuild --release --target x86_64-apple-darwin
+      - name: aarch64-apple-darwin
+        run: cargo zigbuild --release --target aarch64-apple-darwin
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: harness-x86_64-unknown-linux-musl
+          path: target/x86_64-unknown-linux-musl/release/harness
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: harness-aarch64-unknown-linux-musl
+          path: target/aarch64-unknown-linux-musl/release/harness
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: harness-x86_64-apple-darwin
+          path: target/x86_64-apple-darwin/release/harness
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: harness-aarch64-apple-darwin
+          path: target/aarch64-apple-darwin/release/harness
 
   # Scorecard refuses on anything but the default branch, and publishing needs an OIDC token a
   # pull_request run does not get, so this job is skipped there rather than failed.
