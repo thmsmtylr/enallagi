@@ -64,12 +64,12 @@ fn normal(text: &str) -> String {
     cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// `normal()`'s tokens, deduped, with anything under three characters
-/// dropped (the decision that goes beyond probes.sh's own `normal()`).
+/// `normal()`'s tokens, deduped via the `HashSet`. No length filter: the 0.5
+/// overlap threshold is calibrated in probes.sh against every token,
+/// including the short ones.
 fn tokens(text: &str) -> HashSet<String> {
     normal(text)
         .split_whitespace()
-        .filter(|t| t.len() >= 3)
         .map(str::to_string)
         .collect()
 }
@@ -150,16 +150,23 @@ pub fn verdict_flip(log: &Log) -> ProbeResult {
 
 /// Two rejections whose reasons are the same friction reworded: Jaccard
 /// over their normalised tokens >= 0.5, ported from probes.sh's
-/// `friction_repeat` grouping (lines 305-322).
+/// `friction_repeat` grouping (harness/hooks/probes.sh:294-344).
 pub fn rejection_repeat(log: &Log) -> ProbeResult {
     let events = match load(log) {
         Ok(e) => e,
         Err(msg) => return ProbeResult::Error(msg),
     };
-    let mut groups: Vec<(HashSet<String>, Vec<usize>, String)> = Vec::new();
+    // (normalised tokens of the first reason in the group, event indices,
+    // tasks named, that first reason's own text)
+    type Group = (HashSet<String>, Vec<usize>, Vec<String>, String);
+    let mut groups: Vec<Group> = Vec::new();
     for (i, e) in events.iter().enumerate() {
         if let Kind::TaskStatus {
-            from, to, reason, ..
+            task,
+            from,
+            to,
+            reason,
+            ..
         } = &e.kind
         {
             if from == "review" && to == "ready" {
@@ -171,22 +178,25 @@ pub fn rejection_repeat(log: &Log) -> ProbeResult {
                     .iter_mut()
                     .find(|(first, ..)| jaccard(first, &key) >= FRICTION_OVERLAP)
                 {
-                    Some((_, idxs, _)) => idxs.push(i),
-                    None => groups.push((key, vec![i], reason.clone())),
+                    Some((_, idxs, tasks, _)) => {
+                        idxs.push(i);
+                        tasks.push(task.clone());
+                    }
+                    None => groups.push((key, vec![i], vec![task.clone()], reason.clone())),
                 }
             }
         }
     }
     let mut findings = Vec::new();
-    for (_, idxs, reason) in groups {
+    for (_, idxs, tasks, reason) in groups {
         if idxs.len() >= 2 {
             findings.push(cite(
                 log,
                 &events,
                 &idxs,
                 &format!(
-                    "rejection reason repeats across {} tasks: {}",
-                    idxs.len(),
+                    "rejection reason repeats across tasks {}: {}",
+                    tasks.join(","),
                     reason
                 ),
             ));
@@ -368,7 +378,7 @@ pub fn limit_repeat(log: &Log) -> ProbeResult {
     ProbeResult::Count(findings)
 }
 
-pub fn all<'a>(log: &Log, cfg: &Config) -> Vec<(&'a str, ProbeResult)> {
+pub fn all(log: &Log, cfg: &Config) -> Vec<(&'static str, ProbeResult)> {
     vec![
         ("verdict-flip", verdict_flip(log)),
         ("rejection-repeat", rejection_repeat(log)),
@@ -440,7 +450,31 @@ mod tests {
                 assert_eq!(findings.len(), 1);
                 assert!(findings[0].message.contains("T-1"));
                 assert!(findings[0].message.contains("#1,2"));
+                // the first cited event is the log's first line.
+                assert_eq!(findings[0].line, 1);
             }
+            ProbeResult::Error(e) => panic!("expected findings, got error: {e}"),
+        }
+    }
+
+    #[test]
+    fn verdict_flip_needs_two_flips_on_the_same_task() {
+        let (dir, mut w) = writer();
+        // a single forced-back is not a repeat.
+        w.emit(status("T-1", "done", "ready", "forced back", "verdict"));
+        let log = Log::open(dir.path());
+        match verdict_flip(&log) {
+            ProbeResult::Count(findings) => assert_eq!(findings.len(), 0),
+            ProbeResult::Error(e) => panic!("expected findings, got error: {e}"),
+        }
+
+        // two different tasks flipped once each is not a repeat either.
+        let (dir2, mut w2) = writer();
+        w2.emit(status("T-1", "done", "ready", "forced back", "verdict"));
+        w2.emit(status("T-2", "done", "ready", "forced back", "verdict"));
+        let log2 = Log::open(dir2.path());
+        match verdict_flip(&log2) {
+            ProbeResult::Count(findings) => assert_eq!(findings.len(), 0),
             ProbeResult::Error(e) => panic!("expected findings, got error: {e}"),
         }
     }
@@ -472,7 +506,76 @@ mod tests {
 
         let log = Log::open(dir.path());
         match rejection_repeat(&log) {
+            ProbeResult::Count(findings) => {
+                assert_eq!(findings.len(), 1);
+                assert!(findings[0].message.contains("T-1"));
+                assert!(findings[0].message.contains("T-2"));
+                assert!(!findings[0].message.contains("T-3"));
+            }
+            ProbeResult::Error(e) => panic!("expected findings, got error: {e}"),
+        }
+    }
+
+    /// Two real friction lines from the harness's own `PROGRESS.archive.md`,
+    /// the calibration example named in probes.sh's `friction_repeat`
+    /// comment (harness/hooks/probes.sh:305-313): "SECOND occurrence..."
+    /// (:213) and "FIFTH sighting..." (:477) score exactly 0.5 Jaccard over
+    /// their full (unfiltered) token sets -- the widest pair the comment
+    /// says the threshold still separates from noise. `tokens()` must match
+    /// that number exactly, or the boundary moves.
+    #[test]
+    fn rejection_repeat_fires_at_exactly_the_half_boundary() {
+        let (dir, mut w) = writer();
+        w.emit(status(
+            "T-1",
+            "review",
+            "ready",
+            "SECOND occurrence of a probe firing on the prose that documents it \
+             the first was this",
+            "adjudicator",
+        ));
+        w.emit(status(
+            "T-2",
+            "review",
+            "ready",
+            "FIFTH sighting of a check firing on the prose that documents it \
+             and the first where the",
+            "adjudicator",
+        ));
+
+        let log = Log::open(dir.path());
+        match rejection_repeat(&log) {
             ProbeResult::Count(findings) => assert_eq!(findings.len(), 1),
+            ProbeResult::Error(e) => panic!("expected findings, got error: {e}"),
+        }
+    }
+
+    /// The comment's closest non-repeat pair (:1253/:1351, both "none new.
+    /// One thing worth the next lane's time...") scores ~0.476 -- just under
+    /// the threshold, so it must NOT group.
+    #[test]
+    fn rejection_repeat_does_not_fire_just_under_the_boundary() {
+        let (dir, mut w) = writer();
+        w.emit(status(
+            "T-1",
+            "review",
+            "ready",
+            "none new. One thing worth the next lane's time, not a rule: \
+             harness hooks probes.sh",
+            "adjudicator",
+        ));
+        w.emit(status(
+            "T-2",
+            "review",
+            "ready",
+            "none new. One thing worth the next lane's time: the selftest \
+             assertion deliberately does",
+            "adjudicator",
+        ));
+
+        let log = Log::open(dir.path());
+        match rejection_repeat(&log) {
+            ProbeResult::Count(findings) => assert_eq!(findings.len(), 0),
             ProbeResult::Error(e) => panic!("expected findings, got error: {e}"),
         }
     }
@@ -496,6 +599,26 @@ mod tests {
     }
 
     #[test]
+    fn stage_outlier_flags_cost_independently_of_seconds() {
+        let (dir, mut w) = writer();
+        for cost in [1.0, 1.1, 1.2, 5.0] {
+            w.emit(start("implement"));
+            // seconds flat: no seconds-outlier should fire alongside this.
+            w.emit(end("implement", 100, Some(cost), None));
+        }
+
+        let log = Log::open(dir.path());
+        match stage_outlier(&log) {
+            ProbeResult::Count(findings) => {
+                assert_eq!(findings.len(), 1);
+                assert!(findings[0].message.contains("cost"));
+                assert!(findings[0].message.contains('5'));
+            }
+            ProbeResult::Error(e) => panic!("expected findings, got error: {e}"),
+        }
+    }
+
+    #[test]
     fn turns_exhausted_matches_the_stage_ceiling() {
         let (dir, mut w) = writer();
         w.emit(start("implement"));
@@ -512,6 +635,28 @@ mod tests {
         };
         match turns_exhausted(&log, &cfg) {
             ProbeResult::Count(findings) => assert_eq!(findings.len(), 1),
+            ProbeResult::Error(e) => panic!("expected findings, got error: {e}"),
+        }
+    }
+
+    #[test]
+    fn turns_exhausted_does_not_fire_short_of_the_ceiling() {
+        let (dir, mut w) = writer();
+        w.emit(start("implement"));
+        // one turn short of the configured cap: the agent chose to stop.
+        w.emit(end("implement", 60, None, Some(119)));
+
+        let log = Log::open(dir.path());
+        let cfg = Config {
+            stage: vec![Stage {
+                name: "implement".into(),
+                turns: 120,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        match turns_exhausted(&log, &cfg) {
+            ProbeResult::Count(findings) => assert_eq!(findings.len(), 0),
             ProbeResult::Error(e) => panic!("expected findings, got error: {e}"),
         }
     }
