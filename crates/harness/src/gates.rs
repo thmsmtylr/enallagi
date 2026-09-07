@@ -147,9 +147,13 @@ fn force_back(
                         .push(format!("{task}: the queue was not committed: {err}"));
                 }
             }
-            Err(err) => ctx
-                .warnings
-                .push(format!("{task}: TASKS.md could not be rewritten: {err}")),
+            // The queue still says `done`, so a `task.status` here would be a status change the
+            // file does not carry. The refusal is the warning; the gate still fails.
+            Err(err) => {
+                ctx.warnings
+                    .push(format!("{task}: TASKS.md could not be rewritten: {err}"));
+                return fail(reason);
+            }
         }
     }
     ctx.events.emit(Kind::TaskStatus {
@@ -307,9 +311,24 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         // rather than lifting it -- no task names test-hashes.json on its scope line, so the file
         // came back as out_of instead.
         if let Some(key_re) = recut_keys_pattern(&f) {
-            if recut_in_scope(ctx.root, &base, &f, key_re, &pats) {
+            let keys = recut_keys(ctx.root, &base, &f, key_re);
+            if !keys.is_empty() {
+                let off: Vec<&str> = keys
+                    .iter()
+                    .filter(|k| !in_scope(k, &pats))
+                    .map(String::as_str)
+                    .collect();
+                if off.is_empty() {
+                    continue;
+                }
+                // The key is what was authorised, so the rejection names it rather than leaving
+                // the lane to diff the file itself.
+                let named = format!("{f} ({})", off.join(" "));
+                harness_hit.push(named.clone());
+                out_of.push(named);
                 continue;
             }
+            // A recut file whose keys could not be read is judged like any other path.
         }
         if is_harness_path(ctx.cfg, &f) {
             harness_hit.push(f.clone());
@@ -407,18 +426,18 @@ fn recut_keys_pattern(f: &str) -> Option<&'static str> {
     }
 }
 
-/// True when the file re-cut at least one key and every key it re-cut is on the scope line.
-/// SPEC.md §0.2 states the conditional form -- "a re-cut key that does not correspond to a file on
-/// the task's scope: line is a rejection" -- which makes one that does an ordinary event. The
-/// unconditional form deadlocked the queue: every product row's test file is hashed, so any task
-/// turning a row green had to re-cut a hash, which forced `rows: none — harness`, which forbade it
-/// from claiming the row it had just turned green.
-fn recut_in_scope(root: &Path, base: &str, file: &str, key_re: &str, pats: &[String]) -> bool {
-    let Ok(re) = regex::Regex::new(key_re) else {
-        return false;
-    };
-    let Ok(diff) = git(root, &["diff", base, "HEAD", "--", file]) else {
-        return false;
+/// The keys the file re-cut between `base` and HEAD, sorted and deduped. SPEC.md §0.2 states the
+/// conditional form -- "a re-cut key that does not correspond to a file on the task's scope: line
+/// is a rejection" -- which makes one that does an ordinary event. The unconditional form
+/// deadlocked the queue: every product row's test file is hashed, so any task turning a row green
+/// had to re-cut a hash, which forced `rows: none — harness`, which forbade it from claiming the
+/// row it had just turned green.
+fn recut_keys(root: &Path, base: &str, file: &str, key_re: &str) -> Vec<String> {
+    let (Ok(re), Ok(diff)) = (
+        regex::Regex::new(key_re),
+        git(root, &["diff", base, "HEAD", "--", file]),
+    ) else {
+        return Vec::new();
     };
     let mut keys: Vec<String> = diff
         .lines()
@@ -427,7 +446,7 @@ fn recut_in_scope(root: &Path, base: &str, file: &str, key_re: &str, pats: &[Str
         .collect();
     keys.sort();
     keys.dedup();
-    !keys.is_empty() && keys.iter().all(|k| in_scope(k, pats))
+    keys
 }
 
 /// The matcher every scope rejection turns on. `case` globs are permissive -- `*` crosses `/`
@@ -597,14 +616,14 @@ fn adjudicator_halt(ctx: &mut GateCtx) -> GateOutcome {
     }
 }
 
+/// A line beginning HALT that names a block. Both patterns are regexes: slicing the first four
+/// bytes of a line splits a multibyte character, and stage output is full of box drawing.
 fn halt_id(output: &str) -> Option<String> {
+    let starts_halt = regex::Regex::new(r"(?i)^\s*halt").ok()?;
     let task = regex::Regex::new(r"T-[0-9]+").ok()?;
     output
         .lines()
-        .filter(|l| {
-            let l = l.trim_start();
-            l.len() >= 4 && l[..4].eq_ignore_ascii_case("halt")
-        })
+        .filter(|l| starts_halt.is_match(l))
         .find_map(|l| task.find(l).map(|m| m.as_str().to_string()))
 }
 
@@ -716,6 +735,15 @@ mod tests {
 
         fn events(&self) -> Vec<Event> {
             self.writer.log.read().expect("read events")
+        }
+
+        /// What a scope rejection puts on the log.
+        fn assert_rejection_events(&self) {
+            let events = self.events();
+            assert!(events.iter().any(|e| matches!(&e.kind,
+                Kind::Gate { gate, pass, .. } if gate == "scope" && !*pass)));
+            assert!(events.iter().any(|e| matches!(&e.kind,
+                Kind::TaskStatus { to, by, .. } if to == "ready" && by == "scope")));
         }
     }
 
@@ -888,6 +916,10 @@ mod tests {
         assert!(!out.pass);
         assert!(out.reason.contains("touched the harness"), "{}", out.reason);
         assert!(env.tasks_text().contains("status: ready"));
+        assert!(env
+            .log()
+            .contains("chore(T-001): harness scope gate rejected a done verdict"));
+        env.assert_rejection_events();
     }
 
     #[test]
@@ -908,6 +940,10 @@ mod tests {
             "{}",
             out.reason
         );
+        assert!(env
+            .log()
+            .contains("chore(T-001): harness scope gate rejected a done verdict"));
+        env.assert_rejection_events();
     }
 
     #[test]
@@ -1008,6 +1044,105 @@ mod tests {
         let out = run("verdict", &mut ctx);
         assert!(!out.pass);
         assert!(env.tasks_text().contains("status: done"));
+    }
+
+    #[test]
+    fn halt_detection_survives_multibyte_output() {
+        let mut env = Env::new("exit 0\n");
+        env.stage_output = "────────\nHALT T-007 needs SPEC\n".to_string();
+        let out = run("adjudicator-halt", &mut env.ctx(None, None));
+        assert!(out.halt);
+        assert!(env.halts[0].contains("T-007"), "{}", env.halts[0]);
+
+        let mut quiet = Env::new("exit 0\n");
+        quiet.stage_output = "────────\n".to_string();
+        assert!(run("adjudicator-halt", &mut quiet.ctx(None, None)).pass);
+        assert!(quiet.halts.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_queue_it_cannot_rewrite_emits_no_status_change() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", "src/a.ts", "§11 row 1");
+        env.repo.commit_all("verdict");
+        env.repo.write("src/x.ts", "left behind");
+        let tasks = env.repo.root.join("TASKS.md");
+        std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o444))
+            .expect("chmod TASKS.md");
+
+        let out = run("verdict", &mut env.ctx(Some("T-001"), None));
+        assert!(!out.pass);
+        assert!(env.tasks_text().contains("status: done"));
+        assert!(
+            env.warnings
+                .iter()
+                .any(|w| w.contains("TASKS.md could not be rewritten")),
+            "{:?}",
+            env.warnings
+        );
+        assert!(
+            !env.events()
+                .iter()
+                .any(|e| matches!(&e.kind, Kind::TaskStatus { .. })),
+            "a status change the file does not carry was emitted"
+        );
+    }
+
+    #[test]
+    fn a_lock_recut_is_read_off_the_skill_ids() {
+        // The lock's keys are `[[skill]]` ids, not paths, so a task editing a skill names the id
+        // on its scope line beside the skill's own files.
+        let lock =
+            |id: &str| format!("version = 1\n\n[[skill]]\nid = \"{id}\"\nsha256 = \"aaa\"\n");
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", ".claude/skills/tdd/**, tdd", "§11 row 1");
+        env.repo.write("harness.lock", &lock("tdd-old"));
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write("harness.lock", &lock("tdd"));
+        env.repo.commit_all("relock");
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(
+            out.reason.contains("harness.lock (tdd-old)"),
+            "{}",
+            out.reason
+        );
+
+        let mut named = Env::new("exit 0\n");
+        named.queue("done", ".claude/skills/tdd/**, tdd, tdd-old", "§11 row 1");
+        named.repo.write("harness.lock", &lock("tdd-old"));
+        named.repo.commit_all("verdict");
+        let base = named.head();
+        named.repo.write("harness.lock", &lock("tdd"));
+        named.repo.commit_all("relock");
+        let out = run("scope", &mut named.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
+    fn force_runs_the_force_form_of_the_check() {
+        let repo = Repo::new();
+        let cmd = repo.stub_check("echo \"$1\" >> ran.txt\nexit 0\n");
+        repo.write(
+            "harness.toml",
+            &format!(
+                "[check]\ncommand = \"{cmd} plain\"\nforce = \"{cmd} forced\"\nfail_name = '\\(fail\\) (.+)$'\n"
+            ),
+        );
+        let cfg = crate::config::load(&repo.root).expect("load harness.toml");
+        check_delta(&repo.root, &cfg, true);
+        assert_eq!(
+            std::fs::read_to_string(repo.root.join("ran.txt")).expect("ran.txt"),
+            "forced\n"
+        );
+        check_delta(&repo.root, &cfg, false);
+        assert_eq!(
+            std::fs::read_to_string(repo.root.join("ran.txt")).expect("ran.txt"),
+            "forced\nplain\n"
+        );
     }
 
     #[test]
