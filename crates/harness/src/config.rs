@@ -70,6 +70,10 @@ pub enum ConfigError {
     DuplicateStage(String),
     #[error("two [[skill]] tables both have id {0}")]
     DuplicateSkill(String),
+    #[error("skill id `{0}` must match ^[a-z0-9-]+$")]
+    BadSkillId(String),
+    #[error("skill {id}: path `{path}` must be relative and free of `..`")]
+    BadSkillPath { id: String, path: String },
     #[error("stage {stage}: timeout `{value}` is not <n>s, <n>m or <n>h")]
     BadTimeout { stage: String, value: String },
 }
@@ -346,6 +350,17 @@ pub fn validate(
     for sk in &cfg.skill {
         if !declared.insert(sk.id.as_str()) {
             errs.push(ConfigError::DuplicateSkill(sk.id.clone()));
+        }
+        // Both become filesystem paths in `skills::resolve`, so they are
+        // checked here, before anything is fetched or written.
+        if !crate::skills::valid_id(&sk.id) {
+            errs.push(ConfigError::BadSkillId(sk.id.clone()));
+        }
+        if !crate::skills::valid_path(&sk.path) {
+            errs.push(ConfigError::BadSkillPath {
+                id: sk.id.clone(),
+                path: sk.path.clone(),
+            });
         }
     }
     let mut checked_roles: BTreeSet<&str> = BTreeSet::new();
@@ -628,7 +643,7 @@ fn fail_name_from_sed(sed: &str) -> Option<String> {
 /// source and rev are supplied here.
 fn skill_decl(skill: &serde_json::Value) -> String {
     let name = skill.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    let id = name.rsplit(':').next().unwrap_or(name);
+    let id = &skill_id(name);
     let (source, rev) = if id == "ponytail" {
         ("github:thmsmtylr/ponytail", "main")
     } else {
@@ -644,6 +659,25 @@ fn skill_decl(skill: &serde_json::Value) -> String {
         field("gate"),
         field("why"),
     )
+}
+
+/// The old `name` was a tool-specific reference like
+/// `superpowers:test-driven-development`. The id is its last segment, cut down
+/// to what `validate` accepts.
+fn skill_id(name: &str) -> String {
+    name.rsplit(':')
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 fn snake_case(key: &str) -> String {
@@ -745,6 +779,44 @@ mod tests {
         })
         .unwrap_err();
         assert!(errs.iter().any(|e| e.to_string().contains("nope")));
+    }
+
+    /// Both end up as filesystem paths, so a `..` in either is refused at
+    /// load rather than caught by whatever fetches next.
+    #[test]
+    fn a_skill_id_or_path_that_escapes_its_directory_is_refused() {
+        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        c.skill[0].id = "..".into();
+        c.skill[1].path = "../x".into();
+        let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
+        let text: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
+        assert!(
+            text.iter()
+                .any(|e| e.contains("skill id `..`") && e.contains("^[a-z0-9-]+$")),
+            "{text:?}"
+        );
+        assert!(
+            text.iter()
+                .any(|e| e.contains(&c.skill[1].id) && e.contains("../x")),
+            "{text:?}"
+        );
+    }
+
+    #[test]
+    fn a_migrated_skill_name_becomes_a_valid_id() {
+        assert_eq!(skill_id("Ponytail"), "ponytail");
+        assert_eq!(skill_id("b/../c"), "b----c");
+        assert!(crate::skills::valid_id(&skill_id("Weird Name_v2")));
+
+        let (t, _) = migrate_json(
+            r#"{"skills":[{"name":"superpowers:test-driven-development","gate":"none","why":"w"}]}"#,
+        )
+        .unwrap();
+        assert!(t.contains("id = \"test-driven-development\""), "{t}");
+        assert!(
+            t.contains("path = \"skills/test-driven-development\""),
+            "{t}"
+        );
     }
 
     #[test]
