@@ -1,10 +1,26 @@
-#[allow(dead_code)]
+use crate::{eval, git};
+use std::path::PathBuf;
+
 pub struct Args {
     pub gate: Option<String>,
     pub names: Vec<String>,
 }
 
-pub fn run(_args: &Args) -> anyhow::Result<i32> {
-    eprintln!("harness: eval not implemented");
-    Ok(2)
+pub fn run(args: &Args) -> anyhow::Result<i32> {
+    let cwd = std::env::current_dir()?;
+    let root = match git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
+        Ok(top) => PathBuf::from(top),
+        Err(_) => cwd,
+    };
+
+    let outcome = match &args.gate {
+        Some(name) => eval::gate(&root, name, None),
+        None => eval::run(&root, &args.names, None),
+    };
+
+    Ok(match outcome {
+        Ok(true) => 0,
+        Ok(false) => 1,
+        Err(_) => 2,
+    })
 }
