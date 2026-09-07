@@ -8,7 +8,7 @@ use std::process::Command;
 
 /// A package is a directory with `evals/` under it: the install surface is
 /// the binary's own, so nothing of this checkout is copied in.
-fn package_copy() -> tempfile::TempDir {
+fn package() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     fs::create_dir_all(dir.path().join("evals")).expect("mkdir evals");
     dir
@@ -102,7 +102,7 @@ fn last_line(s: &str) -> &str {
 
 #[test]
 fn the_eval_runner_passes_a_role_that_obeys_its_rule() {
-    let pkg = package_copy();
+    let pkg = package();
     write_eval(
         pkg.path(),
         "case",
@@ -125,7 +125,7 @@ fn the_eval_runner_passes_a_role_that_obeys_its_rule() {
 
 #[test]
 fn the_eval_runner_fails_a_role_that_breaks_its_rule() {
-    let pkg = package_copy();
+    let pkg = package();
     write_eval(
         pkg.path(),
         "case",
@@ -148,7 +148,7 @@ fn the_eval_runner_fails_a_role_that_breaks_its_rule() {
 
 #[test]
 fn with_no_agent_configured_the_evals_refuse_rather_than_report() {
-    let pkg = package_copy();
+    let pkg = package();
     write_eval(pkg.path(), "case", "do the thing", "true", "true", None);
     // A preset that resolves to nothing: agent resolution fails closed, the
     // same shape as a fresh checkout with no agentCommand configured.
@@ -175,8 +175,8 @@ fn with_no_agent_configured_the_evals_refuse_rather_than_report() {
 
 #[test]
 fn a_directory_with_no_evals_is_refused() {
-    let pkg = package_copy();
-    // package_copy's evals/ is empty: a fresh install, no eval directories.
+    let pkg = package();
+    // package's evals/ is empty: a fresh install, no eval directories.
     let r = run_eval(pkg.path(), "/bin/true {prompt}", &[]);
     assert_eq!(r.code, 2, "stdout={} stderr={}", r.stdout, r.stderr);
     assert!(
@@ -188,7 +188,7 @@ fn a_directory_with_no_evals_is_refused() {
 
 #[test]
 fn a_fixture_that_cannot_be_built_is_error_never_fail() {
-    let pkg = package_copy();
+    let pkg = package();
     write_eval(pkg.path(), "case", "irrelevant", "true", "true", None);
 
     // TMPDIR names nothing: the throwaway repo can never be created, so the
@@ -244,7 +244,7 @@ fn write_gate_fixture(pkg: &Path, other_assert: &str) -> PathBuf {
 
 #[test]
 fn a_candidate_rule_that_does_not_fix_its_case_is_rejected() {
-    let pkg = package_copy();
+    let pkg = package();
     write_eval(pkg.path(), "rule", "RULE", "true", "false", Some("true\n"));
     let stub = pkg.path().join("stub.sh");
     write_exec(&stub, ": # never passes\n");
@@ -263,7 +263,7 @@ fn a_candidate_rule_that_does_not_fix_its_case_is_rejected() {
 
 #[test]
 fn a_candidate_rule_whose_case_passes_without_it_is_rejected() {
-    let pkg = package_copy();
+    let pkg = package();
     write_eval(pkg.path(), "rule", "RULE", "true", "true", Some("true\n"));
     let stub = pkg.path().join("stub.sh");
     write_exec(&stub, ": # always passes, ablated or not\n");
@@ -282,7 +282,7 @@ fn a_candidate_rule_whose_case_passes_without_it_is_rejected() {
 
 #[test]
 fn a_candidate_rule_that_regresses_another_eval_is_rejected() {
-    let pkg = package_copy();
+    let pkg = package();
     let stub = write_gate_fixture(pkg.path(), "false");
 
     let r = run_gate(
@@ -299,7 +299,7 @@ fn a_candidate_rule_that_regresses_another_eval_is_rejected() {
 
 #[test]
 fn a_candidate_rule_that_fixes_its_case_and_regresses_nothing_is_accepted() {
-    let pkg = package_copy();
+    let pkg = package();
     let stub = write_gate_fixture(pkg.path(), "true");
 
     let r = run_gate(
