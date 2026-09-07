@@ -22,6 +22,39 @@ pub struct LaneReport {
     pub left: Option<PathBuf>,
     pub reason: String,
     pub branch: String,
+    /// `run`'s own error, if it returned one. Recorded but never used to decide whether the lane
+    /// merges: only the worktree's committed state does that, the same as `LOOP_RC` in
+    /// `worktree.sh:53` never gates the merge attempt -- it only becomes the script's exit code.
+    pub run_error: Option<String>,
+}
+
+/// Creates the worktree at `lane/<base>`, retrying as `lane/<base>-1` .. `lane/<base>-10` if the
+/// branch or directory already exists (two lanes started in the same second carry the same
+/// timestamp). Returns the branch name, worktree path and its string form.
+fn create_worktree(
+    root: &Path,
+    cfg: &Config,
+    base: &str,
+) -> Result<(String, PathBuf, String), WorktreeError> {
+    let mut last_dir = PathBuf::new();
+    for n in 0..=10u32 {
+        let name = if n == 0 {
+            base.to_string()
+        } else {
+            format!("{base}-{n}")
+        };
+        let branch = format!("lane/{name}");
+        let dir = root
+            .join(&cfg.layout.harness_dir)
+            .join("worktrees")
+            .join(format!("lane-{name}"));
+        let dir_str = dir.to_string_lossy().into_owned();
+        if git::git(root, &["worktree", "add", "-b", &branch, &dir_str]).is_ok() {
+            return Ok((branch, dir, dir_str));
+        }
+        last_dir = dir;
+    }
+    Err(WorktreeError::Create(last_dir))
 }
 
 /// Run one lane in its own git worktree, branched off the current branch's HEAD. `run` is called
@@ -40,17 +73,10 @@ pub fn lane(
     }
 
     let ts = jiff::Timestamp::now().strftime("%Y%m%d-%H%M%S").to_string();
-    let branch = format!("lane/{ts}");
-    let dir = root
-        .join(&cfg.layout.harness_dir)
-        .join("worktrees")
-        .join(format!("lane-{ts}"));
-    let dir_str = dir.to_string_lossy().into_owned();
+    let base = format!("{ts}-{}", std::process::id());
+    let (branch, dir, dir_str) = create_worktree(root, cfg, &base)?;
 
-    git::git(root, &["worktree", "add", "-b", &branch, &dir_str])
-        .map_err(|_| WorktreeError::Create(dir.clone()))?;
-
-    let _ = run(&dir);
+    let run_error = run(&dir).err().map(|e| e.to_string());
 
     // Uncommitted work in the lane is the lane's to finish, not ours to throw away.
     if !git::porcelain(&dir).is_empty() {
@@ -59,6 +85,7 @@ pub fn lane(
             left: Some(dir),
             reason: format!("{branch} has uncommitted work"),
             branch,
+            run_error,
         });
     }
 
@@ -73,6 +100,7 @@ pub fn lane(
                 left: None,
                 reason,
                 branch,
+                run_error,
             })
         }
         Err(git::GitError::Failed { stderr, .. }) => Ok(LaneReport {
@@ -80,6 +108,7 @@ pub fn lane(
             left: Some(dir),
             reason: stderr,
             branch,
+            run_error,
         }),
         Err(e) => Err(e.into()),
     }
@@ -140,14 +169,21 @@ mod tests {
         let cfg = cfg(&r);
 
         let mut seen_dir: Option<PathBuf> = None;
+        let mut seen_in_worktree_list = false;
         lane(&r.root, &cfg, &mut |wt| {
             seen_dir = Some(wt.to_path_buf());
+            let listed = git::git(&r.root, &["worktree", "list"]).unwrap_or_default();
+            seen_in_worktree_list = listed.contains(&wt.to_string_lossy().into_owned());
             Ok(())
         })
         .expect("lane");
 
         let dir = seen_dir.expect("closure ran");
-        assert!(dir.starts_with(r.root.join(".harness").join("worktrees")));
+        assert!(dir.starts_with(r.root.join(&cfg.layout.harness_dir).join("worktrees")));
+        assert!(
+            seen_in_worktree_list,
+            "worktree not listed while the lane ran"
+        );
     }
 
     #[test]
@@ -212,5 +248,43 @@ mod tests {
             &["worktree", "remove", "--force", &left.to_string_lossy()],
         );
         let _ = git::git(&r.root, &["branch", "-D", &report.branch]);
+    }
+
+    #[test]
+    fn a_run_that_errors_still_merges_and_the_error_is_kept() {
+        let r = repo_with_harness_dir();
+        let cfg = cfg(&r);
+
+        let report = lane(&r.root, &cfg, &mut |_wt| {
+            anyhow::bail!("the lane's run failed")
+        })
+        .expect("lane");
+
+        assert!(report.merged, "reason: {}", report.reason);
+        assert_eq!(report.run_error.as_deref(), Some("the lane's run failed"));
+    }
+
+    #[test]
+    fn two_lanes_in_the_same_second_do_not_collide() {
+        let r = repo_with_harness_dir();
+        let cfg = cfg(&r);
+
+        let first = lane(&r.root, &cfg, &mut |wt| {
+            std::fs::write(wt.join("first.txt"), "x").expect("write");
+            commit_all_in(wt, "feat: first lane");
+            Ok(())
+        })
+        .expect("first lane");
+        let second = lane(&r.root, &cfg, &mut |wt| {
+            std::fs::write(wt.join("second.txt"), "x").expect("write");
+            commit_all_in(wt, "feat: second lane");
+            Ok(())
+        })
+        .expect("second lane");
+
+        assert!(first.merged, "reason: {}", first.reason);
+        assert!(second.merged, "reason: {}", second.reason);
+        assert!(r.root.join("first.txt").exists());
+        assert!(r.root.join("second.txt").exists());
     }
 }
