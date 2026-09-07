@@ -224,7 +224,15 @@ understands agentic software engineering well enough to be trusted with it.
 - **No parallel lanes, no daemon, no durable-execution engine, no hosting.** Recorded refusals:
   parallel lanes contradict `one-row`, files already survive a kill, the git tree is the journal,
   and hosting is a security business, not a portfolio artifact.
-- Bash and `python3` only. Nothing else may become a dependency.
+- **Stack.** One Rust binary, statically linked, targets `x86_64` and `aarch64` on `linux-musl` and
+  `apple-darwin`. Runtime dependencies: `git`, the agent CLI named in the configuration, and the check
+  command named in the configuration. Crate dependencies: `clap`, `serde`, `serde_json`, `toml`,
+  `ratatui`, `crossterm`, `globset`, `regex`, `sha2`, `jiff`, `thiserror`, `anyhow`; `tempfile` in
+  tests. Git is invoked as a subprocess, not linked. Supersedes "Bash and `python3` only"
+  (2026-09-04 to 2026-09-07): both parser defects this package paid for were bash 3.2 versus 5 and
+  BSD versus GNU sed, and a compiled binary removes that class.
+- **Vendor-neutral.** The agent is any CLI with a headless mode. No adapter is the default; the
+  Claude Code adapter is one of several, each a settings file.
 
 ## Open questions
 
