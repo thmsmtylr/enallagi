@@ -313,9 +313,16 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         if let Some(key_re) = recut_keys_pattern(&f) {
             let keys = recut_keys(ctx.root, &base, &f, key_re);
             if !keys.is_empty() {
+                // A hash key is a path already. A lock key is a skill id, and it is in scope when
+                // the directory that skill is vendored into is.
+                let skills = skills_dir_for(ctx.cfg);
+                let as_path = |k: &str| match f.as_str() {
+                    "harness.lock" => format!("{skills}/{k}/SKILL.md"),
+                    _ => k.to_string(),
+                };
                 let off: Vec<&str> = keys
                     .iter()
-                    .filter(|k| !in_scope(k, &pats))
+                    .filter(|k| !in_scope(&as_path(k), &pats))
                     .map(String::as_str)
                     .collect();
                 if off.is_empty() {
@@ -414,6 +421,23 @@ fn is_harness_path(cfg: &Config, f: &str) -> bool {
                 | "harness.lock"
                 | "test-hashes.json"
         )
+}
+
+/// Where the vendored skills live: the layout's own setting, else the agent preset's, else
+/// `<harness_dir>/skills` for a preset that inlines them.
+// ponytail: Task 8 owns `skills::skills_dir`, which resolves the same three sources from an
+// already-resolved preset. Unify there once it exists.
+pub(crate) fn skills_dir_for(cfg: &Config) -> String {
+    if let Some(dir) = &cfg.layout.skills_dir {
+        return dir.clone();
+    }
+    if let Some(dir) = crate::agent::presets()
+        .get(&cfg.agent.preset)
+        .and_then(|p| p.skills_dir.clone())
+    {
+        return dir;
+    }
+    format!("{}/skills", cfg.layout.harness_dir)
 }
 
 /// The two files whose *keys* are what a task authorises, and the pattern that reads a key off a
@@ -1092,34 +1116,44 @@ mod tests {
 
     #[test]
     fn a_lock_recut_is_read_off_the_skill_ids() {
-        // The lock's keys are `[[skill]]` ids, not paths, so a task editing a skill names the id
-        // on its scope line beside the skill's own files.
-        let lock =
-            |id: &str| format!("version = 1\n\n[[skill]]\nid = \"{id}\"\nsha256 = \"aaa\"\n");
-        let mut env = Env::new("exit 0\n");
-        env.queue("done", ".claude/skills/tdd/**, tdd", "§11 row 1");
-        env.repo.write("harness.lock", &lock("tdd-old"));
-        env.repo.commit_all("verdict");
-        let base = env.head();
-        env.repo.write("harness.lock", &lock("tdd"));
-        env.repo.commit_all("relock");
-        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        // A lock key is a skill id, and it is in scope through the directory that skill is
+        // vendored into -- `.claude/skills/<id>` under the default preset.
+        let lock = |ids: &[&str]| {
+            let mut text = "version = 1\n".to_string();
+            for id in ids {
+                text.push_str(&format!("\n[[skill]]\nid = \"{id}\"\nsha256 = \"aaa\"\n"));
+            }
+            text
+        };
+        let relock = |ids: &[&str]| {
+            let mut env = Env::new("exit 0\n");
+            env.queue("done", ".claude/skills/tdd/**", "§11 row 1");
+            env.repo.commit_all("verdict");
+            let base = env.head();
+            env.repo.write("harness.lock", &lock(ids));
+            env.repo.commit_all("relock");
+            run("scope", &mut env.ctx(Some("T-001"), Some(&base)))
+        };
+
+        assert!(relock(&["tdd"]).pass);
+        let out = relock(&["tdd", "tdd-old"]);
         assert!(!out.pass);
         assert!(
             out.reason.contains("harness.lock (tdd-old)"),
             "{}",
             out.reason
         );
+    }
 
-        let mut named = Env::new("exit 0\n");
-        named.queue("done", ".claude/skills/tdd/**, tdd, tdd-old", "§11 row 1");
-        named.repo.write("harness.lock", &lock("tdd-old"));
-        named.repo.commit_all("verdict");
-        let base = named.head();
-        named.repo.write("harness.lock", &lock("tdd"));
-        named.repo.commit_all("relock");
-        let out = run("scope", &mut named.ctx(Some("T-001"), Some(&base)));
-        assert!(out.pass, "{}", out.reason);
+    #[test]
+    fn skills_dir_falls_back_from_layout_to_preset_to_harness_dir() {
+        let mut cfg = Config::default();
+        cfg.layout.harness_dir = ".harness".to_string();
+        assert_eq!(skills_dir_for(&cfg), ".harness/skills");
+        cfg.agent.preset = "claude".to_string();
+        assert_eq!(skills_dir_for(&cfg), ".claude/skills");
+        cfg.layout.skills_dir = Some("vendor/skills".to_string());
+        assert_eq!(skills_dir_for(&cfg), "vendor/skills");
     }
 
     #[test]
