@@ -35,30 +35,48 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     // visible in the stream, so the code is read off the events rather than
     // threaded back through every return path.
     let failed = Arc::new(AtomicBool::new(false));
+    let stop = root.join("STOP");
     let outcome = if tui {
         let (tx, rx) = mpsc::channel::<Event>();
         let thread_root = root.clone();
         let flag = Arc::clone(&failed);
         let worker = std::thread::spawn(move || {
-            pipeline::run(&thread_root, &opts, &mut |e| {
+            pipeline::run(
+                &thread_root,
+                &opts,
+                Box::new(move |e| {
+                    if counts_as_failure(e) {
+                        flag.store(true, Ordering::Relaxed);
+                    }
+                    let _ = tx.send(e.clone());
+                }),
+            )
+        });
+        // The loop owns a child process. Whatever the TUI did -- clean quit or
+        // a terminal that fell over -- it is asked to stop and joined before
+        // this returns, rather than left running behind a detached thread.
+        let drawn = tui::run_live(rx, &root.join("TASKS.md"), &stop);
+        if drawn.is_err() {
+            let _ = std::fs::write(&stop, b"");
+        }
+        let ran = match worker.join() {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        };
+        drawn?;
+        ran
+    } else {
+        let flag = Arc::clone(&failed);
+        pipeline::run(
+            &root,
+            &opts,
+            Box::new(move |e| {
                 if counts_as_failure(e) {
                     flag.store(true, Ordering::Relaxed);
                 }
-                let _ = tx.send(e.clone());
-            })
-        });
-        tui::run_live(rx, &root.join("TASKS.md"), &root.join("STOP"))?;
-        match worker.join() {
-            Ok(result) => result,
-            Err(payload) => std::panic::resume_unwind(payload),
-        }
-    } else {
-        pipeline::run(&root, &opts, &mut |e| {
-            if counts_as_failure(e) {
-                failed.store(true, Ordering::Relaxed);
-            }
-            println!("{}", events::render_line(e));
-        })
+                println!("{}", events::render_line(e));
+            }),
+        )
     };
 
     match outcome {

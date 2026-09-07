@@ -526,9 +526,12 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
             return CheckReport {
                 red: true,
                 unnamed: true,
-                output: format!("check could not be run: {err}"),
+                // the one sentinel `probes` also writes, so a caller turning
+                // this report into a `CheckOutcome` can tell "never started"
+                // from "started and came back red"
+                output: format!("the check could not be run: {err}"),
                 ..CheckReport::default()
-            }
+            };
         }
     };
     let output = format!(

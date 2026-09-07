@@ -14,7 +14,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::agent::{self, Preset, StageSpawn, TurnCap};
 use crate::config::{self, Config, ConfigError, Predicate};
-use crate::events::{Event, Kind, Log, Writer};
+use crate::events::{Kind, Log, Sink, Writer};
 use crate::gates::{self, GateCtx};
 use crate::probes::{self, CheckOutcome, ProbeCtx};
 use crate::queue::{self, Queue};
@@ -30,15 +30,15 @@ and no answer will come, so never end a turn on a question -- decide and act. A 
 or agent process in ps is your PARENT process, not a competing writer: LEARNINGS.md's one-checkout-one-writer
 rule is about a second operator, and it does not apply to the process that started you.";
 
-const SCOUT: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/roles/scout.md: read that file first and follow it exactly. Run `harness probe` and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop.";
+const SCOUT: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/run/roles/scout.md: read that file first and follow it exactly. Run `harness probe` and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop.";
 
-const ADJUDICATOR: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/roles/adjudicator.md: read that file first and follow it exactly. Act on every block with 'status: proposed' in TASKS.md, in file order. Promote it to 'status: ready' with a scope and criteria an agent that has read only __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or __CONTEXT_FILE__ is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop.";
+const ADJUDICATOR: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/run/roles/adjudicator.md: read that file first and follow it exactly. Act on every block with 'status: proposed' in TASKS.md, in file order. Promote it to 'status: ready' with a scope and criteria an agent that has read only __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or __CONTEXT_FILE__ is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop.";
 
-const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __HARNESS_DIR__/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason -- and include it in that commit. An implementation left uncommitted is a lost iteration.";
+const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __HARNESS_DIR__/run/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason -- and include it in that commit. An implementation left uncommitted is a lost iteration.";
 
-const VERIFIER: &str = "Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Your role is defined in __HARNESS_DIR__/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons, and commit the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop.";
+const VERIFIER: &str = "Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Your role is defined in __HARNESS_DIR__/run/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons, and commit the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop.";
 
-const GENERIC: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/roles/__ROLE__.md: read that file first and follow it exactly. Then stop.";
+const GENERIC: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/run/roles/__ROLE__.md: read that file first and follow it exactly. Then stop.";
 
 fn prompt_for(role: &str, cfg: &Config) -> String {
     let body = match role {
@@ -71,8 +71,19 @@ fn role_source(root: &Path, cfg: &Config, role: &str) -> Option<String> {
     )
 }
 
+/// The source: what a repo edits, tokens and all.
 fn role_path(root: &Path, cfg: &Config, role: &str) -> PathBuf {
     root.join(&cfg.layout.harness_dir)
+        .join("roles")
+        .join(format!("{role}.md"))
+}
+
+/// The rendered copy the agent actually reads, under `run/` because it is
+/// output: rendering into the source would eat its own `{{skill:<id>}}` tokens
+/// and the next run would resolve nothing.
+fn rendered_role_path(root: &Path, cfg: &Config, role: &str) -> PathBuf {
+    root.join(&cfg.layout.harness_dir)
+        .join("run")
         .join("roles")
         .join(format!("{role}.md"))
 }
@@ -217,7 +228,10 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
 
 // -------------------------------------------------------------------- the run
 
-pub fn run(root: &Path, opts: &RunOpts, sink: &mut dyn FnMut(&Event)) -> anyhow::Result<Digest> {
+/// `sink` is owned rather than borrowed because it is installed on the
+/// `events::Writer` every module shares: that is the only way a `stage.output`
+/// reaches a live view while the agent is still running, instead of after it.
+pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
     let cfg = config::load(root).map_err(|e| Refused(e.to_string()))?;
     let presets = agent::presets();
     config::validate(&cfg, &presets, &|role| role_source(root, &cfg, role)).map_err(|errs| {
@@ -244,9 +258,11 @@ pub fn run(root: &Path, opts: &RunOpts, sink: &mut dyn FnMut(&Event)) -> anyhow:
         presets,
         opts,
         rate_limit,
-        writer: Writer::new(Log::open(&root.join(&cfg.layout.harness_dir))),
-        sink,
-        seen: 0,
+        writer: {
+            let mut w = Writer::new(Log::open(&root.join(&cfg.layout.harness_dir)));
+            w.set_sink(sink);
+            w
+        },
         digest: Digest::default(),
         role_seconds: BTreeMap::new(),
         stages_run: 0,
@@ -278,8 +294,6 @@ struct Loop<'a> {
     opts: &'a RunOpts,
     rate_limit: Regex,
     writer: Writer,
-    sink: &'a mut dyn FnMut(&Event),
-    seen: u64,
     digest: Digest,
     role_seconds: BTreeMap<String, u64>,
     stages_run: usize,
@@ -300,20 +314,29 @@ enum Flow {
 
 impl<'a> Loop<'a> {
     fn go(&mut self) -> anyhow::Result<Digest> {
+        self.needs_spec_at_start = self.ids_at("needs-spec");
+        self.emit(Kind::RunStart {
+            config_sha256: config_sha256(self.root),
+            pipeline: None,
+        });
+
         // `no-clarification-left`: a marker anywhere in the contract stops the
         // run before it starts. A backticked mention is prose about the marker
-        // -- the rail's own definition is one -- and a bare one is real.
+        // -- the rail's own definition is one -- and a bare one is real. It
+        // sits between run.start and run.end like every other halt, so a reader
+        // of the log sees a run that began and refused rather than no run.
         if let Some(lines) = clarifications(self.root, &self.cfg.layout.spec) {
-            let reason = format!(
-                "{} carries [NEEDS CLARIFICATION]. The loop does not start.",
-                self.cfg.layout.spec
+            self.halt(
+                "clarification",
+                format!(
+                    "{} carries [NEEDS CLARIFICATION]. The loop does not start.",
+                    self.cfg.layout.spec
+                ),
             );
-            println!("HALT: {reason}");
             for line in &lines {
                 println!("  {line}");
             }
-            self.halt("clarification", reason);
-            return Ok(std::mem::take(&mut self.digest));
+            return Ok(self.finish(0));
         }
 
         let pid_path = self
@@ -326,12 +349,6 @@ impl<'a> Loop<'a> {
         let _pid = PidFile(pid_path.clone());
         let _ = std::fs::write(&pid_path, format!("{}\n", std::process::id()));
 
-        self.needs_spec_at_start = self.ids_at("needs-spec");
-        self.emit(Kind::RunStart {
-            config_sha256: config_sha256(self.root),
-            pipeline: None,
-        });
-
         let mut iterations = 0u32;
         for i in 1..=self.opts.max_iter {
             self.writer.set_iter(i);
@@ -341,6 +358,12 @@ impl<'a> Loop<'a> {
             }
         }
 
+        Ok(self.finish(iterations))
+    }
+
+    /// `run.end`, then the digest on stdout when nothing is drawing a TUI over
+    /// it. Every exit path goes through here, so every run ends with one.
+    fn finish(&mut self, iterations: u32) -> Digest {
         self.digest.iterations = iterations;
         self.emit(Kind::RunEnd {
             halts: self.digest.halts.clone(),
@@ -352,7 +375,7 @@ impl<'a> Loop<'a> {
         if !self.opts.tui {
             print!("{}", self.digest_text());
         }
-        Ok(std::mem::take(&mut self.digest))
+        std::mem::take(&mut self.digest)
     }
 
     /// One round. `false` ends the run.
@@ -406,14 +429,22 @@ impl<'a> Loop<'a> {
             };
             match self.stage(&stage, task.clone(), iter_base.clone()) {
                 Flow::Go => {}
-                Flow::SkipRest => break,
+                // the bash `continue`: the round is over and nothing it would
+                // have counted happened, so the digest hears nothing about it
+                Flow::SkipRest => return !self.stopped,
                 Flow::Stop => return false,
             }
         }
 
         self.promotions(&ready_before, &rejections_before);
-        if let Some(task) = &task {
-            self.task_outcome(task, progress_before);
+        match &task {
+            Some(task) => self.task_outcome(task, progress_before),
+            None => {
+                if let Some(reason) = self.proposed_names_contract() {
+                    self.halt("proposed", reason);
+                    return false;
+                }
+            }
         }
         if let Some(reason) = self.new_needs_spec() {
             self.halt("needs-spec", reason);
@@ -481,12 +512,10 @@ impl<'a> Loop<'a> {
         let result = match agent::spawn(&spawn, &mut self.writer, &stop_file, &self.rate_limit) {
             Ok(result) => result,
             Err(err) => {
-                self.pump();
                 self.halt("stage", format!("{} could not start: {err}", stage.name));
                 return Flow::Stop;
             }
         };
-        self.pump();
 
         self.stages_run += 1;
         self.digest.seconds += result.seconds;
@@ -558,7 +587,6 @@ impl<'a> Loop<'a> {
                 dry_rounds: &mut self.dry_rounds,
             };
             let outcome = gates::run(gate, &mut ctx);
-            self.pump();
             self.check_log();
             if outcome.halt {
                 self.stopped = true;
@@ -611,15 +639,13 @@ impl<'a> Loop<'a> {
         ) {
             Ok(list) => list,
             Err(err) => {
-                self.pump();
                 self.halt("skill", err.to_string());
                 return Err(Flow::Stop);
             }
         };
-        self.pump();
 
         let rendered = skills::render(&source, &resolved_skills, &resolved.preset, self.cfg);
-        let path = role_path(self.root, self.cfg, role);
+        let path = rendered_role_path(self.root, self.cfg, role);
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -727,6 +753,27 @@ impl<'a> Loop<'a> {
         None
     }
 
+    /// A fix that needs the spec or the context file is neither a promotion nor
+    /// a kill. The adjudicator is told to leave the block at proposed and say
+    /// so; this catches the one that stayed proposed without saying it.
+    fn proposed_names_contract(&self) -> Option<String> {
+        let spec = &self.cfg.layout.spec;
+        let context = &self.cfg.layout.context_file;
+        self.blocks()
+            .iter()
+            .filter(|b| queue::field(b, "status").as_deref() == Some("proposed"))
+            .find(|b| {
+                let text = queue::block_text(b);
+                text.contains(spec.as_str()) || text.contains(context.as_str())
+            })
+            .map(|b| {
+                format!(
+                    "{} is still proposed and its fix names {spec} or {context}. Neither is a lane's to edit.",
+                    b.id
+                )
+            })
+    }
+
     /// Blocks already at needs-spec are the ordinary state of a queue whose
     /// contract has open questions; halting on the status itself would end
     /// every run before its first task. The halt is on a NEW one appearing.
@@ -813,7 +860,14 @@ impl<'a> Loop<'a> {
         let queue = Queue {
             path: self.root.join("TASKS.md"),
         };
-        let Ok(text) = queue.read() else { return };
+        let text = match queue.read() {
+            Ok(text) => text,
+            // a missing file reads as empty, so this is a real IO failure
+            Err(err) => {
+                self.digest.warnings.push(format!("TASKS.md: {err}"));
+                return;
+            }
+        };
         match queue::unblock(&text) {
             Ok(out) if out != text => {
                 if let Err(err) = queue.write(&out) {
@@ -857,7 +911,6 @@ impl<'a> Loop<'a> {
 
     fn emit(&mut self, kind: Kind) {
         self.writer.emit(kind);
-        self.pump();
         self.check_log();
     }
 
@@ -873,19 +926,6 @@ impl<'a> Loop<'a> {
             self.digest.halts.push(reason);
         }
         self.stopped = true;
-    }
-
-    /// Everything gates.rs, agent.rs and skills.rs emitted through the shared
-    /// writer, forwarded to the caller's sink in log order.
-    fn pump(&mut self) {
-        let run = self.writer.run.clone();
-        let Ok(events) = self.writer.log.read_since(self.seen) else {
-            return;
-        };
-        for event in events.iter().filter(|e| e.run == run) {
-            self.seen = self.seen.max(event.seq);
-            (self.sink)(event);
-        }
     }
 
     fn digest_text(&self) -> String {
@@ -1004,16 +1044,26 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate) -> bool {
 }
 
 /// The check, run once per round and handed to every probe that reads it --
-/// `run_all` would otherwise run the force check itself, once per call. A check
-/// that cannot name its failure still ran.
+/// `run_all` would otherwise run the force check itself, once per call.
+///
+/// `ran` is whether the check STARTED, never whether it could name what failed:
+/// a red check nobody can name is exactly the finding the scout came for, and
+/// reporting it as `ran: false` turns that finding into an ERROR.
 fn check_outcome(root: &Path, cfg: &Config) -> CheckOutcome {
     let report = gates::check_delta(root, cfg, true);
+    let started = !report.output.starts_with(NEVER_RAN)
+        // nested under turbo the check would recurse, so it is not run at all
+        && std::env::var_os("TURBO_HASH").is_none();
     CheckOutcome {
-        ran: !report.unnamed || !report.red,
+        ran: started,
         red: report.red,
         output: report.output,
     }
 }
+
+/// The one sentence `gates::check_delta` and `probes` both write when the check
+/// never started.
+const NEVER_RAN: &str = "the check could not be run:";
 
 fn config_sha256(root: &Path) -> String {
     let mut hasher = Sha256::new();
