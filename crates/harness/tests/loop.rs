@@ -5,6 +5,7 @@
 use harness::events::{Event, Kind};
 use harness::fixture::Repo;
 use harness::pipeline::{self, Digest, RunOpts};
+use std::sync::{Arc, Mutex};
 
 // ------------------------------------------------------------------ fixture
 
@@ -110,7 +111,8 @@ fn implementer(repo: &Repo, extra: &str) -> String {
         repo,
         "src/fakeimpl.sh",
         &format!(
-            "echo work >src/thing.ts\n\
+            "sleep 1\n\
+             echo work >src/thing.ts\n\
              {bin} tasks set-status T-001 review 'stub implemented'\n\
              echo 'iteration' >>PROGRESS.md\n\
              {extra}\
@@ -148,9 +150,25 @@ fn opts(max_iter: u32) -> RunOpts {
 }
 
 fn go(repo: &Repo, opts: &RunOpts) -> (Digest, Vec<Event>) {
-    let mut events = Vec::new();
-    let digest =
-        pipeline::run(&repo.root, opts, &mut |e| events.push(e.clone())).expect("the pipeline ran");
+    let (digest, events) = try_go(repo, opts);
+    (digest.expect("the pipeline ran"), events)
+}
+
+/// The sink is installed on the shared `events::Writer`, so what it collects is
+/// the live stream in emit order -- not a replay of the log afterwards.
+fn try_go(repo: &Repo, opts: &RunOpts) -> (anyhow::Result<Digest>, Vec<Event>) {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let digest = pipeline::run(
+        &repo.root,
+        opts,
+        Box::new(move |e| {
+            if let Ok(mut v) = sink.lock() {
+                v.push(e.clone());
+            }
+        }),
+    );
+    let events = seen.lock().map(|v| v.clone()).unwrap_or_default();
     (digest, events)
 }
 
@@ -189,7 +207,7 @@ fn the_launcher_spawns_the_configured_agent_not_a_hardcoded_one() {
 #[test]
 fn the_implement_stage_points_the_agent_at_its_role_file() {
     let r = repo(&base_toml(""), TASKS);
-    assert!(plan_of(&r).contains(".harness/roles/implementer.md"));
+    assert!(plan_of(&r).contains(".harness/run/roles/implementer.md"));
 }
 
 #[test]
@@ -280,17 +298,22 @@ fn and_the_record_carries_the_role_the_seconds_and_the_reported_cost() {
         _ => None,
     });
     assert_eq!(role.as_deref(), Some("implementer"));
-    let (cost, task) = events
+    let (cost, task, seconds) = events
         .iter()
         .find_map(|e| match &e.kind {
             Kind::StageEnd {
-                stage, cost, task, ..
-            } if stage == "implement" => Some((*cost, task.clone())),
+                stage,
+                cost,
+                task,
+                seconds,
+                ..
+            } if stage == "implement" => Some((*cost, task.clone(), *seconds)),
             _ => None,
         })
         .expect("an implement stage.end");
     assert_eq!(cost, Some(0.5));
     assert_eq!(task.as_deref(), Some("T-001"));
+    assert!((1..60).contains(&seconds), "seconds was {seconds}");
 }
 
 #[test]
@@ -345,7 +368,7 @@ fn a_config_naming_an_unknown_gate_is_refused() {
         &base_toml("").replace("\"commit-round\"", "\"nope\""),
         TASKS,
     );
-    let err = pipeline::run(&r.root, &opts(1), &mut |_| {}).expect_err("refused");
+    let err = try_go(&r, &opts(1)).0.expect_err("refused");
     assert!(err.downcast_ref::<pipeline::Refused>().is_some(), "{err}");
     assert!(err.to_string().contains("nope"), "{err}");
 }
@@ -357,7 +380,7 @@ fn a_stage_on_a_preset_with_no_turn_cap_and_no_timeout_is_refused() {
         "preset = \"aider\"",
     );
     let r = repo(&toml, TASKS);
-    let err = pipeline::run(&r.root, &opts(1), &mut |_| {}).expect_err("refused");
+    let err = try_go(&r, &opts(1)).0.expect_err("refused");
     assert!(err.downcast_ref::<pipeline::Refused>().is_some(), "{err}");
     assert!(err.to_string().contains("timeout"), "{err}");
 }
@@ -499,4 +522,170 @@ fn harness_run_exits_2_on_a_refused_config() {
         .expect("run harness run");
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("nope"));
+}
+
+// ------------------------------------------------------ roles keep their source
+
+/// A skill that resolves without a network: a `path:` source is vendored out of
+/// the repo itself.
+const SKILL: &str = r#"
+[[skill]]
+id = "tdd"
+source = "path:vendor"
+path = "tdd"
+gate = "none"
+why = "the failing test is written first"
+"#;
+
+#[test]
+fn rendering_a_role_never_eats_the_source_it_rendered_from() {
+    let toml = base_toml(SKILL).replace(
+        "stages = [\"implement\", \"verify\"]",
+        "stages = [\"implement\"]",
+    );
+    let r = repo(&toml, TASKS);
+    r.write("vendor/tdd/SKILL.md", "# tdd\n\nWrite the test first.\n");
+    r.write(
+        ".harness/roles/implementer.md",
+        "Do the work with {{skill:tdd}} in hand.\n",
+    );
+
+    for run in 1..=2 {
+        let (_, events) = go(&r, &opts(1));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(&e.kind, Kind::SkillResolved { id, .. } if id == "tdd")),
+            "run {run} resolved no skill"
+        );
+    }
+    let source = std::fs::read_to_string(r.root.join(".harness/roles/implementer.md")).unwrap();
+    assert!(source.contains("{{skill:tdd}}"), "the source was rewritten");
+    let rendered =
+        std::fs::read_to_string(r.root.join(".harness/run/roles/implementer.md")).unwrap();
+    assert!(!rendered.contains("{{skill:"), "the token was not rendered");
+}
+
+// -------------------------------------------------------------- the check ran
+
+#[test]
+fn a_red_check_that_names_nothing_is_a_finding_not_an_error() {
+    let r = repo(&base_toml(""), "");
+    script(&r, "src/fakecheck.sh", "echo boom\nexit 1\n");
+    r.write("TASKS.md", "# queue\n");
+    r.commit_all("a red check");
+
+    // an empty queue plans the discovery round, whose scout reads the probes
+    let plan = plan_of(&r);
+    assert!(plan.contains("FINDING check-red"), "{plan}");
+    assert!(!plan.contains("PROBE check-red ERROR"), "{plan}");
+}
+
+// --------------------------------------------- a proposal the contract owns
+
+#[test]
+fn a_block_left_proposed_whose_fix_names_the_contract_halts() {
+    let r = repo("", "");
+    let adjudicate = script(
+        &r,
+        "src/fakeadj.sh",
+        "printf '\\n## [T-002] the schema is wrong\\nstatus: proposed\\nprobe: spec-untested\\noutput: SPEC.md does not say which store\\n' >>TASKS.md\n",
+    );
+    let extra = format!(
+        "\n[agent.adjudicator]\ncommand = [\"{adjudicate}\", \"{{prompt}}\", \"{{turns}}\"]\n"
+    );
+    r.write("harness.toml", &base_toml(&extra));
+    r.write("TASKS.md", "# queue\n");
+    r.commit_all("stubs");
+
+    let (digest, _) = go(&r, &opts(1));
+    assert!(
+        digest
+            .halts
+            .iter()
+            .any(|h| h.contains("T-002") && h.contains("still proposed")),
+        "{:?}",
+        digest.halts
+    );
+}
+
+// ---------------------------------------------------------------- live events
+
+#[test]
+fn a_stages_output_reaches_the_sink_while_the_stage_is_still_running() {
+    let toml = base_toml("").replace(
+        "stages = [\"implement\", \"verify\"]",
+        "stages = [\"implement\"]",
+    );
+    let r = repo(&toml, TASKS);
+    script(&r, "src/fakeagent.sh", "echo hello\nsleep 2\n");
+    r.commit_all("a slow agent");
+
+    let seen: Arc<Mutex<Vec<(std::time::Instant, &'static str)>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    pipeline::run(
+        &r.root,
+        &opts(1),
+        Box::new(move |e| {
+            let name = match &e.kind {
+                Kind::StageOutput { .. } => "output",
+                Kind::StageEnd { .. } => "end",
+                _ => return,
+            };
+            if let Ok(mut v) = sink.lock() {
+                v.push((std::time::Instant::now(), name));
+            }
+        }),
+    )
+    .expect("the pipeline ran");
+
+    let seen = seen.lock().unwrap().clone();
+    let output = seen
+        .iter()
+        .find(|(_, k)| *k == "output")
+        .expect("a stage.output");
+    let end = seen.iter().find(|(_, k)| *k == "end").expect("a stage.end");
+    // post-hoc forwarding delivers both at once; a live sink sees the output a
+    // whole sleep before the stage it came from finishes.
+    assert!(
+        end.0.duration_since(output.0) > std::time::Duration::from_millis(500),
+        "output arrived only {:?} before the end",
+        end.0.duration_since(output.0)
+    );
+}
+
+// -------------------------------------------------- a gate that skips the rest
+
+#[test]
+fn the_implementer_marking_its_own_task_done_skips_the_verify_stage() {
+    let r = repo("", "");
+    let implement = implementer(
+        &r,
+        &format!(
+            "{bin} tasks set-status T-001 done 'I verified myself'\n",
+            bin = env!("CARGO_BIN_EXE_harness"),
+        ),
+    );
+    let verify = script(&r, "src/fakeverify.sh", "touch verify-ran\n");
+    r.write(
+        "harness.toml",
+        &base_toml(&role_commands(&implement, &verify)),
+    );
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(ends(&events).len(), 1, "verify may not spawn");
+    assert!(!r.root.join("verify-ran").exists());
+    assert!(
+        digest
+            .warnings
+            .iter()
+            .any(|w| w.contains("forced back to ready")),
+        "{:?}",
+        digest.warnings
+    );
+    // the bash `continue`: nothing the round would have counted happened
+    assert!(digest.landed.is_empty(), "{:?}", digest.landed);
 }
