@@ -629,10 +629,6 @@ fn no_shipped_file_carries_rhetorical_filler() {
             let Ok(text) = fs::read_to_string(&file) else {
                 continue;
             };
-            // this file names the patterns it looks for
-            if file.ends_with("floor.rs") {
-                continue;
-            }
             assert!(
                 !filler.is_match(&text),
                 "{}: {:?}",
