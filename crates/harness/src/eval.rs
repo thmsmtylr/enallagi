@@ -19,20 +19,12 @@ pub enum EvalError {
     Fixture,
 }
 
-/// Builds an eval's fixture by shelling out to the package's own
-/// `install.sh`. Stands in for `init::install` until that lands.
-fn install_fixture(pkg: &Path, root: &Path) -> Result<(), EvalError> {
-    let status = Command::new(pkg.join("install.sh"))
-        .arg(root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|_| EvalError::Fixture)?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(EvalError::Fixture)
-    }
+/// Builds an eval's fixture: the harness installed into a throwaway repo,
+/// the same install an operator gets.
+fn install_fixture(root: &Path) -> Result<(), EvalError> {
+    crate::init::install(root, &crate::init::InitOpts::default())
+        .map(|_| ())
+        .map_err(|_| EvalError::Fixture)
 }
 
 /// The outcome of one fixture run, matching `evals/run.sh`'s exit classes:
@@ -131,7 +123,7 @@ fn run_one(pkg: &Path, name: &str, agent_argv: &[String], ablate: bool) -> Outco
         Ok(r) => r,
         Err(_) => return Outcome::FixtureError,
     };
-    if install_fixture(pkg, &repo.root).is_err() {
+    if install_fixture(&repo.root).is_err() {
         return Outcome::FixtureError;
     }
 
