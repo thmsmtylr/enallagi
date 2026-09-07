@@ -279,6 +279,10 @@ pub struct StageResult {
 const POLL: Duration = Duration::from_millis(200);
 /// How long a SIGTERM gets to be honoured before the child is killed outright.
 const GRACE: Duration = Duration::from_secs(10);
+/// A reset further out than this is not a limit worth waiting for. A notice
+/// whose reset has already passed rolls to the same time tomorrow, which is
+/// how a stale line becomes a day-long sleep that only the STOP file ends.
+const MAX_WAIT: u64 = 6 * 3600;
 
 /// Runs one stage. A session limit is a notice with a reset time in it -- the
 /// words alone are not one, since a stage working on this file quotes them --
@@ -292,8 +296,11 @@ pub fn spawn(
     rate_limit: &Regex,
 ) -> Result<StageResult, AgentError> {
     let mut attempt = 0u32;
+    // One clock for the stage, not per attempt: the retries and the waits
+    // between them are time the run has spent, and this is what a seconds
+    // budget is measured against.
+    let started = Instant::now();
     loop {
-        let started = Instant::now();
         let (exit, output, timed_out) = run_once(s, events)?;
         let result = StageResult {
             exit,
@@ -308,7 +315,9 @@ pub fn spawn(
         let Some(matched) = result.output.lines().find(|l| rate_limit.is_match(l)) else {
             return Ok(result);
         };
-        let Some(sleep_seconds) = seconds_until_reset(matched, jiff::Zoned::now()) else {
+        let Some(sleep_seconds) =
+            seconds_until_reset(matched, jiff::Zoned::now()).filter(|s| *s <= MAX_WAIT)
+        else {
             return Ok(result);
         };
         events.emit(Kind::Limit {
@@ -342,13 +351,15 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         .argv
         .iter()
         .map(|word| {
-            let word = word
-                .replace("{prompt}", &s.prompt)
-                .replace("{turns}", &turns);
-            match &timeout {
+            // The prompt goes in last, one pass each: a prompt that quotes
+            // `{turns}` or `{prompt}` -- and a role prompt about this file
+            // will -- must reach the agent as the characters the role wrote.
+            let word = word.replace("{turns}", &turns);
+            let word = match &timeout {
                 Some(t) => word.replace("{timeout}", t),
                 None => word,
-            }
+            };
+            word.replace("{prompt}", &s.prompt)
         })
         .collect();
     let (program, args) = argv.split_first().ok_or(AgentError::EmptyCommand)?;
@@ -660,7 +671,7 @@ mod tests {
     fn a_stop_file_during_the_limit_wait_stops_the_run() {
         let r = crate::fixture::Repo::new();
         std::fs::write(r.root.join("STOP"), "").unwrap();
-        let argv = r.stub_agent(FRESH_NOTICE);
+        let argv = r.stub_agent(&limit_notice("1M", "+1 minute"));
         let mut w = Writer::new(Log::open(&r.root.join(".harness")));
         let err = spawn(
             &spawner(argv, &r.root),
@@ -681,21 +692,23 @@ mod tests {
         );
     }
 
-    /// A notice is only a limit while its reset is still ahead, so the stub
-    /// prints a *fresh* one on every run: a fixed timestamp would be in the
-    /// past by the second retry and roll over to the next day, which is a
-    /// real 24-hour sleep rather than a test.
-    const FRESH_NOTICE: &str = concat!(
-        "date -u -v+1M '+hit your session limit resets %I:%M%p (UTC)' 2>/dev/null",
-        " || date -u -d '+1 minute' '+hit your session limit resets %I:%M%p (UTC)'"
-    );
+    /// A stub that prints a session-limit notice whose reset is `bsd`/`gnu`
+    /// ahead, computed at run time. A notice is only a limit while its reset
+    /// is still ahead, so a fixed timestamp would be in the past by the second
+    /// retry and roll to the next day -- a real day-long sleep, not a test.
+    /// BSD `date` first, GNU second, so it runs on macOS and Linux.
+    fn limit_notice(bsd: &str, gnu: &str) -> String {
+        const FMT: &str = "'+hit your session limit resets %I:%M%p (UTC)'";
+        format!("date -u -v+{bsd} {FMT} 2>/dev/null || date -u -d '{gnu}' {FMT}")
+    }
 
     #[test]
     #[ignore = "sleeps up to four minutes waiting out two synthetic session limits"]
     fn rate_limit_is_retried_at_most_twice() {
         let r = crate::fixture::Repo::new();
         let runs = r.root.join("runs");
-        let argv = r.stub_agent(&format!("echo x >> {}; {FRESH_NOTICE}", runs.display()));
+        let notice = limit_notice("1M", "+1 minute");
+        let argv = r.stub_agent(&format!("echo x >> {}; {notice}", runs.display()));
         let mut w = Writer::new(Log::open(&r.root.join(".harness")));
         let res = spawn(
             &spawner(argv, &r.root),
@@ -706,6 +719,11 @@ mod tests {
         .unwrap();
         assert_eq!(res.exit, 0);
         assert_eq!(std::fs::read_to_string(&runs).unwrap().lines().count(), 3);
+        assert!(
+            res.seconds >= 120,
+            "seconds covers both waits, not just the last attempt: {}",
+            res.seconds
+        );
         let limits: Vec<_> = w
             .log
             .read()
@@ -717,5 +735,67 @@ mod tests {
             })
             .collect();
         assert_eq!(limits, vec![0, 1]);
+    }
+
+    #[test]
+    fn the_prompt_is_substituted_last() {
+        let r = crate::fixture::Repo::new();
+        let argv = r.stub_agent("printf '%s|%s\\n' \"$1\" \"$2\"");
+        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut s = spawner(argv, &r.root);
+        s.prompt = "see {turns} and {prompt}".into();
+        s.turns = 7;
+        let res = spawn(
+            &s,
+            &mut w,
+            &r.root.join("STOP"),
+            &Regex::new("never").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(res.output.trim(), "see {turns} and {prompt}|7");
+    }
+
+    #[test]
+    fn a_reset_more_than_six_hours_out_is_not_a_limit() {
+        let r = crate::fixture::Repo::new();
+        let argv = r.stub_agent(&limit_notice("10H", "+10 hours"));
+        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let res = spawn(
+            &spawner(argv, &r.root),
+            &mut w,
+            &r.root.join("STOP"),
+            &Regex::new("hit your session limit").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(res.exit, 0);
+        assert!(!w
+            .log
+            .read()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e.kind, Kind::Limit { .. })));
+    }
+
+    #[test]
+    fn an_override_command_keeps_the_tokens_it_spells_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = crate::config::load(dir.path()).unwrap().agent;
+        cfg.preset = "gemini".into();
+        // gemini caps turns in its own config, so the preset's own argv has no
+        // {turns} to keep -- but a command that spells one out means it.
+        cfg.command = Some(vec![
+            "mytool".into(),
+            "--turns".into(),
+            "{turns}".into(),
+            "{prompt}".into(),
+        ]);
+        let r = resolve(&cfg, "scout", &presets()).unwrap();
+        assert_eq!(r.argv[1..3], ["--turns".to_string(), "{turns}".to_string()]);
+        assert_eq!(r.preset.turn_cap, TurnCap::Flag);
+
+        cfg.command = Some(vec!["mytool".into(), "{prompt}".into()]);
+        let r = resolve(&cfg, "scout", &presets()).unwrap();
+        assert_eq!(r.argv, ["mytool".to_string(), "{prompt}".to_string()]);
+        assert_eq!(r.preset.turn_cap, TurnCap::None);
     }
 }
