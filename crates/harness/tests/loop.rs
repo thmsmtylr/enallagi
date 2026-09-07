@@ -1,0 +1,502 @@
+//! The launcher, ported from `selftest.sh:65-106` (the dry plan, the halts) and
+//! `:492-507` (the run log and the budget) with stub agents in place of a
+//! coding agent.
+
+use harness::events::{Event, Kind};
+use harness::fixture::Repo;
+use harness::pipeline::{self, Digest, RunOpts};
+
+// ------------------------------------------------------------------ fixture
+
+const TASKS: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.ts
+rows: none — harness
+status: ready
+criteria:
+  - it happens
+";
+
+/// The agent every role falls back to: it reports a cost and nothing else.
+const QUIET: &str = "echo '{\"total_cost_usd\":0.5}'\n";
+
+fn script(repo: &Repo, rel: &str, body: &str) -> String {
+    repo.write(rel, &format!("#!/usr/bin/env bash\nset -u\n{body}"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(repo.root.join(rel), std::fs::Permissions::from_mode(0o755))
+            .expect("chmod");
+    }
+    format!("./{rel}")
+}
+
+/// The full config: `[[pipeline]]` and `[[stage]]` replace the defaults whole,
+/// so every test that touches either spells out the pair it wants.
+fn base_toml(extra: &str) -> String {
+    format!(
+        r#"
+[agent]
+preset = "custom"
+command = ["./src/fakeagent.sh", "{{prompt}}", "{{turns}}"]
+
+[agent.usage]
+cost = "total_cost_usd"
+
+[check]
+command = "./src/fakecheck.sh"
+
+[[pipeline]]
+name = "task"
+when = "queue.takeable"
+stages = ["implement", "verify"]
+
+[[pipeline]]
+name = "discover"
+when = "!queue.takeable"
+stages = ["scout", "adjudicate"]
+end_after_dry_rounds = 2
+
+[[stage]]
+name = "implement"
+role = "implementer"
+turns = 5
+post = ["implementer-not-done"]
+
+[[stage]]
+name = "verify"
+role = "verifier"
+turns = 5
+post = ["commit-verdict", "verdict", "scope"]
+
+[[stage]]
+name = "scout"
+role = "scout"
+turns = 5
+
+[[stage]]
+name = "adjudicate"
+role = "adjudicator"
+turns = 5
+post = ["commit-round", "adjudicator-halt", "dry-round"]
+{extra}
+"#
+    )
+}
+
+/// A repo with the harness installed, a queue holding one takeable task, and a
+/// stub agent per role. `.harness` is ignored so the run's own writes -- the
+/// event log, the pid file, the rendered role prompts -- never dirty the tree.
+fn repo(toml: &str, tasks: &str) -> Repo {
+    let repo = Repo::new();
+    repo.write(".gitignore", ".harness/\n");
+    script(&repo, "src/fakecheck.sh", "exit 0\n");
+    script(&repo, "src/fakeagent.sh", QUIET);
+    if !tasks.is_empty() {
+        repo.write("TASKS.md", tasks);
+    }
+    repo.write("SPEC.md", "# spec\n");
+    repo.write("PROGRESS.md", "# progress\n");
+    repo.write("harness.toml", toml);
+    repo.commit_all("harness");
+    repo
+}
+
+/// The stub implementer: it does the task's work, commits it, and leaves the
+/// block at `review` -- which is the only thing the launcher requires of it.
+fn implementer(repo: &Repo, extra: &str) -> String {
+    script(
+        repo,
+        "src/fakeimpl.sh",
+        &format!(
+            "echo work >src/thing.ts\n\
+             {bin} tasks set-status T-001 review 'stub implemented'\n\
+             echo 'iteration' >>PROGRESS.md\n\
+             {extra}\
+             git add -A >/dev/null 2>&1\n\
+             git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
+             {QUIET}",
+            bin = env!("CARGO_BIN_EXE_harness"),
+        ),
+    )
+}
+
+fn verifier(repo: &Repo) -> String {
+    script(
+        repo,
+        "src/fakeverify.sh",
+        &format!(
+            "{bin} tasks set-status T-001 done 'stub verified'\n{QUIET}",
+            bin = env!("CARGO_BIN_EXE_harness"),
+        ),
+    )
+}
+
+fn role_commands(implement: &str, verify: &str) -> String {
+    format!(
+        "\n[agent.implementer]\ncommand = [\"{implement}\", \"{{prompt}}\", \"{{turns}}\"]\n\
+         \n[agent.verifier]\ncommand = [\"{verify}\", \"{{prompt}}\", \"{{turns}}\"]\n"
+    )
+}
+
+fn opts(max_iter: u32) -> RunOpts {
+    RunOpts {
+        max_iter,
+        ..RunOpts::default()
+    }
+}
+
+fn go(repo: &Repo, opts: &RunOpts) -> (Digest, Vec<Event>) {
+    let mut events = Vec::new();
+    let digest =
+        pipeline::run(&repo.root, opts, &mut |e| events.push(e.clone())).expect("the pipeline ran");
+    (digest, events)
+}
+
+fn ends(events: &[Event]) -> Vec<&Kind> {
+    events
+        .iter()
+        .map(|e| &e.kind)
+        .filter(|k| matches!(k, Kind::StageEnd { .. }))
+        .collect()
+}
+
+fn plan_of(repo: &Repo) -> String {
+    let cfg = harness::config::load(&repo.root).expect("load");
+    pipeline::plan(&repo.root, &cfg).expect("plan")
+}
+
+// ------------------------------------------------------------- the dry plan
+
+#[test]
+fn a_dry_iteration_plans_implement_and_verify() {
+    let r = repo(&base_toml(""), TASKS);
+    let plan = plan_of(&r);
+    assert!(plan.contains("DRY_RUN would spawn"), "{plan}");
+    assert!(plan.contains("implement"), "{plan}");
+    assert!(plan.contains("verify"), "{plan}");
+    // the gates each stage would run
+    assert!(plan.contains("commit-verdict"), "{plan}");
+}
+
+#[test]
+fn the_launcher_spawns_the_configured_agent_not_a_hardcoded_one() {
+    let r = repo(&base_toml(""), TASKS);
+    assert!(plan_of(&r).contains("via ./src/fakeagent.sh"));
+}
+
+#[test]
+fn the_implement_stage_points_the_agent_at_its_role_file() {
+    let r = repo(&base_toml(""), TASKS);
+    assert!(plan_of(&r).contains(".harness/roles/implementer.md"));
+}
+
+#[test]
+fn a_role_with_its_own_agent_command_is_spawned_with_it() {
+    let extra =
+        "\n[agent.verifier]\ncommand = [\"./src/fakeverifier.sh\", \"{prompt}\", \"{turns}\"]\n";
+    let r = repo(&base_toml(extra), TASKS);
+    assert!(plan_of(&r).contains("as role verifier via ./src/fakeverifier.sh"));
+}
+
+#[test]
+fn a_role_with_no_agent_command_falls_back_to_the_default() {
+    let extra =
+        "\n[agent.verifier]\ncommand = [\"./src/fakeverifier.sh\", \"{prompt}\", \"{turns}\"]\n";
+    let r = repo(&base_toml(extra), TASKS);
+    assert!(plan_of(&r).contains("as role implementer via ./src/fakeagent.sh"));
+}
+
+// ------------------------------------------------------- the clarification rail
+
+#[test]
+fn a_bare_clarification_marker_halts_the_loop() {
+    let r = repo(&base_toml(""), TASKS);
+    r.write("SPEC.md", "# spec\n\n[NEEDS CLARIFICATION] which store?\n");
+    let (digest, events) = go(&r, &opts(1));
+    assert!(
+        digest
+            .halts
+            .iter()
+            .any(|h| h.contains("[NEEDS CLARIFICATION]")),
+        "{:?}",
+        digest.halts
+    );
+    assert!(ends(&events).is_empty(), "nothing may spawn");
+}
+
+#[test]
+fn a_backticked_marker_in_the_template_does_not_halt_it() {
+    let r = repo(&base_toml(""), TASKS);
+    r.write(
+        "SPEC.md",
+        "# spec\n\nA `[NEEDS CLARIFICATION]` marker is prose about the rail.\n",
+    );
+    let (digest, _) = go(&r, &opts(1));
+    assert!(
+        !digest
+            .halts
+            .iter()
+            .any(|h| h.contains("[NEEDS CLARIFICATION]")),
+        "{:?}",
+        digest.halts
+    );
+}
+
+// ------------------------------------------------------ the log and the budget
+
+#[test]
+fn every_spawned_stage_appends_one_record_to_the_run_log() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    r.write(
+        "harness.toml",
+        &base_toml(&role_commands(&implement, &verify)),
+    );
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let (_, events) = go(&r, &opts(1));
+    assert_eq!(ends(&events).len(), 2, "{events:#?}");
+}
+
+#[test]
+fn and_the_record_carries_the_role_the_seconds_and_the_reported_cost() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    r.write(
+        "harness.toml",
+        &base_toml(&role_commands(&implement, &verify)),
+    );
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let (_, events) = go(&r, &opts(1));
+    let role = events.iter().find_map(|e| match &e.kind {
+        Kind::StageStart { stage, role, .. } if stage == "implement" => role.clone(),
+        _ => None,
+    });
+    assert_eq!(role.as_deref(), Some("implementer"));
+    let (cost, task) = events
+        .iter()
+        .find_map(|e| match &e.kind {
+            Kind::StageEnd {
+                stage, cost, task, ..
+            } if stage == "implement" => Some((*cost, task.clone())),
+            _ => None,
+        })
+        .expect("an implement stage.end");
+    assert_eq!(cost, Some(0.5));
+    assert_eq!(task.as_deref(), Some("T-001"));
+}
+
+#[test]
+fn the_loop_stops_before_a_stage_that_would_exceed_the_budget() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    r.write(
+        "harness.toml",
+        &base_toml(&role_commands(&implement, &verify)),
+    );
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let o = RunOpts {
+        budget_usd: Some(0.4),
+        ..opts(1)
+    };
+    let (digest, events) = go(&r, &o);
+    assert!(
+        digest.halts.iter().any(|h| h.contains("the run has spent")),
+        "{:?}",
+        digest.halts
+    );
+    // and the stage it would have spawned never ran
+    assert_eq!(ends(&events).len(), 1, "{events:#?}");
+}
+
+#[test]
+fn a_dollar_budget_over_a_cost_nothing_reports_halts() {
+    let r = repo(
+        &base_toml("").replace("cost = \"total_cost_usd\"", "turns = \"turns\""),
+        TASKS,
+    );
+    let o = RunOpts {
+        budget_usd: Some(10.0),
+        ..opts(1)
+    };
+    let (digest, _) = go(&r, &o);
+    assert!(
+        digest.halts.iter().any(|h| h.contains("reported no cost")),
+        "{:?}",
+        digest.halts
+    );
+}
+
+// ------------------------------------------------------------- refused configs
+
+#[test]
+fn a_config_naming_an_unknown_gate_is_refused() {
+    let r = repo(
+        &base_toml("").replace("\"commit-round\"", "\"nope\""),
+        TASKS,
+    );
+    let err = pipeline::run(&r.root, &opts(1), &mut |_| {}).expect_err("refused");
+    assert!(err.downcast_ref::<pipeline::Refused>().is_some(), "{err}");
+    assert!(err.to_string().contains("nope"), "{err}");
+}
+
+#[test]
+fn a_stage_on_a_preset_with_no_turn_cap_and_no_timeout_is_refused() {
+    let toml = base_toml("").replace(
+        "preset = \"custom\"\ncommand = [\"./src/fakeagent.sh\", \"{prompt}\", \"{turns}\"]",
+        "preset = \"aider\"",
+    );
+    let r = repo(&toml, TASKS);
+    let err = pipeline::run(&r.root, &opts(1), &mut |_| {}).expect_err("refused");
+    assert!(err.downcast_ref::<pipeline::Refused>().is_some(), "{err}");
+    assert!(err.to_string().contains("timeout"), "{err}");
+}
+
+// ------------------------------------------------------------- skills, frozen
+
+#[test]
+fn a_stage_refuses_to_start_on_an_unresolved_skill_under_frozen() {
+    let r = repo(&base_toml(""), TASKS);
+    r.write(
+        ".harness/roles/implementer.md",
+        "Walk the ladder with {{skill:ponytail}} before you write anything.\n",
+    );
+    let o = RunOpts {
+        frozen: true,
+        ..opts(1)
+    };
+    let (digest, events) = go(&r, &o);
+    assert!(
+        digest.halts.iter().any(|h| h.contains("ponytail")),
+        "{:?}",
+        digest.halts
+    );
+    assert!(ends(&events).is_empty(), "the stage may not spawn");
+}
+
+// ------------------------------------------------------------ a command stage
+
+#[test]
+fn a_command_stage_runs_with_the_harness_environment() {
+    let toml = base_toml("").replace(
+        "stages = [\"implement\", \"verify\"]",
+        "stages = [\"note\"]",
+    ) + "\n[[stage]]\nname = \"note\"\ncommand = \"printf '%s %s %s' \\\"$HARNESS_TASK\\\" \\\"$HARNESS_STAGE\\\" \\\"$HARNESS_ITERATION\\\" >env.txt\"\nturns = 1\n";
+    let r = repo(&toml, TASKS);
+    go(&r, &opts(1));
+    let seen = std::fs::read_to_string(r.root.join("env.txt")).expect("the command stage ran");
+    assert_eq!(seen, "T-001 note 1");
+}
+
+// ------------------------------------------------------------------- the halts
+
+#[test]
+fn stop_file_halts_at_the_next_boundary() {
+    let r = repo("", "");
+    let implement = implementer(&r, "touch STOP\n");
+    let verify = verifier(&r);
+    r.write(
+        "harness.toml",
+        &base_toml(&role_commands(&implement, &verify)),
+    );
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert!(
+        digest.halts.iter().any(|h| h.contains("STOP")),
+        "{:?}",
+        digest.halts
+    );
+    assert_eq!(ends(&events).len(), 1, "verify may not spawn");
+}
+
+#[test]
+fn a_new_needs_spec_halts() {
+    let r = repo("", "");
+    let implement = implementer(
+        &r,
+        &format!(
+            "{bin} tasks set-status T-001 needs-spec 'the contract does not answer it'\n",
+            bin = env!("CARGO_BIN_EXE_harness"),
+        ),
+    );
+    let toml = base_toml(&role_commands(&implement, "./src/fakeagent.sh")).replace(
+        "stages = [\"implement\", \"verify\"]",
+        "stages = [\"implement\"]",
+    );
+    r.write("harness.toml", &toml);
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    // one iteration, so the halt has to come from the end of the round it
+    // happened in and not from the next round's boundary.
+    let (digest, _) = go(&r, &opts(1));
+    assert!(
+        digest.halts.iter().any(|h| h.contains("needs-spec")),
+        "{:?}",
+        digest.halts
+    );
+}
+
+#[test]
+fn two_dry_rounds_end_the_run() {
+    let r = repo(&base_toml(""), "");
+    r.write("TASKS.md", "# queue\n");
+    r.commit_all("empty queue");
+    let (digest, _) = go(&r, &opts(5));
+    assert_eq!(digest.iterations, 2, "{digest:#?}");
+}
+
+// -------------------------------------------------------------- `harness run`
+
+#[test]
+fn harness_run_without_a_tty_prints_one_line_per_event_and_exits_0() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    r.write(
+        "harness.toml",
+        &base_toml(&role_commands(&implement, &verify)),
+    );
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["run", "--no-tui", "1"])
+        .current_dir(&r.root)
+        .output()
+        .expect("run harness run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stdout}");
+    assert_eq!(
+        stdout.lines().filter(|l| l.contains(" stage.end ")).count(),
+        2,
+        "{stdout}"
+    );
+}
+
+#[test]
+fn harness_run_exits_2_on_a_refused_config() {
+    let r = repo(
+        &base_toml("").replace("\"commit-round\"", "\"nope\""),
+        TASKS,
+    );
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["run", "--no-tui", "1"])
+        .current_dir(&r.root)
+        .output()
+        .expect("run harness run");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("nope"));
+}
