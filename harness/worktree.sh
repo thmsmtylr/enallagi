@@ -46,7 +46,7 @@ fi
 
 # Fast-forward or nothing. A merge commit here would mean the parent moved under the lane, which is
 # the second-writer case the rails are about, and it is a human's call — never this script's.
-if git merge --ff-only "$LANE" >/dev/null 2>&1; then
+if MERGE_SAID=$(git merge --ff-only "$LANE" 2>&1); then
   echo "worktree: $PARENT_BRANCH fast-forwarded to $LANE at $(git rev-parse --short HEAD)"
   git worktree remove "$DIR" && git branch -d "$LANE" >/dev/null 2>&1
   echo "worktree: removed $DIR"
@@ -54,8 +54,9 @@ if git merge --ff-only "$LANE" >/dev/null 2>&1; then
 fi
 
 cat >&2 <<WHAT
-worktree: $PARENT_BRANCH has moved and $LANE cannot fast-forward into it. Nothing was merged and
-nothing was removed. A merge here is a decision, not a step:
+worktree: $LANE did not fast-forward into $PARENT_BRANCH. git said:
+$(printf '%s\n' "$MERGE_SAID" | sed 's/^/  /')
+Nothing was merged and nothing was removed. A merge here is a decision, not a step:
   cd $DIR                       # the lane's work, intact
   git -C $PWD merge $LANE       # if you want the merge commit
   git -C $PWD worktree remove $DIR && git -C $PWD branch -D $LANE   # if you do not want the work

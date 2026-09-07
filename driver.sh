@@ -84,6 +84,7 @@ TASK
     # the persistent effect, read from the tree and not from anything the loop said
     echo "EFFECT status=$(awk '/^## \[T-001\]/{f=1} f&&/^status:/{print $2; exit}' TASKS.md)"
     echo "EFFECT dirty=$(git status --porcelain | grep -c . || true)"
+    echo "EFFECT stages=$(grep -c . .harness/run.log 2>/dev/null || true)"
   )
   rc=$?
   rm -rf "$d"
@@ -115,6 +116,15 @@ for mode in uncommitted no-progress out-of-scope red-check; do
   }
   status=$(status_of "$out")
   dirty=$(printf '%s\n' "$out" | sed -n 's/^EFFECT dirty=//p' | tail -1)
+  stages=$(printf '%s\n' "$out" | sed -n 's/^EFFECT stages=//p' | tail -1)
+  # `status` is `ready` both when the gate held and when the loop never ran; the run log tells
+  # them apart. A mode in which no stage was spawned reached nothing, and is not a pass.
+  [ "${stages:-0}" -gt 0 ] || {
+    echo "driver: mode $mode spawned no stage (run.log is empty), so no gate was reached" >&2
+    printf '%s\n' "$out" | tail -5 >&2
+    unreached=1
+    continue
+  }
   case "$mode" in
   uncommitted)
     [ "$status" = "done" ] && [ "${dirty:-0}" -gt 0 ] && echo "FINDING a lane left its implementation uncommitted and the task still reached done with $dirty dirty path(s). Nothing the launcher runs reads the working tree; only verifier.md step 0 does, and a prompt is not a gate."
