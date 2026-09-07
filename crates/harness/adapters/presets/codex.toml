@@ -1,0 +1,15 @@
+name = "codex"
+argv = ["codex", "exec", "{prompt}", "--json", "--dangerously-bypass-approvals-and-sandbox"]
+turn_cap = "none"
+model_flag = "--model"
+instruction_file = "AGENTS.md"
+hooks_file = "hooks.json"
+
+[usage]
+input_tokens = "usage.input_tokens"
+output_tokens = "usage.output_tokens"
+
+[hook_events]
+pre_tool_use = "PreToolUse"
+stop = "Stop"
+prompt_submit = "UserPromptSubmit"

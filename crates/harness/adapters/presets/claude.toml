@@ -1,0 +1,19 @@
+name = "claude"
+argv = ["claude", "-p", "{prompt}", "--output-format", "stream-json", "--verbose", "--max-turns", "{turns}", "--dangerously-skip-permissions"]
+turn_cap = "flag"
+model_flag = "--model"
+skills_dir = ".claude/skills"
+invocation = "invoke it via the Skill tool"
+instruction_file = "CLAUDE.md"
+hooks_file = ".claude/settings.json"
+
+[usage]
+cost = "total_cost_usd"
+input_tokens = "usage.input_tokens"
+output_tokens = "usage.output_tokens"
+turns = "num_turns"
+
+[hook_events]
+pre_tool_use = "PreToolUse"
+stop = "Stop"
+prompt_submit = "UserPromptSubmit"

@@ -1,0 +1,10 @@
+name = "cursor"
+argv = ["agent", "-p", "{prompt}", "--output-format", "stream-json", "--force"]
+turn_cap = "none"
+model_flag = "--model"
+instruction_file = "AGENTS.md"
+hooks_file = ".cursor/hooks.json"
+
+[hook_events]
+pre_tool_use = "preToolUse"
+stop = "stop"

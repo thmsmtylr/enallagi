@@ -1,0 +1,6 @@
+name = "opencode"
+argv = ["opencode", "run", "{prompt}", "--format", "json", "--auto"]
+turn_cap = "config"
+model_flag = "--model"
+skills_dir = ".opencode/skills"
+instruction_file = "AGENTS.md"

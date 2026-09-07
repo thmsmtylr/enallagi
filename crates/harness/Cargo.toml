@@ -1,0 +1,25 @@
+[package]
+name = "harness"
+version = "0.1.0"
+edition = "2021"
+description = "An autonomous task loop for a coding agent, installed into any git repository."
+license = "Apache-2.0"
+
+[[bin]]
+name = "harness"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
+crossterm = "0.29.0"
+globset = "0.4.20"
+jiff = "0.2.35"
+ratatui = "0.30.2"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+tempfile = "3.27.0"
+thiserror = "2.0.20"
+toml = "1.1.5"

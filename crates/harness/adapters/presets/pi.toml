@@ -1,0 +1,7 @@
+name = "pi"
+argv = ["pi", "-p", "{prompt}", "--mode", "json"]
+turn_cap = "none"
+model_flag = "--model"
+skills_dir = ".pi/skills"
+invocation = "invoke it as /skill:<id>"
+instruction_file = "AGENTS.md"

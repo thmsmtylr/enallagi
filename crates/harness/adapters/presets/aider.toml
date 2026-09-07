@@ -1,0 +1,4 @@
+name = "aider"
+argv = ["aider", "--message", "{prompt}", "--yes-always"]
+turn_cap = "none"
+model_flag = "--model"

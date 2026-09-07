@@ -1,0 +1,5 @@
+name = "omp"
+argv = ["omp", "-p", "{prompt}", "--mode", "json", "--yolo", "--max-time", "{timeout}"]
+turn_cap = "time"
+model_flag = "--model"
+instruction_file = ".omp/AGENTS.md"
