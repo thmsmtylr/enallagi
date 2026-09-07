@@ -232,7 +232,40 @@ cp "$T/progress.bak" PROGRESS.md && rm -f "$T/progress.bak"
 # --- the PROGRESS.md rollover -----------------------------------------------
 for n in 1 2 3 4 5 6; do printf '\n## fixture entry %s\nfriction: none\nnext: nothing\n' "$n" >>PROGRESS.md; done
 git add -A && git commit -qm progress >/dev/null 2>&1
+# a done block whose notes quote another block inside a fence, and a ready block after it: the
+# archive has to move the first and leave the second exactly where the launcher can take it.
+# Both files are restored afterwards: the ceiling fixture below appends kill lines to DECISIONS.md
+# and reads them as inside `## Rejected findings`, which an archived block at the end would close.
+cp TASKS.md "$T/tasks.bak" && cp DECISIONS.md "$T/decisions.bak"
+python3 - <<'SEED'
+s = open('TASKS.md').read().rstrip() + """
+
+## [T-401] done, and its notes quote a block
+scope: src/a.ts
+blockedBy:
+status: done
+notes: |
+```
+## [T-402] the quoted block, not a task
+blockedBy:
+status: ready
+```
+
+## [T-403] the next real task
+scope: src/b.ts
+blockedBy:
+status: ready
+"""
+open('TASKS.md', 'w').write(s)
+SEED
+git add -A >/dev/null && git commit -qm 'seed a done block' >/dev/null
 PROGRESS_MAX=12 PROGRESS_KEEP=4 .harness/archive-done.sh >/dev/null 2>&1
+is "a done block is archived to DECISIONS.md and the queue keeps its stub" "DECISIONS.md 1 1" \
+  "$(python3 .harness/tasks.py field T-401 archived | cut -d' ' -f1) $(grep -c '^## \[T-401\]' DECISIONS.md) $(grep -c '^status: done$' <<<"$(python3 .harness/tasks.py block T-401)")"
+is "the quoted block is not a task to the launcher, and the real next task survives" "T-403 0" \
+  "$(python3 .harness/tasks.py ids-at ready | grep -E 'T-40[0-9]' | tr '\n' ' ' | sed 's/ $//') $(python3 .harness/tasks.py list | grep -c 'T-402')"
+cp "$T/tasks.bak" TASKS.md && cp "$T/decisions.bak" DECISIONS.md && rm -f "$T/tasks.bak" "$T/decisions.bak"
+git add -A >/dev/null && git commit -qm 'archive fixture undone' >/dev/null
 is "the oldest entry moves out of PROGRESS.md" "1" "$(grep -c 'fixture entry 1' PROGRESS.archive.md 2>/dev/null || echo 0)"
 is "and is gone from the file the loop reads" "0" "$(grep -c 'fixture entry 1' PROGRESS.md)"
 is "the newest entry stays" "1" "$(grep -c 'fixture entry 6' PROGRESS.md)"
@@ -243,46 +276,27 @@ is "the split lands on an entry heading, never inside one" "## fixture entry 6" 
 git add -A && git commit -qm rolled >/dev/null 2>&1
 
 # --- one checkout, one writer ------------------------------------------------
-# The lane-liveness question is archive-done.sh's process-tree walk and one-writer.sh calls it
-# rather than carrying a second copy, so the fixture is a tree of the shape that walk looks for: a
-# parent whose argv carries `.harness/loop.sh` and a child whose argv carries the agent binary
-# harness.json names. Both are children of this shell, never ancestors of it, which is what makes
-# the caller "not that lane". Every pattern that reads ps is bracketed (`[f]akeagent`) so the
-# reading process cannot match itself.
-# The second assertion is the one that matters: a hook that refuses every write is an outage, and
-# an operator resolving a needs-spec halt is working precisely because the loop has stopped.
-# awk rather than `ps | grep`, for the same reason archive-done.sh uses it: shellcheck's SC2009
-# points at pgrep, and pgrep -f is the question this whole task was told not to ask.
-lane_in_ps() { ps -eo args= | awk '/[f]akeagent.sh one-writer-fixture/ {n++} END {exit !n}'; }
+# Liveness is `.harness/loop.pid`: loop.sh writes its pid on start and removes it on exit, and a
+# writer is "not the lane" exactly when that pid is alive and not among the writer's own ancestors.
+# The fixture is a background sleep standing in for a loop: a sibling of this shell, never an
+# ancestor of it. The allow assertions are the ones that matter -- a hook that refuses every write
+# is an outage, and an operator resolving a needs-spec halt is working because the loop stopped.
 WRITE='{"tool_input":{"file_path":"TASKS.md"}}'
-bash -c 'echo .harness/loop.sh one-writer-fixture >/dev/null; bash -c "echo ./src/fakeagent.sh one-writer-fixture >/dev/null; sleep 30" & wait' &
+sleep 30 &
 FAKELOOP=$!
-LANE=""
-for _ in $(seq 50); do
-  lane_in_ps && {
-    LANE=live
-    break
-  }
-  sleep 0.2
-done
-if [ -z "$LANE" ]; then
-  skip "a write from a session that is not the live lane is refused" "the fixture lane never appeared in ps"
-  skip "the same write is allowed when no lane is live" "the fixture lane never appeared in ps"
-else
-  REFUSED=$(printf '%s' "$WRITE" | .harness/hooks/one-writer.sh 2>&1)
-  RRC=$?
-  is "a write from a session that is not the live lane is refused" "2 T-001" \
-    "$RRC $(printf '%s\n' "$REFUSED" | grep -o 'T-001' | head -1)"
-  [ "$RRC" -eq 2 ] || printf '%s\n' "$REFUSED" | sed 's/^/      /'
-  { kill "$FAKELOOP" && wait "$FAKELOOP"; } >/dev/null 2>&1
-  for p in $(ps -eo pid=,args= | awk '/[f]akeagent.sh one-writer-fixture/ {print $1}'); do kill "$p" 2>/dev/null; done
-  for _ in $(seq 50); do
-    lane_in_ps || break
-    sleep 0.2
-  done
-  ALLOWED=$(printf '%s' "$WRITE" | .harness/hooks/one-writer.sh 2>&1)
-  is "the same write is allowed when no lane is live" "0 " "$? $ALLOWED"
-fi
+echo "$FAKELOOP" >.harness/loop.pid
+REFUSED=$(printf '%s' "$WRITE" | .harness/hooks/one-writer.sh 2>&1)
+RRC=$?
+is "a write from a session that is not the live lane is refused" "2 T-001" \
+  "$RRC $(printf '%s\n' "$REFUSED" | grep -o 'T-001' | head -1)"
+[ "$RRC" -eq 2 ] || printf '%s\n' "$REFUSED" | sed 's/^/      /'
+OWN=$(bash -c 'echo $$ >.harness/loop.pid; printf %s "$0" | .harness/hooks/one-writer.sh 2>&1; echo "rc=$?"' "$WRITE" | tail -1)
+is "a write from under the loop itself -- its own lane -- is allowed" "rc=0" "$OWN"
+echo "$FAKELOOP" >.harness/loop.pid
+{ kill "$FAKELOOP" && wait "$FAKELOOP"; } >/dev/null 2>&1
+ALLOWED=$(printf '%s' "$WRITE" | .harness/hooks/one-writer.sh 2>&1)
+is "a pid file left by a loop that is gone is not a live loop" "0 " "$? $ALLOWED"
+rm -f .harness/loop.pid
 
 # --- the driver, the only probe that does not read text ---------------------
 printf '#!/usr/bin/env bash\necho "FINDING the artifact answered but wrote nothing to the store"\n' >src/fakedriver.sh
@@ -403,8 +417,13 @@ cat >src/fakelane.sh <<'LANE'
 case "$1" in
   *"roles/implementer.md"*)
     date +%s%N > src/allowed.ts
-    [ -n "${SNEAK:-}" ] && date +%s%N > "$SNEAK"
-    sed -i.bak 's/^status: ready/status: review/' TASKS.md && rm -f TASKS.md.bak
+    # .check-baseline is the one file where the DIRECTION of the edit is the question: emptied is
+    # a failure cleared, appended is a red check made green by hand
+    if [ "${SNEAK:-}" = .check-baseline ] && [ -z "${GROW:-}" ]; then : > .check-baseline
+    elif [ -n "${SNEAK:-}" ]; then date +%s%N > "$SNEAK"; fi
+    # SELF_DONE: the implementer writes the verdict on its own work, which only the verifier may
+    if [ -n "${SELF_DONE:-}" ]; then sed -i.bak 's/^status: ready/status: done/' TASKS.md; else sed -i.bak 's/^status: ready/status: review/' TASKS.md; fi
+    rm -f TASKS.md.bak
     printf '\n## fixture — T-101 — landed\nfriction: none\n' >> PROGRESS.md
     # `if`, never `[ x ] && y` as a branch's last statement: a false test is the script's exit
     # status and the launcher reads a non-zero lane as a halt (PROGRESS.md, T-001)
@@ -442,23 +461,34 @@ FIXTURE
   git add -A >/dev/null && git commit -qm fixture >/dev/null
   # outside the repo: the fixture lane runs `git add -A`, so a log inside it becomes part of the
   # diff the scope gate is judging
-  SNEAK="$1" NO_COMMIT="${NO_COMMIT:-}" BUDGET_USD="${BUDGET_USD:-}" .harness/loop.sh 1 >"$LANE_LOG" 2>&1
+  SNEAK="$1" NO_COMMIT="${NO_COMMIT:-}" GROW="${GROW:-}" SELF_DONE="${SELF_DONE:-}" BUDGET_USD="${BUDGET_USD:-}" .harness/loop.sh 1 >"$LANE_LOG" 2>&1
   git add -A >/dev/null 2>&1 && git commit -qm "whatever the lane left" >/dev/null 2>&1
   awk '/^## \[T-101\]/{f=1} f&&/^status:/{print $2; exit}' TASKS.md
 }
 is "a lane inside its scope keeps its done verdict" "done" "$(lane '' 'none — harness')"
 is "a lane that never committed is forced back to ready" "ready" "$(NO_COMMIT=1 lane '' 'none — harness')"
+is "an implementer that marks its own task done is forced back to ready" "ready" "$(SELF_DONE=1 lane '' 'none — harness')"
+is "and the verify stage is skipped, since nothing is at review" "0" "$(grep -c '^=== Iteration 1: verify' "$LANE_LOG")"
 is "a lane that leaves its scope is forced back to ready" "ready" "$(lane src/sneaky.ts 'none — harness')"
 # the message is the line a human acts on, so it is asserted, not only the status it produced
 is "and the rejection names the file it is rejecting" "1" \
   "$(grep -c 'SCOPE FAILED -- touched src/sneaky.ts' "$LANE_LOG")"
 rm -f src/sneaky.ts
+# each baseline lane starts from a baseline with a line in it: the allowed edit empties it, so a
+# second lane on the emptied file would be no edit at all and prove nothing
+echo "a thing that broke" >>.check-baseline
 is "a harness edit a harness task declared is allowed" "done" \
   "$(lane .check-baseline 'none — harness' .check-baseline)"
+echo "a thing that broke" >>.check-baseline
 # shellcheck disable=SC2016 # literal backticks: this is the `rows:` field's own text, quoted the
 # way TASKS.md writes it.
 is "the same edit under a product task is forced back to ready" "ready" \
   "$(lane .check-baseline '`src/thing.test.ts::a name copied from your suite`' .check-baseline)"
+echo "a thing that broke" >>.check-baseline
+is "a line added to .check-baseline is rejected even under a harness task" "ready" \
+  "$(GROW=1 lane .check-baseline 'none — harness' .check-baseline)"
+is "and the rejection says the baseline only shrinks" "1" "$(grep -c 'SCOPE FAILED --.*baseline only ever shrinks' "$LANE_LOG")"
+: >.check-baseline
 # --- the run log and the budget ---------------------------------------------
 rm -f .harness/run.log
 lane '' 'none — harness' >/dev/null
@@ -861,12 +891,15 @@ if [ -f "$SRC/$CI" ]; then
   CISELF=$(printf '%s\n' "$FLOORJOB" | grep -E '^[^#]*\./selftest\.sh' | grep -cvE '^[^#]*name:' || true)
   if [ "${CISELF:-0}" -gt 0 ]; then CISELF=invoked; else CISELF=absent; fi
   CIIF=$(printf '%s\n' "$FLOORJOB" | grep -cE '^[[:space:]]*(-[[:space:]]+)?if:' || true)
-  CIGOT="${CIOS}selftest:$CISELF if:${CIIF:-?} evals:$(grep -cE '^[^#]*HARNESS_EVALS' "$SRC/$CI" || true)"
+  # `continue-on-error: true` is the sibling of `if:` -- the step runs, its failure is a warning,
+  # the job stays green. Counted at any depth for the same reason `if:` is.
+  CICOE=$(printf '%s\n' "$FLOORJOB" | grep -cE '^[[:space:]]*(-[[:space:]]+)?continue-on-error:' || true)
+  CIGOT="${CIOS}selftest:$CISELF if:${CIIF:-?} coe:${CICOE:-?} evals:$(grep -cE '^[^#]*HARNESS_EVALS' "$SRC/$CI" || true)"
 else
   CIGOT="no $CI"
 fi
 is "ci runs the floor on a GNU and a BSD userland" \
-  "macos-latest ubuntu-latest selftest:invoked if:0 evals:0" "$CIGOT"
+  "macos-latest ubuntu-latest selftest:invoked if:0 coe:0 evals:0" "$CIGOT"
 
 # --- the one assertion that reaches the artifact, off this machine -----------
 # `the package driver reports shortfalls as FINDING lines` is gated behind HARNESS_DRIVER, so until
@@ -907,11 +940,12 @@ driver_job() { # $1 = a workflow file. The job, the variable, the floor invocati
   local blk self
   blk=$(job_block "$1" driver)
   self=$(printf '%s\n' "$blk" | grep -E '^[^#]*\./selftest\.sh' | grep -cvE '^[^#]*name:' || true)
-  printf 'job:%s driver:%s selftest:%s if:%s' \
+  printf 'job:%s driver:%s selftest:%s if:%s coe:%s' \
     "$([ -n "$blk" ] && echo present || echo absent)" \
     "$(printf '%s\n' "$blk" | grep -qE "^[^#]*HARNESS_DRIVER:[[:space:]]*['\"]?[^[:space:]'\"]" && echo set || echo unset)" \
     "$([ "${self:-0}" -gt 0 ] && echo invoked || echo absent)" \
-    "$(printf '%s\n' "$blk" | grep -cE '^[[:space:]]*(-[[:space:]]+)?if:' || true)"
+    "$(printf '%s\n' "$blk" | grep -cE '^[[:space:]]*(-[[:space:]]+)?if:' || true)" \
+    "$(printf '%s\n' "$blk" | grep -cE '^[[:space:]]*(-[[:space:]]+)?continue-on-error:' || true)"
 }
 cat >"$T/ci-nojob.yml" <<'YML'
 jobs:
@@ -937,10 +971,19 @@ jobs:
           HARNESS_DRIVER: '1'
         run: ./selftest.sh
 YML
+cat >"$T/ci-soft.yml" <<'YML'
+jobs:
+  driver:
+    steps:
+      - env:
+          HARNESS_DRIVER: '1'
+        continue-on-error: true
+        run: ./selftest.sh
+YML
 is "ci runs the floor with the driver reaching the artifact" \
-  "job:present driver:set selftest:invoked if:0 | job:absent driver:unset selftest:absent if:0 | job:present driver:unset selftest:invoked if:0 | job:present driver:set selftest:invoked if:1" \
-  "$([ -f "$SRC/$CI" ] && driver_job "$SRC/$CI" || echo "no $CI") | $(driver_job "$T/ci-nojob.yml") | $(driver_job "$T/ci-novar.yml") | $(driver_job "$T/ci-off.yml")"
-rm -f "$T/ci-nojob.yml" "$T/ci-novar.yml" "$T/ci-off.yml"
+  "job:present driver:set selftest:invoked if:0 coe:0 | job:absent driver:unset selftest:absent if:0 coe:0 | job:present driver:unset selftest:invoked if:0 coe:0 | job:present driver:set selftest:invoked if:1 coe:0 | job:present driver:set selftest:invoked if:0 coe:1" \
+  "$([ -f "$SRC/$CI" ] && driver_job "$SRC/$CI" || echo "no $CI") | $(driver_job "$T/ci-nojob.yml") | $(driver_job "$T/ci-novar.yml") | $(driver_job "$T/ci-off.yml") | $(driver_job "$T/ci-soft.yml")"
+rm -f "$T/ci-nojob.yml" "$T/ci-novar.yml" "$T/ci-off.yml" "$T/ci-soft.yml"
 
 # A tag moves and a SHA does not, so a `uses:` pinned to a tag is an unreviewed third party running
 # with the workflow's token. Every one carries its version in a trailing comment, which is how
@@ -1082,7 +1125,9 @@ AFTER=$(.harness/hooks/probes.sh 2>&1)
 LEFT=$(printf '%s\n' "$AFTER" | sed -n 's/^PROBE ponytail-ceiling //p')
 GONE=$(printf '%s\n' "$AFTER" | grep -cE "^FINDING ponytail-ceiling ($KILLED|$MOVED) ")
 STILL=$(printf '%s\n' "$AFTER" | grep -cE "^FINDING ponytail-ceiling $LIVE ")
-is "a ceiling whose kill is already written down is not re-proposed" "8 6 0" "$BEFORE $LEFT $GONE"
+# two of BEFORE are killed above, so LEFT is BEFORE less two -- never a literal count, which read
+# a marker added elsewhere in the package as this probe breaking
+is "a ceiling whose kill is already written down is not re-proposed" "$((BEFORE - 2)) 0" "$LEFT $GONE"
 is "a ceiling with no kill line is still reported" "1 1" "$STILL0 $STILL"
 cp "$T/decisions.bak" DECISIONS.md && rm -f "$T/decisions.bak"
 
