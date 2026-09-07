@@ -723,7 +723,7 @@ rm -rf "$FIX"
 DEMO_OUT=$("$SRC/docs/demo.sh" 2>&1)
 DEMO_RC=$?
 DEMO_SEEN=$(printf '%s\n' "$DEMO_OUT" |
-  grep -oE '=== Iteration 1: implement T-001|=== Iteration 1: verify T-001|=== digest|T-001 +status: done' |
+  grep -oE 'stage=implement|stage=verify|T-001 +status: done' |
   tr '\n' '|')
 # "it must leave the machine as it found it" is the criterion with nothing else behind it, so it is
 # read here too. The demo prints the directory it made; an extraction that found no path reads
@@ -737,7 +737,7 @@ else
   DEMO_LEFT=gone
 fi
 is "docs/demo.sh drives one loop iteration end to end and deletes what it made" \
-  "0|=== Iteration 1: implement T-001|=== Iteration 1: verify T-001|=== digest|T-001  status: done|gone" \
+  "0|stage=implement|stage=verify|T-001  status: done|gone" \
   "$DEMO_RC|$DEMO_SEEN$DEMO_LEFT"
 
 # --- the immutability hashes ------------------------------------------------
