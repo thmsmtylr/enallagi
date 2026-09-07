@@ -6,8 +6,10 @@
 mod stream;
 mod view;
 
+use std::panic::PanicHookInfo;
 use std::path::Path;
 use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyEvent, KeyEventKind};
@@ -145,23 +147,80 @@ fn loop_running(pid_path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Restores the terminal on drop -- including on panic, since a `Drop` runs
-/// during unwinding. `run_live`/`run_attached` also wrap their loop in
-/// `catch_unwind` so the terminal is back to normal *before* the panic is
-/// resumed, rather than racing the unwind.
-struct TerminalGuard;
+/// Restores on drop only the steps that actually succeeded -- including on
+/// panic, since a `Drop` runs during unwinding. `run_live`/`run_attached`
+/// also wrap their loop in `catch_unwind` so the terminal is back to normal
+/// *before* the panic is resumed, rather than racing the unwind, and install
+/// a panic hook (below) so the panic message itself prints on the restored,
+/// normal screen rather than the still-active alternate one.
+struct TerminalGuard {
+    raw_mode: bool,
+    alt_screen: bool,
+}
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+        if self.alt_screen {
+            let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+        }
+        if self.raw_mode {
+            let _ = disable_raw_mode();
+        }
     }
 }
 
-fn enter_terminal() -> anyhow::Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
+/// Unconditionally attempts both restore steps, ignoring errors. Unlike
+/// `TerminalGuard`, which only undoes what it tracked, this has no per-step
+/// state to consult -- it's what the panic hook calls, and by the time a
+/// hook can fire `enter_terminal` has already fully succeeded. Idempotent:
+/// safe to call more than once (each call just re-issues the same
+/// best-effort escape sequence and syscall).
+fn restore_terminal() {
+    let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+    let _ = disable_raw_mode();
+}
+
+fn enter_terminal() -> anyhow::Result<(Terminal<CrosstermBackend<std::io::Stdout>>, TerminalGuard)>
+{
     enable_raw_mode()?;
+    let mut guard = TerminalGuard {
+        raw_mode: true,
+        alt_screen: false,
+    };
     execute!(std::io::stdout(), EnterAlternateScreen)?;
-    Ok(Terminal::new(CrosstermBackend::new(std::io::stdout()))?)
+    guard.alt_screen = true;
+    let terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
+    Ok((terminal, guard))
+}
+
+type PanicHook = dyn Fn(&PanicHookInfo<'_>) + Send + Sync + 'static;
+
+/// Builds a hook that runs `restore` and then forwards to `prev` -- pulled
+/// out of `install_restore_hook` so a test can supply a fake `restore` (and
+/// a fake `prev`) and observe the order without touching a real terminal.
+fn build_hook<R>(restore: R, prev: Arc<PanicHook>) -> Box<PanicHook>
+where
+    R: Fn() + Send + Sync + 'static,
+{
+    Box::new(move |info| {
+        restore();
+        (*prev)(info);
+    })
+}
+
+/// Installs a hook that restores the terminal before forwarding to whatever
+/// hook was previously installed, so a panic's own message prints on the
+/// normal screen instead of a broken alternate one. Returns the previous
+/// hook so the caller can put it back with `restore_hook` once the loop
+/// that needed this hook is done.
+fn install_restore_hook() -> Arc<PanicHook> {
+    let prev: Arc<PanicHook> = Arc::from(std::panic::take_hook());
+    std::panic::set_hook(build_hook(restore_terminal, Arc::clone(&prev)));
+    prev
+}
+
+fn restore_hook(prev: Arc<PanicHook>) {
+    std::panic::set_hook(Box::new(move |info| (*prev)(info)));
 }
 
 /// `harness run tty`: draws events as they arrive on `rx`, redrawing on
@@ -169,11 +228,12 @@ fn enter_terminal() -> anyhow::Result<Terminal<CrosstermBackend<std::io::Stdout>
 /// (the run loop's STOP file) and keeps drawing until `rx` disconnects and
 /// is drained -- the loop decides when to actually end, the TUI just asks.
 pub fn run_live(rx: Receiver<Event>, tasks: &Path, stop: &Path) -> anyhow::Result<()> {
-    let mut terminal = enter_terminal()?;
-    let guard = TerminalGuard;
+    let (mut terminal, guard) = enter_terminal()?;
+    let prev_hook = install_restore_hook();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_live_loop(&mut terminal, &rx, tasks, stop)
     }));
+    restore_hook(prev_hook);
     drop(guard);
     match outcome {
         Ok(result) => result,
@@ -226,13 +286,14 @@ fn run_live_loop<B: Backend>(
 /// 500ms rather than owning a channel; `q` quits the viewer immediately and
 /// never touches the STOP file since watch doesn't own the run.
 pub fn run_attached(harness_dir: &Path, tasks: &Path) -> anyhow::Result<()> {
-    let mut terminal = enter_terminal()?;
-    let guard = TerminalGuard;
+    let (mut terminal, guard) = enter_terminal()?;
+    let prev_hook = install_restore_hook();
     let log = Log::open(harness_dir);
     let pid_path = harness_dir.join("loop.pid");
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_attached_loop(&mut terminal, &log, tasks, &pid_path)
     }));
+    restore_hook(prev_hook);
     drop(guard);
     match outcome {
         Ok(result) => result,
@@ -370,14 +431,39 @@ mod tests {
     #[test]
     fn q_writes_stop_and_no_key_touches_the_queue() {
         let mut model = fixture_model();
-        let queue_before = model.queue.len();
+        let queue_before = format!("{:?}", model.queue);
         assert!(!model.stop_requested);
-        model.handle_key(press('q'));
-        assert!(model.stop_requested);
+
         // `Model` has no method that mutates `queue` or writes TASKS.md from
         // a key -- `handle_key` only ever touches `stop_requested`, `focus`,
-        // `scroll` and `help`. Confirmed here at the value level too.
-        assert_eq!(model.queue.len(), queue_before);
+        // `scroll` and `help`. Confirmed here at the value level, for every
+        // key the view recognises, not just `q`.
+        for key in [
+            press('q'),
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            },
+            KeyEvent {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            },
+            KeyEvent {
+                code: KeyCode::Down,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            },
+            press('?'),
+        ] {
+            model.handle_key(key);
+            assert_eq!(format!("{:?}", model.queue), queue_before);
+        }
+        assert!(model.stop_requested);
     }
 
     #[test]
@@ -386,5 +472,44 @@ mod tests {
         let backend = TestBackend::new(0, 0);
         let mut terminal = Terminal::new(backend).expect("terminal");
         terminal.draw(|f| view(&model, f)).expect("draw");
+    }
+
+    #[test]
+    fn restore_terminal_is_idempotent() {
+        // No real terminal is attached in a test run, so both underlying
+        // calls fail -- `restore_terminal` swallows that. The point is that
+        // calling it twice is still fine: no panic, no error propagated.
+        restore_terminal();
+        restore_terminal();
+    }
+
+    #[test]
+    fn panic_hook_restores_before_forwarding_to_the_previous_hook() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
+
+        let restored = Arc::new(AtomicBool::new(false));
+        let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let restored_flag = Arc::clone(&restored);
+        let order_for_restore = Arc::clone(&order);
+        let fake_restore = move || {
+            order_for_restore.lock().expect("lock").push("restored");
+            restored_flag.store(true, Ordering::SeqCst);
+        };
+
+        let order_for_prev = Arc::clone(&order);
+        let fake_prev: Arc<PanicHook> = Arc::new(move |_info: &PanicHookInfo<'_>| {
+            order_for_prev.lock().expect("lock").push("forwarded");
+        });
+
+        let saved = std::panic::take_hook();
+        std::panic::set_hook(build_hook(fake_restore, fake_prev));
+        let result = std::panic::catch_unwind(|| panic!("boom"));
+        std::panic::set_hook(saved);
+
+        assert!(result.is_err());
+        assert!(restored.load(Ordering::SeqCst));
+        assert_eq!(*order.lock().expect("lock"), vec!["restored", "forwarded"]);
     }
 }
