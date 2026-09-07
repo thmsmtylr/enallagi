@@ -9,30 +9,55 @@ pub struct Args {
     pub json: bool,
 }
 
+/// The stateless part of `Args` — what `keep` needs to decide whether one
+/// event survives `--task`/`--since`. `--role` isn't here because it needs
+/// to see the whole stream (it keeps a stage's surrounding events, not just
+/// events that themselves match), so it stays a separate pass in `run`.
+pub struct Filter {
+    pub task: Option<String>,
+    pub since: Option<String>,
+}
+
+/// The `--task`/`--since` predicate, shared between `run` and its tests so
+/// the tests exercise the real filtering logic rather than a reimplementation
+/// of it.
+pub(crate) fn keep(e: &Event, opts: &Filter) -> bool {
+    if let Some(task) = &opts.task {
+        if task_of(&e.kind) != Some(task.as_str()) {
+            return false;
+        }
+    }
+    if let Some(since) = &opts.since {
+        if e.ts.as_str() < since.as_str() {
+            return false;
+        }
+    }
+    true
+}
+
 pub fn run(args: &Args) -> anyhow::Result<i32> {
     let log = Log::open(Path::new(".harness"));
-    let events = match log.read() {
-        Ok(events) => events,
+    let (pairs, _skipped) = match log.read_lines() {
+        Ok(pairs) => pairs,
         Err(err) => {
             eprintln!("harness: events: {err}");
             return Ok(2);
         }
     };
 
-    let mut events = events;
+    let mut pairs = pairs;
     if let Some(role) = &args.role {
-        events = filter_role(events, role);
+        pairs = filter_role(pairs, role);
     }
-    if let Some(task) = &args.task {
-        events.retain(|e| task_of(&e.kind) == Some(task.as_str()));
-    }
-    if let Some(since) = &args.since {
-        events.retain(|e| e.ts.as_str() >= since.as_str());
-    }
+    let filter = Filter {
+        task: args.task.clone(),
+        since: args.since.clone(),
+    };
+    pairs.retain(|(_, e)| keep(e, &filter));
 
-    for e in &events {
+    for (raw, e) in &pairs {
         if args.json {
-            println!("{}", serde_json::to_string(e)?);
+            println!("{raw}");
         } else {
             println!("{}", render_line(e));
         }
@@ -44,10 +69,10 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
 /// Keeps `stage.start` events whose role matches, plus every event of that
 /// stage (by stage name, scoped to the run it started in) up to and
 /// including its `stage.end`.
-fn filter_role(events: Vec<Event>, role: &str) -> Vec<Event> {
+fn filter_role(items: Vec<(String, Event)>, role: &str) -> Vec<(String, Event)> {
     let mut active: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     let mut out = Vec::new();
-    for e in events {
+    for (raw, e) in items {
         let starts_here =
             matches!(&e.kind, Kind::StageStart { role: r, .. } if r.as_deref() == Some(role));
         if starts_here {
@@ -69,7 +94,7 @@ fn filter_role(events: Vec<Event>, role: &str) -> Vec<Event> {
             } else {
                 None
             };
-            out.push(e);
+            out.push((raw, e));
             if let Some(key) = end_stage {
                 active.remove(&key);
             }
@@ -116,10 +141,12 @@ mod tests {
             output_tokens: None,
             turns: None,
         });
-        let all = w.log.read().unwrap();
-        let kept = filter_role(all, "implementer");
+        let (pairs, _) = w.log.read_lines().unwrap();
+        let kept = filter_role(pairs, "implementer");
         assert_eq!(kept.len(), 3);
-        assert!(kept.iter().all(|e| stage_of(&e.kind) != Some("verify")));
+        assert!(kept
+            .iter()
+            .all(|(_, e)| stage_of(&e.kind) != Some("verify")));
     }
 
     #[test]
@@ -138,10 +165,33 @@ mod tests {
             reason: "ok".into(),
         });
         let all = w.log.read().unwrap();
-        let kept: Vec<_> = all
-            .into_iter()
-            .filter(|e| task_of(&e.kind) == Some("T-1"))
-            .collect();
+        let filter = Filter {
+            task: Some("T-1".into()),
+            since: None,
+        };
+        let kept: Vec<_> = all.into_iter().filter(|e| keep(e, &filter)).collect();
         assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn since_filter_keeps_ts_on_or_after() {
+        let event_at = |ts: &str, reason: &str| Event {
+            ts: ts.to_string(),
+            run: "r".into(),
+            iter: 0,
+            seq: 1,
+            kind: Kind::Halt {
+                halt: "x".into(),
+                reason: reason.to_string(),
+            },
+        };
+        let early = event_at("2026-09-07T00:00:00Z", "early");
+        let late = event_at("2026-09-07T00:00:01Z", "late");
+        let filter = Filter {
+            task: None,
+            since: Some("2026-09-07T00:00:01Z".into()),
+        };
+        assert!(!keep(&early, &filter), "before `since` should be dropped");
+        assert!(keep(&late, &filter), "exactly `since` should be kept");
     }
 }

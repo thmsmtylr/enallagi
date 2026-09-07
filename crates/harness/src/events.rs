@@ -138,26 +138,34 @@ impl Log {
         writeln!(f, "{line}")
     }
 
-    /// Parses every line, reporting the ones that failed to parse rather than
-    /// failing the whole read. A missing file reads as empty.
-    pub fn read_report(&self) -> io::Result<(Vec<Event>, usize)> {
+    /// Parses every line, pairing each with the exact text it came from (so
+    /// `--json` can echo the file's own line rather than a re-serialization
+    /// of the parsed value) and reporting the ones that failed to parse
+    /// rather than failing the whole read. A missing file reads as empty.
+    pub fn read_lines(&self) -> io::Result<(Vec<(String, Event)>, usize)> {
         let text = match fs::read_to_string(&self.path) {
             Ok(t) => t,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
             Err(err) => return Err(err),
         };
-        let mut events = Vec::new();
+        let mut pairs = Vec::new();
         let mut skipped = 0usize;
         for line in text.lines() {
             if line.trim().is_empty() {
                 continue;
             }
             match serde_json::from_str::<Event>(line) {
-                Ok(e) => events.push(e),
+                Ok(e) => pairs.push((line.to_string(), e)),
                 Err(_) => skipped += 1,
             }
         }
-        Ok((events, skipped))
+        Ok((pairs, skipped))
+    }
+
+    /// Like `read_lines`, but without the raw text alongside each event.
+    pub fn read_report(&self) -> io::Result<(Vec<Event>, usize)> {
+        let (pairs, skipped) = self.read_lines()?;
+        Ok((pairs.into_iter().map(|(_, e)| e).collect(), skipped))
     }
 
     pub fn read(&self) -> io::Result<Vec<Event>> {
@@ -175,6 +183,7 @@ pub struct Writer {
     pub run: String,
     pub iter: u32,
     seq: u64,
+    last_error: Option<String>,
 }
 
 impl Writer {
@@ -188,6 +197,7 @@ impl Writer {
             run: format!("{ts}-{hex:04x}"),
             iter: 0,
             seq: 0,
+            last_error: None,
         }
     }
 
@@ -202,9 +212,16 @@ impl Writer {
         };
         // Best-effort: a write failure here has nowhere to report to since
         // `emit` returns the event, not a Result. The caller still gets the
-        // in-memory `Event`; only the on-disk log is missing this line.
-        let _ = self.log.append(&event);
+        // in-memory `Event`; the failure is recorded in `last_error` for a
+        // caller that wants to notice.
+        self.last_error = self.log.append(&event).err().map(|err| err.to_string());
         event
+    }
+
+    /// The error from the most recent `emit`'s append, if it failed. `None`
+    /// once a later `emit` succeeds.
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
     }
 
     pub fn set_iter(&mut self, i: u32) {
@@ -366,6 +383,36 @@ mod tests {
         let l = render_line(&e);
         assert!(l.contains("command=\"do the thing\""));
         assert!(!l.contains("role="));
+    }
+
+    #[test]
+    fn emit_records_append_failure_in_last_error() {
+        let d = tempfile::tempdir().unwrap();
+        let blocker = d.path().join("blocker");
+        fs::write(&blocker, "not a directory").unwrap();
+        // `Log::open` joins "events.jsonl" onto this, so `append` will try to
+        // `create_dir_all` a path that already exists as a plain file.
+        let mut w = Writer::new(Log::open(&blocker));
+        assert!(w.last_error().is_none());
+        w.emit(Kind::Halt {
+            halt: "x".into(),
+            reason: "y".into(),
+        });
+        assert!(w.last_error().is_some());
+    }
+
+    #[test]
+    fn read_lines_pairs_the_raw_line_with_its_parsed_event() {
+        let d = tempfile::tempdir().unwrap();
+        let mut w = Writer::new(Log::open(d.path()));
+        w.emit(Kind::Halt {
+            halt: "x".into(),
+            reason: "y".into(),
+        });
+        let (pairs, skipped) = w.log.read_lines().unwrap();
+        assert_eq!(skipped, 0);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].0, serde_json::to_string(&pairs[0].1).unwrap());
     }
 
     #[test]
