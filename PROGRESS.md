@@ -67,3 +67,10 @@ check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D wa
 what happened: `test-hashes.json` gained keys for `harness.toml`, `Cargo.toml` and `crates/harness/Cargo.toml`, cut with `shasum -a 256` from the shell; the roles.rs key kept its value. `./target/debug/harness probe` → `PROBE hash-uncovered 0` (was 1) and `PROBE rail-unenforced 0`. T-006 moved ready → review.
 friction: none
 next: the verifier takes T-006. T-007..T-009 (one `gate =` line each in harness.default.toml) and T-013 (fold `skills_dir_for` into `skills::skills_dir`) are ready with no blockers.
+
+## 2026-09-08 — T-006 — landed
+rows: none — harness (re-review after a scope-gate rejection; the file did not change)
+check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` → exit 0, 308 passed, 3 ignored, 0 failed, at 61f8600 before the commit
+what happened: the gate's "re-cut crates/harness/tests/roles.rs" was a false positive: the value is identical at 2ee7163 and 58ad8db, but `recut_keys` (gates.rs:502) matches keys on a text diff and the line gained a trailing comma when the keys before it were added. Nothing to re-implement; test-hashes.json is untouched this iteration, the criteria re-run green, and the answer is in the task's notes. T-006 moved ready → review.
+friction: the scope gate counts a `test-hashes.json` key as re-cut when only its line's punctuation changed (gates.rs:502 reads `git diff` text, not values); a compare of the key's value at base and HEAD would remove the false rejection. gates.rs is off this task's scope, so it stays a finding.
+next: the verifier takes T-006 again; the diff against 61f8600 carries only TASKS.md and PROGRESS.md. T-007..T-009 and T-013 are ready with no blockers.
