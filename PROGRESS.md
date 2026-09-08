@@ -74,3 +74,10 @@ check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D wa
 what happened: the gate's "re-cut crates/harness/tests/roles.rs" was a false positive: the value is identical at 2ee7163 and 58ad8db, but `recut_keys` (gates.rs:502) matches keys on a text diff and the line gained a trailing comma when the keys before it were added. Nothing to re-implement; test-hashes.json is untouched this iteration, the criteria re-run green, and the answer is in the task's notes. T-006 moved ready → review.
 friction: the scope gate counts a `test-hashes.json` key as re-cut when only its line's punctuation changed (gates.rs:502 reads `git diff` text, not values); a compare of the key's value at base and HEAD would remove the false rejection. gates.rs is off this task's scope, so it stays a finding.
 next: the verifier takes T-006 again; the diff against 61f8600 carries only TASKS.md and PROGRESS.md. T-007..T-009 and T-013 are ready with no blockers.
+
+## 2026-09-08 — T-007 — landed
+rows: none — harness (the tdd skill now names the probe that fails without it)
+check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` → exit 0, 308 passed, 3 ignored, 0 failed, at 9b6c821 before the commit
+what happened: the tdd entry in harness.default.toml reads `gate = "spec-untested"`; nothing else in the file changed. `./target/debug/harness probe` → `PROBE skill-ungated 2` (was 3), the two left being T-008's and T-009's. T-007 moved ready → review.
+friction: none
+next: the verifier takes T-007. T-008 and T-009 are the same one-line shape (`rejection-repeat`, `verdict-flip`) on the same file, each rebuilt with `cargo build -q` before the probe is read; T-013 (fold `skills_dir_for` into `skills::skills_dir`) is ready too.
