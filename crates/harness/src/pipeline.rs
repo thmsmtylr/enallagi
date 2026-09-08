@@ -1,8 +1,4 @@
-//! pipeline: the launcher. It runs the declarative pipelines of `harness.toml`
-//! -- halts between stages, gates after them -- and is the port of the bash
-//! `loop.sh`. What was one hardcoded stage sequence there is `[[pipeline]]`
-//! and `[[stage]]` here; what stays in code is the order of the halts, the
-//! per-role prompt, and the digest.
+//! The launcher: runs pipelines from `harness.toml` with halts and gates.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -21,10 +17,7 @@ use crate::queue::{self, Queue};
 use crate::skills::{self, ResolveOpts};
 use crate::{archive, git};
 
-// ---------------------------------------------------------------- the prompts
-
-// Three of four iterations on 2026-08-27 ended in a question to nobody: each lane ran `ps`,
-// found the process that spawned it, and applied `one checkout is one writer` to its own parent.
+// A lane running ps to check for competing writers must ignore its parent.
 const LANE: &str = "You are this loop's own lane, spawned by the harness. There is no human in this session
 and no answer will come, so never end a turn on a question -- decide and act. A running harness
 or agent process in ps is your PARENT process, not a competing writer: LEARNINGS.md's one-checkout-one-writer
@@ -51,8 +44,6 @@ fn prompt_for(role: &str, cfg: &Config) -> String {
     config::subst(&format!("{LANE} {body}"), cfg)
 }
 
-/// The role file the prompt tells the agent to read: the repo's own copy when
-/// it has one, otherwise the packaged text.
 fn role_source(root: &Path, cfg: &Config, role: &str) -> Option<String> {
     let path = role_path(root, cfg, role);
     if path.is_file() {
@@ -71,24 +62,18 @@ fn role_source(root: &Path, cfg: &Config, role: &str) -> Option<String> {
     )
 }
 
-/// The source: what a repo edits, tokens and all.
 fn role_path(root: &Path, cfg: &Config, role: &str) -> PathBuf {
     root.join(&cfg.layout.harness_dir)
         .join("roles")
         .join(format!("{role}.md"))
 }
 
-/// The rendered copy the agent actually reads, under `run/` because it is
-/// output: rendering into the source would eat its own `{{skill:<id>}}` tokens
-/// and the next run would resolve nothing.
 fn rendered_role_path(root: &Path, cfg: &Config, role: &str) -> PathBuf {
     root.join(&cfg.layout.harness_dir)
         .join("run")
         .join("roles")
         .join(format!("{role}.md"))
 }
-
-// ----------------------------------------------------------------- the types
 
 #[derive(Debug, Clone)]
 pub struct RunOpts {
@@ -103,8 +88,6 @@ pub struct RunOpts {
 
 impl Default for RunOpts {
     fn default() -> Self {
-        // Three, because the article's batch is three rounds and a batch
-        // boundary is a decision point, not a budget.
         RunOpts {
             max_iter: 3,
             dry_run: false,
@@ -118,8 +101,7 @@ impl Default for RunOpts {
 }
 
 impl RunOpts {
-    /// `BUDGET_SECONDS`, `BUDGET_USD` and `BUDGET_TOKENS`, which is where the
-    /// bash launcher read them. A value that does not parse is no budget.
+    // a BUDGET_SECONDS/USD/TOKENS value that does not parse is silently no budget
     pub fn with_env_budgets(mut self) -> Self {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
         self.budget_seconds = self.budget_seconds.or(var("BUDGET_SECONDS")
@@ -148,17 +130,10 @@ pub struct Digest {
     pub warnings: Vec<String>,
 }
 
-/// A config that does not validate. The CLI turns it into exit 2, which is
-/// what tells a caller "nothing ran" apart from "something halted".
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct Refused(pub String);
 
-// ------------------------------------------------------------------- the plan
-
-/// The `--dry-run` text: every pipeline whose `when` holds, its stages, the
-/// prompt each would carry, the gates each would run, and -- when a scout is
-/// among them -- the probe output that scout's whole input is. Nothing spawns.
 pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
     let presets = agent::presets();
     let mut out = String::new();
@@ -212,8 +187,7 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
 
     if scouting {
         out.push_str("  probes, which are the scout's whole input:\n");
-        // HARNESS_DRIVER only here and at the scout stage, never for the whole
-        // run: the driver installs throwaway repos and costs wall clock.
+        // HARNESS_DRIVER only here and the scout stage -- it installs throwaway repos and costs wall clock elsewhere
         let check = check_outcome(root, cfg);
         let ctx = ProbeCtx {
             root,
@@ -226,11 +200,6 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
     Ok(out)
 }
 
-// -------------------------------------------------------------------- the run
-
-/// `sink` is owned rather than borrowed because it is installed on the
-/// `events::Writer` every module shares: that is the only way a `stage.output`
-/// reaches a live view while the agent is still running, instead of after it.
 pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
     let cfg = config::load(root).map_err(|e| Refused(e.to_string()))?;
     let presets = agent::presets();
@@ -242,8 +211,6 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
                 .join("\n"),
         )
     })?;
-    // Every pattern the config can name is matched case-insensitively; a
-    // session-limit notice is not written the same way twice.
     let rate_limit = Regex::new(&format!("(?i){}", cfg.agent.rate_limit_pattern))
         .map_err(|e| Refused(format!("agent.rate_limit_pattern: {e}")))?;
 
@@ -276,9 +243,7 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
     looper.go()
 }
 
-/// `<harness_dir>/loop.pid` is the answer to "is a loop running in THIS
-/// checkout?" -- `archive_done` and the one-writer hook read it. It goes away
-/// on every exit path, which is what a guard is for.
+// answers "is a loop running in this checkout?" for archive_done and the one-writer hook; removed on every exit via Drop
 struct PidFile(PathBuf);
 
 impl Drop for PidFile {
@@ -305,7 +270,6 @@ struct Loop<'a> {
     stopped: bool,
 }
 
-/// What a stage leaves for the rest of the round.
 enum Flow {
     Go,
     SkipRest,
@@ -320,11 +284,7 @@ impl<'a> Loop<'a> {
             pipeline: None,
         });
 
-        // `no-clarification-left`: a marker anywhere in the contract stops the
-        // run before it starts. A backticked mention is prose about the marker
-        // -- the rail's own definition is one -- and a bare one is real. It
-        // sits between run.start and run.end like every other halt, so a reader
-        // of the log sees a run that began and refused rather than no run.
+        // a backticked mention is prose about the marker; only a bare one halts the run
         if let Some(lines) = clarifications(self.root, &self.cfg.layout.spec) {
             self.halt(
                 "clarification",
@@ -361,8 +321,7 @@ impl<'a> Loop<'a> {
         Ok(self.finish(iterations))
     }
 
-    /// `run.end`, then the digest on stdout when nothing is drawing a TUI over
-    /// it. Every exit path goes through here, so every run ends with one.
+    // every exit path funnels through here, so every run ends with one digest
     fn finish(&mut self, iterations: u32) -> Digest {
         self.digest.iterations = iterations;
         self.emit(Kind::RunEnd {
@@ -378,7 +337,6 @@ impl<'a> Loop<'a> {
         std::mem::take(&mut self.digest)
     }
 
-    /// One round. `false` ends the run.
     fn iteration(&mut self) -> bool {
         if self.boundary(true) {
             return false;
@@ -386,7 +344,7 @@ impl<'a> Loop<'a> {
 
         self.unblock();
         match archive::archive_done(self.root, self.cfg, false) {
-            // Neither is a halt: the queue is still readable and the round can run.
+            // neither is a halt: the queue is still readable and the round can run
             Ok(report) => {
                 if let Some(refused) = report.refused {
                     self.digest.warnings.push(refused);
@@ -401,9 +359,7 @@ impl<'a> Loop<'a> {
         let iter_base = git::head(self.root);
         let progress_before = file_len(&self.root.join("PROGRESS.md"));
 
-        // This halt fires only once a discovery round has already left nothing
-        // takeable: every `ready` block being `attended: true` is the ordinary
-        // state of a queue whose work is waiting on a human.
+        // fires only after a discovery round already found nothing takeable; attended:true blocks alone are the ordinary human-wait state
         if task.is_none() && self.dry_rounds >= 1 {
             if let Some(id) = self.first_attended_ready() {
                 self.halt(
@@ -429,8 +385,7 @@ impl<'a> Loop<'a> {
             };
             match self.stage(&stage, task.clone(), iter_base.clone()) {
                 Flow::Go => {}
-                // the bash `continue`: the round is over and nothing it would
-                // have counted happened, so the digest hears nothing about it
+                // the round ends here and nothing after this counts toward the digest
                 Flow::SkipRest => return !self.stopped,
                 Flow::Stop => return false,
             }
@@ -453,13 +408,9 @@ impl<'a> Loop<'a> {
         if self.stopped {
             return false;
         }
-        // A dry round is one that leaves nothing a lane can legally take. An
-        // empty queue on its own is not exhaustion; a run of them is, and the
-        // pipeline says how long a run has to be.
+        // an empty queue isn't exhaustion by itself; only end_after_dry_rounds consecutive empties are
         pipeline.end_after_dry_rounds == 0 || self.dry_rounds < pipeline.end_after_dry_rounds
     }
-
-    // ------------------------------------------------------------- one stage
 
     fn stage(
         &mut self,
@@ -499,8 +450,6 @@ impl<'a> Loop<'a> {
         self.emit(Kind::StageStart {
             stage: stage.name.clone(),
             role: role.clone(),
-            // the preset for a role stage, the command for a command stage:
-            // both are what the TUI puts in the output pane's title.
             command: Some(match &role {
                 Some(_) => spawn.preset.name.clone(),
                 None => spawn.argv.last().cloned().unwrap_or_default(),
@@ -527,8 +476,7 @@ impl<'a> Loop<'a> {
         }
         let spent_tokens =
             result.usage.input_tokens.unwrap_or(0) + result.usage.output_tokens.unwrap_or(0);
-        // A dollar budget over a cost nothing reports is no budget. Recorded
-        // here, read by `over_budget` at the next stage boundary.
+        // cost_missing is read by over_budget() at the next boundary; a budget over unreported cost can't be enforced
         if role.is_some() {
             if self.opts.budget_usd.is_some() && result.usage.cost.is_none() {
                 self.cost_missing = true;
@@ -615,16 +563,14 @@ impl<'a> Loop<'a> {
             }
         };
 
-        // The prompt tells the agent to read its role file, exactly as the bash
-        // launcher did, so the rendered file has to be on disk before it runs.
+        // the prompt tells the agent to read its role file, so the rendered file must exist before it spawns
         let Some(source) = role_source(self.root, self.cfg, role) else {
             self.halt("stage", format!("role {role} has no prompt file"));
             return Err(Flow::Stop);
         };
         let source = config::subst(&source, self.cfg);
         let ids = skills::required_ids(&source);
-        // CI is frozen whether or not anyone passed the flag: a run that can
-        // fetch a skill mid-flight is a run whose inputs are not the lock's.
+        // CI is frozen whether or not anyone passed the flag; fetching a skill mid-flight breaks the lock
         let frozen = self.opts.frozen || std::env::var_os("CI").is_some();
         let resolved_skills = match skills::resolve(
             self.root,
@@ -692,10 +638,7 @@ impl<'a> Loop<'a> {
         }
     }
 
-    // ------------------------------------------------------------ the halts
-
-    /// The order is the bash launcher's: STOP, then the budgets, then a task
-    /// that went to needs-spec since the run started.
+    // order matters: STOP file, then budgets, then a new needs-spec task
     fn boundary(&mut self, needs_spec: bool) -> bool {
         if self.stopped {
             return true;
@@ -717,8 +660,7 @@ impl<'a> Loop<'a> {
         false
     }
 
-    // Checked before every stage, never during one: a half-finished stage is
-    // worse than a slow run. Unset or zero means no limit.
+    // checked before each stage, never during one -- a half-finished stage is worse than a slow run
     fn over_budget(&self) -> Option<String> {
         if self.cost_missing {
             return Some("BUDGET_USD is set and the last stage reported no cost, so the budget cannot be enforced. The agent command must print a cost [agent.usage].cost can read (claude: add --output-format json), or unset BUDGET_USD.".to_string());
@@ -753,9 +695,7 @@ impl<'a> Loop<'a> {
         None
     }
 
-    /// A fix that needs the spec or the context file is neither a promotion nor
-    /// a kill. The adjudicator is told to leave the block at proposed and say
-    /// so; this catches the one that stayed proposed without saying it.
+    // catches a proposed block whose fix needs the spec/context but didn't say so and halt
     fn proposed_names_contract(&self) -> Option<String> {
         let spec = &self.cfg.layout.spec;
         let context = &self.cfg.layout.context_file;
@@ -774,9 +714,7 @@ impl<'a> Loop<'a> {
             })
     }
 
-    /// Blocks already at needs-spec are the ordinary state of a queue whose
-    /// contract has open questions; halting on the status itself would end
-    /// every run before its first task. The halt is on a NEW one appearing.
+    // halts only on a NEW needs-spec task; pre-existing ones are the ordinary state of an open contract
     fn new_needs_spec(&self) -> Option<String> {
         self.ids_at("needs-spec")
             .into_iter()
@@ -797,8 +735,6 @@ impl<'a> Loop<'a> {
             reason,
         });
     }
-
-    // ------------------------------------------------------- the bookkeeping
 
     fn choose(&mut self) -> Option<config::Pipeline> {
         self.cfg
@@ -846,8 +782,7 @@ impl<'a> Loop<'a> {
                 other.unwrap_or("no status")
             )),
         }
-        // The entry is all the next iteration inherits, so a silent iteration
-        // is itself the finding.
+        // the entry is all the next iteration inherits, so a silent iteration is itself the finding
         if file_len(&self.root.join("PROGRESS.md")) <= progress_before {
             self.digest.warnings.push(format!(
                 "iteration {} wrote no PROGRESS.md entry for {task}.",
@@ -907,15 +842,12 @@ impl<'a> Loop<'a> {
             .unwrap_or_default()
     }
 
-    // ------------------------------------------------------------ the events
-
     fn emit(&mut self, kind: Kind) {
         self.writer.emit(kind);
         self.check_log();
     }
 
-    /// An event that never reached the log is an event `harness watch` and the
-    /// probes will never see, so the run stops rather than continue blind.
+    // an event that never reached the log is one `harness watch` and the probes will never see
     fn check_log(&mut self) {
         let Some(err) = self.writer.last_error().map(str::to_string) else {
             return;
@@ -961,8 +893,6 @@ impl<'a> Loop<'a> {
     }
 }
 
-// -------------------------------------------------------------------- helpers
-
 fn inline(items: &[String]) -> String {
     if items.is_empty() {
         " none".to_string()
@@ -989,8 +919,6 @@ fn round4(value: f64) -> f64 {
     (value * 10_000.0).round() / 10_000.0
 }
 
-/// The first three bare `[NEEDS CLARIFICATION]` lines. A backticked mention is
-/// prose about the marker; a bare one is a real marker.
 fn clarifications(root: &Path, spec: &str) -> Option<Vec<String>> {
     let text = std::fs::read_to_string(root.join(spec)).ok()?;
     let hits: Vec<String> = text
@@ -1005,7 +933,6 @@ fn clarifications(root: &Path, spec: &str) -> Option<Vec<String>> {
     (!hits.is_empty()).then_some(hits)
 }
 
-/// The whole `when` vocabulary, answered against the tree as it is now.
 fn holds(root: &Path, cfg: &Config, when: &Predicate) -> bool {
     match when {
         Predicate::Not(inner) => !holds(root, cfg, inner),
@@ -1043,12 +970,8 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate) -> bool {
     }
 }
 
-/// The check, run once per round and handed to every probe that reads it --
-/// `run_all` would otherwise run the force check itself, once per call.
-///
-/// `ran` is whether the check STARTED, never whether it could name what failed:
-/// a red check nobody can name is exactly the finding the scout came for, and
-/// reporting it as `ran: false` turns that finding into an ERROR.
+// `ran` means the check STARTED, not that it named what failed --
+// reporting ran:false there would turn a real finding into an ERROR
 fn check_outcome(root: &Path, cfg: &Config) -> CheckOutcome {
     let report = gates::check_delta(root, cfg, true);
     let started = !report.output.starts_with(NEVER_RAN)
@@ -1061,8 +984,6 @@ fn check_outcome(root: &Path, cfg: &Config) -> CheckOutcome {
     }
 }
 
-/// The one sentence `gates::check_delta` and `probes` both write when the check
-/// never started.
 const NEVER_RAN: &str = "the check could not be run:";
 
 fn config_sha256(root: &Path) -> String {
@@ -1078,7 +999,6 @@ fn config_sha256(root: &Path) -> String {
         .collect()
 }
 
-/// A command stage is `sh -c <string>`: no turns, no usage, no model.
 fn shell_preset() -> Preset {
     Preset {
         name: "sh".to_string(),

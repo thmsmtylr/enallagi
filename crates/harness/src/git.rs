@@ -1,5 +1,3 @@
-//! git: thin wrappers around the `git` CLI used by the rest of the crate.
-
 use std::path::Path;
 use std::process::Command;
 
@@ -54,9 +52,7 @@ pub fn diff_names(root: &Path, base: &str) -> Vec<String> {
 }
 
 pub fn commit_paths(root: &Path, paths: &[&str], msg: &str) -> Result<bool, GitError> {
-    // One `git add -- a b` fails as a whole when any path is missing, so a
-    // caller naming a file the repo does not have (DECISIONS.md before the
-    // first rejection) staged nothing at all and this silently no-opped.
+    // `git add -- a b` fails as a whole when any path is missing, so filter first or a missing path silently no-ops the rest
     for path in paths.iter().filter(|p| root.join(p).exists()) {
         let _ = git(root, &["add", "--", path]);
     }

@@ -1,7 +1,4 @@
-//! config: the answers the harness substitutes into roles, gates and probes.
-//!
-//! `harness.default.toml` is embedded in the binary and is the base. A repo's
-//! `harness.toml` is deep-merged over it: tables key by key, arrays whole.
+//! The answers substituted into roles, gates and probes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -10,10 +7,8 @@ use std::time::Duration;
 pub use crate::agent::UsagePaths;
 use crate::agent::{Presets, TurnCap};
 
-/// The default answers, embedded so a fresh repo needs no file.
 pub const DEFAULT_TOML: &str = include_str!("../harness.default.toml");
 
-/// The roles a stage can name, and so the only keys `[agent.<role>]` accepts.
 pub const ROLE_NAMES: &[&str] = &[
     "scout",
     "adjudicator",
@@ -22,7 +17,6 @@ pub const ROLE_NAMES: &[&str] = &[
     "researcher",
 ];
 
-/// Post-stage gates, by name. A `stage.post` entry outside this list is refused.
 pub const GATE_NAMES: &[&str] = &[
     "implementer-not-done",
     "commit-verdict",
@@ -57,7 +51,7 @@ pub enum ConfigError {
     #[error(
         "stage {stage}: preset {preset} caps turns by neither a flag nor its own config, so the stage needs a timeout"
     )]
-    // Also raised for a time-capped preset, whose cap *is* the timeout.
+    // also raised for a time-capped preset, whose cap *is* the timeout
     NoTurnCapNoTimeout { stage: String, preset: String },
     #[error("agent preset `{0}` is not known")]
     UnknownPreset(String),
@@ -98,9 +92,6 @@ pub struct AgentConfig {
     pub model: Option<String>,
     pub usage: Option<UsagePaths>,
     pub rate_limit_pattern: String,
-    /// Per-role overrides: any other key of `[agent]` is `[agent.<role>]`.
-    /// Flattened, so `deny_unknown_fields` cannot also apply here; `validate`
-    /// refuses a key that is not a role instead.
     #[serde(flatten)]
     pub roles: BTreeMap<String, AgentOverride>,
 }
@@ -186,7 +177,6 @@ impl Default for Stage {
 }
 
 impl Stage {
-    /// `30m` -> 1800s. `None` when the stage sets no timeout.
     pub fn timeout_duration(&self) -> Result<Option<Duration>, ConfigError> {
         let Some(raw) = &self.timeout else {
             return Ok(None);
@@ -196,7 +186,7 @@ impl Stage {
             stage: self.name.clone(),
             value: value.to_string(),
         };
-        // char, not byte: `30м` (Cyrillic) must be refused, not split mid-scalar.
+        // char, not byte: a multibyte last char like `30м` must be refused, not split mid-scalar
         let unit = value.chars().last().ok_or_else(bad)?;
         let scale: u64 = match unit {
             's' => 1,
@@ -234,8 +224,6 @@ pub enum Predicate {
     Not(Box<Predicate>),
 }
 
-/// The whole `when` vocabulary. No conjunction, no disjunction: a pipeline
-/// that needs two conditions is two pipelines.
 pub fn parse_when(s: &str) -> Result<Predicate, ConfigError> {
     let s = s.trim();
     if let Some(rest) = s.strip_prefix('!') {
@@ -255,15 +243,13 @@ pub fn parse_when(s: &str) -> Result<Predicate, ConfigError> {
     }
 }
 
-/// `harness.toml` deep-merged over the embedded defaults.
 pub fn load(root: &Path) -> Result<Config, ConfigError> {
     let mut base: toml::Value = parse_toml(DEFAULT_TOML, "harness.default.toml")?;
     let path = root.join("harness.toml");
     if path.is_file() {
         let text = std::fs::read_to_string(&path)?;
         let user: toml::Value = parse_toml(&text, "harness.toml")?;
-        // check.force follows check.command: overriding the check without
-        // pinning the force variant must not leave the old tool behind.
+        // check.force follows check.command, so overriding the check without pinning force can't leave the old tool behind
         let user_check = user.get("check");
         if let (Some(command), None) = (
             user_check.and_then(|c| c.get("command")),
@@ -289,8 +275,6 @@ fn parse_toml(text: &str, path: &str) -> Result<toml::Value, ConfigError> {
     })
 }
 
-/// Tables merge key by key, everything else replaces -- an array of tables
-/// such as `[[stage]]` is a whole list, not a list to append to.
 fn merge(base: &mut toml::Value, over: &toml::Value) {
     match (base, over) {
         (toml::Value::Table(b), toml::Value::Table(o)) => {
@@ -307,7 +291,6 @@ fn merge(base: &mut toml::Value, over: &toml::Value) {
     }
 }
 
-/// Every problem at once: a half-reported config costs a round trip per error.
 pub fn validate(
     cfg: &Config,
     presets: &Presets,
@@ -319,8 +302,7 @@ pub fn validate(
         errs.push(ConfigError::EmptyCheck);
     }
 
-    // [agent.<role>] is flattened, so a misspelled role parses happily into
-    // the map and would silently never apply. Catch it here instead.
+    // [agent.<role>] is flattened, so a misspelled role would parse happily and silently never apply
     for role in cfg.agent.roles.keys() {
         if !ROLE_NAMES.contains(&role.as_str()) {
             errs.push(ConfigError::UnknownRole { role: role.clone() });
@@ -352,8 +334,7 @@ pub fn validate(
         if !declared.insert(sk.id.as_str()) {
             errs.push(ConfigError::DuplicateSkill(sk.id.clone()));
         }
-        // Both become filesystem paths in `skills::resolve`, so they are
-        // checked here, before anything is fetched or written.
+        // both become filesystem paths in skills::resolve, so checked here before anything is fetched or written
         if !crate::skills::valid_id(&sk.id) {
             errs.push(ConfigError::BadSkillId(sk.id.clone()));
         }
@@ -417,9 +398,7 @@ pub fn validate(
         } else {
             match presets.get(&preset) {
                 None => errs.push(ConfigError::UnknownPreset(preset)),
-                // Time is here with None because a time-capped preset spends
-                // its {timeout} word on the stage's timeout; without one there
-                // is nothing to substitute and the cap is not applied.
+                // TurnCap::Time is grouped with None: it spends its {timeout} word on the stage's timeout, so without one there's nothing to substitute
                 Some(p)
                     if matches!(p.turn_cap, TurnCap::None | TurnCap::Time)
                         && st.timeout.is_none() =>
@@ -441,7 +420,6 @@ pub fn validate(
     }
 }
 
-/// The `__SCREAMING_SNAKE__` tokens of a role prompt or template.
 pub fn subst(text: &str, cfg: &Config) -> String {
     let l = &cfg.layout;
     let cap = l.learnings_cap.to_string();
@@ -459,8 +437,7 @@ pub fn subst(text: &str, cfg: &Config) -> String {
         ("__SOURCE_ROOT__", &l.source_root),
         ("__LEARNINGS_CAP__", &cap),
     ];
-    // Unset means the preset's own directory, which only skills::skills_dir
-    // knows. Leave the token standing rather than substituting an empty path.
+    // unset means the preset's own directory, which only skills::skills_dir knows -- leave the token standing, not empty
     if let Some(dir) = l.skills_dir.as_deref() {
         tokens.push(("__SKILLS_DIR__", dir));
     }
@@ -469,10 +446,6 @@ pub fn subst(text: &str, cfg: &Config) -> String {
     })
 }
 
-// ---------------------------------------------------------------- migration
-
-/// A `harness.json` from the bash harness, as `harness.toml` text plus the
-/// list of `"<old> -> <new>"` renames to show the user.
 pub fn migrate_json(json: &str) -> Result<(String, Vec<String>), ConfigError> {
     let value: serde_json::Value = serde_json::from_str(json).map_err(|e| ConfigError::Parse {
         path: "harness.json".to_string(),
@@ -494,7 +467,6 @@ pub fn migrate_json(json: &str) -> Result<(String, Vec<String>), ConfigError> {
     let mut skills: Vec<String> = Vec::new();
 
     for (key, value) in obj {
-        // `_comment`, `_agent`, ... are prose, not answers.
         if key.starts_with('_') {
             continue;
         }
@@ -549,9 +521,7 @@ pub fn migrate_json(json: &str) -> Result<(String, Vec<String>), ConfigError> {
             _ => {
                 let snake = snake_case(key);
                 let line = json_to_toml(value).map(|v| format!("{snake} = {v}"));
-                // A key with no Layout field -- rowCountFile, or anything a
-                // repo invented -- would make the migrated file unloadable now
-                // that unknown keys are refused. Report it as dropped instead.
+                // a key with no Layout field would make the migrated file unloadable now unknown keys are refused; report it dropped instead
                 match line.filter(|l| toml::from_str::<Layout>(l).is_ok()) {
                     Some(line) => {
                         layout.push(line);
@@ -586,9 +556,6 @@ pub fn migrate_json(json: &str) -> Result<(String, Vec<String>), ConfigError> {
     Ok((out, renamed))
 }
 
-/// `s/PATTERN/REPL/p` -> a Rust regex whose group 1 is the failing test name.
-/// sed's BRE spells a group `\(...\)` and a literal paren `(`; a regex spells
-/// them the other way around, so the escaping swaps.
 fn fail_name_from_sed(sed: &str) -> Option<String> {
     let mut chars = sed.chars();
     if chars.next()? != 's' {
@@ -638,16 +605,13 @@ fn fail_name_from_sed(sed: &str) -> Option<String> {
             (false, c) => out.push(c),
         }
     }
-    // No group in the sed pattern means it deleted the prefix and kept the
-    // rest; the regex has to capture that rest instead.
+    // no group in the sed pattern means it deleted the prefix and kept the rest; the regex must capture that rest instead
     if !pattern.contains("\\(") {
         out.push_str("(.+)$");
     }
     Some(out)
 }
 
-/// A skill entry of the old `skills` list. Nothing was fetched then, so the
-/// source and rev are supplied here.
 fn skill_decl(skill: &serde_json::Value) -> String {
     let name = skill.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let id = &skill_id(name);
@@ -668,9 +632,6 @@ fn skill_decl(skill: &serde_json::Value) -> String {
     )
 }
 
-/// The old `name` was a tool-specific reference like
-/// `superpowers:test-driven-development`. The id is its last segment, cut down
-/// to what `validate` accepts.
 fn skill_id(name: &str) -> String {
     name.rsplit(':')
         .next()
@@ -715,7 +676,6 @@ fn json_to_toml(v: &serde_json::Value) -> Option<toml::Value> {
     })
 }
 
-/// A JSON scalar or list as the TOML that denotes it.
 fn scalar(v: &serde_json::Value) -> String {
     json_to_toml(v).map_or_else(|| "\"\"".to_string(), |t| t.to_string())
 }
@@ -788,8 +748,6 @@ mod tests {
         assert!(errs.iter().any(|e| e.to_string().contains("nope")));
     }
 
-    /// Both end up as filesystem paths, so a `..` in either is refused at
-    /// load rather than caught by whatever fetches next.
     #[test]
     fn a_skill_id_or_path_that_escapes_its_directory_is_refused() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
@@ -838,7 +796,7 @@ mod tests {
     #[test]
     fn migrate_json_renames_keys() {
         let (t, renamed) = migrate_json(
-            // r###"..."### because the payload contains `"##`.
+            // r###"..."### because the payload contains `"##`
             r###"{"check":"make","checkForce":"make -B","rowsHeading":"## 11. X","agentCommand":["claude","-p","{prompt}"]}"###,
         )
         .unwrap();
@@ -847,9 +805,6 @@ mod tests {
         assert!(t.contains("preset = \"custom\""));
     }
 
-    // --- gaps the brief's seven leave open ---
-
-    /// The file everything else is merged over has to pass its own rules.
     #[test]
     fn the_defaults_validate() {
         let c = load(tempfile::tempdir().unwrap().path()).unwrap();
@@ -862,8 +817,7 @@ mod tests {
         assert_eq!(c.pipeline[1].end_after_dry_rounds, 2);
     }
 
-    /// Tables merge key by key; an array of tables replaces the list whole,
-    /// so a user's one [[stage]] is the only stage.
+    // tables merge key by key; an array of tables replaces the list whole, so a user's one [[stage]] is the only stage
     #[test]
     fn tables_merge_and_arrays_replace() {
         let d = tempfile::tempdir().unwrap();
@@ -905,8 +859,6 @@ mod tests {
                 Some(Duration::from_secs(secs))
             );
         }
-        // A multibyte last char must not split mid-scalar, and a product that
-        // does not fit must not overflow. Both used to panic.
         for bad in [
             "30",
             "",
@@ -962,7 +914,6 @@ mod tests {
         assert_eq!(errs.len(), 1, "only the verifier stage lacks a turn cap");
         assert!(errs[0].to_string().contains("verify"));
 
-        // A timeout on that stage settles it.
         c.stage[1].timeout = Some("30m".into());
         assert!(validate(&c, &crate::agent::presets(), &|_| Some(String::new())).is_ok());
     }
@@ -1023,21 +974,18 @@ mod tests {
         assert!(out.contains("__SKILLS_DIR__"));
         assert!(out.contains("SPEC.md") && out.contains("## 12.") && out.contains("|12"));
 
-        // Set, it substitutes like any other token.
         c.layout.skills_dir = Some(".codex/skills".into());
         out = subst(text, &c);
         assert!(!out.contains("__"), "{out}");
         assert!(out.contains(".codex/skills"));
     }
 
-    /// The shipped sed expression has to produce the shipped regex.
     #[test]
     fn fail_name_sed_becomes_a_capturing_regex() {
         assert_eq!(
             fail_name_from_sed("s/.*(fail) //p").unwrap(),
             r".*\(fail\) (.+)$"
         );
-        // An explicit BRE group is kept as the capture, and nothing is appended.
         assert_eq!(
             fail_name_from_sed(r"s/^FAIL \(.*\)$/\1/p").unwrap(),
             r"^FAIL (.*)$"
@@ -1049,7 +997,6 @@ mod tests {
         assert_eq!(&caps[1], "parses a header");
     }
 
-    /// The real harness.default.json, migrated, must load and validate.
     #[test]
     fn the_shipped_json_migrates_into_a_valid_config() {
         let json = include_str!("../../../harness.default.json");
@@ -1059,8 +1006,6 @@ mod tests {
             .iter()
             .any(|r| r == "learningsCap -> layout.learnings_cap"));
         assert!(!renamed.iter().any(|r| r.starts_with('_')), "{renamed:?}");
-        // Layout has no row_count_file; with unknown keys refused, migration
-        // has to drop it rather than write a file that will not load.
         assert!(renamed
             .iter()
             .any(|r| r == "rowCountFile -> dropped, no longer used"));
@@ -1083,7 +1028,6 @@ mod tests {
         assert_eq!(c.skill[1].source, "github:thmsmtylr/ponytail");
         assert_eq!(c.skill[1].rev.as_deref(), Some("main"));
         assert_eq!(c.skill[6].gate, "queue-uncovered");
-        // The [[stage]] and [[pipeline]] defaults survive the overlay.
         assert_eq!(c.stage.len(), 4);
         let roles = |_: &str| Some(String::new());
         assert!(validate(&c, &crate::agent::presets(), &roles).is_ok());
@@ -1104,8 +1048,6 @@ mod tests {
         assert_eq!(c.agent.roles["verifier"].command.as_ref().unwrap()[0], "b");
     }
 
-    /// `[agent.<role>]` is the spec form and the only one; the named fields of
-    /// `[agent]` stay named fields beside it.
     #[test]
     fn a_role_table_is_a_plain_agent_subtable() {
         let d = tempfile::tempdir().unwrap();
@@ -1141,8 +1083,6 @@ mod tests {
         );
     }
 
-    /// A config that does not validate refuses to run, and a key in the wrong
-    /// table is exactly the typo that would otherwise run with a stale value.
     #[test]
     fn an_unknown_key_is_refused() {
         let d = tempfile::tempdir().unwrap();

@@ -1,5 +1,3 @@
-//! cli: argument parsing (clap derive) and dispatch to per-subcommand modules.
-
 mod eval;
 mod events;
 mod gate;

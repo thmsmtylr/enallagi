@@ -1,7 +1,4 @@
-//! A rail that names files and names `test-hashes.json` as its enforcement is
-//! true only if every file it names has a key there. `rail-unenforced` goes
-//! quiet as soon as the file exists, whatever is in it, which made
-//! `harness-immutable` aspirational.
+//! A rail naming `test-hashes.json` as enforcement is only true if every file it names has a key there — rail-unenforced goes quiet once the file merely exists.
 
 use super::common::{self, Res};
 use super::rail_unenforced::is_path;

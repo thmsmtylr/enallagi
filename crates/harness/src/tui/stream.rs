@@ -1,23 +1,11 @@
-//! stream: turns one `stage.output` chunk (raw process stdout, possibly
-//! several stream-json lines batched together since `agent::spawn` streams
-//! at no more than 1/s) into the lines the output pane shows.
-//!
-//! `claude`, `gemini`, `qwen`, `amp` and `cursor` all emit one JSON object
-//! per line on stdout. A line that parses and carries a recognised shape is
-//! rendered as `tool  <name>  <input>` or `text  <first line>`; anything
-//! else -- unparseable JSON, a shape we don't know, plain text -- is shown
-//! raw, verbatim.
+//! Turns one `stage.output` chunk into the lines the output pane shows: a recognised JSON shape renders as `tool`/`text`, anything else shows raw.
 
 use serde_json::Value;
 
-/// Splits one chunk into its lines and renders each independently.
 pub fn parse_chunk(chunk: &str) -> Vec<String> {
     chunk.lines().map(render_line).collect()
 }
 
-/// True if any line of the chunk is a `type: assistant` (or `message`)
-/// stream-json event -- used to count agent turns for the output pane's
-/// title.
 pub fn is_assistant_chunk(chunk: &str) -> bool {
     chunk.lines().any(|line| {
         parse_object(line)
@@ -56,8 +44,7 @@ fn render_line(line: &str) -> String {
     }
 }
 
-/// Renders one content item -- either an entry of `message.content[]`, or a
-/// top-level gemini/qwen-shaped object with the same `type`/fields.
+// either an entry of message.content[], or a top-level gemini/qwen-shaped object with the same fields
 fn render_item(item: &Value) -> Option<String> {
     match item.get("type").and_then(Value::as_str)? {
         "tool_use" => {
