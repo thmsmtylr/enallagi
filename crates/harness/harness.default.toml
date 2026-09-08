@@ -189,7 +189,7 @@ id = "tdd"
 source = "github:obra/superpowers"
 path = "skills/test-driven-development"
 rev = "v6.3.0"
-gate = "none"
+gate = "spec-untested"
 why = "the failing test that encodes the acceptance criteria is written before the code"
 
 [[skill]]

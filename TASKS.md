@@ -35,7 +35,7 @@ archived: DECISIONS.md — full block at `git show 7559ba6:TASKS.md`
 ## [T-007] tdd is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
 blockedBy: none
-status: ready
+status: review
 probe: skill-ungated
 rows: none — harness
 command: `harness probe`
@@ -53,6 +53,23 @@ notes: |
   criterion names is never written, which is the half of tdd a probe can see; nothing observes
   ordering, and that stays a hope the `why` line already states. The embedded default is the entry
   the probe reads here, so it is the file; harness.toml is off scope.
+  2026-09-08 implementer: one line, `gate = "none"` → `gate = "spec-untested"` on the tdd entry
+  (harness.default.toml:192); no other entry changed. Red first: `./target/debug/harness probe` at
+  9b6c821 emitted `FINDING skill-ungated harness.toml:0 tdd is declared with gate: none ...`
+  (PROBE skill-ungated 3). Green: after `cargo build -q`, `PROBE skill-ungated 2`, the two lines left
+  are review-received and review-requested (T-008, T-009). Scrutinise: the gate name is
+  `spec-untested`, which is in probes/mod.rs:56 `NAMES`, so the "names gate" branch of the probe stays
+  silent; the tdd entry's source, path, rev and why are byte-identical to 9b6c821.
+  Commands:
+    $ sed -i '' '/^id = "tdd"$/,/^gate = /{s/^gate = "none"$/gate = "spec-untested"/;}' crates/harness/harness.default.toml
+    $ cargo test -p harness -q --test probes -- every_declared_skill_names_its_enforcing_gate
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out
+    $ cargo build -q && ./target/debug/harness probe | grep skill-ungated
+    PROBE skill-ungated 2 (review-received, review-requested; no tdd line)
+    $ cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo exit=$?
+    test result: ok. 190 passed; 0 failed; 1 ignored (+ 8, 5, 9, 15 (2 ignored), 21, 29, 27, 4 passed) → exit=0
+    $ git add crates/harness/harness.default.toml TASKS.md PROGRESS.md && git commit -m "feat(config): T-007 tdd names spec-untested as its gate"
+    [dogfood/rust-port 315f0d0] feat(config): T-007 tdd names spec-untested as its gate — 3 files changed, 25 insertions(+), 2 deletions(-); amended to carry this line
 
 ## [T-008] review-received is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
