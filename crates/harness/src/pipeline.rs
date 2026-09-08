@@ -597,6 +597,11 @@ impl<'a> Loop<'a> {
             }
         };
 
+        if let Err(reason) = self.commit_vendored_skills(&resolved_skills) {
+            self.halt("skill", reason);
+            return Err(Flow::Stop);
+        }
+
         let rendered = skills::render(&source, &resolved_skills, &resolved.preset, self.cfg);
         let path = rendered_role_path(self.root, self.cfg, role);
         if let Some(parent) = path.parent() {
@@ -617,6 +622,47 @@ impl<'a> Loop<'a> {
             stage: stage.name.clone(),
             task,
             preset: resolved.preset,
+        })
+    }
+
+    // a fetched skill and its lock entry are new to the tree; committed here so the verdict gate
+    // sees them as part of the branch, not as work the implementer or verifier left uncommitted.
+    fn commit_vendored_skills(&mut self, resolved: &[skills::ResolvedSkill]) -> Result<(), String> {
+        if resolved.is_empty() || !self.skills_dirty(resolved) {
+            return Ok(());
+        }
+        let mut paths = vec!["harness.lock".to_string()];
+        for skill in resolved {
+            if let Ok(rel) = skill.dir.strip_prefix(self.root) {
+                paths.push(rel.to_string_lossy().to_string());
+            }
+        }
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let ids: Vec<&str> = resolved.iter().map(|s| s.id.as_str()).collect();
+        git::commit_paths(
+            self.root,
+            &refs,
+            &format!("chore(skills): vendor {}", ids.join(" ")),
+        )
+        .map(|_| ())
+        .map_err(|err| format!("vendored skills could not be committed: {err}"))
+    }
+
+    // "fetched" is the ordinary signal; the porcelain fallback also catches a vendored dir left
+    // untracked by an earlier run (e.g. one before this fix existed).
+    fn skills_dirty(&self, resolved: &[skills::ResolvedSkill]) -> bool {
+        if resolved.iter().any(|s| s.result == "fetched") {
+            return true;
+        }
+        git::porcelain(self.root).iter().any(|line| {
+            let path = line.get(3..).unwrap_or("");
+            path == "harness.lock"
+                || resolved.iter().any(|s| {
+                    s.dir
+                        .strip_prefix(self.root)
+                        .map(|rel| path.starts_with(rel.to_string_lossy().as_ref()))
+                        .unwrap_or(false)
+                })
         })
     }
 

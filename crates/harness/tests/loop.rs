@@ -567,6 +567,107 @@ fn rendering_a_role_never_eats_the_source_it_rendered_from() {
     assert!(!rendered.contains("{{skill:"), "the token was not rendered");
 }
 
+const SKILL_TASKS: &str = "\
+## [T-001] do the thing
+
+scope: src/a.ts
+rows: none — harness
+status: ready
+criteria:
+  - it happens
+";
+
+const SKILL_DECL: &str = "\
+[[skill]]
+id = \"tdd\"
+source = \"path:vendor/tdd\"
+path = \"\"
+gate = \"none\"
+why = \"because\"
+";
+
+// reproduces the bug: skills::resolve vendors a skill and writes harness.lock but nothing commits
+// them, so the verdict gate sees the untracked vendor dir as work off the branch and forces the
+// task back to ready even though the implementer and verifier committed everything in their scope.
+#[test]
+fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
+    let toml = base_toml(SKILL_DECL);
+    let r = repo(&toml, SKILL_TASKS);
+    // repo()'s root .gitignore blanket-ignores .harness/; carve out the skills dir the fixture
+    // vendors into, same as a real install's .harness/.gitignore only ignores logs and events.
+    r.write(".gitignore", ".harness/*\n!.harness/skills/\n");
+    r.write("vendor/tdd/SKILL.md", "# tdd\n\nWrite the test first.\n");
+    r.write(
+        ".harness/roles/implementer.md",
+        "Do the work with {{skill:tdd}} in hand.\n",
+    );
+
+    let implement = script(
+        &r,
+        "src/fakeimpl.sh",
+        &format!(
+            "echo work >src/a.ts\n\
+             {bin} tasks set-status T-001 review 'stub implemented'\n\
+             echo 'iteration' >>PROGRESS.md\n\
+             git add -- src/a.ts PROGRESS.md TASKS.md >/dev/null 2>&1\n\
+             git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
+             {QUIET}",
+            bin = env!("CARGO_BIN_EXE_harness"),
+        ),
+    );
+    let verify = script(
+        &r,
+        "src/fakeverify.sh",
+        &format!(
+            "{bin} tasks set-status T-001 done 'stub verified'\n\
+             git add -- TASKS.md >/dev/null 2>&1\n\
+             git -c commit.gpgsign=false commit -qm 'verify: T-001 verdict' >/dev/null 2>&1\n\
+             {QUIET}",
+            bin = env!("CARGO_BIN_EXE_harness"),
+        ),
+    );
+    r.write(
+        "harness.toml",
+        &(toml + &role_commands(&implement, &verify)),
+    );
+    r.commit_all("stubs");
+
+    let (_, events) = go(&r, &opts(1));
+
+    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    assert!(tasks.contains("status: done"), "{tasks}");
+    assert!(
+        events.iter().any(|e| matches!(&e.kind,
+            Kind::Gate { gate, pass, .. } if gate == "verdict" && *pass)),
+        "{events:#?}"
+    );
+    assert!(
+        events.iter().any(|e| matches!(&e.kind,
+            Kind::Gate { gate, pass, .. } if gate == "scope" && *pass)),
+        "{events:#?}"
+    );
+
+    let log = std::process::Command::new("git")
+        .args(["log", "--oneline"])
+        .current_dir(&r.root)
+        .output()
+        .expect("git log");
+    assert!(
+        String::from_utf8_lossy(&log.stdout).contains("chore(skills): vendor tdd"),
+        "{}",
+        String::from_utf8_lossy(&log.stdout)
+    );
+
+    let ls = std::process::Command::new("git")
+        .args(["ls-files"])
+        .current_dir(&r.root)
+        .output()
+        .expect("git ls-files");
+    let ls = String::from_utf8_lossy(&ls.stdout);
+    assert!(ls.contains("harness.lock"), "{ls}");
+    assert!(ls.contains(".harness/skills/tdd/SKILL.md"), "{ls}");
+}
+
 #[test]
 fn a_red_check_that_names_nothing_is_a_finding_not_an_error() {
     let r = repo(&base_toml(""), "");
