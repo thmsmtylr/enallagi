@@ -16,7 +16,6 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         root: &root,
         cfg: &cfg,
         check: None,
-        // it costs wall-clock on every scout round and has to earn it
         driver: std::env::var("HARNESS_DRIVER").as_deref() == Ok("1"),
     };
     let results = probes::run_all(&ctx, &args.names);

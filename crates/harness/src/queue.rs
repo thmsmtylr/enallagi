@@ -1,9 +1,4 @@
-//! queue: TASKS.md, parsed once.
-//!
-//! TASKS.md used to be read by seven separate awk and sed programs, each re-implementing "find
-//! the block, read the field". Every question the launcher asks about the queue is answered here.
-//! A heading inside a fenced code block is documentation, not a task; an unterminated fence or a
-//! duplicate id makes the queue ambiguous, so both are refused rather than silently resolved.
+//! TASKS.md, parsed once. A heading inside a fenced code block is documentation, not a task; an unterminated fence or duplicate id is refused, not silently resolved.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -101,8 +96,7 @@ pub fn parse(text: &str) -> Result<Vec<Block>, QueueError> {
     Ok(blocks)
 }
 
-/// The first `key: value` line of a block, stripped. `status` is its first word: everything
-/// after it is the reason (`deferred -- out of scope`).
+// status is its first word: everything after it is the reason (`deferred -- out of scope`)
 pub fn field(b: &Block, key: &str) -> Option<String> {
     let prefix = format!("{key}:");
     for (_, line) in &b.body {
@@ -242,9 +236,7 @@ pub fn rejections(decisions: &str) -> Vec<String> {
     out
 }
 
-/// `id, title, status` -- one line per block, file order. File order is queue priority:
-/// `ready_unattended` takes the first ready block in file order, so re-ordering the view would
-/// lie about it.
+// file order is queue priority: ready_unattended takes the first ready block in file order
 pub fn list(blocks: &[Block]) -> String {
     blocks
         .iter()
@@ -264,8 +256,7 @@ pub struct Queue {
 }
 
 impl Queue {
-    /// A missing file reads as an empty queue -- every command takes an optional trailing file,
-    /// so fixtures need no environment and a fresh repo with no TASKS.md yet is not an error.
+    // a missing file reads as an empty queue: a fresh repo with no TASKS.md yet is not an error
     pub fn read(&self) -> Result<String, QueueError> {
         match std::fs::read_to_string(&self.path) {
             Ok(s) => Ok(s),
@@ -366,8 +357,6 @@ mod tests {
             vec!["- [2026-09-01] a claim \u{2014} refuted by `x`: y"]
         );
     }
-
-    // Ported from harness/tasks.py selftest() (lines 270-332), fixture and all.
 
     const FIXTURE: &str = "# TASKS\n\n## Block format\n\n```\n## [T-042] the example in the documentation, which is not a task\nblockedBy:\nstatus: ready\n```\n\n---\n\n## [T-001] a blocker that is done\nblockedBy:\nstatus: done\n\n## [T-002] ready, and its blocker is not\nblockedBy: T-009\nstatus: ready\n\n## [T-003] ready, attended, not a lane's\nblockedBy: T-001\nstatus: ready\nattended: true\n\n## [T-004] the one a lane may take\nblockedBy: T-001\nstatus: ready\nrows: none \u{2014} harness\n\n## [T-005] blocked, and every blocker is done\nblockedBy: T-001\nstatus: blocked\n\n## [T-006] blockedBy spelled none\nblockedBy: none\nstatus: review\n\n## [T-007] blocked, and its blocker is not done\nblockedBy: T-009\nstatus: blocked\n\n## [T-009] the blocker T-002 waits on\nblockedBy:\nstatus: ready\n";
 

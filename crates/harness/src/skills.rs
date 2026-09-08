@@ -1,6 +1,4 @@
-//! skills: the declared skills of `harness.toml`, fetched from git or a path,
-//! vendored into the repository, pinned in `harness.lock`, and rendered into
-//! the role prompts that name them with `{{skill:<id>}}`.
+//! Fetches declared skills from git or a path, vendors and pins them, and renders them into role prompts.
 
 use crate::agent::Preset;
 use crate::config::{Config, SkillDecl};
@@ -60,8 +58,7 @@ pub fn lock_path(root: &Path) -> PathBuf {
     root.join("harness.lock")
 }
 
-/// A missing lock reads as an empty one; an unparseable lock is an error,
-/// because silently re-fetching over a corrupt pin defeats the pin.
+// a missing lock reads as empty, but an unparseable one is an error -- silently re-fetching over a corrupt pin defeats the pin
 pub fn read_lock(root: &Path) -> Result<Lock, SkillError> {
     let text = match fs::read_to_string(lock_path(root)) {
         Ok(t) => t,
@@ -79,9 +76,7 @@ pub fn write_lock(root: &Path, lock: &Lock) -> Result<(), SkillError> {
     Ok(())
 }
 
-/// `^[a-z0-9-]+$`. The id is joined onto a filesystem path and written into
-/// the lock, so anything else -- a `..`, a separator, a shell metacharacter --
-/// is refused before it can be either.
+// the id becomes a filesystem path and a lock key, so a `..`, separator or shell metacharacter is refused before it can be either
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id
@@ -89,8 +84,7 @@ pub fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-/// A skill's `path` is joined onto a directory the harness fetched, so it must
-/// stay inside it. Empty means the source root itself.
+// joined onto a fetched directory, so it must stay inside it; empty means the source root itself
 pub fn valid_path(path: &str) -> bool {
     let p = Path::new(path);
     p.is_relative() && !p.components().any(|c| c == Component::ParentDir)
@@ -110,9 +104,7 @@ pub fn required_ids(role_text: &str) -> Vec<String> {
     ids
 }
 
-/// Where vendored skills live, relative to the repository root: the configured
-/// directory, else the preset's own, else `<harness_dir>/skills` for a preset
-/// that has no skills mechanism and reads the body inline instead.
+// configured dir, else the preset's own, else <harness_dir>/skills for a preset with no skills mechanism
 pub fn skills_dir(cfg: &Config, preset: &Preset) -> PathBuf {
     if let Some(dir) = cfg.layout.skills_dir.as_deref() {
         return PathBuf::from(dir);
@@ -137,8 +129,7 @@ impl Default for ResolveOpts {
     }
 }
 
-/// CI freezes skills the way `--frozen` does: an unattended run must fail on a
-/// stale lock rather than fetch new instructions and carry on.
+// CI freezes skills like --frozen: an unattended run must fail on a stale lock, not fetch new instructions
 fn frozen_from_env(ci: Option<&OsStr>) -> bool {
     ci.is_some()
 }
@@ -161,9 +152,6 @@ pub struct ResolvedSkill {
     pub body: String,
 }
 
-/// Resolves each id to a vendored skill directory. Under `frozen` a skill that
-/// does not already match its lock entry is refused rather than fetched, so a
-/// pipeline cannot silently pull new instructions mid-run.
 pub fn resolve(
     root: &Path,
     cfg: &Config,
@@ -178,8 +166,7 @@ pub fn resolve(
     let mut dirty = false;
 
     for id in ids {
-        // `validate` refuses these at load; this is the second lock on the
-        // door, because the id is about to become a directory name.
+        // validate() refuses these at load; this is the second lock on the door since the id becomes a directory name
         if !valid_id(id) {
             return Err(SkillError::BadId { id: id.clone() });
         }
@@ -253,8 +240,6 @@ pub fn resolve(
     Ok(out)
 }
 
-/// `Ok(body)` when the lock, the declaration and the vendored `SKILL.md` all
-/// agree; `Err(why)` names the first thing that did not.
 fn cached(
     lock: &Lock,
     entry: Option<usize>,
@@ -274,8 +259,6 @@ fn cached(
     Ok(body)
 }
 
-/// The directory the skill's `path` is relative to, plus the commit it is at
-/// for a git source.
 fn fetch(
     root: &Path,
     decl: &SkillDecl,
@@ -324,9 +307,7 @@ fn fetch(
     Ok((dir, Some(commit)))
 }
 
-/// `<cache>/git/<host>/<every path segment>/<rev>`. Every segment of the URL
-/// is kept, so two repositories that share a trailing `<owner>/<repo>` under
-/// different prefixes cannot land on the same checkout.
+// every URL segment is kept, so two repos sharing a trailing <owner>/<repo> under different prefixes don't collide
 fn cache_path(cache_dir: &Path, url: &str, rev: &str) -> PathBuf {
     let rest = match url.split_once("://") {
         Some((_, r)) => r.to_string(),
@@ -351,9 +332,7 @@ fn cache_path(cache_dir: &Path, url: &str, rev: &str) -> PathBuf {
     dir
 }
 
-/// One path segment of the cache, with `.` and `..` neutered: a URL is
-/// attacker-supplied as far as this function is concerned, and it is being
-/// turned into a filesystem path.
+// a URL is attacker-supplied as far as this is concerned, and it's becoming a filesystem path
 fn segment(s: &str) -> String {
     if s.is_empty() || s.chars().all(|c| c == '.') {
         return "_".to_string();
@@ -361,17 +340,14 @@ fn segment(s: &str) -> String {
     s.to_string()
 }
 
-/// A cache directory that already exists is a pinned checkout and is reused
-/// without touching the network. A new one is cloned beside it and renamed
-/// into place, so a directory under that name is always a complete checkout
-/// and never a half-finished or abandoned clone.
+// cloned beside the target and renamed into place, so a directory under that name is always a complete checkout, never a half clone
 fn clone(url: &str, rev: Option<&str>, dir: &Path) -> Result<(), SkillError> {
     if dir.exists() {
         return Ok(());
     }
     let parent = dir.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(parent)?;
-    // Not `with_extension`: a rev like `v1.2` would lose its `.2`.
+    // not with_extension: a rev like `v1.2` would lose its `.2`
     let tmp = PathBuf::from(format!("{}.tmp", dir.display()));
     let _ = fs::remove_dir_all(&tmp);
 
@@ -381,8 +357,7 @@ fn clone(url: &str, rev: Option<&str>, dir: &Path) -> Result<(), SkillError> {
     }
     if let Err(e) = fs::rename(&tmp, dir) {
         let _ = fs::remove_dir_all(&tmp);
-        // Losing the race to another process is not a failure: what it put
-        // there is the same checkout this one just made.
+        // losing the race to another process is not a failure -- it made the same checkout
         if !dir.exists() {
             return Err(e.into());
         }
@@ -402,15 +377,13 @@ fn clone_into(url: &str, rev: Option<&str>, parent: &Path, tmp: &Path) -> Result
     ) {
         return Ok(());
     }
-    // --branch takes a branch or a tag, never a commit sha.
+    // --branch takes a branch or a tag, never a commit sha
     let _ = fs::remove_dir_all(tmp);
     git::git(parent, &["clone", url, &target])?;
     git::git(tmp, &["checkout", "-q", rev])?;
     Ok(())
 }
 
-/// Copies `src` over `dst`, replacing whatever was there, and returns the
-/// `SKILL.md` body.
 fn vendor(src: &Path, dst: &Path) -> Result<String, SkillError> {
     if !src.join("SKILL.md").is_file() {
         return Err(SkillError::Io(std::io::Error::new(
@@ -444,10 +417,7 @@ fn sha256(bytes: &[u8]) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Replaces every `{{skill:<id>}}` token of a role prompt. A tool preset gets
-/// the invocation it understands; a preset with no skills mechanism gets the
-/// body appended as a section and a pointer to it. Tokens whose id was not
-/// resolved are left alone.
+// unresolved {{skill:<id>}} tokens are left alone; inline presets get the body appended, others get the invocation
 pub fn render(
     role_text: &str,
     resolved: &[ResolvedSkill],
@@ -510,7 +480,6 @@ mod tests {
 
     const BODY: &str = "---\nname: tdd\n---\n\nWrite the failing test first.\n";
 
-    /// A `path:` source directory holding one SKILL.md, outside the repo.
     fn source_dir(repo: &Repo, rel: &str) -> String {
         repo.write(&format!("{rel}/SKILL.md"), BODY);
         repo.write(&format!("{rel}/references/more.md"), "more\n");
@@ -570,7 +539,6 @@ mod tests {
 
     #[test]
     fn a_git_source_is_cloned_at_rev_into_the_cache() {
-        // A bare repo in a tempdir: no network, but a real git source.
         let upstream = Repo::new();
         upstream.write("skills/tdd/SKILL.md", BODY);
         upstream.commit_all("skill");
@@ -713,8 +681,6 @@ mod tests {
         assert!(matches!(err, SkillError::BadSource { .. }));
     }
 
-    /// A bare repo at `<home>/<rel>` holding `skills/tdd/SKILL.md`, as a
-    /// `git+file://` source. No network: the upstream is a fixture.
     fn bare_source(home: &Path, rel: &str, body: &str) -> String {
         let upstream = Repo::new();
         upstream.write("skills/tdd/SKILL.md", body);
@@ -794,7 +760,6 @@ mod tests {
         let repo = Repo::new();
         let cfg = config(&source, "skills/tdd", None);
 
-        // What a clone killed halfway through leaves behind.
         let url = source.trim_start_matches("git+");
         let dir = cache_path(&repo.root.join("cache"), url, "HEAD");
         let tmp = PathBuf::from(format!("{}.tmp", dir.display()));

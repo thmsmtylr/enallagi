@@ -34,9 +34,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 Some(rev) => format!("{}@{rev}", decl.source),
                 None => decl.source.clone(),
             };
-            // A path source has no commit to pin, so its lock line is the
-            // content hash instead -- "unlocked" is reserved for a skill the
-            // lock does not mention at all.
+            // a path source has no commit to pin, so its lock line is the content hash; "unlocked" means the lock omits it entirely
             let state = lock
                 .skill
                 .iter()
@@ -59,8 +57,6 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     };
     let mut events = Writer::new(Log::open(&root.join(&cfg.layout.harness_dir)));
 
-    // One id at a time, so a refusal names every unresolved skill rather than
-    // only the first one.
     let mut unresolved = Vec::new();
     for id in &ids {
         match skills::resolve(

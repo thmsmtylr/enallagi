@@ -1,13 +1,4 @@
-//! archive: moves `done` task blocks out of TASKS.md into DECISIONS.md, and rolls PROGRESS.md
-//! over once it grows past a size the loop's `tail` no longer needs to see in full.
-//!
-//! A done task's `notes:` are its audit trail and the only channel between two fresh sessions,
-//! so they are kept, not deleted -- but 85% of a long-running TASKS.md is finished tasks, and
-//! every process an iteration spawns re-reads the whole file to find its own block. The verdict
-//! moves to DECISIONS.md; the block keeps exactly what the two resolvers read: the header,
-//! `blockedBy:`/`scope:`/`attended:` and `status:`.
-//!
-//! Ported from `harness/archive-done.sh`.
+//! Moves `done` task blocks out of TASKS.md into DECISIONS.md, and rolls PROGRESS.md over past a size cap.
 
 use std::collections::HashSet;
 use std::fs;
@@ -18,8 +9,6 @@ use crate::config::Config;
 use crate::git;
 use crate::queue;
 
-/// PROGRESS_MAX and PROGRESS_KEEP from the shell script, same names, same defaults: the
-/// rollover triggers past this many lines and keeps this many of the newest.
 const PROGRESS_MAX_DEFAULT: usize = 2000;
 const PROGRESS_KEEP_DEFAULT: usize = 200;
 
@@ -41,11 +30,7 @@ pub struct ArchiveReport {
     pub refused: Option<String>,
 }
 
-/// A loop is running here, and this process is not under it. `TASKS.md` is that loop's bus, so
-/// rewriting it from anywhere else races the running lane -- LEARNINGS 2026-08-25, one checkout
-/// is one writer. Liveness is `<harness_dir>/loop.pid`: `loop.sh` writes its pid on start and
-/// removes it on exit, and a process is that loop's own lane exactly when the pid is among its
-/// ancestors.
+// rewriting TASKS.md from outside a running loop's own lane races it: one checkout, one writer
 pub fn loop_live(root: &Path, harness_dir: &str) -> Option<u32> {
     let pidfile = root.join(harness_dir).join("loop.pid");
     let content = fs::read_to_string(pidfile).ok()?;
@@ -146,8 +131,6 @@ pub fn archive_done(
     })
 }
 
-/// Moves every `done`, not-yet-archived block's body to DECISIONS.md, leaving a stub in
-/// TASKS.md with only the fields the two resolvers read.
 fn archive_tasks(root: &Path, dry_run: bool) -> Result<Vec<String>, ArchiveError> {
     let tasks_path = root.join("TASKS.md");
     let src = fs::read_to_string(&tasks_path)?;
@@ -176,8 +159,7 @@ fn archive_tasks(root: &Path, dry_run: bool) -> Result<Vec<String>, ArchiveError
                 continue;
             }
 
-            // The FIRST of each, which is the one field() reads; a quoted block in the notes
-            // has its own and is ignored.
+            // keep the FIRST of each key, the one field() reads
             let mut keep: Vec<String> = Vec::new();
             let mut seen: HashSet<String> = HashSet::new();
             for l in &body[1..] {
@@ -223,9 +205,7 @@ fn archive_tasks(root: &Path, dry_run: bool) -> Result<Vec<String>, ArchiveError
     Ok(moved)
 }
 
-/// Rolls the oldest entries of PROGRESS.md into PROGRESS.archive.md once the file grows past
-/// `PROGRESS_MAX` lines, keeping the header (everything up to the first `---`) and the newest
-/// `PROGRESS_KEEP` lines, split on an entry heading so no entry is cut in half.
+// split point snaps to the nearest entry heading so no entry is cut in half
 fn roll_progress(root: &Path, dry_run: bool) -> Result<usize, ArchiveError> {
     let max = env_usize("PROGRESS_MAX", PROGRESS_MAX_DEFAULT);
     let keep = env_usize("PROGRESS_KEEP", PROGRESS_KEEP_DEFAULT);

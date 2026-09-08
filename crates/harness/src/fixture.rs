@@ -23,11 +23,7 @@ impl Repo {
         repo
     }
 
-    /// The fallible twin of `new`: a fixture that cannot be built (a git
-    /// binary missing, a full disk, a tempdir the sandbox refuses) is an
-    /// I/O error here, never a panic. `harness eval` builds every fixture
-    /// through this path so a broken fixture is reported as `ERROR`, not a
-    /// crash.
+    // a fixture that can't be built is an I/O error here, never a panic, so eval reports ERROR not a crash
     pub fn try_new() -> std::io::Result<Repo> {
         let dir = tempfile::TempDir::new()?;
         let root = dir.path().to_path_buf();
@@ -49,7 +45,6 @@ impl Repo {
         fs::write(path, content).expect("write fixture file");
     }
 
-    /// The fallible twin of `write`.
     pub fn try_write(&self, rel: &str, content: &str) -> std::io::Result<()> {
         let path = self.root.join(rel);
         if let Some(parent) = path.parent() {
@@ -80,8 +75,6 @@ impl Repo {
         "./src/fakecheck.sh".to_string()
     }
 
-    /// `harness.toml` = the embedded default plus `toml_overrides`, then a full
-    /// install: the roles, the rails, the skill and the documents.
     pub fn init_harness(&self, toml_overrides: &str) {
         self.write("harness.toml", toml_overrides);
         crate::init::install(&self.root, &crate::init::InitOpts::default()).expect("install");

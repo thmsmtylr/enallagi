@@ -1,5 +1,4 @@
-//! Helpers the text probes share: the two table parsers, the queue block
-//! reader, the learnings reader, and the tree lookups (`tracked`, `declares`).
+//! Helpers the text probes share: table parsers, the queue/learnings readers, and tree lookups.
 
 use super::{Finding, ProbeCtx, ProbeResult};
 use crate::config::Config;
@@ -8,7 +7,6 @@ use globset::GlobBuilder;
 use regex::Regex;
 use std::path::Path;
 
-/// A probe fails with a reason string; nothing here is recoverable in place.
 pub type Res<T> = Result<T, String>;
 
 pub fn result(found: Res<Vec<Finding>>) -> ProbeResult {
@@ -65,8 +63,6 @@ pub fn tracked(root: &Path) -> Res<Vec<String>> {
         .collect())
 }
 
-/// Every file and directory under `root`, relative and sorted, `.git` aside.
-/// One walk answers any number of patterns, which is why it is separate.
 pub fn walk(root: &Path) -> Vec<String> {
     let mut out = Vec::new();
     descend(root, "", &mut out);
@@ -98,8 +94,7 @@ fn descend(root: &Path, prefix: &str, out: &mut Vec<String>) {
     }
 }
 
-/// `*` stops at a `/` and `**` crosses it, which is what the shell glob these
-/// patterns were written for does.
+// `*` stops at a `/`, `**` crosses it
 pub fn matches(paths: &[String], pattern: &str) -> Res<Vec<String>> {
     let pattern = pattern.strip_suffix('/').unwrap_or(pattern);
     let glob = GlobBuilder::new(pattern)
@@ -114,8 +109,6 @@ pub fn matches(paths: &[String], pattern: &str) -> Res<Vec<String>> {
         .collect())
 }
 
-/// How a test declares its name is language-specific: the patterns come from
-/// `layout.test_decl_patterns`.
 pub fn declares(root: &Path, rel: &str, name: &str, patterns: &[String]) -> Res<bool> {
     let wanted: Vec<String> = patterns.iter().map(|p| p.replace("{name}", name)).collect();
     Ok(lines_of(root, rel)?.iter().any(|line| {
@@ -148,8 +141,7 @@ pub struct SpecRow {
 
 const SEPARATOR: &str = r"^\|[\s:|-]+\|\s*$";
 
-/// The same slice and cell pattern the floor's own row parser uses; a second
-/// parser must read what it reads.
+// must slice and read cells the same way the floor's own row parser does, or the two disagree
 pub fn spec_rows(ctx: &ProbeCtx) -> Res<Vec<SpecRow>> {
     let cfg: &Config = ctx.cfg;
     let spec = &cfg.layout.spec;
@@ -248,7 +240,6 @@ pub fn rail_rows(ctx: &ProbeCtx) -> Res<Vec<RailRow>> {
         }
     }
     if !seen {
-        // a renamed column read as "no rails at all", which is 0 for two probes -- zero-as-pass
         return Err(format!(
             "{file} has no table headed `{RAILS_HEADER}`, so no rail can be read"
         ));

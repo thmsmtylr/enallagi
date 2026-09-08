@@ -8,9 +8,7 @@ use crate::gates::{self, CheckReport};
 use crate::queue;
 use crate::skills;
 
-/// PreToolUse: refuse an edit to `test-hashes.json`, a file it covers, `harness.lock` itself, or
-/// a file under a locked skill's vendored directory. Bash `sed -i` and a heredoc from Bash bypass
-/// this same as the shell version did -- the authority is the verifier reading the diff.
+// this can be bypassed via Bash sed -i or a heredoc: the real authority is the verifier reading the diff
 pub fn immutable(root: &Path, input: &str) -> (i32, String) {
     let Some(target) = tool_input_path(root, input) else {
         return (0, String::new());
@@ -362,7 +360,6 @@ mod tests {
         config::load(root).unwrap_or_default()
     }
 
-    /// Cleans up process on drop even if the test panics, preventing `sleep 30` leaks.
     struct Reaper(std::process::Child);
 
     impl Drop for Reaper {
@@ -448,7 +445,6 @@ mod tests {
     fn immutable_normalizes_a_nonexistent_target_under_an_existing_directory() {
         let r = Repo::new();
         r.write("test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
-        // src/ already exists (Repo::new seeds src/schema.ts); this file under it does not.
         let (code, msg) = immutable(&r.root, &input("src/does-not-exist-yet.ts"));
         assert_eq!(code, 0, "{msg}");
     }
@@ -466,11 +462,9 @@ mod tests {
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("package.json#scripts"), "{msg}");
 
-        // the root package.json is covered too
         let (code, _) = immutable(&r.root, &input("package.json"));
         assert_eq!(code, 2);
 
-        // an uninvolved workspace member is not
         r.write("packages/bar/package.json", r#"{"name":"bar"}"#);
         let (code, _) = immutable(&r.root, &input("packages/bar/other.ts"));
         assert_eq!(code, 0);

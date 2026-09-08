@@ -1,5 +1,3 @@
-//! `harness tasks <cmd> [args] [file]` -- the CLI surface over `queue`.
-
 use crate::queue::{self, Queue, QueueError};
 use std::path::{Path, PathBuf};
 

@@ -1,13 +1,9 @@
-//! Ported from `selftest.sh:597-667`: the eval runner and the write-path
-//! gate on a candidate rule, driven with a stub agent so no real agent is
-//! spawned.
+//! The eval runner and the write-path gate on a candidate rule, driven with a stub agent so no real agent is spawned.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// A package is a directory with `evals/` under it: the install surface is
-/// the binary's own, so nothing of this checkout is copied in.
 fn package() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     fs::create_dir_all(dir.path().join("evals")).expect("mkdir evals");
@@ -26,8 +22,6 @@ fn write_exec(path: &Path, body: &str) {
     }
 }
 
-/// Writes `<pkg>/evals/<name>/{prompt.txt,setup.sh,assert.sh}`, and
-/// `ablate.sh` when given.
 fn write_eval(
     pkg: &Path,
     name: &str,
@@ -150,8 +144,7 @@ fn the_eval_runner_fails_a_role_that_breaks_its_rule() {
 fn with_no_agent_configured_the_evals_refuse_rather_than_report() {
     let pkg = package();
     write_eval(pkg.path(), "case", "do the thing", "true", "true", None);
-    // A preset that resolves to nothing: agent resolution fails closed, the
-    // same shape as a fresh checkout with no agentCommand configured.
+    // a preset that resolves to nothing: agent resolution fails closed
     fs::write(
         pkg.path().join("harness.toml"),
         "[agent]\npreset = \"doesnotexist\"\n",
@@ -176,7 +169,6 @@ fn with_no_agent_configured_the_evals_refuse_rather_than_report() {
 #[test]
 fn a_directory_with_no_evals_is_refused() {
     let pkg = package();
-    // package's evals/ is empty: a fresh install, no eval directories.
     let r = run_eval(pkg.path(), "/bin/true {prompt}", &[]);
     assert_eq!(r.code, 2, "stdout={} stderr={}", r.stdout, r.stderr);
     assert!(
@@ -191,8 +183,7 @@ fn a_fixture_that_cannot_be_built_is_error_never_fail() {
     let pkg = package();
     write_eval(pkg.path(), "case", "irrelevant", "true", "true", None);
 
-    // TMPDIR names nothing: the throwaway repo can never be created, so the
-    // fixture can never be built.
+    // TMPDIR names nothing, so the throwaway repo can never be created
     let r = run_harness_eval_in(
         pkg.path(),
         None,
@@ -207,12 +198,7 @@ fn a_fixture_that_cannot_be_built_is_error_never_fail() {
     );
 }
 
-/// Sets up `pkg` with a "rule" eval (gated) and an "other" eval (used to
-/// check for regressions). The rule is a real line of the verifier prompt
-/// `harness init` writes into the fixture -- the `git status --porcelain`
-/// rule -- and `ablate.sh` deletes it. The single stub agent tells which
-/// eval it was called for from the prompt text, and for "rule" it passes
-/// only when the rule is still there.
+// RULE is a real line of the verifier prompt harness init writes; ablate.sh deletes it
 const RULE: &str = "git status --porcelain";
 
 fn write_gate_fixture(pkg: &Path, other_assert: &str) -> PathBuf {

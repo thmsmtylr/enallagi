@@ -7,8 +7,6 @@ pub struct Args {
     pub name: String,
 }
 
-/// The root a hook resolves against: `CLAUDE_PROJECT_DIR` when the adapter sets it (every hook
-/// script this ports read that first), else `git rev-parse --show-toplevel`, else the cwd.
 fn root() -> anyhow::Result<PathBuf> {
     if let Ok(dir) = std::env::var("CLAUDE_PROJECT_DIR") {
         if !dir.is_empty() {

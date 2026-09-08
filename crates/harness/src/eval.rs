@@ -1,10 +1,4 @@
-//! eval: the eval runner and the three-condition admission gate for a
-//! candidate rule. A port of `evals/run.sh`.
-//!
-//! One eval is a directory under `<pkg>/evals/` with `setup.sh`,
-//! `prompt.txt` and `assert.sh` (`ablate.sh` is optional, and required only
-//! to gate a candidate rule). Each eval runs in a throwaway repo with the
-//! harness freshly installed, the same isolation the loop's own stages get.
+//! The eval runner and the three-condition admission gate for a candidate rule.
 
 use crate::agent;
 use crate::config;
@@ -19,16 +13,13 @@ pub enum EvalError {
     Fixture,
 }
 
-/// Builds an eval's fixture: the harness installed into a throwaway repo,
-/// the same install an operator gets.
 fn install_fixture(root: &Path) -> Result<(), EvalError> {
     crate::init::install(root, &crate::init::InitOpts::default())
         .map(|_| ())
         .map_err(|_| EvalError::Fixture)
 }
 
-/// The outcome of one fixture run, matching `evals/run.sh`'s exit classes:
-/// 0 pass, 3 fixture error, 4 agent error, anything else a fail.
+// exit classes: 0 pass, 3 fixture error, 4 agent error, anything else a fail
 enum Outcome {
     Pass,
     Fail,
@@ -64,8 +55,6 @@ fn list_evals(pkg: &Path) -> Vec<String> {
     names
 }
 
-/// `EVAL_AGENT`, else the resolved `[agent]` of `pkg`'s `harness.toml` (or
-/// the embedded default when there is none), else nothing to run.
 fn resolve_agent(pkg: &Path) -> Option<Vec<String>> {
     if let Ok(env) = std::env::var("EVAL_AGENT") {
         let words: Vec<String> = env.split_whitespace().map(String::from).collect();
@@ -80,9 +69,6 @@ fn resolve_agent(pkg: &Path) -> Option<Vec<String>> {
         .map(|r| r.argv)
 }
 
-/// Runs one script with `cwd` = the fixture root. `pkg` is exported as
-/// `EVAL_PKG` when `with_pkg` is set, matching which of `setup.sh`/
-/// `ablate.sh` (yes) and `assert.sh` (no) the shell version passes it to.
 fn run_script(script: &Path, cwd: &Path, pkg: Option<&Path>) -> bool {
     let mut cmd = Command::new("bash");
     cmd.arg(script).current_dir(cwd);
@@ -92,9 +78,6 @@ fn run_script(script: &Path, cwd: &Path, pkg: Option<&Path>) -> bool {
     cmd.status().map(|s| s.success()).unwrap_or(false)
 }
 
-/// Substitutes `{prompt}`/`{turns}` into the agent argv and runs it with
-/// `cwd` = the fixture root, output discarded. `false` on a non-zero exit
-/// or a spawn failure.
 fn run_agent(argv: &[String], prompt: &str, cwd: &Path) -> bool {
     let words: Vec<String> = argv
         .iter()
@@ -113,8 +96,6 @@ fn run_agent(argv: &[String], prompt: &str, cwd: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Builds a fresh fixture, optionally ablates the candidate rule, then runs
-/// the eval's `setup.sh`, the agent and `assert.sh` in it.
 fn run_one(pkg: &Path, name: &str, agent_argv: &[String], ablate: bool) -> Outcome {
     let dir = eval_dir(pkg, name);
 
@@ -126,9 +107,7 @@ fn run_one(pkg: &Path, name: &str, agent_argv: &[String], ablate: bool) -> Outco
         return Outcome::FixtureError;
     }
 
-    // The ablation runs before setup and before the agent: the fixture is
-    // identical either way, and the only difference is whether the rule is
-    // present when the agent reads its prompt.
+    // ablation runs before setup: fixture is identical either way, only the rule's presence differs
     if ablate {
         let ablate_sh = dir.join("ablate.sh");
         if !ablate_sh.is_file() {
@@ -139,9 +118,7 @@ fn run_one(pkg: &Path, name: &str, agent_argv: &[String], ablate: bool) -> Outco
         }
     }
 
-    // Committed BEFORE setup.sh, so a setup that leaves work uncommitted on
-    // purpose is what the agent sees. Not checked: the shell version does
-    // not fail the run when there is nothing to commit either.
+    // committed before setup.sh, so a setup that leaves work uncommitted on purpose is what the agent sees
     let _ = git::commit_paths(&repo.root, &["."], "fixture");
 
     if !run_script(&dir.join("setup.sh"), &repo.root, Some(pkg)) {
@@ -164,8 +141,6 @@ fn run_one(pkg: &Path, name: &str, agent_argv: &[String], ablate: bool) -> Outco
     }
 }
 
-/// Prints the `EVAL <name> ...` line for one outcome. Returns `true` when
-/// the eval passed.
 fn report(name: &str, outcome: &Outcome) -> bool {
     match outcome {
         Outcome::Pass => {
@@ -199,9 +174,6 @@ const NO_AGENT: [&str; 2] = [
     "evals: refusing to report a result for something that was never run.",
 ];
 
-/// Runs `names` (every eval under `pkg/evals` when empty) and prints one
-/// `EVAL` line per eval. `true` when every eval passed. `agent` overrides
-/// the usual `EVAL_AGENT`/`harness.toml` resolution.
 pub fn run(pkg: &Path, names: &[String], agent: Option<Vec<String>>) -> anyhow::Result<bool> {
     let agent_argv = match agent.or_else(|| resolve_agent(pkg)) {
         Some(a) => a,
@@ -239,10 +211,6 @@ pub fn run(pkg: &Path, names: &[String], agent: Option<Vec<String>>) -> anyhow::
     Ok(all_pass)
 }
 
-/// The write-path gate on a candidate rule: it must fix the eval it came
-/// from, that eval must fail with the rule ablated, and no other eval may
-/// regress. Prints one `GATE <name> ...` line. `agent` overrides the usual
-/// resolution, as in `run`.
 pub fn gate(pkg: &Path, name: &str, agent: Option<Vec<String>>) -> anyhow::Result<bool> {
     let agent_argv = match agent.or_else(|| resolve_agent(pkg)) {
         Some(a) => a,

@@ -1,17 +1,6 @@
-//! The context file is read by every lane at the start of every task, and it is
-//! seeded ONCE -- init writes a document only when it is absent, so a later
-//! change to `check.command` never reaches it. This repository ran for six
-//! rounds with the context file telling every lane to verify with a command
-//! that did not exist in it; a lane hit it, worked around it locally, and the
-//! source stayed wrong (DECISIONS.md:709). Nothing caught it because twelve
-//! probes read these documents for SHAPE -- that an entry names a file, that a
-//! row names a test -- and none for TRUTH.
+//! The context file's Commands section must name the configured check, or every lane verifies with the wrong command silently.
 //!
-//! ponytail: the context file only. The same staleness in the spec or
-//! LEARNINGS.md is real and is not reported here, because detecting "a command
-//! that is not the check" needs to know what a check looks like, and a fuzzy
-//! match on a document full of shell examples cries wolf. Widen it when a
-//! second document is measured to have drifted.
+//! ponytail: the context file only; widen to the spec or LEARNINGS.md once a second document is measured to have drifted.
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
@@ -33,11 +22,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             "the context file every lane reads does not exist",
         )]);
     }
-    // The Commands section only. The check is usually named again further down,
-    // where the `green` rail is explained, and a document that still explains
-    // the rail correctly while telling a lane to run the wrong command is
-    // exactly the state this probe exists to catch -- so a match anywhere in
-    // the file is not a match.
+    // scoped to the Commands section only: a match elsewhere in the file isn't a match
     let mut commands: Vec<String> = Vec::new();
     let mut start = 0usize;
     for (index, line) in common::lines_of(ctx.root, file)?.iter().enumerate() {

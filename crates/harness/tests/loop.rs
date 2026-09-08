@@ -1,6 +1,4 @@
-//! The launcher, ported from `selftest.sh:65-106` (the dry plan, the halts) and
-//! `:492-507` (the run log and the budget) with stub agents in place of a
-//! coding agent.
+//! The launcher: the dry plan, the halts, the run log and the budget, with stub agents in place of a coding agent.
 
 use harness::events::{Event, Kind};
 use harness::fixture::Repo;
@@ -17,7 +15,6 @@ criteria:
   - it happens
 ";
 
-/// The agent every role falls back to: it reports a cost and nothing else.
 const QUIET: &str = "echo '{\"total_cost_usd\":0.5}'\n";
 
 fn script(repo: &Repo, rel: &str, body: &str) -> String {
@@ -31,8 +28,7 @@ fn script(repo: &Repo, rel: &str, body: &str) -> String {
     format!("./{rel}")
 }
 
-/// The full config: `[[pipeline]]` and `[[stage]]` replace the defaults whole,
-/// so every test that touches either spells out the pair it wants.
+// [[pipeline]] and [[stage]] replace the defaults whole, so every test spells out the full pair
 fn base_toml(extra: &str) -> String {
     format!(
         r#"
@@ -84,9 +80,6 @@ post = ["commit-round", "adjudicator-halt", "dry-round"]
     )
 }
 
-/// A repo with the harness installed, a queue holding one takeable task, and a
-/// stub agent per role. `.harness` is ignored so the run's own writes -- the
-/// event log, the pid file, the rendered role prompts -- never dirty the tree.
 fn repo(toml: &str, tasks: &str) -> Repo {
     let repo = Repo::new();
     repo.write(".gitignore", ".harness/\n");
@@ -102,8 +95,6 @@ fn repo(toml: &str, tasks: &str) -> Repo {
     repo
 }
 
-/// The stub implementer: it does the task's work, commits it, and leaves the
-/// block at `review` -- which is the only thing the launcher requires of it.
 fn implementer(repo: &Repo, extra: &str) -> String {
     script(
         repo,
@@ -152,8 +143,7 @@ fn go(repo: &Repo, opts: &RunOpts) -> (Digest, Vec<Event>) {
     (digest.expect("the pipeline ran"), events)
 }
 
-/// The sink is installed on the shared `events::Writer`, so what it collects is
-/// the live stream in emit order -- not a replay of the log afterwards.
+// installed on the shared events::Writer, so this collects the live stream in emit order, not a replay of the log
 fn try_go(repo: &Repo, opts: &RunOpts) -> (anyhow::Result<Digest>, Vec<Event>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&seen);
@@ -190,7 +180,6 @@ fn a_dry_iteration_plans_implement_and_verify() {
     assert!(plan.contains("DRY_RUN would spawn"), "{plan}");
     assert!(plan.contains("implement"), "{plan}");
     assert!(plan.contains("verify"), "{plan}");
-    // the gates each stage would run
     assert!(plan.contains("commit-verdict"), "{plan}");
 }
 
@@ -330,7 +319,6 @@ fn the_loop_stops_before_a_stage_that_would_exceed_the_budget() {
         "{:?}",
         digest.halts
     );
-    // and the stage it would have spawned never ran
     assert_eq!(ends(&events).len(), 1, "{events:#?}");
 }
 
@@ -446,8 +434,7 @@ fn a_new_needs_spec_halts() {
     r.write("TASKS.md", TASKS);
     r.commit_all("stubs");
 
-    // one iteration, so the halt has to come from the end of the round it
-    // happened in and not from the next round's boundary.
+    // one iteration: the halt must come from this round's end, not the next round's boundary
     let (digest, _) = go(&r, &opts(1));
     assert!(
         digest.halts.iter().any(|h| h.contains("needs-spec")),
@@ -506,8 +493,6 @@ fn harness_run_exits_2_on_a_refused_config() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("nope"));
 }
 
-/// A skill that resolves without a network: a `path:` source is vendored out of
-/// the repo itself.
 const SKILL: &str = r#"
 [[skill]]
 id = "tdd"
@@ -553,7 +538,6 @@ fn a_red_check_that_names_nothing_is_a_finding_not_an_error() {
     r.write("TASKS.md", "# queue\n");
     r.commit_all("a red check");
 
-    // an empty queue plans the discovery round, whose scout reads the probes
     let plan = plan_of(&r);
     assert!(plan.contains("FINDING check-red"), "{plan}");
     assert!(!plan.contains("PROBE check-red ERROR"), "{plan}");
@@ -620,8 +604,7 @@ fn a_stages_output_reaches_the_sink_while_the_stage_is_still_running() {
         .find(|(_, k)| *k == "output")
         .expect("a stage.output");
     let end = seen.iter().find(|(_, k)| *k == "end").expect("a stage.end");
-    // post-hoc forwarding delivers both at once; a live sink sees the output a
-    // whole sleep before the stage it came from finishes.
+    // a live sink sees output a whole sleep before its stage finishes; post-hoc forwarding would deliver both at once
     assert!(
         end.0.duration_since(output.0) > std::time::Duration::from_millis(500),
         "output arrived only {:?} before the end",
@@ -658,6 +641,5 @@ fn the_implementer_marking_its_own_task_done_skips_the_verify_stage() {
         "{:?}",
         digest.warnings
     );
-    // the bash `continue`: nothing the round would have counted happened
     assert!(digest.landed.is_empty(), "{:?}", digest.landed);
 }

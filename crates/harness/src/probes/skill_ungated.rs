@@ -1,15 +1,6 @@
-//! A `[[skill]]` entry that lists an id and nothing that fails without it is
-//! prose claiming to be a mechanism: `gate = "none"` reads identically to a
-//! real enforcement unless something says so out loud.
+//! A `[[skill]]` entry with `gate = "none"` reads identically to real enforcement unless something says so out loud.
 //!
-//! The two things a gate may name are the harness's own gate and probe names
-//! and the rails file. The bash original read its own source for the first of
-//! those, which meant a literal gate name in that file defined ITSELF -- which
-//! it did, and cost the rejection of 211e355. Here the names are the two
-//! constants, so an invented one cannot find itself.
-//!
-//! An empty or missing list is one FINDING, never a count of zero
-//! (LEARNINGS.md, zero-as-pass).
+//! gate names are checked against fixed constants, not the rails file's own text: a literal gate name in that file must not define itself.
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult, NAMES};
@@ -56,8 +47,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             ));
             continue;
         }
-        // word-boundary, not substring: a short gate name matches some word in
-        // every file otherwise.
+        // word-boundary, not substring: a short gate name matches some word in every file otherwise
         let word = common::re(&format!(r"\b{}\b", regex::escape(gate)))?;
         if !word.is_match(&known) {
             found.push(common::finding(

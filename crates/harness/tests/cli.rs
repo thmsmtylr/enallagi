@@ -62,9 +62,7 @@ fn events_json_echoes_the_file_line_verbatim() {
     let dir = tempfile::tempdir().unwrap();
     let harness_dir = dir.path().join(".harness");
     std::fs::create_dir_all(&harness_dir).unwrap();
-    // Keys out of `Kind::Halt`'s declared order, plus a field no variant
-    // declares at all — both are legal JSONL, and `--json` must reproduce
-    // this exact line rather than a re-serialization of the parsed `Event`.
+    // keys out of order plus an undeclared field: both legal JSONL, and --json must echo them raw, not re-serialize
     let line = r#"{"kind":"halt","reason":"boom","extra_field":"unexpected","seq":1,"iter":0,"run":"r","ts":"2026-09-07T00:00:00Z","halt":"stop"}"#;
     std::fs::write(harness_dir.join("events.jsonl"), format!("{line}\n")).unwrap();
 
