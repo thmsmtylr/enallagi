@@ -41,7 +41,7 @@ archived: DECISIONS.md — full block at `git show 054a985:TASKS.md`
 ## [T-008] review-received is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
 blockedBy: none
-status: review
+status: done
 probe: skill-ungated
 rows: none — harness
 command: `harness probe`
@@ -70,6 +70,18 @@ notes: |
   → exit 0, 308 passed, 3 ignored, 0 failed. Commit: `git add crates/harness/harness.default.toml TASKS.md
   PROGRESS.md && git commit -q -m "feat(config): T-008 review-received names rejection-repeat as its gate"`
   → d1943e2 (amended to carry these lines); `git status --porcelain` → empty.
+  2026-09-08 verifier: VERIFIED at cbb7e3b. `git status --porcelain` → empty. `git show --stat HEAD` →
+  PROGRESS.md, TASKS.md, harness.default.toml only; `git diff HEAD~1 -- crates/harness/harness.default.toml`
+  → one hunk, `-gate = "none"` / `+gate = "rejection-repeat"` at line 216 under `id = "review-received"`;
+  source, path, rev, why untouched. `git diff HEAD~1 -- test-hashes.json .check-baseline` → empty;
+  .check-baseline has no failure lines. `grep -n '"rejection-repeat"' probes/mod.rs` → 72, 99.
+  `touch src/lib.rs && cargo build -q && ./target/debug/harness probe | grep skill-ungated` →
+  `PROBE skill-ungated 1`, the FINDING names review-requested (T-009); lines naming review-received: 0.
+  `cargo test -p harness -q --test probes -- every_declared_skill_names_its_enforcing_gate` → 1 passed
+  (body asserts 7 entries and no "names gate" finding, so an invented gate name fails it).
+  `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+  → exit 0; per-binary totals 15+190+21+27+29+4+5+8+9 = 308 passed, 3 ignored, 0 failed. PROGRESS.md
+  entry carries `friction: none`. Ponytail: one-line config change, nothing to cut.
 
 ## [T-009] review-requested is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
