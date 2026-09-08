@@ -1,13 +1,9 @@
-//! The launcher, ported from `selftest.sh:65-106` (the dry plan, the halts) and
-//! `:492-507` (the run log and the budget) with stub agents in place of a
-//! coding agent.
+//! The launcher: the dry plan, the halts, the run log and the budget, with stub agents in place of a coding agent.
 
 use harness::events::{Event, Kind};
 use harness::fixture::Repo;
 use harness::pipeline::{self, Digest, RunOpts};
 use std::sync::{Arc, Mutex};
-
-// ------------------------------------------------------------------ fixture
 
 const TASKS: &str = "\
 ## [T-001] do the thing
@@ -19,7 +15,6 @@ criteria:
   - it happens
 ";
 
-/// The agent every role falls back to: it reports a cost and nothing else.
 const QUIET: &str = "echo '{\"total_cost_usd\":0.5}'\n";
 
 fn script(repo: &Repo, rel: &str, body: &str) -> String {
@@ -33,8 +28,7 @@ fn script(repo: &Repo, rel: &str, body: &str) -> String {
     format!("./{rel}")
 }
 
-/// The full config: `[[pipeline]]` and `[[stage]]` replace the defaults whole,
-/// so every test that touches either spells out the pair it wants.
+// [[pipeline]] and [[stage]] replace the defaults whole, so every test spells out the full pair
 fn base_toml(extra: &str) -> String {
     format!(
         r#"
@@ -86,9 +80,6 @@ post = ["commit-round", "adjudicator-halt", "dry-round"]
     )
 }
 
-/// A repo with the harness installed, a queue holding one takeable task, and a
-/// stub agent per role. `.harness` is ignored so the run's own writes -- the
-/// event log, the pid file, the rendered role prompts -- never dirty the tree.
 fn repo(toml: &str, tasks: &str) -> Repo {
     let repo = Repo::new();
     repo.write(".gitignore", ".harness/\n");
@@ -104,8 +95,6 @@ fn repo(toml: &str, tasks: &str) -> Repo {
     repo
 }
 
-/// The stub implementer: it does the task's work, commits it, and leaves the
-/// block at `review` -- which is the only thing the launcher requires of it.
 fn implementer(repo: &Repo, extra: &str) -> String {
     script(
         repo,
@@ -154,8 +143,7 @@ fn go(repo: &Repo, opts: &RunOpts) -> (Digest, Vec<Event>) {
     (digest.expect("the pipeline ran"), events)
 }
 
-/// The sink is installed on the shared `events::Writer`, so what it collects is
-/// the live stream in emit order -- not a replay of the log afterwards.
+// installed on the shared events::Writer, so this collects the live stream in emit order, not a replay of the log
 fn try_go(repo: &Repo, opts: &RunOpts) -> (anyhow::Result<Digest>, Vec<Event>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&seen);
@@ -185,8 +173,6 @@ fn plan_of(repo: &Repo) -> String {
     pipeline::plan(&repo.root, &cfg).expect("plan")
 }
 
-// ------------------------------------------------------------- the dry plan
-
 #[test]
 fn a_dry_iteration_plans_implement_and_verify() {
     let r = repo(&base_toml(""), TASKS);
@@ -194,7 +180,6 @@ fn a_dry_iteration_plans_implement_and_verify() {
     assert!(plan.contains("DRY_RUN would spawn"), "{plan}");
     assert!(plan.contains("implement"), "{plan}");
     assert!(plan.contains("verify"), "{plan}");
-    // the gates each stage would run
     assert!(plan.contains("commit-verdict"), "{plan}");
 }
 
@@ -225,8 +210,6 @@ fn a_role_with_no_agent_command_falls_back_to_the_default() {
     let r = repo(&base_toml(extra), TASKS);
     assert!(plan_of(&r).contains("as role implementer via ./src/fakeagent.sh"));
 }
-
-// ------------------------------------------------------- the clarification rail
 
 #[test]
 fn a_bare_clarification_marker_halts_the_loop() {
@@ -261,8 +244,6 @@ fn a_backticked_marker_in_the_template_does_not_halt_it() {
         digest.halts
     );
 }
-
-// ------------------------------------------------------ the log and the budget
 
 #[test]
 fn every_spawned_stage_appends_one_record_to_the_run_log() {
@@ -338,7 +319,6 @@ fn the_loop_stops_before_a_stage_that_would_exceed_the_budget() {
         "{:?}",
         digest.halts
     );
-    // and the stage it would have spawned never ran
     assert_eq!(ends(&events).len(), 1, "{events:#?}");
 }
 
@@ -359,8 +339,6 @@ fn a_dollar_budget_over_a_cost_nothing_reports_halts() {
         digest.halts
     );
 }
-
-// ------------------------------------------------------------- refused configs
 
 #[test]
 fn a_config_naming_an_unknown_gate_is_refused() {
@@ -385,8 +363,6 @@ fn a_stage_on_a_preset_with_no_turn_cap_and_no_timeout_is_refused() {
     assert!(err.to_string().contains("timeout"), "{err}");
 }
 
-// ------------------------------------------------------------- skills, frozen
-
 #[test]
 fn a_stage_refuses_to_start_on_an_unresolved_skill_under_frozen() {
     let r = repo(&base_toml(""), TASKS);
@@ -407,8 +383,6 @@ fn a_stage_refuses_to_start_on_an_unresolved_skill_under_frozen() {
     assert!(ends(&events).is_empty(), "the stage may not spawn");
 }
 
-// ------------------------------------------------------------ a command stage
-
 #[test]
 fn a_command_stage_runs_with_the_harness_environment() {
     let toml = base_toml("").replace(
@@ -420,8 +394,6 @@ fn a_command_stage_runs_with_the_harness_environment() {
     let seen = std::fs::read_to_string(r.root.join("env.txt")).expect("the command stage ran");
     assert_eq!(seen, "T-001 note 1");
 }
-
-// ------------------------------------------------------------------- the halts
 
 #[test]
 fn stop_file_halts_at_the_next_boundary() {
@@ -462,8 +434,7 @@ fn a_new_needs_spec_halts() {
     r.write("TASKS.md", TASKS);
     r.commit_all("stubs");
 
-    // one iteration, so the halt has to come from the end of the round it
-    // happened in and not from the next round's boundary.
+    // one iteration: the halt must come from this round's end, not the next round's boundary
     let (digest, _) = go(&r, &opts(1));
     assert!(
         digest.halts.iter().any(|h| h.contains("needs-spec")),
@@ -480,8 +451,6 @@ fn two_dry_rounds_end_the_run() {
     let (digest, _) = go(&r, &opts(5));
     assert_eq!(digest.iterations, 2, "{digest:#?}");
 }
-
-// -------------------------------------------------------------- `harness run`
 
 #[test]
 fn harness_run_without_a_tty_prints_one_line_per_event_and_exits_0() {
@@ -524,10 +493,6 @@ fn harness_run_exits_2_on_a_refused_config() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("nope"));
 }
 
-// ------------------------------------------------------ roles keep their source
-
-/// A skill that resolves without a network: a `path:` source is vendored out of
-/// the repo itself.
 const SKILL: &str = r#"
 [[skill]]
 id = "tdd"
@@ -566,8 +531,6 @@ fn rendering_a_role_never_eats_the_source_it_rendered_from() {
     assert!(!rendered.contains("{{skill:"), "the token was not rendered");
 }
 
-// -------------------------------------------------------------- the check ran
-
 #[test]
 fn a_red_check_that_names_nothing_is_a_finding_not_an_error() {
     let r = repo(&base_toml(""), "");
@@ -575,13 +538,10 @@ fn a_red_check_that_names_nothing_is_a_finding_not_an_error() {
     r.write("TASKS.md", "# queue\n");
     r.commit_all("a red check");
 
-    // an empty queue plans the discovery round, whose scout reads the probes
     let plan = plan_of(&r);
     assert!(plan.contains("FINDING check-red"), "{plan}");
     assert!(!plan.contains("PROBE check-red ERROR"), "{plan}");
 }
-
-// --------------------------------------------- a proposal the contract owns
 
 #[test]
 fn a_block_left_proposed_whose_fix_names_the_contract_halts() {
@@ -608,8 +568,6 @@ fn a_block_left_proposed_whose_fix_names_the_contract_halts() {
         digest.halts
     );
 }
-
-// ---------------------------------------------------------------- live events
 
 #[test]
 fn a_stages_output_reaches_the_sink_while_the_stage_is_still_running() {
@@ -646,16 +604,13 @@ fn a_stages_output_reaches_the_sink_while_the_stage_is_still_running() {
         .find(|(_, k)| *k == "output")
         .expect("a stage.output");
     let end = seen.iter().find(|(_, k)| *k == "end").expect("a stage.end");
-    // post-hoc forwarding delivers both at once; a live sink sees the output a
-    // whole sleep before the stage it came from finishes.
+    // a live sink sees output a whole sleep before its stage finishes; post-hoc forwarding would deliver both at once
     assert!(
         end.0.duration_since(output.0) > std::time::Duration::from_millis(500),
         "output arrived only {:?} before the end",
         end.0.duration_since(output.0)
     );
 }
-
-// -------------------------------------------------- a gate that skips the rest
 
 #[test]
 fn the_implementer_marking_its_own_task_done_skips_the_verify_stage() {
@@ -686,6 +641,5 @@ fn the_implementer_marking_its_own_task_done_skips_the_verify_stage() {
         "{:?}",
         digest.warnings
     );
-    // the bash `continue`: nothing the round would have counted happened
     assert!(digest.landed.is_empty(), "{:?}", digest.landed);
 }

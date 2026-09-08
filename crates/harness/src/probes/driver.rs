@@ -1,22 +1,4 @@
-//! The one probe that does not read text: it drives the built artifact through
-//! the surface a user touches and prints what fell short. The other fifteen
-//! read the repo, so the floor and the direction signal are the same instrument
-//! and capability shortfall is invisible to them.
-//!
-//! Off unless `layout.driver_command` is set AND `HARNESS_DRIVER` is `1`,
-//! because it costs wall-clock on every scout round and has to earn it.
-//!
-//! Contract: the command exits 0 when it REACHED the artifact, whatever it
-//! found there, and prints one line per shortfall beginning `FINDING `. A
-//! non-zero exit means it could not reach the artifact at all -- that is `PROBE
-//! driver ERROR`, and nothing is proposed from a probe that did not run.
-//!
-//! It gets a throwaway working directory and a stripped environment: if the
-//! thing you drive is itself an agent, that is what stops it inheriting this
-//! loop's context, settings and tools. A relative path in `driver_command`
-//! therefore cannot work; `$HARNESS_ROOT` is exported for it to resolve
-//! against. Watch the persistent effect, not the answer -- diff the store, the
-//! file, the row it was supposed to change.
+//! The one probe that drives the built artifact instead of reading text. Off unless `layout.driver_command` is set and `HARNESS_DRIVER=1`.
 
 use super::{common, ProbeCtx, ProbeResult};
 use std::process::Command;
@@ -26,8 +8,7 @@ pub const OFF: &str = "no driverCommand in harness.toml, or HARNESS_DRIVER is un
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
     let command = &ctx.cfg.layout.driver_command;
     if command.is_empty() || !ctx.driver {
-        // not a count of zero: a probe that did not run has found nothing,
-        // which is no evidence about the tree (LEARNINGS.md, zero-as-pass).
+        // not Count(0): a probe that did not run is no evidence about the tree
         return ProbeResult::Off(OFF.to_string());
     }
     let dir = match tempfile::tempdir() {

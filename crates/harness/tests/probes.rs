@@ -1,16 +1,11 @@
-//! The probe assertions from `selftest.sh:107-231`, `:301-365` and
-//! `:1034-1133`, one test per assertion and named after it.
+//! The probe assertions, one test per assertion and named after it.
 
 use harness::config::{self, Config};
 use harness::fixture::Repo;
 use harness::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
 use std::fs;
 
-// ------------------------------------------------------------------ the seed
-
-/// A repo with `harness init` run in it and `overrides` as its `harness.toml`,
-/// committed. The install is the seed: the documents, the rails and the roles
-/// all come from the binary, so a probe reads the tree an operator would get.
+// install is the seed: docs, rails and roles all come from the binary, so a probe reads the tree an operator would get
 fn seeded_with(overrides: &str) -> (Repo, Config) {
     let repo = Repo::new();
     repo.init_harness(overrides);
@@ -19,13 +14,11 @@ fn seeded_with(overrides: &str) -> (Repo, Config) {
     (repo, cfg)
 }
 
-/// A repo installed with the default configuration.
 fn seeded() -> (Repo, Config) {
     seeded_with("")
 }
 
-/// The check is stubbed green: `check-red` is asserted by Task 8's gate tests,
-/// and running `bun run check` here would only measure the host.
+// stubbed green: running the real check here would only measure the host
 const GREEN: CheckOutcome = CheckOutcome {
     ran: true,
     red: false,
@@ -50,8 +43,6 @@ fn render(results: &[(String, ProbeResult)]) -> String {
     probes::render(results)
 }
 
-/// `sed -n 's/^PROBE <name> //p'` -- the count, or None when the probe did not
-/// report one.
 fn count(results: &[(String, ProbeResult)], name: &str) -> Option<usize> {
     results
         .iter()
@@ -87,8 +78,6 @@ fn append(repo: &Repo, rel: &str, text: &str) {
     let existing = fs::read_to_string(&path).unwrap_or_default();
     fs::write(&path, format!("{existing}{text}")).expect("append");
 }
-
-// --------------------------------------------------- selftest.sh:107-231
 
 #[test]
 fn probes_exit_0_every_probe_ran() {
@@ -134,9 +123,7 @@ fn the_seeded_criterion_is_untested_and_no_task_in_flight_names_it() {
 
 #[test]
 fn harness_immutable_names_the_config_and_no_test_hashes_covers_it() {
-    // `selftest.sh`'s `harness-immutable names loop.sh ...`. The rail names the
-    // file that is the gate; with the launcher a binary rather than an
-    // installed `loop.sh`, that file is `harness.toml`.
+    // the rail names the file that is the gate; with the launcher a binary, that file is harness.toml
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     let found = findings(&results, "hash-uncovered");
@@ -237,15 +224,7 @@ fn a_learnings_file_over_its_cap_is_reported() {
     );
 }
 
-// ---- a reworded friction is the same friction -------------------------------
-// The exact-match key this replaced never collided, so five sightings of one
-// friction sat in the record and the probe read 0 (TASKS.md [T-045]). The
-// firing pair below is two of those five, taken verbatim from this package's
-// own PROGRESS.archive.md:428 and :477 -- a FOURTH and a FIFTH sighting of the
-// same thing, worded differently. The pair under it is the guard, and it is the
-// closest measured NON-repeat in the same record (:1253 and :1351): two
-// different frictions that open with the same eleven words. Both are asserted
-// because either alone passes on a broken probe.
+// two rewordings of one friction, plus a near-miss pair that opens with the same words but isn't a repeat; both are asserted because either alone passes a broken probe
 
 const FRICTION_FIXTURE: &str = "
 ## fixture — a friction
@@ -288,8 +267,6 @@ fn and_two_frictions_that_merely_share_words_are_not_collapsed_into_it() {
     );
 }
 
-// --------------------------------------------------- selftest.sh:301-365
-
 fn with_driver(body: &str) -> (Repo, Config) {
     let (repo, cfg) =
         seeded_with("[layout]\ndriver_command = \"$HARNESS_ROOT/src/fakedriver.sh\"\n");
@@ -320,7 +297,6 @@ fn the_drivers_shortfall_is_one_finding() {
     let (repo, cfg) = with_driver(SHORTFALL);
     let results = run_with(&repo, &cfg, true);
     assert_eq!(count(&results, "driver"), Some(1), "{}", render(&results));
-    // the FINDING line reaches the scout verbatim
     assert!(
         render(&results)
             .contains("FINDING driver $HARNESS_ROOT/src/fakedriver.sh:0 the artifact answered but wrote nothing to the store"),
@@ -354,14 +330,9 @@ fn an_unreachable_artifact_is_error_never_a_count_of_zero() {
     );
 }
 
-// --------------------------------------------------- selftest.sh:1034-1133
-
 #[test]
 fn every_declared_skill_names_its_enforcing_gate() {
-    // The package default, checked against the two things a gate may name: the
-    // built-in gate and probe names, and the installed rails. The expected
-    // value carries the COUNT, so an entry deleted to make this pass is the
-    // thing that fails it (LEARNINGS.md, zero-as-pass).
+    // asserts the COUNT, not just emptiness: an entry deleted to make this pass is the thing that fails it
     let (repo, cfg) = seeded();
     assert_eq!(cfg.skill.len(), 7);
     let results = run(&repo, &cfg);
@@ -395,10 +366,7 @@ fn a_skill_with_no_enforcement_is_reported() {
     assert_eq!(count(&run(&repo, &cfg), "skill-ungated"), Some(0));
 }
 
-/// Three markers: one killed where it stands, one killed at a line it has since
-/// moved off, and one nobody killed. The third is named twice more in the two
-/// shapes that are NOT kills -- an undated line inside the section, and a dated
-/// line under a block below it -- so a probe that takes either for a kill fails.
+// three markers: killed in place, killed at a moved line, and killed by neither of two near-miss shapes
 fn ceilings() -> (Repo, Config) {
     let (repo, cfg) = seeded();
     let m = marker();

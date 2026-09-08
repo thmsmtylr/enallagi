@@ -1,6 +1,4 @@
-//! view: draws one `Model` onto one `ratatui::Frame`. Pure function of the
-//! model, so it's exercised headlessly with `ratatui::backend::TestBackend`
-//! -- no terminal, no crossterm, in the tests below and in `mod.rs`'s.
+//! Draws one `Model` onto one `ratatui::Frame`. Pure function of the model, so it's tested headlessly with `TestBackend`.
 
 use std::collections::HashMap;
 

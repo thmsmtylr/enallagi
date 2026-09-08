@@ -1,6 +1,4 @@
-//! worktree: one lane runs in its own git worktree, isolated from the parent checkout, and is
-//! fast-forwarded back onto the parent branch when its history allows it. Ported from
-//! `harness/worktree.sh`.
+//! One lane runs in its own git worktree, fast-forwarded back onto the parent branch when its history allows it.
 
 use std::path::{Path, PathBuf};
 
@@ -22,15 +20,10 @@ pub struct LaneReport {
     pub left: Option<PathBuf>,
     pub reason: String,
     pub branch: String,
-    /// `run`'s own error, if it returned one. Recorded but never used to decide whether the lane
-    /// merges: only the worktree's committed state does that, the same as `LOOP_RC` in
-    /// `worktree.sh:53` never gates the merge attempt -- it only becomes the script's exit code.
+    // recorded but never used to decide whether the lane merges: only the worktree's committed state does that
     pub run_error: Option<String>,
 }
 
-/// Creates the worktree at `lane/<base>`, retrying as `lane/<base>-1` .. `lane/<base>-10` if the
-/// branch or directory already exists (two lanes started in the same second carry the same
-/// timestamp). Returns the branch name, worktree path and its string form.
 fn create_worktree(
     root: &Path,
     cfg: &Config,
@@ -57,11 +50,7 @@ fn create_worktree(
     Err(WorktreeError::Create(last_dir))
 }
 
-/// Run one lane in its own git worktree, branched off the current branch's HEAD. `run` is called
-/// with the worktree's path; its gates, commits and STOP file are all the lane's. Whatever `run`
-/// returns, what decides what happens next is the worktree's own state -- committed or not --
-/// never the run's exit status, mirroring `worktree.sh`, which checks `git status --porcelain`
-/// regardless of the loop's exit code.
+// what happens next is decided by the worktree's own committed state, never run's exit status
 pub fn lane(
     root: &Path,
     cfg: &Config,
@@ -89,8 +78,6 @@ pub fn lane(
         });
     }
 
-    // Fast-forward or nothing. A merge commit here would mean the parent moved under the lane,
-    // which is a human's call, never this function's.
     match git::git(root, &["merge", "--ff-only", &branch]) {
         Ok(reason) => {
             let _ = git::git(root, &["worktree", "remove", &dir_str]);
@@ -119,8 +106,6 @@ mod tests {
     use super::*;
     use crate::fixture::Repo;
 
-    /// `worktrees/` under the harness dir, gitignored the way `init` writes it -- tests write the
-    /// line themselves since `fixture::init_harness` doesn't run `init` yet.
     fn repo_with_harness_dir() -> Repo {
         let r = Repo::new();
         r.write(".gitignore", ".harness/worktrees/\n");

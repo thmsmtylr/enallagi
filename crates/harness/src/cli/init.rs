@@ -8,7 +8,6 @@ pub struct Args {
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
     let cwd = std::env::current_dir()?;
-    // the harness installs at the repository root, from wherever it is invoked
     let root = match crate::git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
         Ok(top) => std::path::PathBuf::from(top),
         Err(_) => cwd,
@@ -53,9 +52,7 @@ Next, in {root}:
   5. harness probe     # what the tree says about itself
   6. harness run 1     # one iteration, attended, watch it work",
         root = root.display(),
-        // harness.toml is named unconditionally: on a re-run it is neither
-        // written nor kept, and leaving it off the line leaves the answers
-        // untracked
+        // named unconditionally: on a re-run it's neither written nor kept, so leaving it off would leave the answers untracked
         track = report
             .track
             .iter()

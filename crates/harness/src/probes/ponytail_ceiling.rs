@@ -1,16 +1,4 @@
-//! A marker whose kill is already written down is a settled decision, and
-//! reporting it again is the churn this loop measured: 22 scout blocks in one
-//! 2026-09-04 round, 21 killed, every one of them from this probe (TASKS.md
-//! T-070; one marker was killed five times in two days under five ids). So a
-//! marker is skipped when a kill line carries its TEXT -- quoted outright, or
-//! standing at a `path:line` some kill names. The text and not the line number,
-//! because a marker that MOVED is the same marker: `gates.sh:42` came back as
-//! `:44` and `:65` as `:92`, and the installed copy of a file moves
-//! independently of the package one.
-//!
-//! Not a count of zero when nothing has been killed: an empty section
-//! suppresses nothing and every marker is reported, which is what a fresh
-//! install shows (LEARNINGS.md, zero-as-pass).
+//! A ponytail marker is not re-reported once a kill line names its TEXT (quoted, or via `path:line`) — text not line number, since a moved marker is still the same marker.
 
 use super::common::{self, Res};
 use super::learning_ungated::DATED;
@@ -19,10 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const REJECTED: &str = "## Rejected findings";
 
-/// Every dated line under DECISIONS.md's `## Rejected findings`, which is where
-/// the adjudicator writes what it killed and the command that refutes it. The
-/// lines, never the task ids in them: an id is spent once and the same finding
-/// comes back under a new one.
+// lines, not their task ids: an id is spent once but the same finding recurs under a new one
 pub fn kill_lines(ctx: &ProbeCtx) -> Res<Vec<String>> {
     if !common::exists(ctx.root, "DECISIONS.md") {
         return Ok(vec![]);

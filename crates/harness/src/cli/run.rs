@@ -31,9 +31,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     }
     .with_env_budgets();
 
-    // A halt or a rejected gate is exit 1, whatever the digest says: both are
-    // visible in the stream, so the code is read off the events rather than
-    // threaded back through every return path.
+    // exit code is read off the events, not threaded back through every return path
     let failed = Arc::new(AtomicBool::new(false));
     let stop = root.join("STOP");
     let outcome = if tui {
@@ -52,9 +50,6 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 }),
             )
         });
-        // The loop owns a child process. Whatever the TUI did -- clean quit or
-        // a terminal that fell over -- it is asked to stop and joined before
-        // this returns, rather than left running behind a detached thread.
         let drawn = tui::run_live(rx, &root.join("TASKS.md"), &stop);
         if drawn.is_err() {
             let _ = std::fs::write(&stop, b"");
@@ -91,8 +86,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     }
 }
 
-/// `dry-round` is the one gate whose rejection is a routing decision rather
-/// than a verdict: a round that left nothing takeable is how a run ends well.
+// dry-round's rejection is a routing decision, not a verdict: a round with nothing takeable is how a run ends well
 fn counts_as_failure(e: &Event) -> bool {
     match &e.kind {
         Kind::Halt { .. } => true,

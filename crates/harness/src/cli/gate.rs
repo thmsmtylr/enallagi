@@ -31,8 +31,6 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             root: &root,
             cfg: &cfg,
             task: Some(args.task.clone()),
-            // The sha the iteration started at. One gate run outside a loop has only the
-            // previous commit to judge against.
             iter_base: Some(args.base.clone().unwrap_or_else(|| "HEAD~1".to_string())),
             stage_output: String::new(),
             events: &mut events,

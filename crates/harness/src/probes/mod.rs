@@ -1,12 +1,4 @@
-//! probes: what the tree says about itself.
-//!
-//! Sixteen probes read the repository and one drives the built artifact. A
-//! probe REPORTS; it never gates, and nothing here is wired into a hook. A
-//! probe that could not run says ERROR and the scout proposes nothing from it
-//! -- a count of zero is a claim about the tree, and a probe that did not run
-//! has not made one (LEARNINGS.md, zero-as-pass).
-//!
-//! Exit 0 when every probe ran, non-zero only when one could not.
+//! What the tree says about itself. A probe REPORTS, never gates; one that could not run says ERROR, not a claim of zero.
 
 pub mod common;
 pub mod telemetry;
@@ -45,10 +37,7 @@ pub enum ProbeResult {
     Off(String),
 }
 
-/// The forced check, run once for the whole probe run -- the force variant,
-/// because a cached green is a green nobody ran (LEARNINGS.md, 2026-08-27).
-/// `ran` is false when the command could not be started, was not found, or the
-/// run is nested inside a build cache that would recurse into it.
+// force variant: a cached green is a green nobody ran
 pub struct CheckOutcome {
     pub ran: bool,
     pub red: bool,
@@ -60,7 +49,6 @@ pub struct ProbeCtx<'a> {
     pub cfg: &'a Config,
     /// `None` makes `run_all` run the check itself.
     pub check: Option<&'a CheckOutcome>,
-    /// `HARNESS_DRIVER` is set to `1`.
     pub driver: bool,
 }
 
@@ -90,8 +78,6 @@ pub const NAMES: &[&str] = &[
 
 type ProbeFn = fn(&ProbeCtx) -> ProbeResult;
 
-/// The order the scout reads them in: the text probes, the five over
-/// `events.jsonl`, and the driver last.
 fn registry() -> [(&'static str, ProbeFn); 21] {
     [
         ("spec-untested", spec_untested::probe),
@@ -118,8 +104,6 @@ fn registry() -> [(&'static str, ProbeFn); 21] {
     ]
 }
 
-/// The telemetry probes read the event log under the harness directory and
-/// speak their own result type; this is the one place the two meet.
 mod telemetry_probe {
     use super::{telemetry, Finding, ProbeCtx, ProbeResult};
     use crate::events::Log;
@@ -128,8 +112,7 @@ mod telemetry_probe {
         Log::open(&ctx.root.join(&ctx.cfg.layout.harness_dir))
     }
 
-    /// No log at all means nothing has run yet: OFF, like an unconfigured
-    /// driver. A log that exists and cannot be read is the ERROR case.
+    // no log at all is OFF (nothing has run yet); a log that exists and can't be read is ERROR
     fn run(ctx: &ProbeCtx, probe: impl Fn(&Log) -> telemetry::ProbeResult) -> ProbeResult {
         let log = log_of(ctx);
         if !log.path.exists() {
@@ -205,7 +188,6 @@ pub fn run_all(ctx: &ProbeCtx, names: &[String]) -> Vec<(String, ProbeResult)> {
         .collect()
 }
 
-/// One probe that blows up is one ERROR line, not fifteen probes nobody ran.
 fn catch(probe: ProbeFn, ctx: &ProbeCtx) -> ProbeResult {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe(ctx))) {
         Ok(result) => result,

@@ -1,7 +1,4 @@
-//! The queue against the spec, both directions -- Spec Kit's `analyze` step.
-//! `spec-untested` asks whether a criterion has a test and `queue-hygiene` asks
-//! whether the queue is internally consistent; neither asks whether the two
-//! agree.
+//! The queue against the spec, both directions: neither spec-untested nor queue-hygiene asks whether the two agree.
 
 use super::common::{self, Res};
 use super::spec_untested::untested_rows;

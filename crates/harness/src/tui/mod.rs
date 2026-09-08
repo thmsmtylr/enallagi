@@ -1,7 +1,4 @@
-//! tui: renders a run from the event log, live (`harness run` on a tty) or
-//! attached (`harness watch`). `Model` folds events one at a time; `view`
-//! draws it onto any `ratatui` backend, so it's tested headlessly with
-//! `TestBackend` and driven live with `CrosstermBackend`.
+//! Renders a run from the event log, live or attached; `Model` folds events, `view` draws onto any `ratatui` backend.
 
 mod stream;
 mod view;
@@ -43,8 +40,7 @@ pub struct Model {
     pub current_stage: Option<String>,
     pub output: Vec<String>,
     pub help: bool,
-    // Tracked alongside `current_stage` for the queue's bold row and the
-    // output pane's title; not part of the shared interface, so private.
+    // tracked for the queue's bold row and the output pane's title; not part of the shared interface, so private
     current_task: Option<String>,
     current_command: Option<String>,
 }
@@ -69,10 +65,7 @@ impl Model {
         }
     }
 
-    /// Folds one event into the model: tracks the current stage (for the
-    /// output pane) and appends to its output (capped at the last 200
-    /// chunks), then always records the event itself for the header,
-    /// queue-bolding, stages and footer panes to read back.
+    // output is capped at the last 200 chunks
     pub fn apply(&mut self, e: &Event) {
         match &e.kind {
             Kind::StageStart {
@@ -147,12 +140,8 @@ fn loop_running(pid_path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Restores on drop only the steps that actually succeeded -- including on
-/// panic, since a `Drop` runs during unwinding. `run_live`/`run_attached`
-/// also wrap their loop in `catch_unwind` so the terminal is back to normal
-/// *before* the panic is resumed, rather than racing the unwind, and install
-/// a panic hook (below) so the panic message itself prints on the restored,
-/// normal screen rather than the still-active alternate one.
+// restores on drop only the steps that succeeded, including on panic (Drop runs during unwinding);
+// run_live/run_attached also catch_unwind so the terminal is restored before the panic resumes
 struct TerminalGuard {
     raw_mode: bool,
     alt_screen: bool,
@@ -169,12 +158,7 @@ impl Drop for TerminalGuard {
     }
 }
 
-/// Unconditionally attempts both restore steps, ignoring errors. Unlike
-/// `TerminalGuard`, which only undoes what it tracked, this has no per-step
-/// state to consult -- it's what the panic hook calls, and by the time a
-/// hook can fire `enter_terminal` has already fully succeeded. Idempotent:
-/// safe to call more than once (each call just re-issues the same
-/// best-effort escape sequence and syscall).
+// unlike TerminalGuard, tries both steps unconditionally and ignores errors -- idempotent, safe to call more than once
 fn restore_terminal() {
     let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
     let _ = disable_raw_mode();
@@ -195,9 +179,7 @@ fn enter_terminal() -> anyhow::Result<(Terminal<CrosstermBackend<std::io::Stdout
 
 type PanicHook = dyn Fn(&PanicHookInfo<'_>) + Send + Sync + 'static;
 
-/// Builds a hook that runs `restore` and then forwards to `prev` -- pulled
-/// out of `install_restore_hook` so a test can supply a fake `restore` (and
-/// a fake `prev`) and observe the order without touching a real terminal.
+// pulled out of install_restore_hook so a test can supply a fake restore/prev without touching a real terminal
 fn build_hook<R>(restore: R, prev: Arc<PanicHook>) -> Box<PanicHook>
 where
     R: Fn() + Send + Sync + 'static,
@@ -208,11 +190,7 @@ where
     })
 }
 
-/// Installs a hook that restores the terminal before forwarding to whatever
-/// hook was previously installed, so a panic's own message prints on the
-/// normal screen instead of a broken alternate one. Returns the previous
-/// hook so the caller can put it back with `restore_hook` once the loop
-/// that needed this hook is done.
+// restores the terminal before forwarding to the previous hook, so a panic's message prints on the normal screen
 fn install_restore_hook() -> Arc<PanicHook> {
     let prev: Arc<PanicHook> = Arc::from(std::panic::take_hook());
     std::panic::set_hook(build_hook(restore_terminal, Arc::clone(&prev)));
@@ -223,10 +201,7 @@ fn restore_hook(prev: Arc<PanicHook>) {
     std::panic::set_hook(Box::new(move |info| (*prev)(info)));
 }
 
-/// `harness run tty`: draws events as they arrive on `rx`, redrawing on
-/// every event or at least every 500ms. `q` writes an empty file at `stop`
-/// (the run loop's STOP file) and keeps drawing until `rx` disconnects and
-/// is drained -- the loop decides when to actually end, the TUI just asks.
+// `q` writes the STOP file and keeps drawing until rx disconnects -- the loop decides when to end, the TUI just asks
 pub fn run_live(rx: Receiver<Event>, tasks: &Path, stop: &Path) -> anyhow::Result<()> {
     let (mut terminal, guard) = enter_terminal()?;
     let prev_hook = install_restore_hook();
@@ -282,9 +257,7 @@ fn run_live_loop<B: Backend>(
     Ok(())
 }
 
-/// `harness watch`: read-only. Tails `events.jsonl` and `TASKS.md` every
-/// 500ms rather than owning a channel; `q` quits the viewer immediately and
-/// never touches the STOP file since watch doesn't own the run.
+// read-only: tails the log and TASKS.md rather than owning a channel; `q` never touches STOP since watch doesn't own the run
 pub fn run_attached(harness_dir: &Path, tasks: &Path) -> anyhow::Result<()> {
     let (mut terminal, guard) = enter_terminal()?;
     let prev_hook = install_restore_hook();
@@ -434,10 +407,7 @@ mod tests {
         let queue_before = format!("{:?}", model.queue);
         assert!(!model.stop_requested);
 
-        // `Model` has no method that mutates `queue` or writes TASKS.md from
-        // a key -- `handle_key` only ever touches `stop_requested`, `focus`,
-        // `scroll` and `help`. Confirmed here at the value level, for every
-        // key the view recognises, not just `q`.
+        // handle_key never mutates queue or writes TASKS.md -- checked for every recognised key, not just `q`
         for key in [
             press('q'),
             KeyEvent {
@@ -476,9 +446,6 @@ mod tests {
 
     #[test]
     fn restore_terminal_is_idempotent() {
-        // No real terminal is attached in a test run, so both underlying
-        // calls fail -- `restore_terminal` swallows that. The point is that
-        // calling it twice is still fine: no panic, no error propagated.
         restore_terminal();
         restore_terminal();
     }

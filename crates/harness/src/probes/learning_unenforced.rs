@@ -1,5 +1,3 @@
-//! A rule that names nothing runnable is unenforceable.
-
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
 

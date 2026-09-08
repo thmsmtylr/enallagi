@@ -1,6 +1,4 @@
-//! `harness init`, then every read-only subcommand, against one fresh
-//! install. The unit and integration suites drive each module directly; this
-//! asserts the binary an operator actually types is wired to them.
+//! `harness init`, then every read-only subcommand, against one fresh install: the binary an operator actually types, not a module call.
 
 use harness::fixture::Repo;
 use std::process::Command;
@@ -24,7 +22,6 @@ fn harness(repo: &Repo, args: &[&str]) -> Out {
     }
 }
 
-/// A fresh repo with `harness init` run through the binary itself.
 fn installed() -> Repo {
     let repo = Repo::new();
     let out = harness(&repo, &["init"]);
@@ -38,7 +35,6 @@ fn probe_exits_0_on_a_fresh_install() {
     let repo = installed();
     let out = harness(&repo, &["probe"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
-    // every probe reported, and none errored
     assert_eq!(
         out.stdout
             .lines()
@@ -59,10 +55,7 @@ fn run_dry_run_prints_the_plan_and_exits_0() {
     let repo = installed();
     let out = harness(&repo, &["run", "1", "--dry-run"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
-    // The seeded queue holds one takeable task, so the plan is the `task`
-    // pipeline and its two stages. `discover` is the other pipeline and its
-    // `when` is the negation of this one's, so exactly one of the pair can
-    // ever be planned.
+    // discover's `when` negates task's, so exactly one of the pair is ever planned
     assert!(
         out.stdout
             .contains("=== pipeline task (queue.takeable) ==="),

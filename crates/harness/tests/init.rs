@@ -1,5 +1,4 @@
-//! The install assertions from `selftest.sh:40-64` and `:107-120`, one test
-//! per assertion and named after it.
+//! The install assertions, one test per assertion and named after it.
 
 use harness::fixture::Repo;
 use harness::init::{self, InitOpts, InitReport};
@@ -26,7 +25,6 @@ fn read(repo: &Repo, rel: &str) -> String {
     fs::read_to_string(repo.root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
 }
 
-/// What `install-stale` says about this tree.
 fn stale(repo: &Repo) -> Vec<Finding> {
     let cfg = harness::config::load(&repo.root).expect("config");
     let check = CheckOutcome {
@@ -49,7 +47,6 @@ fn stale(repo: &Repo) -> Vec<Finding> {
     }
 }
 
-/// Every file under `root` except git's own, relative to it.
 fn walk(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -73,8 +70,6 @@ fn walk(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-// ------------------------------------------------------ selftest.sh:40-64
-
 #[test]
 fn init_exits_0_on_a_fresh_repo() {
     let repo = Repo::new();
@@ -82,7 +77,6 @@ fn init_exits_0_on_a_fresh_repo() {
     assert!(repo.root.join("harness.toml").is_file());
     assert!(repo.root.join(".harness/RAILS.md").is_file());
     assert!(report.wrote.contains(&"harness.toml".to_string()));
-    // the `git add` line names every top-level path the run touched
     for path in ["harness.toml", ".harness", "TASKS.md", "evals"] {
         assert!(
             report.track.contains(&path.to_string()),
@@ -126,8 +120,6 @@ fn re_init_is_idempotent() {
     assert_eq!(before, after);
 }
 
-// ----------------------------------------------------- selftest.sh:107-120
-
 #[test]
 fn the_context_file_is_seeded_and_the_pointers_point_at_it() {
     let repo = Repo::new();
@@ -153,7 +145,6 @@ fn the_context_file_stays_short() {
 fn the_project_skill_is_valid_agentskills_frontmatter() {
     let repo = Repo::new();
     install(&repo);
-    // the default preset is claude, so the skill lands in its skills directory
     let skill = read(&repo, ".claude/skills/running-the-loop/SKILL.md");
     assert!(skill.starts_with("---\n"), "{skill:.40}");
     assert!(
@@ -197,7 +188,7 @@ fn documents_with_content_are_kept() {
     assert_eq!(read(&repo, "SPEC.md"), "# my own spec\n");
     assert!(report.kept.contains(&"TASKS.md".to_string()), "{report:?}");
     assert!(report.kept.contains(&"SPEC.md".to_string()), "{report:?}");
-    // and a kept document is still tracked, or the first verdict fails on it
+    // a kept document is still tracked, or the first verdict fails on it
     assert!(report.track.contains(&"TASKS.md".to_string()));
 }
 
@@ -213,18 +204,13 @@ fn the_context_file_is_resynced_to_the_configured_check() {
     assert!(!context.contains("`bun run check`"));
 }
 
-// ----------------------------------------------------- selftest.sh:1179-1225
-
 #[test]
 fn an_installed_file_that_drifted_from_its_source_is_reported() {
     let repo = Repo::new();
     install(&repo);
-    // 0 on the freshly installed tree is what stops the probe being a permanent
-    // finding nobody reads
+    // zero on a freshly installed tree, or this is a permanent finding nobody reads
     assert_eq!(stale(&repo), Vec::new());
 
-    // one installed file edited and another deleted; the two FINDINGs are what
-    // prove it reports the file that drifted rather than a count
     repo.write(".harness/roles/scout.md", "# not what init wrote\n");
     fs::remove_file(repo.root.join(".harness/roles/verifier.md")).expect("rm");
     let found = stale(&repo);
@@ -249,8 +235,6 @@ fn an_installed_file_that_drifted_from_its_source_is_reported() {
     install(&repo);
     assert_eq!(stale(&repo), Vec::new());
 }
-
-// ------------------------------------------------------------- migration
 
 #[test]
 fn init_migrates_harness_json_and_prints_each_renamed_key() {
@@ -277,11 +261,8 @@ fn init_migrates_harness_json_and_prints_each_renamed_key() {
         "{:?}",
         report.migrated_keys
     );
-    // the migrated answers are what the install is substituted from
     assert!(repo.root.join("DESIGN.md").is_file());
 }
-
-// -------------------------------------------------------------- adapters
 
 #[test]
 fn the_claude_adapter_writes_agents_and_merges_settings() {
@@ -340,7 +321,6 @@ fn the_claude_adapter_writes_agents_and_merges_settings() {
         "a deny rule of theirs was dropped"
     );
 
-    // and merging twice adds nothing twice
     let before = read(&repo, ".claude/settings.json");
     with(&repo, &adapter("claude"));
     assert_eq!(before, read(&repo, ".claude/settings.json"));
@@ -364,13 +344,11 @@ fn the_codex_adapter_writes_hooks_json() {
 
 #[test]
 fn the_adapter_points_its_own_instruction_file_at_the_context_file() {
-    // QWEN.md is not in the default pointer_files, so the adapter adds it
     let repo = Repo::new();
     let report = with(&repo, &adapter("qwen"));
     assert!(read(&repo, "QWEN.md").contains("AGENTS.md"));
     assert_eq!(report.wrote.iter().filter(|p| *p == "QWEN.md").count(), 1);
 
-    // GEMINI.md is one, and the adapter must not plan it a second time
     let repo = Repo::new();
     let report = with(&repo, &adapter("gemini"));
     assert_eq!(
@@ -390,7 +368,6 @@ fn a_settings_file_that_is_not_json_is_refused() {
         matches!(err, init::InitError::InvalidJson { ref path, .. } if path == ".claude/settings.json"),
         "{err}"
     );
-    // and it refused before writing anything
     assert!(!repo.root.join(".claude/agents").exists());
     assert!(!repo.root.join(".harness").exists());
 }
@@ -431,8 +408,6 @@ fn an_unknown_adapter_is_refused() {
     let err = init::install(&repo.root, &adapter("emacs")).expect_err("unknown adapter");
     assert!(matches!(err, init::InitError::UnknownAdapter(ref a) if a == "emacs"));
 }
-
-// --------------------------------------------------------------- dry run
 
 #[test]
 fn dry_run_writes_nothing_and_says_what_it_would_write() {

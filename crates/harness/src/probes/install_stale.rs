@@ -1,15 +1,4 @@
-//! An installed file that has drifted from the source it was built from.
-//!
-//! Substitution is what makes a plain diff useless: a template carries
-//! `__HARNESS_DIR__` where the installed copy carries `.harness`, so comparing
-//! the trees raw reports every file forever. The comparison is therefore
-//! against what the installer would write now --
-//! `init::planned_files(root, dry_run)` -- rather than against the templates.
-//!
-//! Only the files `init` always overwrites are compared. The seeded documents
-//! -- TASKS.md, PROGRESS.md, the context file, evals/README.md -- are
-//! deliberately absent: `seed` never overwrites one, so a repository's own
-//! record legitimately differs from the template it started as.
+//! An installed file drifted from what init would write now (not the raw template, whose substitution tokens would false-positive every file). Seeded documents are excluded: seed never overwrites one, so drift there is legitimate.
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};

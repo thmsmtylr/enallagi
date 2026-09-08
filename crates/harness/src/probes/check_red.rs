@@ -1,6 +1,3 @@
-//! The forced check, reported rather than gated. A check that could not run is
-//! ERROR, never a count of zero.
-
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
 

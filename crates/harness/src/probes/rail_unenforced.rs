@@ -1,12 +1,9 @@
-//! A rail whose `Enforced by` column names something that does not exist, or
-//! that exists and nothing runs.
+//! A rail whose `Enforced by` column names something that does not exist, or that exists and nothing runs.
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
 use std::collections::BTreeSet;
 
-/// The subcommand names clap knows, so a rail naming `harness <sub>` is
-/// checked against the binary rather than a hand-kept list.
 fn subcommands() -> Vec<String> {
     use clap::CommandFactory;
     crate::cli::Cli::command()
@@ -15,7 +12,6 @@ fn subcommands() -> Vec<String> {
         .collect()
 }
 
-/// The tokens that are paths rather than the name of a function or a hook.
 pub fn is_path(token: &str) -> Res<bool> {
     Ok(common::re(r"\.(sh|ts|tsx|js|json|toml|md|lock)$")?.is_match(token))
 }
@@ -27,17 +23,13 @@ pub fn resolve(ctx: &ProbeCtx, tracked: &[String], token: &str) -> Option<String
     if token.contains('/') {
         return None;
     }
-    // the context file names most enforcement by basename; a tracked file of
-    // that name is the enforcement
+    // the context file names most enforcement by basename; a tracked file of that name is the enforcement
     tracked
         .iter()
         .find(|p| p.rsplit('/').next() == Some(token))
         .cloned()
 }
 
-/// A hook the settings wire and a file a hash covers are both enforcement; only
-/// the check was consulted here, which read every hook the rails name as
-/// unenforced.
 fn harness_text(ctx: &ProbeCtx) -> Res<String> {
     let layout = &ctx.cfg.layout;
     let dir = &layout.harness_dir;
@@ -47,7 +39,6 @@ fn harness_text(ctx: &ProbeCtx) -> Res<String> {
         .filter(|f| common::exists(ctx.root, f))
         .cloned()
         .collect();
-    // one walk answers every pattern: a repo with a node_modules is walked once
     let tree = common::walk(ctx.root);
     for pattern in &layout.harness_globs {
         files.extend(common::matches(&tree, pattern)?);
@@ -135,10 +126,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
                 continue;
             }
             if let Some(rest) = token.strip_prefix("harness ") {
-                // The binary IS the enforcement now: `harness run`, `harness
-                // gate`, `harness probe`, `harness hook verify-done`. A rail
-                // naming a subcommand the binary does not have enforces
-                // nothing, which is the same failure as a missing script.
+                // a rail naming a subcommand the binary doesn't have is the same failure as a missing script
                 let sub = rest.split_whitespace().next().unwrap_or("");
                 if !subcommands().iter().any(|s| s == sub) {
                     found.push(common::finding(
