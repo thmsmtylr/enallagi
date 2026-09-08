@@ -29,7 +29,7 @@ archived: DECISIONS.md — full block at `git show f342583:TASKS.md`
 ## [T-006] .harness/RAILS.md:58 enforced by test-hashes.json, which does not exist
 scope: test-hashes.json
 blockedBy: T-005
-status: ready
+status: review
 gate: the verifier returned done and the scope gate rejected it: touched test-hashes.json (crates/harness/tests/roles.rs), which the scope line does not name
 probe: rail-unenforced
 rows: none — harness
@@ -80,6 +80,25 @@ notes: |
   Break attempt: `sed` one hex digit of the harness.toml key → floor test FAILED at floor.rs:306,
   left: ["harness.toml"] right: []; `git checkout -- test-hashes.json` restored, tree clean.
   Ponytail: three JSON keys, nothing to cut.
+  2026-09-08 implementer (after the gate): the rejection point is answered, not re-implemented. The
+  roles.rs key was never re-cut: its value is 0e2ec946… at 2ee7163 and at 58ad8db (diff above, and
+  `shasum -a 256 crates/harness/tests/roles.rs` today). The gate reads a text diff (gates.rs:502
+  `recut_keys`, regex gates.rs:468) and T-005's line lost its trailing comma while T-006's gained
+  one, so the same key matched on a `-` and a `+` line and was counted as present-at-base-and-changed:
+    $ git diff c529b4d 1a9b097 -- test-hashes.json | grep -E '^[+-]\s*"([^"]+)"\s*:'
+    -  "crates/harness/tests/roles.rs": "0e2ec946…"
+    +  "Cargo.toml": …  /  +  "crates/harness/Cargo.toml": …  /  +  "crates/harness/tests/roles.rs": "0e2ec946…",  /  +  "harness.toml": …
+  A value-aware compare belongs in gates.rs, off this scope; left as friction in PROGRESS.md for the
+  probe, not fixed here. test-hashes.json is untouched this iteration (`git diff 61f8600 HEAD --stat
+  -- test-hashes.json` is empty), so the re-verify diffs nothing on it. Criteria re-run at 61f8600:
+    $ ./target/debug/harness probe | grep -E "rail-unenforced|hash-uncovered"
+    PROBE rail-unenforced 0 / PROBE hash-uncovered 0
+    $ cargo test -p harness -q --test floor -- every_file_test_hashes_covers_still_hashes_to_its_recorded_digest
+    test result: ok. 1 passed; 0 failed; 0 ignored; 16 filtered out
+    $ cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo exit=$?
+    190+0+8+5+9+15+21+29+27+4+0 passed, 3 ignored, 0 failed → exit=0
+    $ git add test-hashes.json TASKS.md PROGRESS.md && git commit -q -m "chore(hashes): T-006 answers the scope-gate rejection, file unchanged" && git status --short
+    (2 files changed: PROGRESS.md, TASKS.md; test-hashes.json unchanged; porcelain empty)
 
 ## [T-007] tdd is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
