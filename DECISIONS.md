@@ -360,3 +360,59 @@ notes: |
   second assertion iterates the whole map over the repo root, not a hardcoded key (floor.rs:306).
   Ponytail: four JSON keys, nothing to cut. The value-aware compare the friction names belongs to a
   gates.rs task the probe can raise; not fixed here (off scope, and not mine to fix).
+
+## [T-007] tdd is declared with gate: none -- nothing fails without it, so relying on it is a hope
+scope: crates/harness/harness.default.toml
+blockedBy: none
+status: done
+probe: skill-ungated
+rows: none — harness
+command: `harness probe`
+output: |
+  PROBE skill-ungated 3
+  FINDING skill-ungated harness.toml:0 tdd is declared with gate: none -- nothing fails without it, so relying on it is a hope
+criteria:
+  - the `[[skill]]` entry `id = "tdd"` in crates/harness/harness.default.toml reads `gate = "spec-untested"`; its `source`, `path`, `rev` and `why` are unchanged, and no other entry changes
+  - `harness probe` emits no `skill-ungated` line naming `tdd` (today: 1)
+  - `cargo test -p harness -q --test probes -- every_declared_skill_names_its_enforcing_gate` passes (a gate name the probe does not know fails it)
+  - `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
+notes: |
+  proposed from the output above on 2026-09-08. Not adjudicated. harness.toml declares no `[[skill]]`; the entry the probe reads is the embedded default.
+  2026-09-08 adjudicator: promoted. Reproduced. `spec-untested` is what fails when the test a
+  criterion names is never written, which is the half of tdd a probe can see; nothing observes
+  ordering, and that stays a hope the `why` line already states. The embedded default is the entry
+  the probe reads here, so it is the file; harness.toml is off scope.
+  2026-09-08 implementer: one line, `gate = "none"` → `gate = "spec-untested"` on the tdd entry
+  (harness.default.toml:192); no other entry changed. Red first: `./target/debug/harness probe` at
+  9b6c821 emitted `FINDING skill-ungated harness.toml:0 tdd is declared with gate: none ...`
+  (PROBE skill-ungated 3). Green: after `cargo build -q`, `PROBE skill-ungated 2`, the two lines left
+  are review-received and review-requested (T-008, T-009). Scrutinise: the gate name is
+  `spec-untested`, which is in probes/mod.rs:56 `NAMES`, so the "names gate" branch of the probe stays
+  silent; the tdd entry's source, path, rev and why are byte-identical to 9b6c821.
+  Commands:
+    $ sed -i '' '/^id = "tdd"$/,/^gate = /{s/^gate = "none"$/gate = "spec-untested"/;}' crates/harness/harness.default.toml
+    $ cargo test -p harness -q --test probes -- every_declared_skill_names_its_enforcing_gate
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out
+    $ cargo build -q && ./target/debug/harness probe | grep skill-ungated
+    PROBE skill-ungated 2 (review-received, review-requested; no tdd line)
+    $ cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo exit=$?
+    test result: ok. 190 passed; 0 failed; 1 ignored (+ 8, 5, 9, 15 (2 ignored), 21, 29, 27, 4 passed) → exit=0
+    $ git add crates/harness/harness.default.toml TASKS.md PROGRESS.md && git commit -m "feat(config): T-007 tdd names spec-untested as its gate"
+    [dogfood/rust-port 315f0d0] feat(config): T-007 tdd names spec-untested as its gate — 3 files changed, 25 insertions(+), 2 deletions(-); amended to carry this line
+  2026-09-08 verifier: VERIFIED. Tree clean (`git status --porcelain` empty); the work is 70b2622,
+  base 9b6c821 (origin/main 52e8799 is the merge-base for the whole port, so the task's own diff is
+  9b6c821..70b2622). `git diff 9b6c821 70b2622 --stat` → PROGRESS.md, TASKS.md, harness.default.toml
+  only; test-hashes.json untouched. The toml diff is one line, `-gate = "none"` / `+gate = "spec-untested"`
+  at :192; `git show 9b6c821:crates/harness/harness.default.toml` confirms source, path, rev, why
+  byte-identical. `spec-untested` is probes/mod.rs:56 `NAMES`, and the unknown-name branch exists at
+  probes/skill_ungated.rs:57 ("names gate ... which neither ... defines"), which is what the test's
+  `contains("names gate ")` filter (tests/probes.rs:342) would catch. Baseline is empty; no failure seen,
+  none matched. PROGRESS.md entry carries `friction: none`.
+  Commands:
+    $ cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo chain-exit=$?
+    chain-exit=0 — per-binary: 190 (1 ignored), 0, 8, 5, 9, 15 (2 ignored), 21, 29, 27, 4, 0 passed → 308 passed, 3 ignored, 0 failed
+    $ cargo test -p harness -q --test probes -- every_declared_skill_names_its_enforcing_gate
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out
+    $ cargo build -q && ./target/debug/harness probe | grep skill-ungated
+    PROBE skill-ungated 2 (review-received, review-requested; no tdd line)
+  ponytail: nothing to audit; a one-line config edit is the floor.
