@@ -83,7 +83,6 @@ fn resolve_agent(pkg: &Path) -> Option<Vec<String>> {
 /// Runs one script with `cwd` = the fixture root. `pkg` is exported as
 /// `EVAL_PKG` when `with_pkg` is set, matching which of `setup.sh`/
 /// `ablate.sh` (yes) and `assert.sh` (no) the shell version passes it to.
-/// Output is inherited, not discarded, matching the shell version.
 fn run_script(script: &Path, cwd: &Path, pkg: Option<&Path>) -> bool {
     let mut cmd = Command::new("bash");
     cmd.arg(script).current_dir(cwd);

@@ -16,8 +16,6 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-// ------------------------------------------------------------ what it ships
-
 const ROLES: &[(&str, &str)] = &[
     (
         "adjudicator.md",
@@ -81,8 +79,6 @@ const CLAUDE_SETTINGS: &str = include_str!("../../../adapters/claude/settings.js
 /// .gitignore is never touched.
 const GITIGNORE: &str =
     "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nskills/\nrun/\n__pycache__/\n";
-
-// ----------------------------------------------------------------- the API
 
 #[derive(Debug, Default, Clone)]
 pub struct InitOpts {
@@ -181,8 +177,6 @@ pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
     }
     Ok(report)
 }
-
-// ---------------------------------------------------------------- the plan
 
 struct Planned {
     path: String,
@@ -424,8 +418,6 @@ pub(crate) fn skills_root(cfg: &Config, preset: Option<&Preset>) -> PathBuf {
     }
 }
 
-// ------------------------------------------------------------- the adapters
-
 /// The hook a `pre_tool_use`, `stop` or `prompt_submit` event runs, in the
 /// order the tool fires them.
 const HOOKS: &[(&str, &[&str])] = &[
@@ -632,8 +624,6 @@ fn pretty(value: &Value) -> String {
     text.push('\n');
     text
 }
-
-// -------------------------------------------------------------- the asserts
 
 /// Every top-level path this run wrote or seeded, for the `git add` at the end:
 /// gate_verdict counts an untracked path as work off the branch, so a document

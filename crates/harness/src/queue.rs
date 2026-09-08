@@ -38,7 +38,6 @@ pub enum QueueError {
     NoSuchTask(String),
 }
 
-/// A `## [T-\d+]` heading line, `id` and the trimmed title after it.
 fn match_heading(line: &str) -> Option<(String, String)> {
     let rest = line.strip_prefix("## [")?;
     let close = rest.find(']')?;
@@ -51,13 +50,11 @@ fn match_heading(line: &str) -> Option<(String, String)> {
     Some((id.to_string(), title))
 }
 
-/// A fenced-code-block delimiter, `` ``` `` or `~~~`, indentation allowed.
 fn is_fence(line: &str) -> bool {
     let trimmed = line.trim_start();
     trimmed.starts_with("```") || trimmed.starts_with("~~~")
 }
 
-/// Blocks in file order. Zero blocks is not a verdict; an unreadable queue is refused, loudly.
 pub fn parse(text: &str) -> Result<Vec<Block>, QueueError> {
     let mut blocks: Vec<Block> = Vec::new();
     let mut current: Option<usize> = None;
@@ -131,7 +128,6 @@ pub fn blockers(b: &Block) -> Vec<String> {
         .collect()
 }
 
-/// First task a lane may take: ready, not attended, every blocker done.
 pub fn ready_unattended(blocks: &[Block]) -> Option<String> {
     let status: HashMap<&str, Option<String>> = blocks
         .iter()
@@ -161,14 +157,12 @@ pub fn ids_at(blocks: &[Block], status: &str) -> Vec<String> {
         .collect()
 }
 
-/// One block, verbatim: its heading reconstructed from `id`/`title`, then its body lines.
 pub fn block_text(b: &Block) -> String {
     let mut lines = vec![format!("## [{}] {}", b.id, b.title)];
     lines.extend(b.body.iter().map(|(_, l)| l.clone()));
     lines.join("\n")
 }
 
-/// Rewrite one block's status in place, recording why next to it as a `gate:` line.
 pub fn set_status(
     text: &str,
     task: &str,
@@ -195,7 +189,6 @@ pub fn set_status(
     Ok(text.to_string())
 }
 
-/// Rewrite `status: blocked` to ready wherever every blocker is done.
 pub fn unblock(text: &str) -> Result<String, QueueError> {
     let blocks = parse(text)?;
     let status: HashMap<&str, Option<String>> = blocks
@@ -231,7 +224,6 @@ pub fn unblock(text: &str) -> Result<String, QueueError> {
     Ok(lines.join("\n"))
 }
 
-/// The kill lines under `## Rejected findings` in DECISIONS.md.
 pub fn rejections(decisions: &str) -> Vec<String> {
     let mut inside = false;
     let mut out = Vec::new();

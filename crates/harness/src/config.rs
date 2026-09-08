@@ -1,7 +1,4 @@
-//! config: the answers the harness substitutes into roles, gates and probes.
-//!
-//! `harness.default.toml` is embedded in the binary and is the base. A repo's
-//! `harness.toml` is deep-merged over it: tables key by key, arrays whole.
+//! The answers substituted into roles, gates and probes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -98,9 +95,6 @@ pub struct AgentConfig {
     pub model: Option<String>,
     pub usage: Option<UsagePaths>,
     pub rate_limit_pattern: String,
-    /// Per-role overrides: any other key of `[agent]` is `[agent.<role>]`.
-    /// Flattened, so `deny_unknown_fields` cannot also apply here; `validate`
-    /// refuses a key that is not a role instead.
     #[serde(flatten)]
     pub roles: BTreeMap<String, AgentOverride>,
 }
@@ -234,8 +228,6 @@ pub enum Predicate {
     Not(Box<Predicate>),
 }
 
-/// The whole `when` vocabulary. No conjunction, no disjunction: a pipeline
-/// that needs two conditions is two pipelines.
 pub fn parse_when(s: &str) -> Result<Predicate, ConfigError> {
     let s = s.trim();
     if let Some(rest) = s.strip_prefix('!') {
@@ -255,7 +247,6 @@ pub fn parse_when(s: &str) -> Result<Predicate, ConfigError> {
     }
 }
 
-/// `harness.toml` deep-merged over the embedded defaults.
 pub fn load(root: &Path) -> Result<Config, ConfigError> {
     let mut base: toml::Value = parse_toml(DEFAULT_TOML, "harness.default.toml")?;
     let path = root.join("harness.toml");
@@ -289,8 +280,6 @@ fn parse_toml(text: &str, path: &str) -> Result<toml::Value, ConfigError> {
     })
 }
 
-/// Tables merge key by key, everything else replaces -- an array of tables
-/// such as `[[stage]]` is a whole list, not a list to append to.
 fn merge(base: &mut toml::Value, over: &toml::Value) {
     match (base, over) {
         (toml::Value::Table(b), toml::Value::Table(o)) => {
@@ -307,7 +296,6 @@ fn merge(base: &mut toml::Value, over: &toml::Value) {
     }
 }
 
-/// Every problem at once: a half-reported config costs a round trip per error.
 pub fn validate(
     cfg: &Config,
     presets: &Presets,
@@ -441,7 +429,6 @@ pub fn validate(
     }
 }
 
-/// The `__SCREAMING_SNAKE__` tokens of a role prompt or template.
 pub fn subst(text: &str, cfg: &Config) -> String {
     let l = &cfg.layout;
     let cap = l.learnings_cap.to_string();
@@ -469,10 +456,6 @@ pub fn subst(text: &str, cfg: &Config) -> String {
     })
 }
 
-// ---------------------------------------------------------------- migration
-
-/// A `harness.json` from the bash harness, as `harness.toml` text plus the
-/// list of `"<old> -> <new>"` renames to show the user.
 pub fn migrate_json(json: &str) -> Result<(String, Vec<String>), ConfigError> {
     let value: serde_json::Value = serde_json::from_str(json).map_err(|e| ConfigError::Parse {
         path: "harness.json".to_string(),
@@ -586,9 +569,6 @@ pub fn migrate_json(json: &str) -> Result<(String, Vec<String>), ConfigError> {
     Ok((out, renamed))
 }
 
-/// `s/PATTERN/REPL/p` -> a Rust regex whose group 1 is the failing test name.
-/// sed's BRE spells a group `\(...\)` and a literal paren `(`; a regex spells
-/// them the other way around, so the escaping swaps.
 fn fail_name_from_sed(sed: &str) -> Option<String> {
     let mut chars = sed.chars();
     if chars.next()? != 's' {
@@ -646,8 +626,6 @@ fn fail_name_from_sed(sed: &str) -> Option<String> {
     Some(out)
 }
 
-/// A skill entry of the old `skills` list. Nothing was fetched then, so the
-/// source and rev are supplied here.
 fn skill_decl(skill: &serde_json::Value) -> String {
     let name = skill.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let id = &skill_id(name);
@@ -668,9 +646,6 @@ fn skill_decl(skill: &serde_json::Value) -> String {
     )
 }
 
-/// The old `name` was a tool-specific reference like
-/// `superpowers:test-driven-development`. The id is its last segment, cut down
-/// to what `validate` accepts.
 fn skill_id(name: &str) -> String {
     name.rsplit(':')
         .next()
@@ -715,7 +690,6 @@ fn json_to_toml(v: &serde_json::Value) -> Option<toml::Value> {
     })
 }
 
-/// A JSON scalar or list as the TOML that denotes it.
 fn scalar(v: &serde_json::Value) -> String {
     json_to_toml(v).map_or_else(|| "\"\"".to_string(), |t| t.to_string())
 }

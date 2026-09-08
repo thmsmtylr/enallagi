@@ -7,8 +7,6 @@ use harness::fixture::Repo;
 use harness::pipeline::{self, Digest, RunOpts};
 use std::sync::{Arc, Mutex};
 
-// ------------------------------------------------------------------ fixture
-
 const TASKS: &str = "\
 ## [T-001] do the thing
 
@@ -185,8 +183,6 @@ fn plan_of(repo: &Repo) -> String {
     pipeline::plan(&repo.root, &cfg).expect("plan")
 }
 
-// ------------------------------------------------------------- the dry plan
-
 #[test]
 fn a_dry_iteration_plans_implement_and_verify() {
     let r = repo(&base_toml(""), TASKS);
@@ -226,8 +222,6 @@ fn a_role_with_no_agent_command_falls_back_to_the_default() {
     assert!(plan_of(&r).contains("as role implementer via ./src/fakeagent.sh"));
 }
 
-// ------------------------------------------------------- the clarification rail
-
 #[test]
 fn a_bare_clarification_marker_halts_the_loop() {
     let r = repo(&base_toml(""), TASKS);
@@ -261,8 +255,6 @@ fn a_backticked_marker_in_the_template_does_not_halt_it() {
         digest.halts
     );
 }
-
-// ------------------------------------------------------ the log and the budget
 
 #[test]
 fn every_spawned_stage_appends_one_record_to_the_run_log() {
@@ -360,8 +352,6 @@ fn a_dollar_budget_over_a_cost_nothing_reports_halts() {
     );
 }
 
-// ------------------------------------------------------------- refused configs
-
 #[test]
 fn a_config_naming_an_unknown_gate_is_refused() {
     let r = repo(
@@ -385,8 +375,6 @@ fn a_stage_on_a_preset_with_no_turn_cap_and_no_timeout_is_refused() {
     assert!(err.to_string().contains("timeout"), "{err}");
 }
 
-// ------------------------------------------------------------- skills, frozen
-
 #[test]
 fn a_stage_refuses_to_start_on_an_unresolved_skill_under_frozen() {
     let r = repo(&base_toml(""), TASKS);
@@ -407,8 +395,6 @@ fn a_stage_refuses_to_start_on_an_unresolved_skill_under_frozen() {
     assert!(ends(&events).is_empty(), "the stage may not spawn");
 }
 
-// ------------------------------------------------------------ a command stage
-
 #[test]
 fn a_command_stage_runs_with_the_harness_environment() {
     let toml = base_toml("").replace(
@@ -420,8 +406,6 @@ fn a_command_stage_runs_with_the_harness_environment() {
     let seen = std::fs::read_to_string(r.root.join("env.txt")).expect("the command stage ran");
     assert_eq!(seen, "T-001 note 1");
 }
-
-// ------------------------------------------------------------------- the halts
 
 #[test]
 fn stop_file_halts_at_the_next_boundary() {
@@ -481,8 +465,6 @@ fn two_dry_rounds_end_the_run() {
     assert_eq!(digest.iterations, 2, "{digest:#?}");
 }
 
-// -------------------------------------------------------------- `harness run`
-
 #[test]
 fn harness_run_without_a_tty_prints_one_line_per_event_and_exits_0() {
     let r = repo("", "");
@@ -524,8 +506,6 @@ fn harness_run_exits_2_on_a_refused_config() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("nope"));
 }
 
-// ------------------------------------------------------ roles keep their source
-
 /// A skill that resolves without a network: a `path:` source is vendored out of
 /// the repo itself.
 const SKILL: &str = r#"
@@ -566,8 +546,6 @@ fn rendering_a_role_never_eats_the_source_it_rendered_from() {
     assert!(!rendered.contains("{{skill:"), "the token was not rendered");
 }
 
-// -------------------------------------------------------------- the check ran
-
 #[test]
 fn a_red_check_that_names_nothing_is_a_finding_not_an_error() {
     let r = repo(&base_toml(""), "");
@@ -580,8 +558,6 @@ fn a_red_check_that_names_nothing_is_a_finding_not_an_error() {
     assert!(plan.contains("FINDING check-red"), "{plan}");
     assert!(!plan.contains("PROBE check-red ERROR"), "{plan}");
 }
-
-// --------------------------------------------- a proposal the contract owns
 
 #[test]
 fn a_block_left_proposed_whose_fix_names_the_contract_halts() {
@@ -608,8 +584,6 @@ fn a_block_left_proposed_whose_fix_names_the_contract_halts() {
         digest.halts
     );
 }
-
-// ---------------------------------------------------------------- live events
 
 #[test]
 fn a_stages_output_reaches_the_sink_while_the_stage_is_still_running() {
@@ -654,8 +628,6 @@ fn a_stages_output_reaches_the_sink_while_the_stage_is_still_running() {
         end.0.duration_since(output.0)
     );
 }
-
-// -------------------------------------------------- a gate that skips the rest
 
 #[test]
 fn the_implementer_marking_its_own_task_done_skips_the_verify_stage() {

@@ -1,12 +1,4 @@
-//! gates: the named checks the loop runs after a stage exits. Ported from
-//! `harness/lib/gates.sh`, `harness/hooks/check-gate.sh` and the three inline
-//! gates in `harness/loop.sh` (the implementer's own verdict, the
-//! adjudicator's HALT line, and the dry-round counter).
-//!
-//! Every gate that forces a task back to `ready` writes the queue with
-//! `queue::set_status`, commits `TASKS.md` with the message the shell used,
-//! and emits `gate` + `task.status` events. `dry_run` computes and reports
-//! the same outcome and writes nothing.
+//! The named checks the loop runs after a stage exits.
 
 use std::path::Path;
 use std::process::Command;
@@ -16,7 +8,6 @@ use crate::events::{Kind, Writer};
 use crate::git::{commit_paths, diff_names, git, head, porcelain};
 use crate::queue::{self, Queue};
 
-/// Files every task writes by protocol, so they are in scope for all of them.
 const BOOKKEEPING: &[&str] = &[
     "TASKS.md",
     "PROGRESS.md",
@@ -62,7 +53,6 @@ fn fail(reason: impl Into<String>) -> GateOutcome {
     }
 }
 
-/// Dispatch by name. A name outside `config::GATE_NAMES` fails closed.
 pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
     let outcome = match name {
         "implementer-not-done" => implementer_not_done(ctx),
@@ -91,8 +81,6 @@ fn tasks_file(root: &Path) -> Queue {
     }
 }
 
-/// The task's `status` word, or `Err` when the queue cannot be read at all. A queue no tool can
-/// address is not a pass for the task in it.
 fn status_of(root: &Path, task: &str) -> Result<Option<String>, queue::QueueError> {
     let text = tasks_file(root).read()?;
     let blocks = queue::parse(&text)?;
@@ -102,7 +90,6 @@ fn status_of(root: &Path, task: &str) -> Result<Option<String>, queue::QueueErro
         .and_then(|b| queue::field(b, "status")))
 }
 
-/// `field(task, <key>)` over the queue, empty when absent.
 fn field_of(root: &Path, task: &str, key: &str) -> String {
     let Ok(text) = tasks_file(root).read() else {
         return String::new();
@@ -124,7 +111,6 @@ fn unreadable(ctx: &mut GateCtx, task: &str) -> GateOutcome {
     fail("unreadable")
 }
 
-/// Rewrite the task to `ready`, commit the queue, and record the refusal.
 fn force_back(
     ctx: &mut GateCtx,
     gate: &str,
@@ -398,7 +384,6 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     )
 }
 
-/// A `scope:` line as globs: backticks and spaces dropped, commas are separators.
 fn scope_globs(line: &str) -> Vec<String> {
     line.replace(['`', ' '], "")
         .replace(',', " ")
@@ -407,8 +392,6 @@ fn scope_globs(line: &str) -> Vec<String> {
         .collect()
 }
 
-/// The harness set is this literal list, so a project whose check script lives elsewhere adds it
-/// here.
 fn is_harness_path(cfg: &Config, f: &str) -> bool {
     let dir = &cfg.layout.harness_dir;
     (!dir.is_empty() && f.starts_with(&format!("{dir}/")))
@@ -423,10 +406,7 @@ fn is_harness_path(cfg: &Config, f: &str) -> bool {
         )
 }
 
-/// Where the vendored skills live: the layout's own setting, else the agent preset's, else
-/// `<harness_dir>/skills` for a preset that inlines them.
-// ponytail: Task 8 owns `skills::skills_dir`, which resolves the same three sources from an
-// already-resolved preset. Unify there once it exists.
+// ponytail: unify with skills::skills_dir (Task 8) once it resolves the same sources.
 pub(crate) fn skills_dir_for(cfg: &Config) -> String {
     if let Some(dir) = &cfg.layout.skills_dir {
         return dir.clone();
@@ -440,8 +420,6 @@ pub(crate) fn skills_dir_for(cfg: &Config) -> String {
     format!("{}/skills", cfg.layout.harness_dir)
 }
 
-/// The two files whose *keys* are what a task authorises, and the pattern that reads a key off a
-/// changed diff line.
 fn recut_keys_pattern(f: &str) -> Option<&'static str> {
     match f {
         "test-hashes.json" => Some(r#"^[+-]\s*"([^"]+)"\s*:"#),
@@ -450,12 +428,6 @@ fn recut_keys_pattern(f: &str) -> Option<&'static str> {
     }
 }
 
-/// The keys the file re-cut between `base` and HEAD, sorted and deduped. SPEC.md §0.2 states the
-/// conditional form -- "a re-cut key that does not correspond to a file on the task's scope: line
-/// is a rejection" -- which makes one that does an ordinary event. The unconditional form
-/// deadlocked the queue: every product row's test file is hashed, so any task turning a row green
-/// had to re-cut a hash, which forced `rows: none — harness`, which forbade it from claiming the
-/// row it had just turned green.
 fn recut_keys(root: &Path, base: &str, file: &str, key_re: &str) -> Vec<String> {
     let (Ok(re), Ok(diff)) = (
         regex::Regex::new(key_re),
@@ -473,9 +445,6 @@ fn recut_keys(root: &Path, base: &str, file: &str, key_re: &str) -> Vec<String> 
     keys
 }
 
-/// The matcher every scope rejection turns on. `case` globs are permissive -- `*` crosses `/`
-/// here, unlike pathname expansion -- so `src/*` covers `src/a/b.ts`. An empty scope line puts
-/// every file out of scope.
 pub fn in_scope(path: &str, globs: &[String]) -> bool {
     globs.iter().any(|pat| {
         !pat.is_empty()
@@ -487,10 +456,6 @@ pub fn in_scope(path: &str, globs: &[String]) -> bool {
     })
 }
 
-/// The portable floor gate's answer: `green` is verified on DELTA, never on absolute zero. A tree
-/// whose exit criteria are not all covered yet cannot reach zero failures, and a gate whose
-/// passing state is unreachable is not strict, it is broken. `.check-baseline` is the recorded red
-/// and it only ever shrinks.
 #[derive(Debug, Clone, Default)]
 pub struct CheckReport {
     pub red: bool,
@@ -501,9 +466,6 @@ pub struct CheckReport {
 }
 
 impl CheckReport {
-    /// What `check-gate.sh` exiting 0 means. Fails closed: a red run whose failures it cannot NAME
-    /// forgives nothing, because a gate asserts what it executed and never merely that nothing
-    /// failed.
     pub fn accepts(&self) -> bool {
         !self.red || (!self.unnamed && self.unforgiven.is_empty())
     }
@@ -571,7 +533,6 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
     }
 }
 
-/// ` [12ms]`, ` [1.4s]` and friends are timings, not part of a test's name.
 fn strip_duration(name: &str) -> String {
     let trimmed = name.trim_end();
     let Some(open) = trimmed.rfind(" [") else {
@@ -589,7 +550,6 @@ fn strip_duration(name: &str) -> String {
     }
 }
 
-/// `.check-baseline`, comments and blanks removed.
 fn baseline(root: &Path) -> Vec<String> {
     std::fs::read_to_string(root.join(".check-baseline"))
         .unwrap_or_default()
@@ -643,8 +603,6 @@ fn adjudicator_halt(ctx: &mut GateCtx) -> GateOutcome {
     }
 }
 
-/// A line beginning HALT that names a block. Both patterns are regexes: slicing the first four
-/// bytes of a line splits a multibyte character, and stage output is full of box drawing.
 fn halt_id(output: &str) -> Option<String> {
     let starts_halt = regex::Regex::new(r"(?i)^\s*halt").ok()?;
     let task = regex::Regex::new(r"T-[0-9]+").ok()?;
@@ -675,8 +633,6 @@ fn dry_round(ctx: &mut GateCtx) -> GateOutcome {
     }
 }
 
-/// The first task a lane may take, or `None` -- including when the queue cannot be read at all.
-/// Nothing is recorded here; the caller decides what an unreadable queue means to it.
 pub fn takeable(root: &Path, _cfg: &Config) -> Option<String> {
     let text = tasks_file(root).read().ok()?;
     queue::ready_unattended(&queue::parse(&text).ok()?)
@@ -699,9 +655,6 @@ mod tests {
     }
 
     impl Env {
-        /// A repo carrying `harness.toml` with the fake check, a `.harness/.gitignore` covering
-        /// what the harness itself writes (without it the event log makes every tree dirty), and
-        /// everything committed so a test's own base sha starts clean.
         fn new(check_body: &str) -> Env {
             let repo = Repo::new();
             repo.write(".harness/.gitignore", "events.jsonl\n*.log\nlogs/\n");
@@ -764,7 +717,6 @@ mod tests {
             self.writer.log.read().expect("read events")
         }
 
-        /// What a scope rejection puts on the log.
         fn assert_rejection_events(&self) {
             let events = self.events();
             assert!(events.iter().any(|e| matches!(&e.kind,

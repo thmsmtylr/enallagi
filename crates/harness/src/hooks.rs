@@ -1,10 +1,4 @@
-//! hooks: the agent lifecycle entry points a coding-agent adapter wires up (PreToolUse,
-//! Stop, UserPromptSubmit). Ported from `harness/hooks/immutable.sh`, `one-writer.sh`,
-//! `verify-done.sh`, `check-gate.sh`, and `adapters/claude/skill-hook.sh`.
-//!
-//! Every hook fails open on anything it cannot read or parse -- an unreadable config, an
-//! unparseable stdin payload, a missing pid file -- because a hook that crashes closed turns a
-//! read error into an outage for every edit in the session.
+//! The agent lifecycle hooks (PreToolUse, Stop, UserPromptSubmit), all fail-open.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -45,8 +39,6 @@ pub fn immutable(root: &Path, input: &str) -> (i32, String) {
     (0, String::new())
 }
 
-/// `{"tool_input":{"file_path": "..."}}` -> the target, resolved against `root` and realpath'd.
-/// `None` on anything that does not parse -- the shell exits 0 on the same failure.
 fn tool_input_path(root: &Path, input: &str) -> Option<PathBuf> {
     let v: serde_json::Value = serde_json::from_str(input).ok()?;
     let path = v.get("tool_input")?.get("file_path")?.as_str()?;
@@ -65,12 +57,6 @@ fn normalize(root: &Path, rel: &str) -> PathBuf {
     realpath_like(&joined)
 }
 
-/// `os.path.realpath`: resolves symlinks in every path component that exists, so a symlinked
-/// alias of a covered file or a locked skill's directory is not a way around either hook. The
-/// target of an edit, or a key of `test-hashes.json`, may name a file that does not exist yet
-/// (a create), so this cannot require existence the way `Path::canonicalize` does -- it walks up
-/// to the nearest existing ancestor, canonicalizes that, then appends the missing tail lexically
-/// normalized (`.`/`..` collapsed, nothing resolved -- there is nothing on disk left to resolve).
 fn realpath_like(p: &Path) -> PathBuf {
     let normalized = lexical_normalize(p);
     let mut existing = normalized.clone();
@@ -89,8 +75,6 @@ fn realpath_like(p: &Path) -> PathBuf {
     resolved
 }
 
-/// Collapses `.` and `..` without touching the filesystem -- `realpath_like`'s fallback for the
-/// tail of a path that does not exist.
 fn lexical_normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for comp in p.components() {
@@ -105,14 +89,9 @@ fn lexical_normalize(p: &Path) -> PathBuf {
     out
 }
 
-/// `test-hashes.json`'s coverage: the reference itself, any key it names, or -- for the
-/// `package.json#scripts` key -- the root `package.json` and every workspace `package.json` the
-/// root file's `workspaces` globs match. `None` on a missing or unparseable reference: fails open,
-/// same as the shell crashing out of the python one-liner.
 fn hashed_hit(root: &Path, target: &Path) -> Option<String> {
     let hashes_path = root.join("test-hashes.json");
     if normalize(root, "test-hashes.json") == *target {
-        // The reference itself, checked before the file is even parsed, exactly like the shell.
         if hashes_path.is_file() {
             return Some("test-hashes.json (the reference itself)".to_string());
         }
@@ -154,10 +133,6 @@ fn hashed_hit(root: &Path, target: &Path) -> Option<String> {
     None
 }
 
-/// `glob.glob(root/<pattern>/package.json)`: each `/`-separated component of `pattern` is matched
-/// against real directory entries when it carries a wildcard, walked literally otherwise. No
-/// recursion into `**` beyond one path segment -- neither does python's `glob` without
-/// `recursive=True`, which the shell never passed.
 fn glob_package_jsons(root: &Path, pattern: &str) -> Vec<PathBuf> {
     let full = format!("{}/package.json", pattern.trim_end_matches('/'));
     let mut current = vec![root.to_path_buf()];
@@ -193,8 +168,6 @@ fn glob_package_jsons(root: &Path, pattern: &str) -> Vec<PathBuf> {
     current
 }
 
-/// `harness.lock`'s coverage: the lock file itself, or a file under `<skills_dir>/<id>/` for an
-/// id the lock names. `None` when there is no lock, or the lock cannot be read.
 fn locked_hit(root: &Path, target: &Path) -> Option<String> {
     let lock_path = root.join("harness.lock");
     if normalize(root, "harness.lock") == *target {
@@ -222,9 +195,6 @@ fn locked_hit(root: &Path, target: &Path) -> Option<String> {
     None
 }
 
-/// PreToolUse: refuse an Edit/Write from a session that is not the lane a live loop is running.
-/// Liveness is `<harness_dir>/loop.pid`, read by `archive::loop_live`, which excludes the
-/// caller's own process chain -- so the loop's own lane is never refused by itself.
 pub fn one_writer(root: &Path, _input: &str) -> (i32, String) {
     let Ok(cfg) = config::load(root) else {
         return (0, String::new());
@@ -256,9 +226,6 @@ pub fn one_writer(root: &Path, _input: &str) -> (i32, String) {
     )
 }
 
-/// Stop hook: the gate runs on the state the workflow actually ends in. `check-covered.sh` is a
-/// build-system-aware gate an adapter may have installed; `check-gate.sh`'s floor -- ported here
-/// as `gates::check_delta` -- runs otherwise.
 pub fn verify_done(root: &Path, input: &str) -> (i32, String) {
     if stop_hook_active(input) {
         return (0, String::new());
@@ -325,9 +292,6 @@ fn run_check_covered(path: &Path, input: &str) -> (i32, String) {
     }
 }
 
-/// `check-gate.sh`'s messages, verbatim: green is silent; a red run forgiven wholesale by
-/// `.check-baseline` still names what it forgave; a run whose failures could not be named forgives
-/// nothing; a run with an unforgiven failure is a rejection naming it and the check's own tail.
 fn render_check_report(report: &CheckReport) -> (i32, String) {
     if !report.red {
         return (0, String::new());
@@ -376,8 +340,6 @@ fn tail_lines(text: &str, n: usize) -> String {
     lines[start..].join("\n")
 }
 
-/// UserPromptSubmit: the skill contract from `harness.toml`, printed straight to stdout on every
-/// prompt. A reporter, never a gate -- always 0, so a prompt can never deadlock on it.
 pub fn skills_contract(root: &Path) -> (i32, String) {
     let skills = config::load(root).map(|c| c.skill).unwrap_or_default();
     if !skills.is_empty() {
@@ -400,8 +362,7 @@ mod tests {
         config::load(root).unwrap_or_default()
     }
 
-    /// Kills and waits on its child even if the test panics before reaching an explicit cleanup
-    /// -- an assertion failure between spawn and kill used to leak the `sleep 30`.
+    /// Cleans up process on drop even if the test panics, preventing `sleep 30` leaks.
     struct Reaper(std::process::Child);
 
     impl Drop for Reaper {

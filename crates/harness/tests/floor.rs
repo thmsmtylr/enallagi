@@ -17,8 +17,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-// -------------------------------------------------------------- the package
-
 /// The checkout this crate lives in.
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -124,8 +122,6 @@ fn history(subjects: &[&str]) -> tempfile::TempDir {
     dir
 }
 
-// -------------------------------------------------- selftest.sh:105 vendor
-
 #[test]
 fn no_installed_script_hardcodes_a_vendor_path_or_process() {
     // The core install names no vendor and no vendor directory. Prose may name
@@ -160,8 +156,6 @@ fn no_installed_script_hardcodes_a_vendor_path_or_process() {
     }
 }
 
-// ------------------------------------------------- selftest.sh:123 one parser
-
 #[test]
 fn the_launcher_parses_no_task_blocks_itself() {
     // `selftest.sh` counted task-block parsing in `loop.sh` and required 0:
@@ -181,8 +175,6 @@ fn the_launcher_parses_no_task_blocks_itself() {
     assert_eq!(holders, vec!["queue.rs".to_string()]);
 }
 
-// ------------------------------------------- selftest.sh:150 the write path
-
 #[test]
 fn the_write_path_gate_installs_where_the_rules_are_written() {
     // `selftest.sh` asserted `[ -x evals/run.sh ]` in the installed repo. The
@@ -199,8 +191,6 @@ fn the_write_path_gate_installs_where_the_rules_are_written() {
     assert_eq!(code, 2, "{stderr}");
     assert!(stderr.contains("no ablate.sh"), "{stderr}");
 }
-
-// --------------------------------------------- selftest.sh:337 --unlabelled
 
 #[test]
 fn the_driver_names_a_commit_on_the_round_that_no_task_claims() {
@@ -224,8 +214,6 @@ fn the_driver_names_a_commit_on_the_round_that_no_task_claims() {
     assert_eq!(code, 0, "{out}");
     assert_eq!(out.lines().filter(|l| l.starts_with("FINDING ")).count(), 0);
 }
-
-// ------------------------------------------- selftest.sh:551 the bootstrap
 
 /// The history `selftest.sh` builds: rounds, and a verifier that never refused.
 const NO_REJECTION: [&str; 8] = [
@@ -277,8 +265,6 @@ fn the_bootstrap_record_is_derived_from_git() {
     assert_eq!(code, 0, "{out}");
 }
 
-// ------------------------------------------------ selftest.sh:697 the demo
-
 #[test]
 fn docs_demo_drives_one_loop_iteration_end_to_end_and_deletes_what_it_made() {
     let (code, out) = script(&repo_root().join("docs/demo.sh"), &repo_root(), &[]);
@@ -318,8 +304,6 @@ fn docs_demo_drives_one_loop_iteration_end_to_end_and_deletes_what_it_made() {
         .unwrap_or_else(|| panic!("the demo printed no directory:\n{out}"));
     assert!(!Path::new(made).exists(), "{made} was left behind");
 }
-
-// ------------------------------------------- selftest.sh:753 the hash floor
 
 /// Every key of a `test-hashes.json` whose file no longer hashes to its
 /// recorded digest.
@@ -363,8 +347,6 @@ fn every_file_test_hashes_covers_still_hashes_to_its_recorded_digest() {
 
     assert_eq!(hash_mismatches(&repo_root()), Vec::<String>::new());
 }
-
-// -------------------------------------------- selftest.sh:826 the workflow
 
 /// One job's own block out of a workflow file: the lines after `  <key>:` up
 /// to the next line at exactly two spaces of indent. An absent or renamed job
@@ -528,8 +510,6 @@ fn every_github_action_is_pinned_to_a_commit_sha() {
     assert_eq!(unpinned(fixture).len(), 2, "{:?}", unpinned(fixture));
 }
 
-// ------------------------------------------ selftest.sh:1140 headless skills
-
 #[test]
 fn the_skill_hook_fires_on_a_headless_lane() {
     // The role prompts name skills and a headless lane may ignore them; the
@@ -566,8 +546,6 @@ fn the_skill_hook_fires_on_a_headless_lane() {
         );
     }
 }
-
-// ------------------------------------------------ selftest.sh:1228 the prose
 
 #[test]
 fn no_role_prompt_carries_an_incident_narrative() {
@@ -638,8 +616,6 @@ fn no_shipped_file_carries_rhetorical_filler() {
         }
     }
 }
-
-// --------------------------------------------------- what stays out of band
 
 #[test]
 #[ignore = "shell package retires in Task 18"]

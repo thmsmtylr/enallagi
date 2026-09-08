@@ -15,7 +15,6 @@ fn subcommands() -> Vec<String> {
         .collect()
 }
 
-/// The tokens that are paths rather than the name of a function or a hook.
 pub fn is_path(token: &str) -> Res<bool> {
     Ok(common::re(r"\.(sh|ts|tsx|js|json|toml|md|lock)$")?.is_match(token))
 }

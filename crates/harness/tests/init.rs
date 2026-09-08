@@ -73,8 +73,6 @@ fn walk(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-// ------------------------------------------------------ selftest.sh:40-64
-
 #[test]
 fn init_exits_0_on_a_fresh_repo() {
     let repo = Repo::new();
@@ -125,8 +123,6 @@ fn re_init_is_idempotent() {
         .collect::<Vec<_>>();
     assert_eq!(before, after);
 }
-
-// ----------------------------------------------------- selftest.sh:107-120
 
 #[test]
 fn the_context_file_is_seeded_and_the_pointers_point_at_it() {
@@ -213,8 +209,6 @@ fn the_context_file_is_resynced_to_the_configured_check() {
     assert!(!context.contains("`bun run check`"));
 }
 
-// ----------------------------------------------------- selftest.sh:1179-1225
-
 #[test]
 fn an_installed_file_that_drifted_from_its_source_is_reported() {
     let repo = Repo::new();
@@ -250,8 +244,6 @@ fn an_installed_file_that_drifted_from_its_source_is_reported() {
     assert_eq!(stale(&repo), Vec::new());
 }
 
-// ------------------------------------------------------------- migration
-
 #[test]
 fn init_migrates_harness_json_and_prints_each_renamed_key() {
     let repo = Repo::new();
@@ -280,8 +272,6 @@ fn init_migrates_harness_json_and_prints_each_renamed_key() {
     // the migrated answers are what the install is substituted from
     assert!(repo.root.join("DESIGN.md").is_file());
 }
-
-// -------------------------------------------------------------- adapters
 
 #[test]
 fn the_claude_adapter_writes_agents_and_merges_settings() {
@@ -431,8 +421,6 @@ fn an_unknown_adapter_is_refused() {
     let err = init::install(&repo.root, &adapter("emacs")).expect_err("unknown adapter");
     assert!(matches!(err, init::InitError::UnknownAdapter(ref a) if a == "emacs"));
 }
-
-// --------------------------------------------------------------- dry run
 
 #[test]
 fn dry_run_writes_nothing_and_says_what_it_would_write() {

@@ -10,7 +10,6 @@
 
 use serde_json::Value;
 
-/// Splits one chunk into its lines and renders each independently.
 pub fn parse_chunk(chunk: &str) -> Vec<String> {
     chunk.lines().map(render_line).collect()
 }

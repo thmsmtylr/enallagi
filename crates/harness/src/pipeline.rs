@@ -1,8 +1,4 @@
-//! pipeline: the launcher. It runs the declarative pipelines of `harness.toml`
-//! -- halts between stages, gates after them -- and is the port of the bash
-//! `loop.sh`. What was one hardcoded stage sequence there is `[[pipeline]]`
-//! and `[[stage]]` here; what stays in code is the order of the halts, the
-//! per-role prompt, and the digest.
+//! The launcher: runs pipelines from `harness.toml` with halts and gates.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -21,10 +17,7 @@ use crate::queue::{self, Queue};
 use crate::skills::{self, ResolveOpts};
 use crate::{archive, git};
 
-// ---------------------------------------------------------------- the prompts
-
-// Three of four iterations on 2026-08-27 ended in a question to nobody: each lane ran `ps`,
-// found the process that spawned it, and applied `one checkout is one writer` to its own parent.
+// A lane running ps to check for competing writers must ignore its parent.
 const LANE: &str = "You are this loop's own lane, spawned by the harness. There is no human in this session
 and no answer will come, so never end a turn on a question -- decide and act. A running harness
 or agent process in ps is your PARENT process, not a competing writer: LEARNINGS.md's one-checkout-one-writer
@@ -51,8 +44,6 @@ fn prompt_for(role: &str, cfg: &Config) -> String {
     config::subst(&format!("{LANE} {body}"), cfg)
 }
 
-/// The role file the prompt tells the agent to read: the repo's own copy when
-/// it has one, otherwise the packaged text.
 fn role_source(root: &Path, cfg: &Config, role: &str) -> Option<String> {
     let path = role_path(root, cfg, role);
     if path.is_file() {
@@ -71,24 +62,18 @@ fn role_source(root: &Path, cfg: &Config, role: &str) -> Option<String> {
     )
 }
 
-/// The source: what a repo edits, tokens and all.
 fn role_path(root: &Path, cfg: &Config, role: &str) -> PathBuf {
     root.join(&cfg.layout.harness_dir)
         .join("roles")
         .join(format!("{role}.md"))
 }
 
-/// The rendered copy the agent actually reads, under `run/` because it is
-/// output: rendering into the source would eat its own `{{skill:<id>}}` tokens
-/// and the next run would resolve nothing.
 fn rendered_role_path(root: &Path, cfg: &Config, role: &str) -> PathBuf {
     root.join(&cfg.layout.harness_dir)
         .join("run")
         .join("roles")
         .join(format!("{role}.md"))
 }
-
-// ----------------------------------------------------------------- the types
 
 #[derive(Debug, Clone)]
 pub struct RunOpts {
@@ -153,8 +138,6 @@ pub struct Digest {
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct Refused(pub String);
-
-// ------------------------------------------------------------------- the plan
 
 /// The `--dry-run` text: every pipeline whose `when` holds, its stages, the
 /// prompt each would carry, the gates each would run, and -- when a scout is
@@ -225,8 +208,6 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
     }
     Ok(out)
 }
-
-// -------------------------------------------------------------------- the run
 
 /// `sink` is owned rather than borrowed because it is installed on the
 /// `events::Writer` every module shares: that is the only way a `stage.output`
@@ -459,8 +440,6 @@ impl<'a> Loop<'a> {
         pipeline.end_after_dry_rounds == 0 || self.dry_rounds < pipeline.end_after_dry_rounds
     }
 
-    // ------------------------------------------------------------- one stage
-
     fn stage(
         &mut self,
         stage: &config::Stage,
@@ -692,8 +671,6 @@ impl<'a> Loop<'a> {
         }
     }
 
-    // ------------------------------------------------------------ the halts
-
     /// The order is the bash launcher's: STOP, then the budgets, then a task
     /// that went to needs-spec since the run started.
     fn boundary(&mut self, needs_spec: bool) -> bool {
@@ -797,8 +774,6 @@ impl<'a> Loop<'a> {
             reason,
         });
     }
-
-    // ------------------------------------------------------- the bookkeeping
 
     fn choose(&mut self) -> Option<config::Pipeline> {
         self.cfg
@@ -907,8 +882,6 @@ impl<'a> Loop<'a> {
             .unwrap_or_default()
     }
 
-    // ------------------------------------------------------------ the events
-
     fn emit(&mut self, kind: Kind) {
         self.writer.emit(kind);
         self.check_log();
@@ -961,8 +934,6 @@ impl<'a> Loop<'a> {
     }
 }
 
-// -------------------------------------------------------------------- helpers
-
 fn inline(items: &[String]) -> String {
     if items.is_empty() {
         " none".to_string()
@@ -1005,7 +976,6 @@ fn clarifications(root: &Path, spec: &str) -> Option<Vec<String>> {
     (!hits.is_empty()).then_some(hits)
 }
 
-/// The whole `when` vocabulary, answered against the tree as it is now.
 fn holds(root: &Path, cfg: &Config, when: &Predicate) -> bool {
     match when {
         Predicate::Not(inner) => !holds(root, cfg, inner),
@@ -1078,7 +1048,6 @@ fn config_sha256(root: &Path) -> String {
         .collect()
 }
 
-/// A command stage is `sh -c <string>`: no turns, no usage, no model.
 fn shell_preset() -> Preset {
     Preset {
         name: "sh".to_string(),
