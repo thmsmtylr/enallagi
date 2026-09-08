@@ -60,3 +60,10 @@ check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D wa
 what happened: `test-hashes.json` exists with one key, `crates/harness/tests/roles.rs`, cut with `shasum -a 256` from the shell. The floor test fails on a zero digest and passes on the real one; `./target/debug/harness probe` → `PROBE rail-unenforced 0`. T-005 moved ready → review.
 friction: none
 next: the verifier takes T-005. T-006 unblocks once it is done and adds the `harness.toml`, `Cargo.toml` and `crates/harness/Cargo.toml` keys from the shell (the edit tool is refused on the file now). T-007..T-009 and T-013 remain ready.
+
+## 2026-09-08 — T-006 — landed
+rows: none — harness (`harness-immutable` now has keys for every file it names)
+check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` → exit 0, 308 passed, 3 ignored, 0 failed, at c529b4d before the commit
+what happened: `test-hashes.json` gained keys for `harness.toml`, `Cargo.toml` and `crates/harness/Cargo.toml`, cut with `shasum -a 256` from the shell; the roles.rs key kept its value. `./target/debug/harness probe` → `PROBE hash-uncovered 0` (was 1) and `PROBE rail-unenforced 0`. T-006 moved ready → review.
+friction: none
+next: the verifier takes T-006. T-007..T-009 (one `gate =` line each in harness.default.toml) and T-013 (fold `skills_dir_for` into `skills::skills_dir`) are ready with no blockers.
