@@ -23,7 +23,7 @@ archived: DECISIONS.md — full block at `git show 8baf510:TASKS.md`
 ## [T-005] .harness/RAILS.md:57 enforced by test-hashes.json, which does not exist
 scope: test-hashes.json
 blockedBy: none
-status: ready
+status: review
 probe: rail-unenforced
 rows: none — harness
 command: `harness probe`
@@ -42,6 +42,17 @@ notes: |
   it, so the fix is the file and not the row; .harness/RAILS.md is off scope. The PreToolUse hook
   refuses the edit tool on `test-hashes.json` only once it exists (hooks.rs:93-96), so creating it
   is unobstructed. Keys for `harness.toml` and the build config are T-006, not here.
+  2026-09-08 implementer: wrote the file from the shell, one key. Red first: a zero digest made
+  `cargo test -p harness -q --test floor -- every_file_test_hashes_covers_still_hashes_to_its_recorded_digest`
+  fail with `left: ["crates/harness/tests/roles.rs"]`; the real digest passes it (1 passed).
+  `./target/debug/harness probe` → `PROBE rail-unenforced 0`; the one `hash-uncovered` line left is
+  :58, T-006's. Scrutinise: the key is the only one and its value is
+  `shasum -a 256 crates/harness/tests/roles.rs` = 0e2ec9467eca1163f757d1bfa210d573d50bd2153c86570143efcaf8a8d0648d at 65e1cd3.
+  Commands:
+    $ printf '{\n  "crates/harness/tests/roles.rs": "%s"\n}\n' "$(shasum -a 256 crates/harness/tests/roles.rs | cut -d' ' -f1)" > test-hashes.json
+    $ cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo exit=$?
+    test result: ok. 190 passed; 0 failed; 1 ignored (+ 8, 5, 9, 15 (2 ignored), 21, 29, 27, 4 passed) → exit=0
+    $ git add test-hashes.json TASKS.md PROGRESS.md && git commit -m "feat(hashes): T-005 test-hashes.json covers tests/roles.rs"
 
 ## [T-006] .harness/RAILS.md:58 enforced by test-hashes.json, which does not exist
 scope: test-hashes.json
