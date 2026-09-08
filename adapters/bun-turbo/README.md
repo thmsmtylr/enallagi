@@ -1,6 +1,7 @@
 # Adapter: bun + turborepo
 
-Install with `./install.sh /path/to/repo --adapter bun-turbo`. It adds:
+The binary has no bun-turbo adapter: copy `check.ts`, `check-covered.sh` and
+`typecheck-changed.sh` from this directory into the target repo by hand. It adds:
 
 | File | What it is |
 | --- | --- |
