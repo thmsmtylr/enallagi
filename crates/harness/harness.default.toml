@@ -187,9 +187,9 @@ why = "the failing test that encodes the acceptance criteria is written before t
 
 [[skill]]
 id = "ponytail"
-source = "github:thmsmtylr/ponytail"
+source = "github:DietrichGebert/ponytail"
 path = "skills/ponytail"
-rev = "main"
+rev = "v4.8.4"
 gate = "ponytail-ceiling"
 why = "the ladder is walked before any new code, and a shortcut taken anyway is marked"
 

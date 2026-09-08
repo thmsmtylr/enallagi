@@ -633,7 +633,7 @@ fn skill_decl(skill: &serde_json::Value) -> String {
     let name = skill.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let id = &skill_id(name);
     let (source, rev) = if id == "ponytail" {
-        ("github:thmsmtylr/ponytail", "main")
+        ("github:DietrichGebert/ponytail", "v4.8.4")
     } else {
         ("github:obra/superpowers", "v6.3.0")
     };
@@ -1050,8 +1050,8 @@ mod tests {
         assert_eq!(c.layout.learnings_cap, 12);
         assert_eq!(c.skill.len(), 7);
         assert_eq!(c.skill[0].id, "test-driven-development");
-        assert_eq!(c.skill[1].source, "github:thmsmtylr/ponytail");
-        assert_eq!(c.skill[1].rev.as_deref(), Some("main"));
+        assert_eq!(c.skill[1].source, "github:DietrichGebert/ponytail");
+        assert_eq!(c.skill[1].rev.as_deref(), Some("v4.8.4"));
         assert_eq!(c.skill[6].gate, "queue-uncovered");
         assert_eq!(c.stage.len(), 4);
         let roles = |_: &str| Some(String::new());
