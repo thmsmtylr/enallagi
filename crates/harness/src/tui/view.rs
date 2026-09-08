@@ -51,7 +51,7 @@ fn render_header(model: &Model, frame: &mut Frame, area: Rect) {
             Kind::StageEnd { cost, .. } => *cost,
             _ => None,
         })
-        .sum();
+        .fold(0.0, |a, c| a + c);
     let budget = match model.budget_usd {
         Some(b) => format!(" / ${b:.2}"),
         None => String::new(),

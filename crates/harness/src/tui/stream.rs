@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 pub fn parse_chunk(chunk: &str) -> Vec<String> {
-    chunk.lines().map(render_line).collect()
+    chunk.lines().filter_map(render_line).collect()
 }
 
 pub fn is_assistant_chunk(chunk: &str) -> bool {
@@ -18,9 +18,10 @@ fn parse_object(line: &str) -> Option<Value> {
     serde_json::from_str::<Value>(line).ok()
 }
 
-fn render_line(line: &str) -> String {
+// A recognised message with nothing to show renders as nothing, never as raw JSON.
+fn render_line(line: &str) -> Option<String> {
     let Some(v) = parse_object(line) else {
-        return line.to_string();
+        return Some(line.to_string());
     };
     let ty = v.get("type").and_then(Value::as_str).unwrap_or("");
     let rendered = match ty {
@@ -35,12 +36,13 @@ fn render_line(line: &str) -> String {
                         .join("\n")
                 })
         }
-        "tool_use" | "tool_result" | "text" => render_item(&v),
+        "tool_use" | "tool_result" | "text" | "thinking" => render_item(&v).or(Some(String::new())),
         _ => None,
     };
     match rendered {
-        Some(s) if !s.is_empty() => s,
-        _ => line.to_string(),
+        Some(s) if s.is_empty() => None,
+        Some(s) => Some(s),
+        None => Some(line.to_string()),
     }
 }
 
@@ -63,6 +65,11 @@ fn render_item(item: &Value) -> Option<String> {
             let text = item.get("text").and_then(Value::as_str).unwrap_or("");
             Some(format!("text  {}", text.lines().next().unwrap_or("")))
         }
+        "thinking" => {
+            let text = item.get("thinking").and_then(Value::as_str).unwrap_or("");
+            let first = text.lines().find(|l| !l.trim().is_empty())?;
+            Some(format!("think {}", first_chars(first, 60)))
+        }
         _ => None,
     }
 }
@@ -73,6 +80,21 @@ fn first_chars(s: &str, n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_thinking_only_message_renders_nothing_not_raw_json() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"","signature":"abc"}]}}"#;
+        assert_eq!(parse_chunk(line), Vec::<String>::new());
+    }
+
+    #[test]
+    fn thinking_with_text_renders_a_think_line_and_the_text() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"weighing the two\nmore"},{"type":"text","text":"done"}]}}"#;
+        assert_eq!(
+            parse_chunk(line),
+            vec!["think weighing the two\ntext  done".to_string()]
+        );
+    }
     use super::*;
 
     #[test]

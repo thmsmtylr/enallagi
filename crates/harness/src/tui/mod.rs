@@ -402,6 +402,20 @@ mod tests {
     }
 
     #[test]
+    fn a_run_with_no_finished_stage_shows_zero_spend_not_negative_zero() {
+        let mut model = fixture_model();
+        model
+            .events
+            .retain(|e| !matches!(e.kind, Kind::StageEnd { .. }));
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|f| view(&model, f)).expect("draw");
+        let text = buffer_text(terminal.backend());
+        assert!(text.contains("$0.00"), "{text}");
+        assert!(!text.contains("$-0.00"), "{text}");
+    }
+
+    #[test]
     fn q_writes_stop_and_no_key_touches_the_queue() {
         let mut model = fixture_model();
         let queue_before = format!("{:?}", model.queue);
