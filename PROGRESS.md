@@ -46,3 +46,10 @@ check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D wa
 what happened: `role_spawn` resolves a declared role before reading its source, and one `chore(vendor): <ids>` commit carries skills and roles. `gates::scope` exempts a freshly vendored role and rejects a re-cut one; `hooks::immutable` refuses a locked role's file. T-002 moved ready → review.
 friction: `roles.rs` sat on the scope line but needed no edit; a scope line that names a file the task never touches is noise the scope gate cannot tell from a forgotten edit.
 next: the verifier takes T-002. Nothing else is at ready; the round's four exit rows all have tests once T-002 is done.
+
+## 2026-09-08 — T-003 — landed
+rows: none — harness (the probe's path rule; the four §11 rows already had tests at T-002)
+check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` → exit 0, 308 passed, 3 ignored, 0 failed, at a55bcf6 before the commit
+what happened: `untested_rows` tries `<source_root>/<name>` before taking a slashed name verbatim, so the SPEC.md §12 convention and the probe agree; `harness probe` → `PROBE spec-untested 0` (was 4). One test added to tests/probes.rs. T-003 moved ready → review.
+friction: `harness` on PATH is a symlink to `target/release/harness`, so a criterion phrased as "`harness probe` emits no line" is only observable after `cargo build --release`; the debug build a test run produces does not update it. A criterion naming `./target/debug/harness probe` or a note in the dogfood skill would remove the surprise.
+next: the verifier takes T-003. T-005 (test-hashes.json) is the next ready task with no blockers; T-006 waits on it. T-007..T-009 and T-013 are ready too.
