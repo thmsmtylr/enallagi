@@ -539,7 +539,7 @@ fn harness_run_without_a_tty_prints_one_line_per_event_and_exits_0() {
     r.commit_all("stubs");
 
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_harness"))
-        .args(["run", "--no-tui", "1"])
+        .args(["run", "--no-tui", "--iterations", "1"])
         .current_dir(&r.root)
         .output()
         .expect("run harness run");
@@ -559,7 +559,7 @@ fn harness_run_exits_2_on_a_refused_config() {
         TASKS,
     );
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_harness"))
-        .args(["run", "--no-tui", "1"])
+        .args(["run", "--no-tui", "--iterations", "1"])
         .current_dir(&r.root)
         .output()
         .expect("run harness run");

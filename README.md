@@ -35,7 +35,7 @@ What gets written and what is only ever seeded once is in Files, below.
 
 ## What a run does
 
-`harness run [N]` runs up to N iterations (default 3), each a pipeline chosen by the queue's state:
+`harness run --iterations <N>` (`-n <N>`) runs up to N iterations (default 3), each a pipeline chosen by the queue's state:
 
 | Pipeline | `when` | Stages |
 | --- | --- | --- |
@@ -48,10 +48,11 @@ per stage. `review` runs first and takes priority over `task`: a task a budget h
 `review` (implemented, never verified) gets its verify stage before a new one starts. `discover`
 ends the run after two consecutive rounds that leave nothing takeable.
 
-Halts: a `STOP` file in the repo root; `BUDGET_SECONDS` / `BUDGET_USD` / `BUDGET_TOKENS` at the
-next stage boundary (the dollar and token budgets need an `[agent.usage]` the preset's output can
-fill, and the run halts if the budget is set and nothing was observed); the adjudicator halting on
-a fix that needs a human (`needs-spec`); a stage that could not start.
+Halts: a `STOP` file in the repo root; `BUDGET_SECONDS` / `BUDGET_USD` / `BUDGET_TOKENS` (or the
+equivalent `--budget-seconds` / `--budget-usd` / `--budget-tokens` flag, which wins when both are
+set) at the next stage boundary (the dollar and token budgets need an `[agent.usage]` the preset's
+output can fill, and the run halts if the budget is set and nothing was observed); the adjudicator
+halting on a fix that needs a human (`needs-spec`); a stage that could not start.
 
 `harness run` draws a TUI whenever stdout is a tty; `--no-tui` suppresses it, `--dry-run` prints the
 plan and the probe output and spawns nothing — it runs no gates — `--frozen` refuses rather than

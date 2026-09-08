@@ -58,7 +58,7 @@ fn probe_exits_0_on_a_fresh_install() {
 #[test]
 fn run_dry_run_prints_the_plan_and_exits_0() {
     let repo = installed();
-    let out = harness(&repo, &["run", "1", "--dry-run"]);
+    let out = harness(&repo, &["run", "--iterations", "1", "--dry-run"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
     // discover's `when` negates task's, so exactly one of the pair is ever planned
     assert!(

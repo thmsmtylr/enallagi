@@ -9,7 +9,10 @@ use crate::pipeline::{self, RunOpts};
 use crate::{git, tui};
 
 pub struct Args {
-    pub n: Option<u32>,
+    pub iterations: u32,
+    pub budget_usd: Option<f64>,
+    pub budget_seconds: Option<u64>,
+    pub budget_tokens: Option<u64>,
     pub no_tui: bool,
     pub dry_run: bool,
     pub frozen: bool,
@@ -22,12 +25,15 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         Err(_) => cwd,
     };
     let tui = !args.no_tui && !args.dry_run && std::io::stdout().is_terminal();
+    // flags set here win: with_env_budgets only fills a field still None
     let opts = RunOpts {
-        max_iter: args.n.unwrap_or(3),
+        max_iter: args.iterations,
         dry_run: args.dry_run,
         frozen: args.frozen,
         tui,
-        ..RunOpts::default()
+        budget_usd: args.budget_usd,
+        budget_seconds: args.budget_seconds,
+        budget_tokens: args.budget_tokens,
     }
     .with_env_budgets();
 

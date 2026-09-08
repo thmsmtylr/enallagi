@@ -17,7 +17,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
 
     let report = worktree::lane(root, &cfg, &mut |wt| {
         let status = Command::new(std::env::current_exe()?)
-            .args(["run", &n.to_string(), "--no-tui"])
+            .args(["run", "--iterations", &n.to_string(), "--no-tui"])
             .current_dir(wt)
             .status()?;
         if !status.success() {

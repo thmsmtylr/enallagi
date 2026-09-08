@@ -93,7 +93,7 @@ step "the queue"
 "$HARNESS_BIN" tasks list
 
 step "one iteration: an implementer process, then a separate verifier process"
-"$HARNESS_BIN" run 1 --no-tui 2>&1 | grep -E 'stage\.start|kind=gate| gate |run\.end'
+"$HARNESS_BIN" run --iterations 1 --no-tui 2>&1 | grep -E 'stage\.start|kind=gate| gate |run\.end'
 
 step "what persisted, read back off the tree and not off anything an agent said"
 printf 'T-001  status: %s\n' "$("$HARNESS_BIN" tasks list | awk '/^T-001/{print $NF}')"
