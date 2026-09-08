@@ -263,7 +263,14 @@ fn render_footer(model: &Model, frame: &mut Frame, area: Rect) {
     } else {
         warnings.join("; ")
     };
-    let p = Paragraph::new(format!("halts: {halts_s}    warnings: {warnings_s}"));
+    let prefix = if model.finished {
+        "finished \u{2014} q to leave    "
+    } else {
+        ""
+    };
+    let p = Paragraph::new(format!(
+        "{prefix}halts: {halts_s}    warnings: {warnings_s}"
+    ));
     frame.render_widget(p, area);
 }
 
