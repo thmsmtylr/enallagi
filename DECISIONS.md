@@ -207,3 +207,57 @@ notes: |
   with it present, so the failure path is covered. The comment's citation (SPEC.md §12) checks out at
   SPEC.md:24. PROGRESS.md entry carries a `friction:` line, first occurrence (grep `target/release`
   → 1 hit). Ponytail: 6-line diff, one extra `exists` call per slashed row, nothing to cut.
+
+## [T-005] .harness/RAILS.md:57 enforced by test-hashes.json, which does not exist
+scope: test-hashes.json
+blockedBy: none
+status: done
+probe: rail-unenforced
+rows: none — harness
+command: `harness probe`
+output: |
+  PROBE rail-unenforced 2
+  FINDING rail-unenforced .harness/RAILS.md:57 enforced by test-hashes.json, which does not exist
+criteria:
+  - `test-hashes.json` exists at the repo root as a flat JSON object mapping a repo-relative path to the lowercase hex SHA-256 of that file's bytes, with one key per file the SPEC.md §11 rows name under `crates/harness/`: today exactly `crates/harness/tests/roles.rs`, its value equal to `shasum -a 256 crates/harness/tests/roles.rs`
+  - `cargo test -p harness -q --test floor -- every_file_test_hashes_covers_still_hashes_to_its_recorded_digest` passes against the real file (today it passes vacuously, the file being absent)
+  - `harness probe` emits no `rail-unenforced` line for `.harness/RAILS.md:57` or `.harness/RAILS.md:58`; the `hash-uncovered` line for :58 is T-006's and may remain
+  - `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
+notes: |
+  proposed from the output above on 2026-09-08. Not adjudicated.
+  2026-09-08 adjudicator: promoted. Reproduced. hooks.rs:92 (`hashed_hit`) and gates.rs:299 already
+  read this file, README.md:350 says it stays unwritten until you write it, and RAILS.md:57 names
+  it, so the fix is the file and not the row; .harness/RAILS.md is off scope. The PreToolUse hook
+  refuses the edit tool on `test-hashes.json` only once it exists (hooks.rs:93-96), so creating it
+  is unobstructed. Keys for `harness.toml` and the build config are T-006, not here.
+  2026-09-08 implementer: wrote the file from the shell, one key. Red first: a zero digest made
+  `cargo test -p harness -q --test floor -- every_file_test_hashes_covers_still_hashes_to_its_recorded_digest`
+  fail with `left: ["crates/harness/tests/roles.rs"]`; the real digest passes it (1 passed).
+  `./target/debug/harness probe` → `PROBE rail-unenforced 0`; the one `hash-uncovered` line left is
+  :58, T-006's. Scrutinise: the key is the only one and its value is
+  `shasum -a 256 crates/harness/tests/roles.rs` = 0e2ec9467eca1163f757d1bfa210d573d50bd2153c86570143efcaf8a8d0648d at 65e1cd3.
+  Commands:
+    $ printf '{\n  "crates/harness/tests/roles.rs": "%s"\n}\n' "$(shasum -a 256 crates/harness/tests/roles.rs | cut -d' ' -f1)" > test-hashes.json
+    $ cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo exit=$?
+    test result: ok. 190 passed; 0 failed; 1 ignored (+ 8, 5, 9, 15 (2 ignored), 21, 29, 27, 4 passed) → exit=0
+    $ git add test-hashes.json TASKS.md PROGRESS.md && git commit -m "feat(hashes): T-005 test-hashes.json covers tests/roles.rs"
+  2026-09-08 verifier: VERIFIED. `git status --porcelain` empty at 2ee7163; diff base HEAD~1 (origin/main
+  resolves but the branch is dogfood, HEAD~1 is the implementer's commit). Files touched: PROGRESS.md,
+  TASKS.md, test-hashes.json — the last is the scope line; no Cargo.toml/Cargo.lock diff (`minimal`).
+  The one key is new, not re-cut, and roles.rs itself is unchanged, so `tests-immutable` is intact.
+  `rows: none — harness` licenses the hash-file edit (`harness-lane`). PROGRESS.md carries
+  `friction: none`; no repeat. Criteria:
+    1. `cat test-hashes.json` → one key `crates/harness/tests/roles.rs` = 0e2ec946…8d0648d; `shasum -a 256
+       crates/harness/tests/roles.rs` → same digest; `python3 -c 'json.load(...)'` parses as a flat object.
+    2. `cargo test -p harness -q --test floor -- every_file_test_hashes_covers_still_hashes_to_its_recorded_digest`
+       → 1 passed; 0 failed; 16 filtered out. Break test: `printf '\n' >> crates/harness/tests/roles.rs`
+       then the same command → FAILED, `left: ["crates/harness/tests/roles.rs"] right: []` at floor.rs:306;
+       `git checkout -- crates/harness/tests/roles.rs` restored, porcelain empty. The test is live.
+    3. `cargo run -q -p harness -- probe` → `PROBE rail-unenforced 0`; `PROBE hash-uncovered 1`, the one
+       FINDING is `.harness/RAILS.md:58 ... harness.toml`, T-006's.
+    4. `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+       → 190+0+8+5+9+15+21+29+27+4+0 = 308 passed, 0 failed, 3 ignored; clippy exit 0; fmt exit 0.
+       `.check-baseline` has no entries; no failure names to match.
+  Not a rejection, for the scout: `harness probe` → `FINDING litter test-hashes.json:0` because
+  harness.toml:18 `layout.docs` does not name the file, though .harness/RAILS.md:57 and gates.rs:299
+  do. harness.toml is off this task's scope.
