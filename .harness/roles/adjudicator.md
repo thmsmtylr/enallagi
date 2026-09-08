@@ -13,7 +13,7 @@ Read `## Rejected findings` once, whole, with `sed -n '/^## Rejected findings/,/
 For each block with `status: proposed`, in file order:
 
 1. **Anchored?** The block must carry `probe:`, `command:` and `output:`, and that output must contain a `FINDING` line naming that probe. Any of the three missing → kill it **unread**. Do not reason about whether the claim is true. An unanchored finding is a rejection, not a task (`anchored`).
-2. **Re-run the command yourself** and paste what you got. Do not trust the pasted output, and do not trust a cached green: the uncached form is `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`. If your run does not emit that `FINDING` line, the finding does not reproduce → kill, quoting your run.
+2. **Re-run the command yourself** and paste what you got. Do not trust the pasted output, and do not trust a cached green: the uncached form is `PATH="$HOME/.cargo/bin:$PATH" cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`. If your run does not emit that `FINDING` line, the finding does not reproduce → kill, quoting your run.
 3. Work the kill list. It is exhaustive: a block that survives all six is promoted, and nothing not on this list is a kill.
    - **Unanchored** — no `probe:`, no `command:`, or no `output:`.
    - **Duplicate** — the same `path:line` and message is already carried by a block at `ready`, `blocked`, `review` or `proposed`. Grep TASKS.md for it before anything else.
