@@ -45,28 +45,25 @@ repository and letting the loop work. `docs/bootstrap.sh` derives that record fr
 nothing else, and `selftest.sh` fails if a history contains no verifier rejection — a bootstrap
 record with no refusals in it is a record of a loop that was not gating anything.
 
-## What exists today (2026-09-04)
+## What exists today (2026-09-08)
 
-Measured, not asserted:
+Measured, not asserted, against the Rust binary that replaced the bash package:
 
-- `docs/bootstrap.sh` → six dogfood rounds across 90 commits; round 6 is 55 commits, 7 verifies,
-  **6 rejections**, in flight.
-- `./selftest.sh` → `EXIT=0`, 88 ok / 2 skip / 0 FAIL (PROGRESS.md, 2026-09-04).
-- `.harness/hooks/probes.sh` → `EXIT=0`. `check-red 0`, `queue-hygiene 0`, `queue-uncovered 0`,
-  `rail-unenforced 0`, `hash-uncovered 0`, `learning-unenforced 0`, `learning-ungated 0`,
-  `rejection-stale 0`, `friction-repeat 0`, `litter 0`. Two report: `spec-untested 4` — the rows
-  T-007, T-040, T-041 and T-042 are queued to cover — and `ponytail-ceiling 28`, of which seventeen
-  are the probe matching the literal string `ponytail:` inside prose that describes a shortcut
-  rather than a shortcut in code.
-- `./driver.sh` → `EXIT=0`, **no `FINDING` lines**. The capability probe drives four adversarial
-  lane modes — work left uncommitted, no PROGRESS.md entry, an edit outside `scope:`, a red floor —
-  through a real installed loop and reads the persistent effect rather than what the loop said. All
-  four are caught (2026-09-04).
-- Queue: 7 `done`, 9 `ready` (T-004, T-007, T-040 through T-046), 1 `proposed`.
-- CI: `ubuntu-latest` + `macos-latest`, GNU and BSD userlands — the regression test for the two
-  parser defects this package has actually paid for.
-- `harness/**` and `.harness/**` are in sync: a reinstall from source reproduces all eleven
-  installed files byte-identically. Nothing asserts that, which is the gap — not drift.
+- `cargo test --workspace -q` → 207 passed / 1 failed / 6 ignored across the workspace's six test
+  binaries. The one failure, `ci_runs_the_floor_on_a_gnu_and_a_bsd_userland`
+  (`crates/harness/tests/floor.rs`), asserts the `floor`/`shfmt` job shape that
+  `.github/workflows/ci.yml` retired in this same task; the test lives in `crates/`, out of scope
+  here (a parallel worktree owns it).
+- `target/release/harness probe`, run after `harness init` into a fresh, otherwise-empty git repo →
+  exit 0. `spec-untested 1`, `queue-uncovered 1`, `rail-unenforced 2`, `hash-uncovered 1`,
+  `skill-ungated 3`, `check-red 1` — all from the seeded templates' own unfilled placeholders
+  (`src/thing.test.ts` named and absent, `test-hashes.json` unwritten, three `[[skill]]` entries
+  still carrying `gate = "none"`, no check command configured). Every other text probe reports 0;
+  the five telemetry probes and `driver` report OFF — no `events.jsonl` yet, no `driverCommand`
+  configured.
+- `./driver.sh` → `EXIT=0`, **no `FINDING` lines**. The four adversarial lane modes — work left
+  uncommitted, no PROGRESS.md entry, an edit outside `scope:`, a red floor — are still caught,
+  driven through the binary rather than the retired `install.sh` + `loop.sh`.
 
 Against the playbook's six stages:
 
