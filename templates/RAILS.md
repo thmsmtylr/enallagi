@@ -89,6 +89,6 @@ Each exists because something specific went wrong.
 ## Commands
 
 - Verify — this is what done means: `__CHECK__`
-- Run the loop: `harness run [iterations]`, `touch STOP` to stop it before the next stage
+- Run the loop: `harness run --iterations <n>`, `touch STOP` to stop it before the next stage
 - See what the tree says about itself: `harness probe`
 - Watch a run from a second terminal: `harness watch`

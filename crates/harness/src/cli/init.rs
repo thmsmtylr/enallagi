@@ -50,7 +50,7 @@ Next, in {root}:
      # everything this run wrote. gate_verdict counts an untracked path as work off the branch,
      # so a document left untracked here fails the first verdict.
   5. harness probe     # what the tree says about itself
-  6. harness run 1     # one iteration, attended, watch it work",
+  6. harness run --iterations 1     # one iteration, attended, watch it work",
         root = root.display(),
         // named unconditionally: on a re-run it's neither written nor kept, so leaving it off would leave the answers untracked
         track = report

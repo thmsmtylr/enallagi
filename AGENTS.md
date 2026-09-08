@@ -8,7 +8,7 @@
 
 - Verify, and this is what done means: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
 - Uncached, for any number you quote to a human: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
-- One loop iteration: `harness run 1`; `touch STOP` halts it
+- One loop iteration: `harness run --iterations 1`; `touch STOP` halts it
 - What the tree says about itself: `harness probe`
 
 ## How work moves

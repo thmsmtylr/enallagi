@@ -19,6 +19,29 @@ fn help_exits_0_and_lists_subcommands() {
 }
 
 #[test]
+fn run_help_mentions_iterations_and_budget_usd() {
+    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["run", "--help"])
+        .output()
+        .expect("run harness run --help");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--iterations"), "{stdout}");
+    assert!(stdout.contains("--budget-usd"), "{stdout}");
+}
+
+#[test]
+fn run_rejects_a_bare_iteration_count() {
+    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["run", "7"])
+        .output()
+        .expect("run harness run 7");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--iterations"), "{stderr}");
+}
+
+#[test]
 fn events_with_no_log_exits_0_with_no_output() {
     let dir = tempfile::tempdir().unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_harness"))

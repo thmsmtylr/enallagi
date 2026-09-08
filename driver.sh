@@ -97,7 +97,7 @@ TOML
     sed -i.bak 's|^scope:$|scope: src/allowed.ts|' TASKS.md && rm -f TASKS.md.bak
     git add -A && git commit -qm 'chore: T-001 setup' >/dev/null
 
-    MODE="$mode" "$HARNESS_BIN" run 1 --no-tui 2>&1
+    MODE="$mode" "$HARNESS_BIN" run --iterations 1 --no-tui 2>&1
     # the persistent effect, read from the tree and not from anything the run said
     echo "EFFECT status=$("$HARNESS_BIN" tasks list | awk '/^T-001/{print $NF}')"
     echo "EFFECT dirty=$(git status --porcelain | grep -c . || true)"
