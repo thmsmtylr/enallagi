@@ -134,6 +134,13 @@ machinery = [
 # seeds.
 learnings_cap = 12
 
+# a task a budget halt stranded at review (implemented, never verified) gets first crack at every
+# run, ahead of starting a new one -- otherwise it sits at review while task/discover cycle around it
+[[pipeline]]
+name = "review"
+when = "queue.reviewing"
+stages = ["verify"]
+
 [[pipeline]]
 name = "task"
 when = "queue.takeable"

@@ -15,6 +15,34 @@ criteria:
   - it happens
 ";
 
+const REVIEW_TASK: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.ts
+rows: none — harness
+status: review
+criteria:
+  - it happens
+";
+
+const REVIEW_AND_READY_TASKS: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.ts
+rows: none — harness
+status: review
+criteria:
+  - it happens
+
+## [T-002] do another thing
+
+scope: src/other.ts
+rows: none — harness
+status: ready
+criteria:
+  - it happens
+";
+
 const QUIET: &str = "echo '{\"total_cost_usd\":0.5}'\n";
 
 fn script(repo: &Repo, rel: &str, body: &str) -> String {
@@ -41,6 +69,11 @@ cost = "total_cost_usd"
 
 [check]
 command = "./src/fakecheck.sh"
+
+[[pipeline]]
+name = "review"
+when = "queue.reviewing"
+stages = ["verify"]
 
 [[pipeline]]
 name = "task"
@@ -792,4 +825,78 @@ fn the_implementer_marking_its_own_task_done_skips_the_verify_stage() {
         digest.warnings
     );
     assert!(digest.landed.is_empty(), "{:?}", digest.landed);
+}
+
+fn with_verifier(r: &Repo, verify: &str) {
+    r.write(
+        "harness.toml",
+        &base_toml(&format!(
+            "\n[agent.verifier]\ncommand = [\"{verify}\", \"{{prompt}}\", \"{{turns}}\"]\n"
+        )),
+    );
+}
+
+#[test]
+fn a_task_stranded_at_review_gets_its_verify_stage_on_the_next_run() {
+    let r = repo(&base_toml(""), REVIEW_TASK);
+    let verify = verifier(&r);
+    with_verifier(&r, &verify);
+    r.commit_all("stubs");
+
+    let (digest, events) = go(&r, &opts(1));
+    let starts: Vec<&Kind> = events
+        .iter()
+        .map(|e| &e.kind)
+        .filter(|k| matches!(k, Kind::StageStart { .. }))
+        .collect();
+    assert_eq!(starts.len(), 1, "only verify may spawn: {events:#?}");
+    match starts[0] {
+        Kind::StageStart { stage, task, .. } => {
+            assert_eq!(stage, "verify");
+            assert_eq!(task.as_deref(), Some("T-001"));
+        }
+        other => panic!("expected a StageStart, got {other:?}"),
+    }
+
+    let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    let blocks = harness::queue::parse(&text).expect("parse");
+    let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
+    assert_eq!(
+        harness::queue::field(t001, "status").as_deref(),
+        Some("done")
+    );
+    assert_eq!(digest.landed, vec!["T-001".to_string()]);
+}
+
+#[test]
+fn a_task_at_review_wins_over_one_ready_for_the_pipeline_choice() {
+    let r = repo(&base_toml(""), REVIEW_AND_READY_TASKS);
+    let verify = verifier(&r);
+    with_verifier(&r, &verify);
+    r.commit_all("stubs");
+
+    let (_, events) = go(&r, &opts(1));
+    let verify_task = events.iter().find_map(|e| match &e.kind {
+        Kind::StageStart { stage, task, .. } if stage == "verify" => task.clone(),
+        _ => None,
+    });
+    assert_eq!(
+        verify_task.as_deref(),
+        Some("T-001"),
+        "the review pipeline, not task, must win"
+    );
+
+    let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    let blocks = harness::queue::parse(&text).expect("parse");
+    let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
+    let t002 = blocks.iter().find(|b| b.id == "T-002").expect("T-002");
+    assert_eq!(
+        harness::queue::field(t001, "status").as_deref(),
+        Some("done")
+    );
+    assert_eq!(
+        harness::queue::field(t002, "status").as_deref(),
+        Some("ready"),
+        "T-002 is untouched: the task pipeline never ran"
+    );
 }

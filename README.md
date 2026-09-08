@@ -39,11 +39,14 @@ What gets written and what is only ever seeded once is in Files, below.
 
 | Pipeline | `when` | Stages |
 | --- | --- | --- |
+| `review` | `queue.reviewing` | **verify** |
 | `task` | `queue.takeable` | **implement** → **verify** |
 | `discover` | `!queue.takeable` | **scout** → **adjudicate** |
 
 Every stage is a separate process spawned from a role prompt under `.harness/roles/`, turn-capped
-per stage. `discover` ends the run after two consecutive rounds that leave nothing takeable.
+per stage. `review` runs first and takes priority over `task`: a task a budget halt stranded at
+`review` (implemented, never verified) gets its verify stage before a new one starts. `discover`
+ends the run after two consecutive rounds that leave nothing takeable.
 
 Halts: a `STOP` file in the repo root; `BUDGET_SECONDS` / `BUDGET_USD` / `BUDGET_TOKENS` at the
 next stage boundary (the dollar and token budgets need an `[agent.usage]` the preset's output can
@@ -180,12 +183,12 @@ different preset, command or model.
 | `learnings_cap` | integer | `12` |
 | `allowed_prefixes`, `docs`, `harness_files`, `harness_globs`, `harness_allow`, `machinery` | string lists | `litter`'s and `scope`'s allowlists |
 
-**`[[pipeline]]`** (two shipped, `task` and `discover`)
+**`[[pipeline]]`** (three shipped, `review`, `task` and `discover`)
 
 | Field | Type | Default |
 | --- | --- | --- |
 | `name` | string | required |
-| `when` | predicate | `queue.takeable`, `queue.empty`, `task.attended`, `check.red`, `probe.<name>`, any `!`-negated |
+| `when` | predicate | `queue.takeable`, `queue.reviewing`, `queue.empty`, `task.attended`, `check.red`, `probe.<name>`, any `!`-negated |
 | `stages` | string list | stage names, in order |
 | `end_after_dry_rounds` | integer | `0` (`2` on `discover`) |
 
