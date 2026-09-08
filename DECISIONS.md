@@ -149,3 +149,61 @@ notes: |
   "vendored skills could not be committed" when the list holds a role (pipeline.rs:685); no test
   covers the pipeline-level halt on a failed role resolve, only the probe above and roles.rs's unit
   test of resolve. Friction line present, first occurrence.
+
+## [T-003] no file tests/roles.rs for criterion tests/roles.rs::a_declared_role_is_fetched_vendored_and_committed_before_its_stage
+scope: crates/harness/src/probes/spec_untested.rs, crates/harness/tests/probes.rs
+blockedBy: none
+status: done
+probe: spec-untested
+rows: `tests/roles.rs::a_declared_role_is_fetched_vendored_and_committed_before_its_stage`, `tests/roles.rs::a_role_whose_vendored_file_drifted_is_refused_under_frozen`, `tests/roles.rs::an_undeclared_role_falls_back_to_the_installed_or_embedded_file`, `tests/roles.rs::the_immutable_hook_refuses_an_edit_to_a_vendored_role`
+command: `harness probe`
+output: |
+  PROBE spec-untested 4
+  FINDING spec-untested SPEC.md:16 no file tests/roles.rs for criterion tests/roles.rs::a_declared_role_is_fetched_vendored_and_committed_before_its_stage
+  PROBE queue-uncovered 2
+  FINDING queue-uncovered SPEC.md:16 tests/roles.rs::a_declared_role_is_fetched_vendored_and_committed_before_its_stage is untested and no open task names it (no file tests/roles.rs for criterion tests/roles.rs::a_declared_role_is_fetched_vendored_and_committed_before_its_stage)
+criteria:
+  - `probes::spec_untested::untested_rows` resolves a row name that contains `/` under `layout.source_root` first (`<source_root>/<name>`) and falls back to the name verbatim only when that path does not exist; a name with no `/` resolves exactly as today
+  - a new test in `crates/harness/tests/probes.rs`: with `source_root` set, a row `tests/x.rs::t` whose file `<source_root>/tests/x.rs` declares `fn t(` yields no `spec-untested` finding, and the same row with that file absent still yields one; `cargo test -p harness -q --test probes` passes
+  - `harness probe` emits no `spec-untested` line for SPEC.md:16, SPEC.md:17, SPEC.md:18 or SPEC.md:19 (today it emits all four)
+  - `git diff --stat <parent>..HEAD -- SPEC.md crates/harness/src/probes/queue_uncovered.rs` is empty: the row names stay as SPEC.md §12 writes them, and `queue_uncovered` already reuses `untested_rows`
+  - `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
+notes: |
+  proposed from the output above on 2026-09-08. Not adjudicated. T-001 carried this row and is done, so no open block names it.
+  2026-09-08 adjudicator: promoted. Re-run reproduced all four `spec-untested` lines. The claim as
+  worded is false — `cargo test -p harness -q --test roles` runs 4 tests and passes — so the task is
+  the probe's path rule, not the row: SPEC.md §12 says rows live under `crates/harness/`, harness.toml
+  sets `source_root` to exactly that, and spec_untested.rs:17 takes any name with a `/` as
+  repo-root-relative. T-004 was the same defect at SPEC.md:17 and was killed rather than carried twice.
+  2026-09-08 implementer: `untested_rows` (spec_untested.rs:17-22) now builds `<source_root>/<name>`
+  first and takes the name verbatim only when it has a `/` and that path is absent; a name with no
+  `/` resolves as before. New test `a_row_with_a_slash_resolves_under_source_root_before_the_repo_root`
+  in tests/probes.rs, red before (left: 1, right: 0), green after. Scrutinise: the seeded row
+  `src/thing.test.ts` still counts as untested under default `source_root = "src"` because
+  `src/src/thing.test.ts` does not exist, which is the fallback branch doing its job. `harness` on PATH
+  is a symlink to target/release, so `cargo build --release` was needed for `harness probe` to show it.
+  `./target/debug/harness probe` and `harness probe` (after release build) both → `PROBE spec-untested 0`,
+  `PROBE queue-uncovered 0`. `git diff --stat HEAD -- SPEC.md crates/harness/src/probes/queue_uncovered.rs`
+  → empty. `cargo test -p harness -q --test probes` → 27 passed. Check →
+  `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+  exit 0 (190+8+5+9+15+21+29+27+4 passed, 3 ignored, 0 failed) at a55bcf6 before the commit.
+  Committed: `git add crates/harness/src/probes/spec_untested.rs crates/harness/tests/probes.rs TASKS.md PROGRESS.md`
+  then `git commit -m "feat(probes): T-003 a row with a slash resolves under source_root first"`
+  (first commit e71e483 missed TASKS.md on a bad edit anchor; amended in place, nothing pushed).
+  2026-09-08 verifier: VERIFIED. Base `HEAD~1` (a55bcf6; origin/main is 82 commits behind this
+  branch, so the parent is the only base that isolates the task). `git status --porcelain` → empty
+  before and after. `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+  → exit 0; 190+0+8+5+9+15+21+29+27+4+0 = 308 passed, 3 ignored, 0 failed, same figures on two
+  runs; `.check-baseline` has no lines and nothing failed, so the delta is empty. Red-green: with
+  spec_untested.rs reverted to a55bcf6, `cargo test -p harness -q --test probes` → 26 passed, 1 failed,
+  `a_row_with_a_slash_resolves_under_source_root_before_the_repo_root` (left: 1, right: 0), and
+  `./target/debug/harness probe` at the parent emits `PROBE spec-untested 4` with FINDING lines at
+  SPEC.md:16, :17, :18, :19; restored, `cargo build -q && ./target/debug/harness probe` →
+  `PROBE spec-untested 0`, `PROBE queue-uncovered 0`. `git diff --stat HEAD~1..HEAD -- SPEC.md
+  crates/harness/src/probes/queue_uncovered.rs` → empty. `git diff HEAD~1 --name-only` → the two
+  scope files plus PROGRESS.md and TASKS.md, both exempt at gates.rs:13-14. No test-hashes.json in the
+  tree, no Cargo.toml/Cargo.lock change, no launcher/hook/check edit, and PROGRESS.md's `rows:` reads
+  `none — harness`. The test diff is additive only; the new test asserts 1 with the file absent and 0
+  with it present, so the failure path is covered. The comment's citation (SPEC.md §12) checks out at
+  SPEC.md:24. PROGRESS.md entry carries a `friction:` line, first occurrence (grep `target/release`
+  → 1 hit). Ponytail: 6-line diff, one extra `exists` call per slashed row, nothing to cut.
