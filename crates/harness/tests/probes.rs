@@ -6,8 +6,6 @@ use harness::fixture::Repo;
 use harness::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
 use std::fs;
 
-// ------------------------------------------------------------------ the seed
-
 /// A repo with `harness init` run in it and `overrides` as its `harness.toml`,
 /// committed. The install is the seed: the documents, the rails and the roles
 /// all come from the binary, so a probe reads the tree an operator would get.
@@ -87,8 +85,6 @@ fn append(repo: &Repo, rel: &str, text: &str) {
     let existing = fs::read_to_string(&path).unwrap_or_default();
     fs::write(&path, format!("{existing}{text}")).expect("append");
 }
-
-// --------------------------------------------------- selftest.sh:107-231
 
 #[test]
 fn probes_exit_0_every_probe_ran() {
@@ -288,8 +284,6 @@ fn and_two_frictions_that_merely_share_words_are_not_collapsed_into_it() {
     );
 }
 
-// --------------------------------------------------- selftest.sh:301-365
-
 fn with_driver(body: &str) -> (Repo, Config) {
     let (repo, cfg) =
         seeded_with("[layout]\ndriver_command = \"$HARNESS_ROOT/src/fakedriver.sh\"\n");
@@ -353,8 +347,6 @@ fn an_unreachable_artifact_is_error_never_a_count_of_zero() {
         "{out}"
     );
 }
-
-// --------------------------------------------------- selftest.sh:1034-1133
 
 #[test]
 fn every_declared_skill_names_its_enforcing_gate() {

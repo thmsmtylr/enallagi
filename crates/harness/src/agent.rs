@@ -331,7 +331,6 @@ pub fn spawn(
     }
 }
 
-/// Chunked so `touch STOP` still lands during a multi-hour wait.
 fn sleep_until(mut left: u64, stop_file: &Path) -> Result<(), AgentError> {
     while left > 0 {
         if stop_file.exists() {
@@ -428,7 +427,6 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
     Ok((exit, output, timed_out))
 }
 
-/// SIGTERM first so the agent can write its own last line, then SIGKILL.
 fn terminate(child: &mut std::process::Child) -> Result<std::process::ExitStatus, AgentError> {
     let pid = child.id().to_string();
     let _ = Command::new("kill").args(["-TERM", &pid]).status();

@@ -205,7 +205,6 @@ pub fn run_all(ctx: &ProbeCtx, names: &[String]) -> Vec<(String, ProbeResult)> {
         .collect()
 }
 
-/// One probe that blows up is one ERROR line, not fifteen probes nobody ran.
 fn catch(probe: ProbeFn, ctx: &ProbeCtx) -> ProbeResult {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe(ctx))) {
         Ok(result) => result,

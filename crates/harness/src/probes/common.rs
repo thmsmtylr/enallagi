@@ -26,7 +26,6 @@ pub fn finding(path: impl Into<String>, line: usize, message: impl Into<String>)
     }
 }
 
-/// Python slices by character; a byte slice would split a multibyte scalar.
 pub fn cut(text: &str, n: usize) -> String {
     text.chars().take(n).collect()
 }
@@ -34,8 +33,6 @@ pub fn cut(text: &str, n: usize) -> String {
 pub fn re(pattern: &str) -> Res<Regex> {
     Regex::new(pattern).map_err(|e| e.to_string())
 }
-
-// ------------------------------------------------------------------ the tree
 
 pub fn read(root: &Path, rel: &str) -> Res<String> {
     std::fs::read(root.join(rel))
@@ -143,8 +140,6 @@ pub fn backticked(text: &str) -> Vec<String> {
     out
 }
 
-// --------------------------------------------------------- the criteria table
-
 pub struct SpecRow {
     pub name: String,
     pub test: String,
@@ -205,8 +200,6 @@ pub fn spec_rows(ctx: &ProbeCtx) -> Res<Vec<SpecRow>> {
     Ok(rows)
 }
 
-// ------------------------------------------------------------- the rails table
-
 pub const RAILS_HEADER: &str = "| Rail | What it means | Enforced by |";
 
 pub fn rails_file(cfg: &Config) -> String {
@@ -263,9 +256,6 @@ pub fn rail_rows(ctx: &ProbeCtx) -> Res<Vec<RailRow>> {
     Ok(rows)
 }
 
-// ---------------------------------------------------------------- LEARNINGS.md
-
-/// One entry per `- ` line, with its indented continuation lines folded in.
 pub fn learning_entries(root: &Path) -> Res<Vec<(usize, String)>> {
     let mut entries: Vec<(usize, String)> = Vec::new();
     let mut open_at: Option<usize> = None;
@@ -286,8 +276,6 @@ pub fn learning_entries(root: &Path) -> Res<Vec<(usize, String)>> {
     }
     Ok(entries)
 }
-
-// -------------------------------------------------------------------- TASKS.md
 
 pub struct TaskBlock {
     pub id: String,
@@ -331,9 +319,6 @@ pub fn field(block: &TaskBlock, key: &str) -> Option<(usize, String)> {
     })
 }
 
-// ------------------------------------------------------------------- normalise
-
-/// Lowercase, everything but `[a-z0-9 ]` to a space, runs of space collapsed.
 pub fn normal(text: &str) -> String {
     let mapped: String = text
         .to_lowercase()

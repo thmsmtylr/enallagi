@@ -96,7 +96,6 @@ pub fn valid_path(path: &str) -> bool {
     p.is_relative() && !p.components().any(|c| c == Component::ParentDir)
 }
 
-/// The `{{skill:<id>}}` tokens of a role prompt, in order, deduped.
 pub fn required_ids(role_text: &str) -> Vec<String> {
     let mut ids: Vec<String> = Vec::new();
     for tail in role_text.split("{{skill:").skip(1) {

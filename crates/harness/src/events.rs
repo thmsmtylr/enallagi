@@ -103,7 +103,6 @@ pub fn stage_of(k: &Kind) -> Option<&str> {
     }
 }
 
-/// The task a `Kind` variant is about, used by the CLI's `--task` filter.
 pub fn task_of(k: &Kind) -> Option<&str> {
     match k {
         Kind::StageStart { task, .. } | Kind::StageEnd { task, .. } => task.as_deref(),

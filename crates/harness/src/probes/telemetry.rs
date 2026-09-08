@@ -1,8 +1,4 @@
-//! telemetry: five probes that read the event log and report findings.
-//!
-//! These are independent of `probes/mod.rs` (written by a parallel task) on
-//! purpose -- `Finding` and `ProbeResult` here are minimal stand-ins the
-//! controller reconciles with the shared types at merge time.
+//! Five probes that read the event log and report findings.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -21,9 +17,6 @@ pub enum ProbeResult {
     Error(String),
 }
 
-/// Reads the whole log. A missing file, an unreadable one, or one with zero
-/// events are all the same failure for a telemetry probe: there is nothing
-/// to correlate.
 fn load(log: &Log) -> Result<Vec<Event>, String> {
     match log.read_report() {
         Ok((events, _skipped)) if !events.is_empty() => Ok(events),
@@ -64,9 +57,6 @@ fn normal(text: &str) -> String {
     cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// `normal()`'s tokens, deduped via the `HashSet`. No length filter: the 0.5
-/// overlap threshold is calibrated in probes.sh against every token,
-/// including the short ones.
 fn tokens(text: &str) -> HashSet<String> {
     normal(text)
         .split_whitespace()
@@ -106,8 +96,6 @@ fn median_f64(values: &[f64]) -> f64 {
     }
 }
 
-/// A task forced back done->ready by the verdict gate more than once in one
-/// run: the gate is re-litigating a call it already made.
 pub fn verdict_flip(log: &Log) -> ProbeResult {
     let events = match load(log) {
         Ok(e) => e,
