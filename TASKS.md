@@ -17,7 +17,7 @@ archived: DECISIONS.md — full block at `git show b1cc210:TASKS.md`
 ## [T-003] no file tests/roles.rs for criterion tests/roles.rs::a_declared_role_is_fetched_vendored_and_committed_before_its_stage
 scope: crates/harness/src/probes/spec_untested.rs, crates/harness/tests/probes.rs
 blockedBy: none
-status: review
+status: done
 probe: spec-untested
 rows: `tests/roles.rs::a_declared_role_is_fetched_vendored_and_committed_before_its_stage`, `tests/roles.rs::a_role_whose_vendored_file_drifted_is_refused_under_frozen`, `tests/roles.rs::an_undeclared_role_falls_back_to_the_installed_or_embedded_file`, `tests/roles.rs::the_immutable_hook_refuses_an_edit_to_a_vendored_role`
 command: `harness probe`
@@ -54,6 +54,23 @@ notes: |
   Committed: `git add crates/harness/src/probes/spec_untested.rs crates/harness/tests/probes.rs TASKS.md PROGRESS.md`
   then `git commit -m "feat(probes): T-003 a row with a slash resolves under source_root first"`
   (first commit e71e483 missed TASKS.md on a bad edit anchor; amended in place, nothing pushed).
+  2026-09-08 verifier: VERIFIED. Base `HEAD~1` (a55bcf6; origin/main is 82 commits behind this
+  branch, so the parent is the only base that isolates the task). `git status --porcelain` → empty
+  before and after. `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+  → exit 0; 190+0+8+5+9+15+21+29+27+4+0 = 308 passed, 3 ignored, 0 failed, same figures on two
+  runs; `.check-baseline` has no lines and nothing failed, so the delta is empty. Red-green: with
+  spec_untested.rs reverted to a55bcf6, `cargo test -p harness -q --test probes` → 26 passed, 1 failed,
+  `a_row_with_a_slash_resolves_under_source_root_before_the_repo_root` (left: 1, right: 0), and
+  `./target/debug/harness probe` at the parent emits `PROBE spec-untested 4` with FINDING lines at
+  SPEC.md:16, :17, :18, :19; restored, `cargo build -q && ./target/debug/harness probe` →
+  `PROBE spec-untested 0`, `PROBE queue-uncovered 0`. `git diff --stat HEAD~1..HEAD -- SPEC.md
+  crates/harness/src/probes/queue_uncovered.rs` → empty. `git diff HEAD~1 --name-only` → the two
+  scope files plus PROGRESS.md and TASKS.md, both exempt at gates.rs:13-14. No test-hashes.json in the
+  tree, no Cargo.toml/Cargo.lock change, no launcher/hook/check edit, and PROGRESS.md's `rows:` reads
+  `none — harness`. The test diff is additive only; the new test asserts 1 with the file absent and 0
+  with it present, so the failure path is covered. The comment's citation (SPEC.md §12) checks out at
+  SPEC.md:24. PROGRESS.md entry carries a `friction:` line, first occurrence (grep `target/release`
+  → 1 hit). Ponytail: 6-line diff, one extra `exists` call per slashed row, nothing to cut.
 
 ## [T-005] .harness/RAILS.md:57 enforced by test-hashes.json, which does not exist
 scope: test-hashes.json
