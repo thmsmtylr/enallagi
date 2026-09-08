@@ -130,6 +130,8 @@ pub struct Digest {
     pub killed: Vec<String>,
     pub halts: Vec<String>,
     pub warnings: Vec<String>,
+    pub stages_run: usize,
+    pub role_seconds: BTreeMap<String, u64>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -239,8 +241,6 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
             w
         },
         digest: Digest::default(),
-        role_seconds: BTreeMap::new(),
-        stages_run: 0,
         cost_missing: false,
         tokens_missing: false,
         spent_tokens: 0,
@@ -268,8 +268,6 @@ struct Loop<'a> {
     rate_limit: Regex,
     writer: Writer,
     digest: Digest,
-    role_seconds: BTreeMap<String, u64>,
-    stages_run: usize,
     cost_missing: bool,
     tokens_missing: bool,
     spent_tokens: u64,
@@ -340,7 +338,7 @@ impl<'a> Loop<'a> {
             warnings: self.digest.warnings.clone(),
         });
         if !self.opts.tui {
-            print!("{}", self.digest_text());
+            print!("{}", digest_text(&self.digest));
         }
         std::mem::take(&mut self.digest)
     }
@@ -484,10 +482,10 @@ impl<'a> Loop<'a> {
             }
         };
 
-        self.stages_run += 1;
+        self.digest.stages_run += 1;
         self.digest.seconds += result.seconds;
         if let Some(role) = &role {
-            *self.role_seconds.entry(role.clone()).or_default() += result.seconds;
+            *self.digest.role_seconds.entry(role.clone()).or_default() += result.seconds;
         }
         if let Some(cost) = result.usage.cost {
             self.digest.cost = round4(self.digest.cost + cost);
@@ -962,38 +960,37 @@ impl<'a> Loop<'a> {
         }
         self.stopped = true;
     }
+}
 
-    fn digest_text(&self) -> String {
-        let mut out = format!(
-            "\n=== digest: {} iteration(s) ===\n",
-            self.digest.iterations
-        );
-        let cost = if self.digest.cost > 0.0 {
-            format!(", cost ${}", self.digest.cost)
-        } else {
-            String::new()
-        };
-        let _ = writeln!(
-            out,
-            "wall clock: {}s across {} stage(s){cost}",
-            self.digest.seconds, self.stages_run
-        );
-        for (role, seconds) in &self.role_seconds {
-            let _ = writeln!(out, "  {role}: {seconds}s");
-        }
-        let _ = writeln!(out, "tasks landed:{}", inline(&self.digest.landed));
-        listing(&mut out, "rows turned green:", &self.digest.rows);
-        let _ = writeln!(out, "findings promoted:{}", inline(&self.digest.promoted));
-        listing(&mut out, "findings killed:", &self.digest.killed);
-        listing(&mut out, "halts:", &self.digest.halts);
-        listing(&mut out, "warnings:", &self.digest.warnings);
-        let _ = writeln!(
-            out,
-            "Loop finished after {} iteration(s).",
-            self.digest.iterations
-        );
-        out
+// shared by the no-TUI path (finish, above) and the TUI path (cli::run, after the view is left),
+// so the two never drift into printing different things for the same run.
+pub fn digest_text(digest: &Digest) -> String {
+    let mut out = format!("\n=== digest: {} iteration(s) ===\n", digest.iterations);
+    let cost = if digest.cost > 0.0 {
+        format!(", cost ${}", digest.cost)
+    } else {
+        String::new()
+    };
+    let _ = writeln!(
+        out,
+        "wall clock: {}s across {} stage(s){cost}",
+        digest.seconds, digest.stages_run
+    );
+    for (role, seconds) in &digest.role_seconds {
+        let _ = writeln!(out, "  {role}: {seconds}s");
     }
+    let _ = writeln!(out, "tasks landed:{}", inline(&digest.landed));
+    listing(&mut out, "rows turned green:", &digest.rows);
+    let _ = writeln!(out, "findings promoted:{}", inline(&digest.promoted));
+    listing(&mut out, "findings killed:", &digest.killed);
+    listing(&mut out, "halts:", &digest.halts);
+    listing(&mut out, "warnings:", &digest.warnings);
+    let _ = writeln!(
+        out,
+        "Loop finished after {} iteration(s).",
+        digest.iterations
+    );
+    out
 }
 
 fn inline(items: &[String]) -> String {

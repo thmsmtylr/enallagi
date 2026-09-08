@@ -40,6 +40,8 @@ pub struct Model {
     pub current_stage: Option<String>,
     pub output: Vec<String>,
     pub help: bool,
+    // set once the event channel disconnects; the view then stays up (nothing more will change) until `q`
+    pub finished: bool,
     // tracked for the queue's bold row and the output pane's title; not part of the shared interface, so private
     current_task: Option<String>,
     current_command: Option<String>,
@@ -60,6 +62,7 @@ impl Model {
             current_stage: None,
             output: Vec::new(),
             help: false,
+            finished: false,
             current_task: None,
             current_command: None,
         }
@@ -216,6 +219,13 @@ pub fn run_live(rx: Receiver<Event>, tasks: &Path, stop: &Path) -> anyhow::Resul
     }
 }
 
+// `q` means STOP while the run is live; once it's finished nothing is left to stop, so the same
+// key means leave instead -- distinguished here rather than in Model::handle_key, which has no
+// notion of "leave" and stays a plain state fold.
+fn is_leave_key(finished: bool, key: &KeyEvent) -> bool {
+    finished && key.kind == KeyEventKind::Press && key.code == KeyCode::Char('q')
+}
+
 fn run_live_loop<B: Backend>(
     terminal: &mut Terminal<B>,
     rx: &Receiver<Event>,
@@ -225,23 +235,28 @@ fn run_live_loop<B: Backend>(
     let mut model = Model::new();
     model.queue = read_queue(tasks);
     let mut stop_written = false;
+    let mut leave = false;
     loop {
-        let mut disconnected = false;
-        loop {
-            match rx.try_recv() {
-                Ok(e) => model.apply(&e),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    disconnected = true;
-                    break;
+        if !model.finished {
+            loop {
+                match rx.try_recv() {
+                    Ok(e) => model.apply(&e),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        model.finished = true;
+                        break;
+                    }
                 }
             }
+            model.queue = read_queue(tasks);
         }
-        model.queue = read_queue(tasks);
         if event::poll(Duration::from_millis(500))? {
             if let CEvent::Key(key) = event::read()? {
+                let leaving = is_leave_key(model.finished, &key);
                 model.handle_key(key);
-                if model.stop_requested && !stop_written {
+                if leaving {
+                    leave = true;
+                } else if model.stop_requested && !model.finished && !stop_written {
                     std::fs::write(stop, b"")?;
                     stop_written = true;
                 }
@@ -250,7 +265,7 @@ fn run_live_loop<B: Backend>(
         terminal
             .draw(|f| view(&model, f))
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        if disconnected {
+        if leave {
             break;
         }
     }
@@ -413,6 +428,29 @@ mod tests {
         let text = buffer_text(terminal.backend());
         assert!(text.contains("$0.00"), "{text}");
         assert!(!text.contains("$-0.00"), "{text}");
+    }
+
+    #[test]
+    fn a_finished_run_renders_the_leave_prompt_and_keeps_halts_and_warnings() {
+        let mut model = fixture_model();
+        model.finished = true;
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|f| view(&model, f)).expect("draw");
+        let text = buffer_text(terminal.backend());
+        assert!(text.contains("finished \u{2014} q to leave"), "{text}");
+        assert!(text.contains("halts:"), "{text}");
+        assert!(text.contains("warnings:"), "{text}");
+    }
+
+    #[test]
+    fn q_leaves_once_finished_instead_of_writing_stop() {
+        assert!(is_leave_key(true, &press('q')));
+        assert!(
+            !is_leave_key(false, &press('q')),
+            "still running: q means STOP, not leave"
+        );
+        assert!(!is_leave_key(true, &press('x')), "only q leaves");
     }
 
     #[test]

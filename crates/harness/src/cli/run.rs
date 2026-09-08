@@ -59,6 +59,10 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             Err(payload) => std::panic::resume_unwind(payload),
         };
         drawn?;
+        // the TUI path never printed one; the no-TUI path gets its from pipeline::run itself
+        if let Ok(digest) = &ran {
+            print!("{}", pipeline::digest_text(digest));
+        }
         ran
     } else {
         let flag = Arc::clone(&failed);
