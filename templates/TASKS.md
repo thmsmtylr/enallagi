@@ -7,7 +7,7 @@ Statuses: `proposed` (the scout's, inert to the loop) · `ready` · `blocked` ·
 (the implementer's last act) · `done` (only the verifier's, and the launcher re-runs the gate
 behind it) · `needs-spec` (the contract does not answer a question the task hit).
 
-Finished blocks archive to DECISIONS.md — `__HARNESS_DIR__/archive-done.sh` moves them at the top of each
+Finished blocks archive to DECISIONS.md — `harness run` moves them at the top of each
 iteration, leaving a stub with the fields the loop still reads. Keep this file small: every
 process an iteration spawns re-reads all of it.
 
@@ -25,7 +25,7 @@ notes: <what a reviewer should scrutinise; the implementer's and the verifier's 
 ```
 
 `T-###` above is written unnumbered on purpose: `## [T-<digits>]` is the exact shape
-`loop.sh`'s `ready_unattended` scans for, and it does not know this one is inside a code fence —
+`harness tasks ready` scans for, and it does not know this one is inside a code fence —
 a numbered example here is a task the loop will take. `blockedBy:` is empty, `none`, or a
 comma-separated list of ids. `attended: true` marks a task
 needing a human credential and no launcher auto-selects it.

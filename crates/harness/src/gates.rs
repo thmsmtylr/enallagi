@@ -509,6 +509,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
     }
 }
 
+// strips a trailing " [<digits>(.<digits>)?(s|m)]" — a test-runner-printed duration, not part of the test's name
 fn strip_duration(name: &str) -> String {
     let trimmed = name.trim_end();
     let Some(open) = trimmed.rfind(" [") else {

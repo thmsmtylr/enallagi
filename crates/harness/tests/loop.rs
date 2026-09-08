@@ -396,6 +396,42 @@ fn a_command_stage_runs_with_the_harness_environment() {
 }
 
 #[test]
+fn queue_empty_fails_closed_on_an_unparseable_tasks_file() {
+    let toml = r#"
+[agent]
+preset = "custom"
+command = ["./src/fakeagent.sh", "{prompt}", "{turns}"]
+
+[check]
+command = "./src/fakecheck.sh"
+
+[[pipeline]]
+name = "empty"
+when = "queue.empty"
+stages = ["note"]
+
+[[stage]]
+name = "note"
+command = "touch ran-empty-pipeline"
+turns = 1
+"#;
+    // duplicate ids are what makes `queue::parse` fail; the same fixture `takeable_is_none_on_an_unreadable_queue` uses
+    let broken_tasks = "## [T-001] first\nstatus: ready\n\n## [T-001] again\nstatus: ready\n";
+    let r = repo(toml, broken_tasks);
+
+    let (digest, _) = go(&r, &opts(1));
+    assert!(
+        !r.root.join("ran-empty-pipeline").exists(),
+        "an unparseable queue is not evidence the queue is empty"
+    );
+    assert!(
+        digest.warnings.iter().any(|w| w.contains("queue.empty")),
+        "{:?}",
+        digest.warnings
+    );
+}
+
+#[test]
 fn stop_file_halts_at_the_next_boundary() {
     let r = repo("", "");
     let implement = implementer(&r, "touch STOP\n");

@@ -81,6 +81,23 @@ pub fn archive_done(
     cfg: &Config,
     dry_run: bool,
 ) -> Result<ArchiveReport, ArchiveError> {
+    archive_done_with(
+        root,
+        cfg,
+        dry_run,
+        env_usize("PROGRESS_MAX", PROGRESS_MAX_DEFAULT),
+        env_usize("PROGRESS_KEEP", PROGRESS_KEEP_DEFAULT),
+    )
+}
+
+// split out so tests can pin PROGRESS_MAX/PROGRESS_KEEP as arguments instead of process env vars, which parallel tests would race on
+pub fn archive_done_with(
+    root: &Path,
+    cfg: &Config,
+    dry_run: bool,
+    progress_max: usize,
+    progress_keep: usize,
+) -> Result<ArchiveReport, ArchiveError> {
     if let Some(_pid) = loop_live(root, &cfg.layout.harness_dir) {
         return Ok(ArchiveReport {
             moved: Vec::new(),
@@ -97,7 +114,7 @@ pub fn archive_done(
     }
 
     let moved = archive_tasks(root, dry_run)?;
-    let progress_rolled = roll_progress(root, dry_run)?;
+    let progress_rolled = roll_progress(root, dry_run, progress_max, progress_keep)?;
 
     if dry_run {
         return Ok(ArchiveReport {
@@ -206,10 +223,12 @@ fn archive_tasks(root: &Path, dry_run: bool) -> Result<Vec<String>, ArchiveError
 }
 
 // split point snaps to the nearest entry heading so no entry is cut in half
-fn roll_progress(root: &Path, dry_run: bool) -> Result<usize, ArchiveError> {
-    let max = env_usize("PROGRESS_MAX", PROGRESS_MAX_DEFAULT);
-    let keep = env_usize("PROGRESS_KEEP", PROGRESS_KEEP_DEFAULT);
-
+fn roll_progress(
+    root: &Path,
+    dry_run: bool,
+    max: usize,
+    keep: usize,
+) -> Result<usize, ArchiveError> {
     let progress_path = root.join("PROGRESS.md");
     let text = match fs::read_to_string(&progress_path) {
         Ok(t) => t,
@@ -248,7 +267,7 @@ fn roll_progress(root: &Path, dry_run: bool) -> Result<usize, ArchiveError> {
     let archive_prefix = match fs::read_to_string(&archive_path) {
         Ok(existing) => format!("{}\n\n", existing.trim_end()),
         Err(_) => "# PROGRESS (archive)\n\nEntries rolled out of PROGRESS.md by \
-                   `archive-done.sh`, oldest first.\nThe loop does not read this file. It \
+                   `harness run`, oldest first.\nThe loop does not read this file. It \
                    exists so the record stays whole.\n\n"
             .to_string(),
     };
@@ -370,12 +389,8 @@ mod tests {
         r.write("TASKS.md", "# TASKS\n");
         r.commit_all("seed progress");
 
-        std::env::set_var("PROGRESS_MAX", "12");
-        std::env::set_var("PROGRESS_KEEP", "4");
         let cfg = cfg(&r.root);
-        let report = archive_done(&r.root, &cfg, false).expect("archive_done");
-        std::env::remove_var("PROGRESS_MAX");
-        std::env::remove_var("PROGRESS_KEEP");
+        let report = archive_done_with(&r.root, &cfg, false, 12, 4).expect("archive_done");
 
         assert!(report.refused.is_none());
         assert!(report.progress_rolled > 0);

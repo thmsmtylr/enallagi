@@ -44,7 +44,8 @@ fn prompt_for(role: &str, cfg: &Config) -> String {
     config::subst(&format!("{LANE} {body}"), cfg)
 }
 
-fn role_source(root: &Path, cfg: &Config, role: &str) -> Option<String> {
+// shared with cli::skills, which validates config before resolving any skill
+pub(crate) fn role_source(root: &Path, cfg: &Config, role: &str) -> Option<String> {
     let path = role_path(root, cfg, role);
     if path.is_file() {
         return std::fs::read_to_string(path).ok();
@@ -138,9 +139,15 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
     let presets = agent::presets();
     let mut out = String::new();
     let mut scouting = false;
+    let mut warnings = Vec::new();
 
     for pipeline in cfg.pipeline.iter() {
-        if !holds(root, cfg, &config::parse_when(&pipeline.when)?) {
+        if !holds(
+            root,
+            cfg,
+            &config::parse_when(&pipeline.when)?,
+            &mut warnings,
+        ) {
             continue;
         }
         let _ = writeln!(
@@ -737,13 +744,15 @@ impl<'a> Loop<'a> {
     }
 
     fn choose(&mut self) -> Option<config::Pipeline> {
-        self.cfg
-            .pipeline
-            .iter()
-            .find(|p| {
-                config::parse_when(&p.when).is_ok_and(|when| holds(self.root, self.cfg, &when))
-            })
-            .cloned()
+        for i in 0..self.cfg.pipeline.len() {
+            let Ok(when) = config::parse_when(&self.cfg.pipeline[i].when) else {
+                continue;
+            };
+            if holds(self.root, self.cfg, &when, &mut self.digest.warnings) {
+                return Some(self.cfg.pipeline[i].clone());
+            }
+        }
+        None
     }
 
     fn promotions(&mut self, ready_before: &[String], rejections_before: &[String]) {
@@ -933,16 +942,24 @@ fn clarifications(root: &Path, spec: &str) -> Option<Vec<String>> {
     (!hits.is_empty()).then_some(hits)
 }
 
-fn holds(root: &Path, cfg: &Config, when: &Predicate) -> bool {
+fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>) -> bool {
     match when {
-        Predicate::Not(inner) => !holds(root, cfg, inner),
+        Predicate::Not(inner) => !holds(root, cfg, inner, warnings),
         Predicate::QueueTakeable => gates::takeable(root, cfg).is_some(),
+        // an unreadable or unparseable queue is not evidence the queue is empty, so this fails closed like `takeable`
         Predicate::QueueEmpty => {
-            let blocks = std::fs::read_to_string(root.join("TASKS.md"))
-                .ok()
-                .and_then(|t| queue::parse(&t).ok())
-                .unwrap_or_default();
-            blocks.is_empty()
+            match std::fs::read_to_string(root.join("TASKS.md"))
+                .map_err(|e| e.to_string())
+                .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
+            {
+                Ok(blocks) => blocks.is_empty(),
+                Err(err) => {
+                    warnings.push(format!(
+                        "TASKS.md: {err}; queue.empty treated as false (fail closed)"
+                    ));
+                    false
+                }
+            }
         }
         Predicate::TaskAttended => {
             let blocks = std::fs::read_to_string(root.join("TASKS.md"))

@@ -71,7 +71,7 @@ repos, accumulating **5–6.6× faster per checkpoint** — all while passing th
 
 Every row is one behaviour, named by the test that proves it. The loop turns rows green one at a
 time and `trace` refuses a row whose test did not run. The heading above and its terminator are
-what `harness.json` points the probes at — rename it there if you rename it here.
+what `harness.toml` points the probes at — rename it there if you rename it here.
 
 | Behaviour | Test |
 | --- | --- |

@@ -66,8 +66,8 @@ const EVALS_README: &str = include_str!("../../../evals/README.md");
 const CLAUDE_SETTINGS: &str = include_str!("../../../adapters/claude/settings.json");
 
 // scoped to the harness dir, never touches the repo's own .gitignore
-const GITIGNORE: &str =
-    "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nskills/\nrun/\n__pycache__/\n";
+// vendored skills are committed (controller ruling), so skills/ is not ignored here
+const GITIGNORE: &str = "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\n";
 
 #[derive(Debug, Default, Clone)]
 pub struct InitOpts {

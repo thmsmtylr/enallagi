@@ -7,7 +7,7 @@ that refutes it. Read it with `sed -n '/^## Rejected findings/,/^## \[T-/p' DECI
 never read past that range.
 
 Below it, completed task blocks, verbatim, moved out of TASKS.md once `done` by
-`__HARNESS_DIR__/archive-done.sh`. The queue stays small; the audit trail stays whole. Each block is the
+`harness run`. The queue stays small; the audit trail stays whole. Each block is the
 implementer's and the verifier's own words, never summarised on the way in.
 
 ## Rejected findings

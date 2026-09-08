@@ -3,8 +3,10 @@
 use crate::agent;
 use crate::config;
 use crate::events::{Log, Writer};
+use crate::git;
+use crate::pipeline::role_source;
 use crate::skills::{self, ResolveOpts, SkillError};
-use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum SkillsCmd {
@@ -19,16 +21,27 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let root = Path::new(".");
-    let cfg = config::load(root)?;
+    let cwd = std::env::current_dir()?;
+    let root = match git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
+        Ok(top) => PathBuf::from(top),
+        Err(_) => cwd,
+    };
+    let cfg = config::load(&root)?;
     let presets = agent::presets();
+    config::validate(&cfg, &presets, &|role| role_source(&root, &cfg, role)).map_err(|errs| {
+        anyhow::anyhow!(errs
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"))
+    })?;
     let preset = presets
         .get(&cfg.agent.preset)
         .ok_or_else(|| anyhow::anyhow!("harness: unknown agent preset {}", cfg.agent.preset))?;
     let ids: Vec<String> = cfg.skill.iter().map(|s| s.id.clone()).collect();
 
     if let SkillsCmd::List = args.cmd {
-        let lock = skills::read_lock(root)?;
+        let lock = skills::read_lock(&root)?;
         for decl in &cfg.skill {
             let source = match &decl.rev {
                 Some(rev) => format!("{}@{rev}", decl.source),
@@ -60,7 +73,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     let mut unresolved = Vec::new();
     for id in &ids {
         match skills::resolve(
-            root,
+            &root,
             &cfg,
             preset,
             std::slice::from_ref(id),

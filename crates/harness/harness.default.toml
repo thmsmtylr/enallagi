@@ -32,7 +32,7 @@ fail_name = '\(fail\) (.+?)(?: \[[0-9.]+m?s\])?$'
 # adapters for tools that read their own file instead; Claude Code does not
 # read AGENTS.md natively (anthropics/claude-code#34235).
 context_file = "AGENTS.md"
-pointer_files = ["CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md"]
+pointer_files = ["CLAUDE.md", "GEMINI.md", "QWEN.md", ".github/copilot-instructions.md"]
 
 # harness_dir holds the launcher, hooks and roles and is vendor-neutral.
 # skills_dir is your tool's Agent Skills directory (.claude/skills,
@@ -91,6 +91,7 @@ docs = [
   "LEARNINGS.md",
   "PROGRESS.archive.md",
   "PROGRESS.md",
+  "QWEN.md",
   "REFERENCES.md",
   "SPEC.md",
   "TASKS.md",
