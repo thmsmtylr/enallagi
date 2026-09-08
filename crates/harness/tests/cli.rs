@@ -111,13 +111,25 @@ fn events_since_keeps_only_events_at_or_after() {
 fn skills_check_refuses_what_sync_then_locks() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    std::fs::write(
-        root.join("harness.toml"),
-        "[[skill]]\nid = \"tdd\"\nsource = \"path:vendor/tdd\"\npath = \"\"\ngate = \"none\"\nwhy = \"x\"\n",
-    )
-    .unwrap();
-    std::fs::create_dir_all(root.join("vendor/tdd")).unwrap();
-    std::fs::write(root.join("vendor/tdd/SKILL.md"), "body\n").unwrap();
+    // the shipped roles name every one of these, and `skills check` validates the config first
+    const IDS: [&str; 7] = [
+        "tdd",
+        "ponytail",
+        "debugging",
+        "review-received",
+        "verify-before-done",
+        "review-requested",
+        "brainstorming",
+    ];
+    let mut toml = String::new();
+    for id in IDS {
+        toml.push_str(&format!(
+            "[[skill]]\nid = \"{id}\"\nsource = \"path:vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"x\"\n\n"
+        ));
+        std::fs::create_dir_all(root.join(format!("vendor/{id}"))).unwrap();
+        std::fs::write(root.join(format!("vendor/{id}/SKILL.md")), "body\n").unwrap();
+    }
+    std::fs::write(root.join("harness.toml"), toml).unwrap();
 
     let harness = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_harness"))
@@ -132,17 +144,15 @@ fn skills_check_refuses_what_sync_then_locks() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("tdd"));
 
     let out = harness(&["skills", "list"]);
-    assert_eq!(
-        String::from_utf8_lossy(&out.stdout).trim_end(),
-        "tdd  path:vendor/tdd  unlocked"
-    );
+    assert!(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|l| l == "tdd  path:vendor/tdd  unlocked"));
 
     let out = harness(&["skills", "sync"]);
     assert!(out.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&out.stdout).trim_end(),
-        "tdd  fetched"
-    );
+    assert!(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|l| l == "tdd  fetched"));
     assert!(root.join(".claude/skills/tdd/SKILL.md").is_file());
     assert!(root.join("harness.lock").is_file());
 
@@ -152,7 +162,9 @@ fn skills_check_refuses_what_sync_then_locks() {
     let out = harness(&["skills", "list"]);
     let listed = String::from_utf8_lossy(&out.stdout);
     assert!(
-        listed.starts_with("tdd  path:vendor/tdd  sha256:"),
+        listed
+            .lines()
+            .any(|l| l.starts_with("tdd  path:vendor/tdd  sha256:")),
         "{listed}"
     );
 }

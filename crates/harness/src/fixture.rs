@@ -75,6 +75,31 @@ impl Repo {
         "./src/fakecheck.sh".to_string()
     }
 
+    /// `[[skill]]` entries for every shipped skill id the given TOML does not declare, each a
+    /// `path:` source under `vendor/`, so a fixture run never reaches the network.
+    pub fn local_skills(&self, toml: &str) -> String {
+        const IDS: [&str; 7] = [
+            "tdd",
+            "ponytail",
+            "debugging",
+            "review-received",
+            "verify-before-done",
+            "review-requested",
+            "brainstorming",
+        ];
+        let mut out = String::new();
+        for id in IDS {
+            if toml.contains(&format!("id = \"{id}\"")) {
+                continue;
+            }
+            self.write(&format!("vendor/{id}/SKILL.md"), &format!("# {id}\n"));
+            out.push_str(&format!(
+                "\n[[skill]]\nid = \"{id}\"\nsource = \"path:vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"fixture\"\n"
+            ));
+        }
+        out
+    }
+
     pub fn init_harness(&self, toml_overrides: &str) {
         self.write("harness.toml", toml_overrides);
         crate::init::install(&self.root, &crate::init::InitOpts::default()).expect("install");

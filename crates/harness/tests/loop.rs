@@ -82,7 +82,11 @@ post = ["commit-round", "adjudicator-halt", "dry-round"]
 
 fn repo(toml: &str, tasks: &str) -> Repo {
     let repo = Repo::new();
-    repo.write(".gitignore", ".harness/\n");
+    // what `harness init` ignores under the harness dir; vendored skills and roles are committed
+    repo.write(
+        ".harness/.gitignore",
+        "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\n",
+    );
     script(&repo, "src/fakecheck.sh", "exit 0\n");
     script(&repo, "src/fakeagent.sh", QUIET);
     if !tasks.is_empty() {
@@ -90,7 +94,8 @@ fn repo(toml: &str, tasks: &str) -> Repo {
     }
     repo.write("SPEC.md", "# spec\n");
     repo.write("PROGRESS.md", "# progress\n");
-    repo.write("harness.toml", toml);
+    let skills = repo.local_skills(toml);
+    repo.write("harness.toml", &format!("{toml}{skills}"));
     repo.commit_all("harness");
     repo
 }
@@ -593,9 +598,6 @@ why = \"because\"
 fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
     let toml = base_toml(SKILL_DECL);
     let r = repo(&toml, SKILL_TASKS);
-    // repo()'s root .gitignore blanket-ignores .harness/; carve out the skills dir the fixture
-    // vendors into, same as a real install's .harness/.gitignore only ignores logs and events.
-    r.write(".gitignore", ".harness/*\n!.harness/skills/\n");
     r.write("vendor/tdd/SKILL.md", "# tdd\n\nWrite the test first.\n");
     r.write(
         ".harness/roles/implementer.md",
@@ -626,9 +628,10 @@ fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
             bin = env!("CARGO_BIN_EXE_harness"),
         ),
     );
+    let skills = r.local_skills(&toml);
     r.write(
         "harness.toml",
-        &(toml + &role_commands(&implement, &verify)),
+        &(toml + &role_commands(&implement, &verify) + &skills),
     );
     r.commit_all("stubs");
 
