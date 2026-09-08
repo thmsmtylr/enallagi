@@ -41,7 +41,7 @@ archived: DECISIONS.md — full block at `git show 054a985:TASKS.md`
 ## [T-008] review-received is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
 blockedBy: none
-status: ready
+status: review
 probe: skill-ungated
 rows: none — harness
 command: `harness probe`
@@ -59,6 +59,17 @@ notes: |
   the same rejection reason recurring across a task's verdicts, which is what a rejected task that
   did not answer its points looks like from the event log; it is the one probe that fails without
   this skill. The embedded default is the entry the probe reads here; harness.toml is off scope.
+  2026-09-08 implementer: one line, harness.default.toml:216 `gate = "none"` → `gate = "rejection-repeat"`;
+  `git diff --stat` → 1 file changed, 1 insertion(+), 1 deletion(-). Red before the edit:
+  `./target/debug/harness probe` → `PROBE skill-ungated 2` with a FINDING naming review-received;
+  after `cargo build -q`: `PROBE skill-ungated 1`, the one left is review-requested (T-009).
+  `cargo test -p harness -q --test probes -- every_declared_skill_names_its_enforcing_gate` → 1 passed.
+  Reviewer: confirm the diff is that one line and that `rejection-repeat` is a probe name
+  (probes/mod.rs:72); the probe must be read from a fresh `cargo build`, not the `harness` symlink.
+  Gate: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+  → exit 0, 308 passed, 3 ignored, 0 failed. Commit: `git add crates/harness/harness.default.toml TASKS.md
+  PROGRESS.md && git commit -q -m "feat(config): T-008 review-received names rejection-repeat as its gate"`
+  → d1943e2 (amended to carry these lines); `git status --porcelain` → empty.
 
 ## [T-009] review-requested is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml

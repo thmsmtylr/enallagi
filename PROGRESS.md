@@ -81,3 +81,10 @@ check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D wa
 what happened: the tdd entry in harness.default.toml reads `gate = "spec-untested"`; nothing else in the file changed. `./target/debug/harness probe` → `PROBE skill-ungated 2` (was 3), the two left being T-008's and T-009's. T-007 moved ready → review.
 friction: none
 next: the verifier takes T-007. T-008 and T-009 are the same one-line shape (`rejection-repeat`, `verdict-flip`) on the same file, each rebuilt with `cargo build -q` before the probe is read; T-013 (fold `skills_dir_for` into `skills::skills_dir`) is ready too.
+
+## 2026-09-08 — T-008 — landed
+rows: none — harness (the review-received skill now names the probe that fails without it)
+check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` → exit 0, 308 passed, 3 ignored, 0 failed, at 0d590d0 before the commit
+what happened: the review-received entry in harness.default.toml reads `gate = "rejection-repeat"`; nothing else in the file changed. `./target/debug/harness probe` → `PROBE skill-ungated 1` (was 2), the one left being T-009's. T-008 moved ready → review.
+friction: none
+next: the verifier takes T-008. T-009 is the same one-line shape (`verdict-flip`, harness.default.toml:232) on the same file, rebuilt with `cargo build -q` before the probe is read; T-013 (fold `skills_dir_for` into `skills::skills_dir`) is ready too.
