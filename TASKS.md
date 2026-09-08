@@ -5,7 +5,7 @@
 ## [T-001] the [[role]] table, its lock entries, and a resolver that fetches and vendors a role
 scope: crates/harness/src/config.rs, crates/harness/src/skills.rs, crates/harness/src/roles.rs, crates/harness/src/lib.rs, crates/harness/harness.default.toml, crates/harness/tests/roles.rs
 blockedBy: none
-status: ready
+status: review
 rows: `tests/roles.rs::a_declared_role_is_fetched_vendored_and_committed_before_its_stage`, `tests/roles.rs::a_role_whose_vendored_file_drifted_is_refused_under_frozen`
 criteria:
   - `config::Config` gains `pub role: Vec<RoleDecl>` (`name`, `source`, `path` default ".", `rev`), deserialised from `[[role]]`, with `deny_unknown_fields`; `validate` refuses a duplicate name, a name outside `[a-z0-9-]+`, a non-relative or `..` path, and a `[[role]]` whose name no `[[stage]]` uses
@@ -16,6 +16,25 @@ criteria:
 notes: |
   Read `crates/harness/src/skills.rs` first: `resolve`, `cached`, `fetch`, `vendor`, `read_lock`, `write_lock`.
   The lock's `[[role]]` table reuses `LockEntry`. Comments: short, only where they guard a mistake.
+  2026-09-08 implementer, at 2610220: the cache/fetch/vendor/lock cycle moved into `skills::pin`
+  (`Pin { id, source, rev, file }` + a vendor closure); `skills::resolve` and `roles::resolve` are
+  both that loop, so cached/fetched/refused and the `SkillResolved` event are identical by
+  construction. `cached` and `fetch` take a `Pin` now, not a `SkillDecl`. Choices a reviewer should
+  scrutinise: (1) a role's source file is `<path>/<name>.md` under the fetched root, mirroring
+  `<path>/SKILL.md` -- `path` naming the file itself is not supported; (2) `config::validate`
+  skips `MissingRole` for a role a `[[role]]` declares, since the file cannot exist before the
+  first fetch (`a_declared_role_is_not_missing_before_it_is_fetched`); (3) `Lock.role` is
+  `skip_serializing_if = "Vec::is_empty"` so a skills-only lock round-trips byte-for-byte;
+  (4) the resolver's `BadId`/`BadPath`/`Undeclared` messages still say "skill" -- validate is the
+  first lock and reports role-specific errors. The row name's "and committed before its stage"
+  clause is T-002's pipeline work; this test asserts fetch, vendor, lock and events.
+  Commands run:
+    cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check
+    exit=0, 11 suites, passed=297 failed=0 (`grep "test result"` over the output)
+    cargo test -p harness --test roles -q
+    test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+    git add crates/harness/src/config.rs crates/harness/src/skills.rs crates/harness/src/roles.rs crates/harness/src/lib.rs crates/harness/harness.default.toml crates/harness/tests/roles.rs TASKS.md PROGRESS.md
+    git commit -m "feat(roles): T-001 the [[role]] table, its lock entries, and a resolver that fetches and vendors a role"
 
 ## [T-002] the pipeline resolves and commits declared roles, and the immutable hook covers them
 scope: crates/harness/src/pipeline.rs, crates/harness/src/hooks.rs, crates/harness/src/roles.rs, crates/harness/src/gates.rs, crates/harness/tests/roles.rs, crates/harness/tests/loop.rs, README.md

@@ -12,6 +12,7 @@ pub mod init;
 pub mod pipeline;
 pub mod probes;
 pub mod queue;
+pub mod roles;
 pub mod skills;
 pub mod tui;
 pub mod worktree;

@@ -69,6 +69,14 @@ pub enum ConfigError {
     BadSkillId(String),
     #[error("skill {id}: path `{path}` must be relative and free of `..`")]
     BadSkillPath { id: String, path: String },
+    #[error("two [[role]] tables are both named {0}")]
+    DuplicateRole(String),
+    #[error("role name `{0}` must match ^[a-z0-9-]+$")]
+    BadRoleName(String),
+    #[error("role {name}: path `{path}` must be relative and free of `..`")]
+    BadRolePath { name: String, path: String },
+    #[error("no [[stage]] uses role {0}")]
+    UnusedRole(String),
     #[error("stage {stage}: timeout `{value}` is not <n>s, <n>m or <n>h")]
     BadTimeout { stage: String, value: String },
     #[error("pipeline {pipeline}: when references probe `{probe}`, not one of {}", crate::probes::NAMES.join(", "))]
@@ -84,6 +92,7 @@ pub struct Config {
     pub pipeline: Vec<Pipeline>,
     pub stage: Vec<Stage>,
     pub skill: Vec<SkillDecl>,
+    pub role: Vec<RoleDecl>,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -214,6 +223,27 @@ pub struct SkillDecl {
     pub rev: Option<String>,
     pub gate: String,
     pub why: String,
+}
+
+/// A role prompt fetched and pinned like a skill; `<path>/<name>.md` in the source lands at `<harness_dir>/roles/<name>.md`.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RoleDecl {
+    pub name: String,
+    pub source: String,
+    pub path: String,
+    pub rev: Option<String>,
+}
+
+impl Default for RoleDecl {
+    fn default() -> Self {
+        RoleDecl {
+            name: String::new(),
+            source: String::new(),
+            path: ".".into(),
+            rev: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -362,6 +392,29 @@ pub fn validate(
             });
         }
     }
+    let mut declared_roles: BTreeSet<&str> = BTreeSet::new();
+    for r in &cfg.role {
+        if !declared_roles.insert(r.name.as_str()) {
+            errs.push(ConfigError::DuplicateRole(r.name.clone()));
+            continue;
+        }
+        if !crate::skills::valid_id(&r.name) {
+            errs.push(ConfigError::BadRoleName(r.name.clone()));
+        }
+        if !crate::skills::valid_path(&r.path) {
+            errs.push(ConfigError::BadRolePath {
+                name: r.name.clone(),
+                path: r.path.clone(),
+            });
+        }
+        if !cfg
+            .stage
+            .iter()
+            .any(|st| st.role.as_deref() == Some(&r.name))
+        {
+            errs.push(ConfigError::UnusedRole(r.name.clone()));
+        }
+    }
     let mut checked_roles: BTreeSet<&str> = BTreeSet::new();
 
     for st in &cfg.stage {
@@ -383,6 +436,8 @@ pub fn validate(
 
         let Some(role) = &st.role else { continue };
         match role_files(role) {
+            // a declared role has no file until roles::resolve fetches it
+            None if declared_roles.contains(role.as_str()) => {}
             None => errs.push(ConfigError::MissingRole {
                 stage: st.name.clone(),
                 role: role.clone(),
@@ -1117,6 +1172,7 @@ mod tests {
             "[check]\ncomand = 'make'\n",            // misspelled
             "[[stage]]\nname = 'x'\nturn = 10\n",    // misspelled
             "[[skill]]\nid = 'x'\nsrc = 'y'\n",      // misspelled
+            "[[role]]\nname = 'x'\nsrc = 'y'\n",     // misspelled
             "[agent.verifier]\npresett = 'codex'\n", // inside a role table
             "[[pipeline]]\nname = 'x'\nwen = 'y'\n", // misspelled
         ] {
@@ -1138,6 +1194,47 @@ mod tests {
             .join("\n");
         assert!(text.contains("both named implement"), "{text}");
         assert!(text.contains("both have id tdd"), "{text}");
+    }
+
+    #[test]
+    fn a_role_declaration_is_refused_when_malformed_or_unused() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join("harness.toml"),
+            "[[role]]\nname = 'Implementer'\nsource = 'path:x'\npath = '../r'\n\n\
+             [[role]]\nname = 'ghost'\nsource = 'path:x'\n\n\
+             [[role]]\nname = 'ghost'\nsource = 'path:x'\n",
+        )
+        .unwrap();
+        let c = load(d.path()).unwrap();
+        assert_eq!(c.role.len(), 3);
+        assert_eq!(c.role[1].path, ".", "the default path is the source root");
+        assert_eq!(c.role[1].rev, None);
+        let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
+        let text = errs
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("role name `Implementer`"), "{text}");
+        assert!(text.contains("../r"), "{text}");
+        assert!(text.contains("both named ghost"), "{text}");
+        assert!(text.contains("no [[stage]] uses role ghost"), "{text}");
+    }
+
+    // the vendored file does not exist before the first fetch, so a declared role can't be a missing one
+    #[test]
+    fn a_declared_role_is_not_missing_before_it_is_fetched() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join("harness.toml"),
+            "[[role]]\nname = 'implementer'\nsource = 'path:x'\n",
+        )
+        .unwrap();
+        let c = load(d.path()).unwrap();
+        let files = |role: &str| (role != "implementer").then(String::new);
+        assert!(validate(&c, &crate::agent::presets(), &files).is_ok());
+        assert!(validate(&c, &crate::agent::presets(), &|_| None).is_err());
     }
 
     #[test]
