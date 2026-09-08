@@ -24,6 +24,11 @@ fn harness(repo: &Repo, args: &[&str]) -> Out {
 
 fn installed() -> Repo {
     let repo = Repo::new();
+    // the shipped default check is `bun run check`; a machine without bun would make check-red ERROR
+    repo.write(
+        "harness.toml",
+        "[check]\ncommand = \"true\"\nfail_name = \"x\"\n",
+    );
     let out = harness(&repo, &["init"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
     assert!(repo.root.join(".harness/RAILS.md").is_file());
