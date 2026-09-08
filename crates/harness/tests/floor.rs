@@ -367,7 +367,7 @@ fn ci() -> String {
 
 #[test]
 fn ci_runs_the_floor_on_a_gnu_and_a_bsd_userland() {
-    let block = job_block(&ci(), "floor");
+    let block = job_block(&ci(), "rust");
     // macos-latest is BSD sed, ubuntu-latest is GNU sed; that difference has broken parsing before
     assert_eq!(matrix_os(&block), vec!["macos-latest", "ubuntu-latest"]);
     assert!(invokes_floor(&block), "{block}");
@@ -375,11 +375,28 @@ fn ci_runs_the_floor_on_a_gnu_and_a_bsd_userland() {
     // whole-file, not job-scoped: HARNESS_EVALS set at workflow top level would be missed otherwise
     assert!(!re(r"(?m)^[^#]*HARNESS_EVALS").is_match(&ci()));
 
+    // the driver job is the other half of the floor: it runs cargo test with HARNESS_DRIVER set
+    let driver_block = job_block(&ci(), "driver");
+    let driver_env = re(r#"(?m)^[^#]*HARNESS_DRIVER:\s*['"]?1['"]?"#);
+    assert!(invokes_floor(&driver_block), "{driver_block}");
+    assert!(driver_env.is_match(&driver_block), "{driver_block}");
+
     assert_eq!(
         matrix_os(&job_block(&ci(), "no-such-job")),
         Vec::<String>::new()
     );
     assert!(!invokes_floor(&job_block(&ci(), "no-such-job")));
+
+    // ablation self-checks: a matrix with one OS must not read as both userlands, and an `if:`
+    // on the job must be caught by switched_off -- the same checks the neighbouring test makes.
+    let one_os = "jobs:\n  rust:\n    strategy:\n      matrix:\n        os:\n          - ubuntu-latest\n    steps:\n      - run: cargo test --workspace\n";
+    assert_ne!(
+        matrix_os(&job_block(one_os, "rust")),
+        vec!["macos-latest".to_string(), "ubuntu-latest".to_string()]
+    );
+
+    let switched = "jobs:\n  rust:\n    if: false\n    strategy:\n      matrix:\n        os:\n          - ubuntu-latest\n          - macos-latest\n    steps:\n      - run: cargo test --workspace\n";
+    assert_eq!(switched_off(&job_block(switched, "rust")), 1);
 }
 
 #[test]
@@ -541,16 +558,39 @@ fn no_shipped_file_carries_rhetorical_filler() {
 }
 
 #[test]
-#[ignore = "shell package retires in Task 18"]
-fn every_shipped_script_passes_shellcheck_at_full_severity() {}
+fn the_shell_package_is_gone() {
+    let gone = [
+        "harness/",
+        "install.sh",
+        "selftest.sh",
+        "adapters/claude/skill-hook.sh",
+        "evals/run.sh",
+    ];
+    let out = Command::new("git")
+        .args(["ls-files"])
+        .current_dir(repo_root())
+        .output()
+        .expect("git ls-files");
+    assert!(out.status.success(), "{:?}", out);
+    let tracked = String::from_utf8_lossy(&out.stdout);
+    for path in gone {
+        assert!(
+            !tracked.lines().any(|l| l == path || l.starts_with(path)),
+            "{path} is still tracked"
+        );
+    }
 
-#[test]
-#[ignore = "shell package retires in Task 18"]
-fn every_shellcheck_suppression_names_its_reason() {}
-
-#[test]
-#[ignore = "shell package retires in Task 18"]
-fn every_shipped_script_is_shfmt_clean() {}
+    let mentions: Vec<String> = crate_sources()
+        .into_iter()
+        .flat_map(|(rel, text)| {
+            text.lines()
+                .filter(|l| l.contains("install.sh") || l.contains("selftest.sh"))
+                .map(move |l| format!("{}: {}", rel.display(), l.trim()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(mentions, Vec::<String>::new());
+}
 
 #[test]
 #[ignore = "installs four repos and drives four iterations; run with --ignored"]
