@@ -14,6 +14,7 @@ use crate::events::{Kind, Log, Sink, Writer};
 use crate::gates::{self, GateCtx};
 use crate::probes::{self, CheckOutcome, ProbeCtx};
 use crate::queue::{self, Queue};
+use crate::roles;
 use crate::skills::{self, ResolveOpts};
 use crate::{archive, git};
 
@@ -570,6 +571,29 @@ impl<'a> Loop<'a> {
             }
         };
 
+        // CI is frozen whether or not anyone passed the flag; fetching a skill mid-flight breaks the lock
+        let frozen = self.opts.frozen || std::env::var_os("CI").is_some();
+        // a declared role is vendored to the path role_source reads first, so the fallback below stays as is
+        let mut resolved_roles = Vec::new();
+        if self.cfg.role.iter().any(|r| r.name == role) {
+            resolved_roles = match roles::resolve(
+                self.root,
+                self.cfg,
+                &[role.to_string()],
+                &ResolveOpts {
+                    frozen,
+                    ..ResolveOpts::default()
+                },
+                &mut self.writer,
+            ) {
+                Ok(list) => list,
+                Err(err) => {
+                    self.halt("role", err.to_string());
+                    return Err(Flow::Stop);
+                }
+            };
+        }
+
         // the prompt tells the agent to read its role file, so the rendered file must exist before it spawns
         let Some(source) = role_source(self.root, self.cfg, role) else {
             self.halt("stage", format!("role {role} has no prompt file"));
@@ -577,8 +601,6 @@ impl<'a> Loop<'a> {
         };
         let source = config::subst(&source, self.cfg);
         let ids = skills::required_ids(&source);
-        // CI is frozen whether or not anyone passed the flag; fetching a skill mid-flight breaks the lock
-        let frozen = self.opts.frozen || std::env::var_os("CI").is_some();
         let resolved_skills = match skills::resolve(
             self.root,
             self.cfg,
@@ -597,7 +619,7 @@ impl<'a> Loop<'a> {
             }
         };
 
-        if let Err(reason) = self.commit_vendored_skills(&resolved_skills) {
+        if let Err(reason) = self.commit_vendored(&resolved_skills, &resolved_roles) {
             self.halt("skill", reason);
             return Err(Flow::Stop);
         }
@@ -625,41 +647,53 @@ impl<'a> Loop<'a> {
         })
     }
 
-    // a fetched skill and its lock entry are new to the tree; committed here so the verdict gate
-    // sees them as part of the branch, not as work the implementer or verifier left uncommitted.
-    fn commit_vendored_skills(&mut self, resolved: &[skills::ResolvedSkill]) -> Result<(), String> {
-        if resolved.is_empty() || !self.skills_dirty(resolved) {
+    // a fetched skill or role and its lock entry are new to the tree; committed here so the verdict
+    // gate sees them as part of the branch, not as work the implementer or verifier left uncommitted.
+    fn commit_vendored(
+        &mut self,
+        skills: &[skills::ResolvedSkill],
+        roles: &[roles::ResolvedRole],
+    ) -> Result<(), String> {
+        let vendored: Vec<(&str, &Path, &str)> = skills
+            .iter()
+            .map(|s| (s.id.as_str(), s.dir.as_path(), s.result.as_str()))
+            .chain(
+                roles
+                    .iter()
+                    .map(|r| (r.name.as_str(), r.path.as_path(), r.result.as_str())),
+            )
+            .collect();
+        if vendored.is_empty() || !self.vendored_dirty(&vendored) {
             return Ok(());
         }
         let mut paths = vec!["harness.lock".to_string()];
-        for skill in resolved {
-            if let Ok(rel) = skill.dir.strip_prefix(self.root) {
+        for (_, path, _) in &vendored {
+            if let Ok(rel) = path.strip_prefix(self.root) {
                 paths.push(rel.to_string_lossy().to_string());
             }
         }
         let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
-        let ids: Vec<&str> = resolved.iter().map(|s| s.id.as_str()).collect();
+        let ids: Vec<&str> = vendored.iter().map(|(id, _, _)| *id).collect();
         git::commit_paths(
             self.root,
             &refs,
-            &format!("chore(skills): vendor {}", ids.join(" ")),
+            &format!("chore(vendor): {}", ids.join(" ")),
         )
         .map(|_| ())
         .map_err(|err| format!("vendored skills could not be committed: {err}"))
     }
 
-    // "fetched" is the ordinary signal; the porcelain fallback also catches a vendored dir left
+    // "fetched" is the ordinary signal; the porcelain fallback also catches a vendored path left
     // untracked by an earlier run.
-    fn skills_dirty(&self, resolved: &[skills::ResolvedSkill]) -> bool {
-        if resolved.iter().any(|s| s.result == "fetched") {
+    fn vendored_dirty(&self, vendored: &[(&str, &Path, &str)]) -> bool {
+        if vendored.iter().any(|(_, _, result)| *result == "fetched") {
             return true;
         }
         git::porcelain(self.root).iter().any(|line| {
             let path = line.get(3..).unwrap_or("");
             path == "harness.lock"
-                || resolved.iter().any(|s| {
-                    s.dir
-                        .strip_prefix(self.root)
+                || vendored.iter().any(|(_, dir, _)| {
+                    dir.strip_prefix(self.root)
                         .map(|rel| path.starts_with(rel.to_string_lossy().as_ref()))
                         .unwrap_or(false)
                 })

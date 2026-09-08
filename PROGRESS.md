@@ -39,3 +39,10 @@ check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D wa
 what happened: `[[role]]` parses and validates in config.rs, `Lock.role` pins it, and `roles::resolve` vendors `<path>/<name>.md` to `<harness_dir>/roles/<name>.md`. The skills loop was refactored into `skills::pin`, which both resolvers call, so the semantics match by construction. T-001 moved ready → review.
 friction: the row name for the first test carries a clause ("and committed before its stage") that belongs to T-002's scope; the implementer has to decide how much of a row one task may satisfy. A row split at the task boundary would remove the judgment call.
 next: the verifier takes T-001. T-002 (pipeline resolves and commits declared roles, immutable hook, scope gate) is blocked on it and extends `tests/roles.rs`.
+
+## 2026-09-08 — T-002 — landed
+rows: `tests/roles.rs::an_undeclared_role_falls_back_to_the_installed_or_embedded_file`, `tests/roles.rs::the_immutable_hook_refuses_an_edit_to_a_vendored_role`
+check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` → exit 0, 301 passed, 0 failed, at 898d1eb before the commit
+what happened: `role_spawn` resolves a declared role before reading its source, and one `chore(vendor): <ids>` commit carries skills and roles. `gates::scope` exempts a freshly vendored role and rejects a re-cut one; `hooks::immutable` refuses a locked role's file. T-002 moved ready → review.
+friction: `roles.rs` sat on the scope line but needed no edit; a scope line that names a file the task never touches is noise the scope gate cannot tell from a forgotten edit.
+next: the verifier takes T-002. Nothing else is at ready; the round's four exit rows all have tests once T-002 is done.

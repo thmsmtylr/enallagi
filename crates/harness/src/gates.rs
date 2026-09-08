@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::events::{Kind, Writer};
 use crate::git::{commit_paths, diff_names, git, head, porcelain};
 use crate::queue::{self, Queue};
+use crate::skills::LockEntry;
 
 const BOOKKEEPING: &[&str] = &[
     "TASKS.md",
@@ -279,12 +280,8 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let base_lock = lock_at(ctx.root, &base);
     let head_lock = lock_at(ctx.root, "HEAD");
     // ids the pipeline vendored fresh this iteration -- the task's scope: line never has to name them
-    let added: Vec<&str> = head_lock
-        .skill
-        .iter()
-        .filter(|h| !base_lock.skill.iter().any(|b| b.id == h.id))
-        .map(|h| h.id.as_str())
-        .collect();
+    let added_skills = added_ids(&base_lock.skill, &head_lock.skill);
+    let added_roles = added_ids(&base_lock.role, &head_lock.role);
 
     let mut out_of: Vec<String> = Vec::new();
     let mut harness_hit: Vec<String> = Vec::new();
@@ -292,9 +289,10 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         if BOOKKEEPING.contains(&f.as_str()) || f == "harness.lock" {
             continue;
         }
-        if added
+        if added_skills
             .iter()
             .any(|id| f.starts_with(&format!("{skills_dir}/{id}/")))
+            || added_roles.iter().any(|id| f == role_file(ctx.cfg, id))
         {
             continue;
         }
@@ -334,23 +332,19 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     }
 
     // present at base and (gone, or a field differs) at HEAD: a re-cut or a removal, neither of
-    // which is the pipeline's own fresh vendoring, so the id's SKILL.md still needs the scope: line
-    for b in &base_lock.skill {
-        let recut = match head_lock.skill.iter().find(|h| h.id == b.id) {
-            None => true,
-            Some(h) => {
-                h.source != b.source
-                    || h.rev != b.rev
-                    || h.commit != b.commit
-                    || h.sha256 != b.sha256
-            }
-        };
-        if !recut {
-            continue;
-        }
-        let path = format!("{skills_dir}/{}/SKILL.md", b.id);
+    // which is the pipeline's own fresh vendoring, so the id's vendored file still needs the scope: line
+    let recut: Vec<(String, String)> = recut_ids(&base_lock.skill, &head_lock.skill)
+        .into_iter()
+        .map(|id| (format!("{skills_dir}/{id}/SKILL.md"), id))
+        .chain(
+            recut_ids(&base_lock.role, &head_lock.role)
+                .into_iter()
+                .map(|id| (role_file(ctx.cfg, &id), id)),
+        )
+        .collect();
+    for (path, id) in recut {
         if !in_scope(&path, &pats) {
-            let named = format!("harness.lock ({})", b.id);
+            let named = format!("harness.lock ({id})");
             harness_hit.push(named.clone());
             out_of.push(named);
         }
@@ -405,6 +399,31 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         &format!("chore({task}): harness scope gate rejected a done verdict"),
         &format!("{task} was forced back to ready by the scope gate: {why}."),
     )
+}
+
+fn added_ids(base: &[LockEntry], head: &[LockEntry]) -> Vec<String> {
+    head.iter()
+        .filter(|h| !base.iter().any(|b| b.id == h.id))
+        .map(|h| h.id.clone())
+        .collect()
+}
+
+fn recut_ids(base: &[LockEntry], head: &[LockEntry]) -> Vec<String> {
+    base.iter()
+        .filter(|b| {
+            head.iter().find(|h| h.id == b.id).is_none_or(|h| {
+                h.source != b.source
+                    || h.rev != b.rev
+                    || h.commit != b.commit
+                    || h.sha256 != b.sha256
+            })
+        })
+        .map(|b| b.id.clone())
+        .collect()
+}
+
+pub(crate) fn role_file(cfg: &Config, id: &str) -> String {
+    format!("{}/roles/{id}.md", cfg.layout.harness_dir)
 }
 
 fn scope_globs(line: &str) -> Vec<String> {
@@ -1124,6 +1143,52 @@ mod tests {
             ));
         }
         text
+    }
+
+    fn role_lock_toml(entries: &[(&str, &str)]) -> String {
+        let mut text = "version = 1\n".to_string();
+        for (id, sha) in entries {
+            text.push_str(&format!(
+                "\n[[role]]\nid = \"{id}\"\nsource = \"path:vendor\"\nsha256 = \"{sha}\"\n"
+            ));
+        }
+        text
+    }
+
+    #[test]
+    fn scope_exempts_a_freshly_vendored_role_outside_scope() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", "src/**", "§11 row 1");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write(".harness/roles/implementer.md", "# role\n");
+        env.repo
+            .write("harness.lock", &role_lock_toml(&[("implementer", "aaa")]));
+        env.repo.commit_all("vendor implementer");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
+    fn scope_rejects_a_recut_role_outside_scope() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", "src/**", "§11 row 1");
+        env.repo
+            .write("harness.lock", &role_lock_toml(&[("implementer", "aaa")]));
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo
+            .write("harness.lock", &role_lock_toml(&[("implementer", "bbb")]));
+        env.repo.commit_all("recut implementer");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(
+            out.reason.contains("harness.lock (implementer)"),
+            "{}",
+            out.reason
+        );
     }
 
     #[test]

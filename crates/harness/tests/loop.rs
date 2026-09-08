@@ -589,18 +589,24 @@ source = \"path:vendor/tdd\"
 path = \"\"
 gate = \"none\"
 why = \"because\"
+
+[[role]]
+name = \"implementer\"
+source = \"path:vendor\"
+path = \"roles\"
 ";
 
 // reproduces the bug: skills::resolve vendors a skill and writes harness.lock but nothing commits
 // them, so the verdict gate sees the untracked vendor dir as work off the branch and forces the
 // task back to ready even though the implementer and verifier committed everything in their scope.
+// a declared role rides the same commit, and the scope gate exempts it like a fresh skill.
 #[test]
 fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
     let toml = base_toml(SKILL_DECL);
     let r = repo(&toml, SKILL_TASKS);
     r.write("vendor/tdd/SKILL.md", "# tdd\n\nWrite the test first.\n");
     r.write(
-        ".harness/roles/implementer.md",
+        "vendor/roles/implementer.md",
         "Do the work with {{skill:tdd}} in hand.\n",
     );
 
@@ -656,7 +662,7 @@ fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
         .output()
         .expect("git log");
     assert!(
-        String::from_utf8_lossy(&log.stdout).contains("chore(skills): vendor tdd"),
+        String::from_utf8_lossy(&log.stdout).contains("chore(vendor): tdd implementer"),
         "{}",
         String::from_utf8_lossy(&log.stdout)
     );
@@ -669,6 +675,10 @@ fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
     let ls = String::from_utf8_lossy(&ls.stdout);
     assert!(ls.contains("harness.lock"), "{ls}");
     assert!(ls.contains(".harness/skills/tdd/SKILL.md"), "{ls}");
+    assert!(ls.contains(".harness/roles/implementer.md"), "{ls}");
+    let lock = harness::skills::read_lock(&r.root).expect("lock");
+    assert_eq!(lock.role.len(), 1, "{lock:?}");
+    assert_eq!(lock.role[0].id, "implementer");
 }
 
 #[test]

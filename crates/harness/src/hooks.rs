@@ -28,9 +28,8 @@ pub fn immutable(root: &Path, input: &str) -> (i32, String) {
         return (
             2,
             format!(
-                "immutable: {hit} is a locked skill, covered by harness.lock. This edit is \
-                 refused. Re-resolve the lock deliberately (`harness skills sync`), not through \
-                 the edit tool."
+                "immutable: {hit} is locked by harness.lock. This edit is refused. Re-resolve \
+                 the lock deliberately (`harness skills sync`), not through the edit tool."
             ),
         );
     }
@@ -180,16 +179,22 @@ fn locked_hit(root: &Path, target: &Path) -> Option<String> {
         return None;
     }
     let lock = skills::read_lock(root).ok()?;
-    if lock.skill.is_empty() {
+    if lock.skill.is_empty() && lock.role.is_empty() {
         return None;
     }
     let cfg = config::load(root).ok()?;
     let skills_dir = gates::skills_dir_for(&cfg);
+    let rel = target.strip_prefix(root).unwrap_or(target);
     for entry in &lock.skill {
         let dir = normalize(root, &format!("{skills_dir}/{}", entry.id));
         if target.starts_with(&dir) {
-            let rel = target.strip_prefix(root).unwrap_or(target);
             return Some(format!("{} (locked skill `{}`)", rel.display(), entry.id));
+        }
+    }
+    for entry in &lock.role {
+        let file = normalize(root, &gates::role_file(&cfg, &entry.id));
+        if *target == file {
+            return Some(format!("{} (locked role `{}`)", rel.display(), entry.id));
         }
     }
     None
