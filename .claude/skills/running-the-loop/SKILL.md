@@ -33,7 +33,7 @@ The full prompts are in `.harness/roles/`. Read the one for the role you are pla
 
 ## What done means
 
-`PATH="$HOME/.cargo/bin:$PATH" cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` passes, verified on **delta** against `.check-baseline` — a failure listed there is
+`export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` passes, verified on **delta** against `.check-baseline` — a failure listed there is
 inherited, a failure not listed there is a rejection, and the file only ever shrinks. Adding a line
 to it is weakening a test by another name.
 
