@@ -1,5 +1,4 @@
-//! events: the append-only JSONL event log written during a run and read
-//! back by `harness watch`, `harness events`, and the probes.
+//! The append-only JSONL event log written during a run and read back by `harness watch`/`events` and the probes.
 
 use std::fs;
 use std::io::{self, Write};
@@ -91,8 +90,6 @@ pub enum Kind {
     },
 }
 
-/// A stage-scoped field shared by several `Kind` variants, used by the CLI's
-/// `--role` filter to track which events belong to a running stage.
 pub fn stage_of(k: &Kind) -> Option<&str> {
     match k {
         Kind::StageStart { stage, .. }
@@ -116,8 +113,6 @@ pub struct Log {
 }
 
 impl Log {
-    /// `<harness_dir>/events.jsonl`. Parent directories are created on the
-    /// first `append`, not here.
     pub fn open(harness_dir: &Path) -> Log {
         Log {
             path: harness_dir.join("events.jsonl"),
@@ -137,10 +132,6 @@ impl Log {
         writeln!(f, "{line}")
     }
 
-    /// Parses every line, pairing each with the exact text it came from (so
-    /// `--json` can echo the file's own line rather than a re-serialization
-    /// of the parsed value) and reporting the ones that failed to parse
-    /// rather than failing the whole read. A missing file reads as empty.
     pub fn read_lines(&self) -> io::Result<(Vec<(String, Event)>, usize)> {
         let text = match fs::read_to_string(&self.path) {
             Ok(t) => t,
@@ -161,7 +152,6 @@ impl Log {
         Ok((pairs, skipped))
     }
 
-    /// Like `read_lines`, but without the raw text alongside each event.
     pub fn read_report(&self) -> io::Result<(Vec<Event>, usize)> {
         let (pairs, skipped) = self.read_lines()?;
         Ok((pairs.into_iter().map(|(_, e)| e).collect(), skipped))
@@ -171,14 +161,11 @@ impl Log {
         self.read_report().map(|(events, _)| events)
     }
 
-    /// Events with `seq` strictly greater than `seq`.
     pub fn read_since(&self, seq: u64) -> io::Result<Vec<Event>> {
         Ok(self.read()?.into_iter().filter(|e| e.seq > seq).collect())
     }
 }
 
-/// A live listener on the writer. It is called from inside `emit`, so a stage's
-/// output reaches it while the agent is still running rather than after it.
 pub type Sink = Box<dyn FnMut(&Event) + Send>;
 
 pub struct Writer {
@@ -206,8 +193,7 @@ impl Writer {
         }
     }
 
-    /// Everything this writer emits from here on also goes to `sink`, in order,
-    /// as it happens. One listener: the run has one caller.
+    // one listener: the run has one caller
     pub fn set_sink(&mut self, sink: Sink) {
         self.sink = Some(sink);
     }
@@ -221,10 +207,7 @@ impl Writer {
             seq: self.seq,
             kind,
         };
-        // Best-effort: a write failure here has nowhere to report to since
-        // `emit` returns the event, not a Result. The caller still gets the
-        // in-memory `Event`; the failure is recorded in `last_error` for a
-        // caller that wants to notice.
+        // emit returns Event not Result, so a write failure is stashed in last_error instead of raised
         self.last_error = self.log.append(&event).err().map(|err| err.to_string());
         if let Some(sink) = &mut self.sink {
             sink(&event);
@@ -232,8 +215,6 @@ impl Writer {
         event
     }
 
-    /// The error from the most recent `emit`'s append, if it failed. `None`
-    /// once a later `emit` succeeds.
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
     }
@@ -247,11 +228,6 @@ fn rfc3339_secs(ts: jiff::Timestamp) -> String {
     ts.strftime("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
-/// Renders one event as `ts kind key=value ...` for `--no-tui` and
-/// `harness events`. Fields are taken from the event's own JSON
-/// serialization, in that object's key order, with `ts` and `kind` pulled
-/// out to the front. A `null` value is omitted; a string containing
-/// whitespace is quoted; arrays are joined with `,`.
 pub fn render_line(e: &Event) -> String {
     let value = serde_json::to_value(e).unwrap_or(serde_json::Value::Null);
     let Some(obj) = value.as_object() else {
@@ -404,8 +380,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let blocker = d.path().join("blocker");
         fs::write(&blocker, "not a directory").unwrap();
-        // `Log::open` joins "events.jsonl" onto this, so `append` will try to
-        // `create_dir_all` a path that already exists as a plain file.
+        // append's create_dir_all fails: a plain file already sits where the dir would go
         let mut w = Writer::new(Log::open(&blocker));
         assert!(w.last_error().is_none());
         w.emit(Kind::Halt {

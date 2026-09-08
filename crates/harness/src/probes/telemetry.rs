@@ -33,9 +33,7 @@ fn no_events(log: &Log) -> String {
     format!("no events.jsonl under {dir}")
 }
 
-/// Builds a `Finding` citing the events at `idxs` (indices into `events`,
-/// used as 1-based line numbers -- true as long as the log has no blank or
-/// unparseable lines ahead of them, which a run's own writer never emits).
+// idxs double as 1-based line numbers: true only while the log has no blank/unparseable lines ahead, which a run's own writer never emits
 fn cite(log: &Log, events: &[Event], idxs: &[usize], message: &str) -> Finding {
     let run = &events[idxs[0]].run;
     let seqs: Vec<String> = idxs.iter().map(|&i| events[i].seq.to_string()).collect();
@@ -46,8 +44,6 @@ fn cite(log: &Log, events: &[Event], idxs: &[usize], message: &str) -> Finding {
     }
 }
 
-/// Lowercase, punctuation stripped to spaces, whitespace collapsed -- port
-/// of `normal()` in harness/hooks/probes.sh:294.
 fn normal(text: &str) -> String {
     let cleaned: String = text
         .to_lowercase()
@@ -136,16 +132,12 @@ pub fn verdict_flip(log: &Log) -> ProbeResult {
     ProbeResult::Count(findings)
 }
 
-/// Two rejections whose reasons are the same friction reworded: Jaccard
-/// over their normalised tokens >= 0.5, ported from probes.sh's
-/// `friction_repeat` grouping (harness/hooks/probes.sh:294-344).
 pub fn rejection_repeat(log: &Log) -> ProbeResult {
     let events = match load(log) {
         Ok(e) => e,
         Err(msg) => return ProbeResult::Error(msg),
     };
-    // (normalised tokens of the first reason in the group, event indices,
-    // tasks named, that first reason's own text)
+    // (first reason's tokens, event indices, tasks named, first reason's text)
     type Group = (HashSet<String>, Vec<usize>, Vec<String>, String);
     let mut groups: Vec<Group> = Vec::new();
     for (i, e) in events.iter().enumerate() {
@@ -201,8 +193,6 @@ struct StageEndInfo {
     cost: Option<f64>,
 }
 
-/// A stage.end whose `seconds` or `cost` is over twice the median of its
-/// role's other runs, in a role with at least three members.
 pub fn stage_outlier(log: &Log) -> ProbeResult {
     let events = match load(log) {
         Ok(e) => e,
@@ -286,8 +276,6 @@ pub fn stage_outlier(log: &Log) -> ProbeResult {
     ProbeResult::Count(findings)
 }
 
-/// A stage.end that reports exactly the configured turn ceiling for that
-/// stage: the agent ran out of turns rather than choosing to stop.
 pub fn turns_exhausted(log: &Log, cfg: &Config) -> ProbeResult {
     let events = match load(log) {
         Ok(e) => e,
@@ -323,9 +311,6 @@ fn stage_of_limit(k: &Kind) -> Option<&str> {
     }
 }
 
-/// Two rate limits on stages that are back-to-back in the run's own
-/// sequence of stage.start events: the rate limit is not a one-off, it is
-/// following the pipeline through.
 pub fn limit_repeat(log: &Log) -> ProbeResult {
     let events = match load(log) {
         Ok(e) => e,
@@ -438,7 +423,6 @@ mod tests {
                 assert_eq!(findings.len(), 1);
                 assert!(findings[0].message.contains("T-1"));
                 assert!(findings[0].message.contains("#1,2"));
-                // the first cited event is the log's first line.
                 assert_eq!(findings[0].line, 1);
             }
             ProbeResult::Error(e) => panic!("expected findings, got error: {e}"),
@@ -448,7 +432,6 @@ mod tests {
     #[test]
     fn verdict_flip_needs_two_flips_on_the_same_task() {
         let (dir, mut w) = writer();
-        // a single forced-back is not a repeat.
         w.emit(status("T-1", "done", "ready", "forced back", "verdict"));
         let log = Log::open(dir.path());
         match verdict_flip(&log) {
@@ -456,7 +439,6 @@ mod tests {
             ProbeResult::Error(e) => panic!("expected findings, got error: {e}"),
         }
 
-        // two different tasks flipped once each is not a repeat either.
         let (dir2, mut w2) = writer();
         w2.emit(status("T-1", "done", "ready", "forced back", "verdict"));
         w2.emit(status("T-2", "done", "ready", "forced back", "verdict"));
@@ -504,13 +486,6 @@ mod tests {
         }
     }
 
-    /// Two real friction lines from the harness's own `PROGRESS.archive.md`,
-    /// the calibration example named in probes.sh's `friction_repeat`
-    /// comment (harness/hooks/probes.sh:305-313): "SECOND occurrence..."
-    /// (:213) and "FIFTH sighting..." (:477) score exactly 0.5 Jaccard over
-    /// their full (unfiltered) token sets -- the widest pair the comment
-    /// says the threshold still separates from noise. `tokens()` must match
-    /// that number exactly, or the boundary moves.
     #[test]
     fn rejection_repeat_fires_at_exactly_the_half_boundary() {
         let (dir, mut w) = writer();
@@ -538,9 +513,6 @@ mod tests {
         }
     }
 
-    /// The comment's closest non-repeat pair (:1253/:1351, both "none new.
-    /// One thing worth the next lane's time...") scores ~0.476 -- just under
-    /// the threshold, so it must NOT group.
     #[test]
     fn rejection_repeat_does_not_fire_just_under_the_boundary() {
         let (dir, mut w) = writer();

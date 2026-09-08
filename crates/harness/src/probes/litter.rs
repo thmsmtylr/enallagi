@@ -1,7 +1,3 @@
-//! The tree holds the product and the documents that govern it. Everything else
-//! is either allowlisted or reported -- tracked, untracked and ignored alike,
-//! because gitignored is not absent.
-
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
 use crate::git;

@@ -9,18 +9,12 @@ pub struct Args {
     pub json: bool,
 }
 
-/// The stateless part of `Args` — what `keep` needs to decide whether one
-/// event survives `--task`/`--since`. `--role` isn't here because it needs
-/// to see the whole stream (it keeps a stage's surrounding events, not just
-/// events that themselves match), so it stays a separate pass in `run`.
+// --role isn't here: it needs the whole stream (a stage's surrounding events, not just matches), so it's a separate pass in run
 pub struct Filter {
     pub task: Option<String>,
     pub since: Option<String>,
 }
 
-/// The `--task`/`--since` predicate, shared between `run` and its tests so
-/// the tests exercise the real filtering logic rather than a reimplementation
-/// of it.
 pub(crate) fn keep(e: &Event, opts: &Filter) -> bool {
     if let Some(task) = &opts.task {
         if task_of(&e.kind) != Some(task.as_str()) {
@@ -66,9 +60,6 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     Ok(0)
 }
 
-/// Keeps `stage.start` events whose role matches, plus every event of that
-/// stage (by stage name, scoped to the run it started in) up to and
-/// including its `stage.end`.
 fn filter_role(items: Vec<(String, Event)>, role: &str) -> Vec<(String, Event)> {
     let mut active: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     let mut out = Vec::new();

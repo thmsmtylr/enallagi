@@ -1,11 +1,4 @@
-//! A rule written from a repeated friction is a write to the agent's standing
-//! context, and an unvalidated write is the failure mode the field has
-//! measured: reflective memory made two ALFWorld environments strictly worse
-//! than no memory at all, with 0 of 121 reflections naming the correct target
-//! (arXiv:2605.29463), and accumulation without a gate regressed below the
-//! no-skills baseline (arXiv:2605.29668). So a dated rule names the eval that
-//! holds it, and the library is capacity-bounded the way GRASP's is. `[seed]`
-//! entries predate the gate and are exempt.
+//! A dated rule must name the eval that holds it, and the library is capacity-bounded. `[seed]` entries predate the gate and are exempt.
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};

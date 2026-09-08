@@ -1,11 +1,4 @@
-//! init: seed a repository with the harness's documents, configuration and
-//! agent-adapter files. Ported from `install.sh`.
-//!
-//! Idempotent by construction. Two kinds of file: the harness's own -- the role
-//! prompts, the rails, the project skill -- which are rewritten on every run
-//! because an upgrade has to reach them, and the project's documents, which are
-//! seeded once and never overwritten, because a file with content in it is the
-//! project's own record.
+//! Seeds a repo with the harness's files: its own files are rewritten every run, the project's documents are seeded once.
 
 use crate::agent::{self, Preset};
 use crate::config::{self, Config};
@@ -33,8 +26,7 @@ const ROLES: &[(&str, &str)] = &[
     ("verifier.md", include_str!("../../../roles/verifier.md")),
 ];
 
-/// The documents, seeded once. `.check-baseline` ships as `dot.check-baseline`
-/// so the package's own tooling does not read it as a baseline.
+// ships as dot.check-baseline so the package's own tooling doesn't read it as a baseline
 const DOCS: &[(&str, &str)] = &[
     ("TASKS.md", include_str!("../../../templates/TASKS.md")),
     (
@@ -73,10 +65,7 @@ const SPEC_SECTION: &str = include_str!("../../../templates/SPEC.section.md");
 const EVALS_README: &str = include_str!("../../../evals/README.md");
 const CLAUDE_SETTINGS: &str = include_str!("../../../adapters/claude/settings.json");
 
-/// The run log is machinery, not content: a lane that stages everything would
-/// otherwise commit it, and the scope gate would reject that lane for a file it
-/// did not write. Scoped to the harness directory, so the repository's own
-/// .gitignore is never touched.
+// scoped to the harness dir, never touches the repo's own .gitignore
 const GITIGNORE: &str =
     "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nskills/\nrun/\n__pycache__/\n";
 
@@ -126,16 +115,12 @@ pub enum InitError {
     BadPattern(String),
 }
 
-/// An io error that names the path it happened to, which `std::io::Error`
-/// does not carry.
 fn io(path: impl std::fmt::Display) -> impl FnOnce(std::io::Error) -> InitError {
     let path = path.to_string();
     move |source| InitError::Io { path, source }
 }
 
-/// Every file `install` would write, as `(relative path, content)`. The
-/// installed instance is substituted and the source is not, so this -- not a
-/// diff against the templates -- is what `install-stale` compares against.
+// what install-stale diffs against: the installed (substituted) form, not the templates
 pub fn planned_files(root: &Path, opts: &InitOpts) -> Result<Vec<(String, String)>, InitError> {
     let (plan, _) = prepare(root, opts)?;
     Ok(plan.into_iter().map(|p| (p.path, p.content)).collect())
@@ -144,8 +129,7 @@ pub fn planned_files(root: &Path, opts: &InitOpts) -> Result<Vec<(String, String
 pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
     let (plan, mut report) = prepare(root, opts)?;
 
-    // Assert what was executed, never merely that nothing failed -- and assert
-    // it before the first write, so a missing answer leaves no half-install.
+    // assert before the first write, so a missing token leaves no half-install
     let pattern = regex::Regex::new(TOKEN).map_err(|e| InitError::BadPattern(e.to_string()))?;
     for file in &plan {
         let left = tokens(&pattern, &file.content);
@@ -162,13 +146,11 @@ pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
             }
             fs::write(&path, &file.content).map_err(io(path.display()))?;
         }
-        // reported only once it is on disk: a caller that sees `wrote` sees
-        // what a reader of the tree would see
+        // reported only once it's actually on disk
         report.wrote.push(file.path.clone());
     }
 
-    // The old answers moved aside only once the new file holds them, and only
-    // when this run is the one that read them.
+    // the old answers move aside only once the new file holds them, and only for the run that read them
     let migrated = root.join("harness.json").is_file()
         && report.wrote.iter().any(|path| path == "harness.toml");
     if !opts.dry_run && migrated {
@@ -183,9 +165,7 @@ struct Planned {
     content: String,
 }
 
-/// Everything that reads the tree happens here; `install` only writes. A file
-/// that is kept -- a document with content, a pointer that already points at
-/// the context file -- never enters the plan.
+// all tree reads happen here; install() only writes
 fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), InitError> {
     if !git::git_ok(root, &["rev-parse", "--git-dir"]) {
         return Err(InitError::NotGit(root.display().to_string()));
@@ -193,7 +173,6 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     let mut plan: Vec<Planned> = Vec::new();
     let mut report = InitReport::default();
 
-    // --- the configuration, and the harness.json it may be migrated from ---
     let pending = seed_config(root, &mut plan, &mut report)?;
     let cfg = match &pending {
         Some(text) => config_from(text)?,
@@ -204,20 +183,17 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     let presets = agent::presets();
     let skills_dir = skills_root(&cfg, presets.get(&cfg.agent.preset));
 
-    // --- the harness's own files, rewritten every run ----------------------
     for (name, text) in ROLES {
         plan.push(write(format!("{dir}/roles/{name}"), sub(text)));
     }
     plan.push(write(format!("{dir}/RAILS.md"), sub(RAILS)));
     plan.push(write(format!("{dir}/.gitignore"), GITIGNORE.to_string()));
-    // Skills install per tool, not per repository. What ships here is this
-    // project's OWN skill, in the format ~48 clients read.
+    // per tool, not per repo: this ships the project's own skill in the shared format
     for (name, text) in SKILL {
         let path = skills_dir.join("running-the-loop").join(name);
         plan.push(write(rel(&path), sub(text)));
     }
 
-    // --- the documents, seeded once ----------------------------------------
     seed(
         root,
         &mut plan,
@@ -240,12 +216,10 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         seed(root, &mut plan, &mut report, &spec, sub(SPEC_SECTION));
     }
 
-    // --- the pointers, for tools that read their own file ------------------
     for pointer in &cfg.layout.pointer_files {
         seed_pointer(root, &mut plan, &mut report, &cfg, pointer, &sub);
     }
 
-    // --- the adapter -------------------------------------------------------
     if let Some(name) = &opts.adapter {
         let preset = presets
             .get(name)
@@ -262,8 +236,6 @@ fn write(path: String, content: String) -> Planned {
     Planned { path, content }
 }
 
-/// `seed`: a file with content in it is the project's own and is never
-/// overwritten.
 fn seed(
     root: &Path,
     plan: &mut Vec<Planned>,
@@ -278,9 +250,7 @@ fn seed(
     }
 }
 
-/// `harness.toml` when absent: the embedded default, or a `harness.json`
-/// migrated. Returns the text when this run is the one that produces it, since
-/// `config::load` cannot see a file that has not been written yet.
+// returns the text only when this run wrote it -- config::load can't see an unwritten file
 fn seed_config(
     root: &Path,
     plan: &mut Vec<Planned>,
@@ -309,8 +279,7 @@ fn seed_config(
     Ok(Some(text))
 }
 
-/// The merged configuration a `harness.toml` that is about to be written would
-/// produce. `config::load` reads a directory, so the pending text gets one.
+// config::load reads a directory, so give the pending text a temporary one
 fn config_from(text: &str) -> Result<Config, InitError> {
     let dir = tempfile::TempDir::new().map_err(io("a temporary directory"))?;
     let path = dir.path().join("harness.toml");
@@ -318,10 +287,7 @@ fn config_from(text: &str) -> Result<Config, InitError> {
     Ok(config::load(dir.path())?)
 }
 
-/// The context file is seeded on the FIRST run, when harness.toml is still the
-/// defaults, so it names the default check. On a re-run with a real `check`,
-/// the lines the template wrote from the default are rewritten -- only those: a
-/// backticked default is the template's text, never yours.
+// resync rewrites only backticked defaults the template wrote, never the user's own prose
 fn seed_context(
     root: &Path,
     plan: &mut Vec<Planned>,
@@ -349,10 +315,6 @@ fn seed_context(
     }
 }
 
-/// The kept context file with the default check strings rewritten to the
-/// configured ones, or None when nothing changed -- including when the default
-/// could not be read, since a resync that does not know what the template wrote
-/// would rewrite the wrong lines.
 fn resync(
     text: &str,
     defaults: Option<&(String, String)>,
@@ -368,16 +330,12 @@ fn resync(
     (out != text).then_some(out)
 }
 
-/// The check the embedded default names, which is what a first install
-/// substituted into the context file. None short of a broken embedded default.
 fn default_check() -> Option<(String, String)> {
     let cfg = config_from("").ok()?;
     Some((cfg.check.command, cfg.check.force))
 }
 
-/// One-line pointers, for tools that read their own file rather than the open
-/// format. Claude Code does not read AGENTS.md natively
-/// (anthropics/claude-code#34235); the @ import is its documented workaround.
+// Claude Code doesn't read AGENTS.md natively; the @ import is its documented workaround
 fn seed_pointer(
     root: &Path,
     plan: &mut Vec<Planned>,
@@ -405,8 +363,7 @@ fn seed_pointer(
     }
 }
 
-/// Where the project skill lands, which `install-stale` also has to know to
-/// tell an overwritten file from a seeded one.
+// install-stale also has to know this path to tell an overwritten file from a seeded one
 pub(crate) fn skills_root(cfg: &Config, preset: Option<&Preset>) -> PathBuf {
     match preset {
         Some(preset) => skills::skills_dir(cfg, preset),
@@ -418,8 +375,7 @@ pub(crate) fn skills_root(cfg: &Config, preset: Option<&Preset>) -> PathBuf {
     }
 }
 
-/// The hook a `pre_tool_use`, `stop` or `prompt_submit` event runs, in the
-/// order the tool fires them.
+// order matters: this is the order the tool fires the events in
 const HOOKS: &[(&str, &[&str])] = &[
     ("pre_tool_use", &["immutable", "one-writer"]),
     ("stop", &["verify-done"]),
@@ -436,17 +392,13 @@ fn adapter(
 ) -> Result<(), InitError> {
     let name = &preset.name;
     if name == "claude" {
-        // The subagent definitions are the role prompts; nothing tool-specific
-        // ends up outside .claude/.
+        // role prompts double as the Claude subagent definitions here
         for (role, text) in ROLES {
             plan.push(write(format!(".claude/agents/{role}"), sub(text)));
         }
     }
 
-    // A tool that reads its own instruction file rather than the open format
-    // gets the same one-line pointer the configured ones get -- unless
-    // pointer_files already names it, which is the common case. Written before
-    // the hooks, because a tool with no hooks file still reads its own file.
+    // written before hooks: a tool with no hooks file still reads its own instruction file
     if let Some(file) = preset.instruction_file.as_deref() {
         let planned = plan.iter().any(|p| p.path == file);
         if file != cfg.layout.context_file && !planned && !has_content(&root.join(file)) {
@@ -464,9 +416,7 @@ fn adapter(
     let ours = if name == "claude" {
         claude_settings(sub)?
     } else {
-        // The vendor shapes are close enough for v1: gemini, qwen, copilot,
-        // cursor and codex all read a list of command hooks under an event
-        // name, and only the event names differ, which the preset carries.
+        // non-claude vendors share this hook shape; only the event names differ, per preset
         hooks_value(preset)
     };
     let existing = fs::read_to_string(root.join(hooks_file)).ok();
@@ -478,9 +428,6 @@ fn adapter(
     Ok(())
 }
 
-/// The shipped Claude settings, substituted like every other shipped file, with
-/// every hook command rewritten to the binary's own: the hooks are subcommands
-/// now, not scripts in the tree.
 fn claude_settings(sub: &dyn Fn(&str) -> String) -> Result<Value, InitError> {
     let mut value: Value =
         serde_json::from_str(&sub(CLAUDE_SETTINGS)).map_err(|e| InitError::InvalidJson {
@@ -491,9 +438,7 @@ fn claude_settings(sub: &dyn Fn(&str) -> String) -> Result<Value, InitError> {
     Ok(value)
 }
 
-/// `"command": ".../hooks/immutable.sh"` -> `"command": "harness hook
-/// immutable"`, wherever it appears. The hooks are subcommands of one binary
-/// now, so nothing tool-specific has to be installed for them to run.
+// e.g. "hooks/immutable.sh" -> "harness hook immutable", wherever "command" appears
 fn rewrite_commands(value: &mut Value) {
     match value {
         Value::Object(map) => {
@@ -511,8 +456,7 @@ fn rewrite_commands(value: &mut Value) {
     }
 }
 
-/// `.../hooks/one-writer.sh` -> `one-writer`. `skill-hook` is the one whose
-/// script name and subcommand name differ.
+// skill-hook is the one script name that doesn't match its subcommand (-> skills)
 fn hook_name(command: &str) -> String {
     let base = command
         .trim_end_matches('"')
@@ -541,9 +485,7 @@ fn hooks_value(preset: &Preset) -> Value {
     json!({ "hooks": events })
 }
 
-/// Every repo already on the tool has one of these, and seeding kept it and
-/// wired no hook at all. Hooks are added by command; a deny rule by text;
-/// anything else in the file is left alone.
+// hooks dedup by command text, deny rules by exact match; everything else in the file is untouched
 fn merge_json(ours: &Value, theirs: &str, path: &str) -> Result<String, InitError> {
     let bad = |message: String| InitError::InvalidJson {
         path: path.to_string(),
@@ -625,9 +567,7 @@ fn pretty(value: &Value) -> String {
     text
 }
 
-/// Every top-level path this run wrote or seeded, for the `git add` at the end:
-/// gate_verdict counts an untracked path as work off the branch, so a document
-/// left untracked here fails the first verdict.
+// gate_verdict treats an untracked path as work off the branch, so nothing here may go untracked
 fn track_paths(plan: &[Planned], report: &InitReport) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for path in plan
@@ -665,9 +605,6 @@ fn rel(path: &Path) -> String {
 mod tests {
     use super::*;
 
-    /// The resync rewrites the strings the TEMPLATE wrote. Without the default
-    /// to recognise it cannot tell those from the project's own prose, so it
-    /// leaves a kept context file exactly as it found it.
     #[test]
     fn a_resync_that_cannot_read_the_default_rewrites_nothing() {
         let cfg = config_from("[check]\ncommand = \"make check\"\n").expect("config");

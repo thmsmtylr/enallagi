@@ -1,23 +1,9 @@
-//! The integration floor: every `selftest.sh` assertion that Tasks 3-16 did
-//! not already cover, one test per assertion and named after it.
-//!
-//! Three kinds live here. The ones about an installed tree reproduce the
-//! selftest's setup through `fixture::Repo` + `init::install` + the binary.
-//! The ones about shipped content -- the workflow, the role prompts, the
-//! prose -- read the files directly. The ones about git history run
-//! `docs/bootstrap.sh` against a history built here.
-//!
-//! Every scan asserts FIRING as well as passing: a grep that cannot report is
-//! not a check, and "it found nothing" on a broken scanner reads the same as a
-//! clean tree.
-
 use harness::fixture::Repo;
 use harness::init::{self, InitOpts};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The checkout this crate lives in.
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -33,7 +19,6 @@ fn re(pattern: &str) -> regex::Regex {
     regex::Regex::new(pattern).expect("compile pattern")
 }
 
-/// Every file under `dir`, relative to it, `.git` excluded.
 fn walk(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
@@ -57,8 +42,7 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// Every `.rs` under `crates/harness/src`, truncated at its `#[cfg(test)]`:
-/// a fixture string in a test module is not the launcher parsing anything.
+// truncated at #[cfg(test)] so a fixture string in a test module isn't mistaken for real launcher code
 fn crate_sources() -> Vec<(PathBuf, String)> {
     let src = repo_root().join("crates/harness/src");
     walk(&src)
@@ -72,8 +56,7 @@ fn crate_sources() -> Vec<(PathBuf, String)> {
         .collect()
 }
 
-/// Runs `program` with `cwd` and `HARNESS_BIN` pointed at the test binary, so
-/// nothing here builds a release binary or reads one off PATH.
+// HARNESS_BIN points at the test binary so nothing here builds release or reads one off PATH
 fn script(program: &Path, cwd: &Path, args: &[&str]) -> (i32, String) {
     let out = Command::new(program)
         .args(args)
@@ -99,7 +82,6 @@ fn harness(cwd: &Path, args: &[&str]) -> (i32, String, String) {
     )
 }
 
-/// A throwaway git repo with `git init`, one commit per subject, oldest first.
 fn history(subjects: &[&str]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let git = |args: &[&str]| {
@@ -124,8 +106,7 @@ fn history(subjects: &[&str]) -> tempfile::TempDir {
 
 #[test]
 fn no_installed_script_hardcodes_a_vendor_path_or_process() {
-    // The core install names no vendor and no vendor directory. Prose may name
-    // a vendor among others; an executable path or a process guard may not.
+    // prose may name a vendor; only an executable path or process guard may not
     let vendor = re(r"\.claude/(hooks|agents)|pgrep -f \.claude|spin [^|]*\bclaude\b");
     assert!(
         vendor.is_match(r#"pgrep -f .claude"#),
@@ -158,9 +139,7 @@ fn no_installed_script_hardcodes_a_vendor_path_or_process() {
 
 #[test]
 fn the_launcher_parses_no_task_blocks_itself() {
-    // `selftest.sh` counted task-block parsing in `loop.sh` and required 0:
-    // one parser, and the launcher holds none of its own. Here the parser is
-    // `queue::match_heading`, and no other module may hold a second.
+    // only queue::match_heading may parse `## [` headings; a second parser here would drift from it
     let heading = re(r"## \[");
     assert!(
         heading.is_match("## [T-001] a task"),
@@ -177,16 +156,12 @@ fn the_launcher_parses_no_task_blocks_itself() {
 
 #[test]
 fn the_write_path_gate_installs_where_the_rules_are_written() {
-    // `selftest.sh` asserted `[ -x evals/run.sh ]` in the installed repo. The
-    // runner is now the binary, so what has to land in the target repo is the
-    // eval directory and a gate that is reachable from it.
     let repo = Repo::new();
     repo.init_harness("");
     let readme = read(&repo.root.join("evals/README.md"));
     assert!(readme.contains("harness eval --gate"), "{readme:.400}");
 
-    // reachable, not merely documented: the gate refuses this repo's own
-    // candidate rule for the right reason rather than 'no such command'
+    // reachable, not merely documented: the gate must refuse this repo's own candidate rule
     let (code, _, stderr) = harness(&repo.root, &["eval", "--gate", "a-candidate-rule"]);
     assert_eq!(code, 2, "{stderr}");
     assert!(stderr.contains("no ablate.sh"), "{stderr}");
@@ -204,18 +179,15 @@ fn the_driver_names_a_commit_on_the_round_that_no_task_claims() {
     let (code, out) = script(&driver, fires.path(), &["--unlabelled"]);
     assert_eq!(code, 0, "{out}");
     let findings: Vec<&str> = out.lines().filter(|l| l.starts_with("FINDING ")).collect();
-    // exactly one, and it names the commit by subject rather than merely counting
     assert_eq!(findings.len(), 1, "{out}");
     assert!(findings[0].ends_with(" tidy the thing"), "{}", findings[0]);
 
-    // and a round whose every commit names a task is silent
     let quiet = history(&["feat: T-001 the work", "verify: T-001 verdict"]);
     let (code, out) = script(&driver, quiet.path(), &["--unlabelled"]);
     assert_eq!(code, 0, "{out}");
     assert_eq!(out.lines().filter(|l| l.starts_with("FINDING ")).count(), 0);
 }
 
-/// The history `selftest.sh` builds: rounds, and a verifier that never refused.
 const NO_REJECTION: [&str; 8] = [
     "init",
     "chore(dogfood): install the harness",
@@ -247,8 +219,6 @@ fn the_bootstrap_record_is_derived_from_git() {
     ]);
     let fixture = history(&subjects);
 
-    // three rounds, read out of a repository whose history was written a
-    // moment ago: the record is derived rather than transcribed
     let (code, out) = script(&bootstrap, fixture.path(), &[]);
     assert_eq!(code, 0, "{out}");
     assert_eq!(
@@ -260,7 +230,6 @@ fn the_bootstrap_record_is_derived_from_git() {
     let (code, out) = script(&bootstrap, fixture.path(), &["--check"]);
     assert_eq!(code, 0, "{out}");
 
-    // and --check passes on this package's own history
     let (code, out) = script(&bootstrap, &repo_root(), &["--check"]);
     assert_eq!(code, 0, "{out}");
 }
@@ -270,10 +239,7 @@ fn docs_demo_drives_one_loop_iteration_end_to_end_and_deletes_what_it_made() {
     let (code, out) = script(&repo_root().join("docs/demo.sh"), &repo_root(), &[]);
     assert_eq!(code, 0, "{out}");
 
-    // The STAGE SEQUENCE, in order and unsorted: an iteration that printed a
-    // verdict without an implement stage, or printed them the other way round,
-    // is not the run README.md describes. Exit status alone would go green on
-    // a demo that printed nothing (LEARNINGS.md, zero-as-pass).
+    // exit code alone would pass on a demo that printed nothing; check the stage sequence too
     let seen: Vec<&str> = out
         .lines()
         .filter_map(|l| {
@@ -294,9 +260,6 @@ fn docs_demo_drives_one_loop_iteration_end_to_end_and_deletes_what_it_made() {
         "{out}"
     );
 
-    // "it must leave the machine as it found it": the demo prints the
-    // directory it made, and an extraction that found no path must read as its
-    // own absence rather than as a pass.
     let made = out
         .lines()
         .find_map(|l| l.strip_prefix("== install into a throwaway repo  ("))
@@ -305,8 +268,6 @@ fn docs_demo_drives_one_loop_iteration_end_to_end_and_deletes_what_it_made() {
     assert!(!Path::new(made).exists(), "{made} was left behind");
 }
 
-/// Every key of a `test-hashes.json` whose file no longer hashes to its
-/// recorded digest.
 fn hash_mismatches(root: &Path) -> Vec<String> {
     let path = root.join("test-hashes.json");
     let Ok(text) = fs::read_to_string(&path) else {
@@ -333,9 +294,6 @@ fn hash_mismatches(root: &Path) -> Vec<String> {
 
 #[test]
 fn every_file_test_hashes_covers_still_hashes_to_its_recorded_digest() {
-    // Asserted FIRING first: `test-hashes.json` is INSTANCE state and the
-    // package tree carries none, so on this branch the scan below reads an
-    // absent file. A check that cannot fail is not a check.
     let fixture = tempfile::tempdir().expect("tempdir");
     fs::write(fixture.path().join("covered.txt"), "the real bytes").expect("write");
     fs::write(
@@ -348,10 +306,6 @@ fn every_file_test_hashes_covers_still_hashes_to_its_recorded_digest() {
     assert_eq!(hash_mismatches(&repo_root()), Vec::<String>::new());
 }
 
-/// One job's own block out of a workflow file: the lines after `  <key>:` up
-/// to the next line at exactly two spaces of indent. An absent or renamed job
-/// yields an empty block, so every token derived from it reads as its own
-/// absence rather than as a silent pass.
 fn job_block(workflow: &str, key: &str) -> String {
     let start = format!("  {key}:");
     let mut inside = false;
@@ -362,8 +316,7 @@ fn job_block(workflow: &str, key: &str) -> String {
             continue;
         }
         if inside {
-            // the block ends at the next job key, and at the comment that
-            // introduces one: every comment inside a job is indented deeper
+            // ends at the next job key or a top-level comment; comments inside a job are indented deeper
             if re(r"^  [a-z#]").is_match(line) {
                 inside = false;
                 continue;
@@ -375,7 +328,6 @@ fn job_block(workflow: &str, key: &str) -> String {
     out
 }
 
-/// The runners a job's `os:` matrix lists, sorted.
 fn matrix_os(block: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut inside = false;
@@ -395,9 +347,7 @@ fn matrix_os(block: &str) -> Vec<String> {
     out
 }
 
-/// Does this block invoke the floor? `^[^#]*` so a line of the workflow's own
-/// prose cannot stand in for the thing it describes, and not on a `name:`,
-/// because a step label mentioning the floor is a label, not an invocation.
+// `^[^#]*` excludes commented-out lines; skips `name:` so a step label isn't mistaken for an invocation
 fn invokes_floor(block: &str) -> bool {
     block.lines().any(|l| {
         let before_comment = l.split('#').next().unwrap_or("");
@@ -406,8 +356,6 @@ fn invokes_floor(block: &str) -> bool {
     })
 }
 
-/// `if:` and `continue-on-error:` at either depth: a job that never runs
-/// asserts nothing, and one whose failure is a warning asserts nothing either.
 fn switched_off(block: &str) -> usize {
     let off = re(r"^\s*(-\s+)?(if|continue-on-error):");
     block.lines().filter(|l| off.is_match(l)).count()
@@ -420,18 +368,13 @@ fn ci() -> String {
 #[test]
 fn ci_runs_the_floor_on_a_gnu_and_a_bsd_userland() {
     let block = job_block(&ci(), "floor");
-    // macos-latest is BSD sed, ubuntu-latest is GNU sed, and both parser
-    // defects this package has had were that difference.
+    // macos-latest is BSD sed, ubuntu-latest is GNU sed; that difference has broken parsing before
     assert_eq!(matrix_os(&block), vec!["macos-latest", "ubuntu-latest"]);
     assert!(invokes_floor(&block), "{block}");
     assert_eq!(switched_off(&block), 0, "{block}");
-    // HARNESS_EVALS asserted ABSENT, whole-file: the evals spawn a real agent,
-    // and a CI job holding a model credential is the blast radius this package
-    // argues against. Whole-file, because scoped to the job it would miss the
-    // variable set at workflow top level.
+    // whole-file, not job-scoped: HARNESS_EVALS set at workflow top level would be missed otherwise
     assert!(!re(r"(?m)^[^#]*HARNESS_EVALS").is_match(&ci()));
 
-    // and the reading reports absence: a renamed job yields an empty block
     assert_eq!(
         matrix_os(&job_block(&ci(), "no-such-job")),
         Vec::<String>::new()
@@ -441,10 +384,7 @@ fn ci_runs_the_floor_on_a_gnu_and_a_bsd_userland() {
 
 #[test]
 fn ci_runs_the_floor_with_the_driver_reaching_the_artifact() {
-    // Until ci.yml carried a job that sets HARNESS_DRIVER, the only assertion
-    // that touched the built artifact ran when the author remembered a flag
-    // and never otherwise. Read by VALUE, not by presence: `HARNESS_DRIVER: ''`
-    // is the token present and the feature off.
+    // read by VALUE not presence: `HARNESS_DRIVER: ''` is present but the feature is off
     let set = re(r#"(?m)^[^#]*HARNESS_DRIVER:\s*['"]?[^\s'"]"#);
     let block = job_block(&ci(), "driver");
     assert!(!block.is_empty(), "no driver job in ci.yml");
@@ -452,9 +392,6 @@ fn ci_runs_the_floor_with_the_driver_reaching_the_artifact() {
     assert!(invokes_floor(&block), "{block}");
     assert_eq!(switched_off(&block), 0, "{block}");
 
-    // Asserted FIRING, not merely passing on a file that happens to be right:
-    // the same readings over four fixtures, each an ablation the row cares
-    // about. Every token has both of its readings somewhere here.
     let no_job = "jobs:\n  floor:\n    steps:\n      - run: ./selftest.sh\n";
     let no_var = "jobs:\n  driver:\n    steps:\n      - name: the floor, with the driver reaching the artifact\n        env:\n          HARNESS_DRIVER: ''\n        run: ./selftest.sh\n";
     let switched = "jobs:\n  driver:\n    if: false\n    steps:\n      - env:\n          HARNESS_DRIVER: '1'\n        run: ./selftest.sh\n";
@@ -477,9 +414,7 @@ fn ci_runs_the_floor_with_the_driver_reaching_the_artifact() {
 
 #[test]
 fn every_github_action_is_pinned_to_a_commit_sha() {
-    // A tag moves and a SHA does not, so a `uses:` pinned to a tag is an
-    // unreviewed third party running with the workflow's token. Every one
-    // carries its version in a trailing comment.
+    // a tag can move; only a full SHA pin is immutable, so every `uses:` must be SHA-pinned
     let uses = re(r"(?m)^\s*(-\s+)?uses:");
     let pinned = re(r"uses:\s*[^@\s]+@[0-9a-f]{40}\s+#\s*\S");
     let unpinned = |text: &str| -> Vec<String> {
@@ -501,8 +436,6 @@ fn every_github_action_is_pinned_to_a_commit_sha() {
         );
     }
 
-    // Asserted FIRING: a tag pin and a bare SHA with no trailing comment,
-    // beside one correctly pinned line.
     let fixture = "\
       - uses: actions/checkout@v7.0.1\n\
       - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc\n\
@@ -512,10 +445,7 @@ fn every_github_action_is_pinned_to_a_commit_sha() {
 
 #[test]
 fn the_skill_hook_fires_on_a_headless_lane() {
-    // The role prompts name skills and a headless lane may ignore them; the
-    // only thing that reaches one every turn is a hook the install writes into
-    // the repo. `--adapter claude` writes it as `UserPromptSubmit`, not
-    // `SessionStart`: SessionStart fires once and decays as the context grows.
+    // UserPromptSubmit, not SessionStart: SessionStart fires once and decays as context grows
     let repo = Repo::new();
     init::install(
         &repo.root,
@@ -531,9 +461,7 @@ fn the_skill_hook_fires_on_a_headless_lane() {
     let on_prompt = settings["hooks"]["UserPromptSubmit"].to_string();
     assert!(on_prompt.contains("harness hook skills"), "{on_prompt}");
 
-    // It reports and never blocks -- refusal is the gates' job -- and its
-    // stdout carries every declared skill. The COUNT is asserted, so a skill
-    // list emptied to make this pass is the thing that fails it.
+    // count is asserted so an emptied skill list can't trivially pass this
     let (code, stdout, stderr) = harness(&repo.root, &["hook", "skills"]);
     assert_eq!(code, 0, "{stderr}");
     let cfg = harness::config::load(&repo.root).expect("config");
@@ -549,9 +477,7 @@ fn the_skill_hook_fires_on_a_headless_lane() {
 
 #[test]
 fn no_role_prompt_carries_an_incident_narrative() {
-    // A role prompt is an instruction, not a post-mortem. Dated incidents,
-    // task ids and reproduction stories are evidence for a human reading the
-    // repo; in a prompt they are tokens the model pays for on every stage.
+    // role prompts are instructions, not post-mortems; dated incidents cost tokens on every stage
     let narrative = re(
         r"(?i)[0-9]{4}-[0-9]{2}-[0-9]{2}|TASKS\.md T-[0-9]|reproduced (on |by )?[0-9]{4}|agentskills\.io",
     );
@@ -574,9 +500,6 @@ fn no_role_prompt_carries_an_incident_narrative() {
 
 #[test]
 fn no_shipped_file_carries_rhetorical_filler() {
-    // This is a public repository. The patterns below are rhetoric, not
-    // information: antithesis, appeals to the point, and self-congratulation.
-    // Every one of them can be replaced by the fact it was decorating.
     let filler = re(
         r"(?i)the whole point|that is the trick|is the whole |beautifully|elegantly|, it is one |extra steps|which is the point|the honest argument|is not a [a-z]+, it is",
     );
@@ -632,10 +555,7 @@ fn every_shipped_script_is_shfmt_clean() {}
 #[test]
 #[ignore = "installs four repos and drives four iterations; run with --ignored"]
 fn the_package_driver_reports_shortfalls_as_finding_lines() {
-    // What is asserted is the INSTRUMENT: it reached the artifact (rc 0) and
-    // everything it said was a finding -- never a verdict, a pass or a fail.
-    // Deliberately NOT "it found at least one thing": that would assert the
-    // harness stays broken.
+    // deliberately not asserting findings.len() > 0 -- that would require the harness to stay broken
     let (code, out) = script(&repo_root().join("driver.sh"), &repo_root(), &[]);
     assert_eq!(code, 0, "{out}");
     let stray: Vec<&str> = out
@@ -644,9 +564,7 @@ fn the_package_driver_reports_shortfalls_as_finding_lines() {
         .collect();
     assert_eq!(stray, Vec::<&str>::new());
 
-    // One FINDING is one proposed block, so a finding the operator cannot open
-    // is a task nobody can act on. Every sha the driver prints has to resolve
-    // HERE: `drive()` works in a `mktemp -d` that is removed before it prints.
+    // every sha printed must resolve in this repo -- drive() works in a mktemp dir removed before it prints
     let sha = re(r"^FINDING [^:]*: ([0-9a-f]+) ");
     for line in out.lines() {
         let Some(caps) = sha.captures(line) else {

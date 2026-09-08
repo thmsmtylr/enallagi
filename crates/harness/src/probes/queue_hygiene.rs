@@ -1,5 +1,4 @@
-//! The queue read against itself: a repeated id, a missing status, a blocker no
-//! block defines, and a done block whose scope matches nothing.
+//! The queue read against itself: a repeated id, a missing status, an undefined blocker, or a done block whose scope matches nothing.
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
@@ -52,7 +51,6 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             }
         }
 
-        // only on a done block: an unfinished task's scope names the files it will create
         if status.as_deref() != Some("done") {
             continue;
         }

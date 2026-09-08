@@ -10,8 +10,6 @@ pub struct Untested {
     pub message: String,
 }
 
-/// The row identity travels with the message: `queue-uncovered` asks which
-/// criterion, not just where.
 pub fn untested_rows(ctx: &ProbeCtx) -> Res<Vec<Untested>> {
     let src = &ctx.cfg.layout.source_root;
     let mut out = Vec::new();

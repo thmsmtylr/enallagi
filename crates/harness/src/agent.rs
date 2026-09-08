@@ -1,5 +1,4 @@
-//! agent: adapter presets — one static TOML file per supported coding agent,
-//! embedded into the binary and parsed on demand.
+//! Adapter presets: one static TOML file per supported coding agent, embedded into the binary and parsed on demand.
 
 use crate::config::AgentConfig;
 use crate::events::{Kind, Writer};
@@ -86,9 +85,6 @@ const PRESET_FILES: &[(&str, &str)] = &[
     ("pi", include_str!("../adapters/presets/pi.toml")),
 ];
 
-/// Parses the embedded preset files. A malformed embedded file is a build
-/// defect, not a runtime condition, so this panics (via `expect`) rather
-/// than returning a `Result`.
 pub fn presets() -> Presets {
     PRESET_FILES
         .iter()
@@ -99,16 +95,12 @@ pub fn presets() -> Presets {
         .collect()
 }
 
-/// One resolved invocation: the argv to run, and the preset it came from with
-/// any per-role `usage` override already folded in.
 pub struct Resolved {
     pub argv: Vec<String>,
     pub preset: Preset,
 }
 
-/// A hand-written `command` is its own truth about which tokens it uses, so
-/// its cap is read back off the argv rather than inherited from a preset that
-/// no longer describes it.
+// a hand-written command's cap is read back off its argv, never inherited from a preset it no longer matches
 fn cap_of(argv: &[String]) -> TurnCap {
     if argv.iter().any(|w| w.contains("{timeout}")) {
         TurnCap::Time
@@ -119,9 +111,7 @@ fn cap_of(argv: &[String]) -> TurnCap {
     }
 }
 
-/// Removes the word holding `token` and the flag in front of it. A cap the
-/// agent cannot take is not passed as an empty string; the flag goes with it,
-/// because `--max-turns` with nothing after it is a usage error.
+// removes the flag along with its value -- `--max-turns` with nothing after it is a usage error
 fn drop_token(argv: &mut Vec<String>, token: &str) {
     if let Some(i) = argv.iter().position(|w| w.contains(token)) {
         argv.remove(i);
@@ -131,8 +121,6 @@ fn drop_token(argv: &mut Vec<String>, token: &str) {
     }
 }
 
-/// The preset for `role`: the role's override first, then `[agent]`. `custom`
-/// has no preset file, so it needs a `command` to be anything at all.
 pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resolved, AgentError> {
     let over = cfg.roles.get(role);
     let name = over
@@ -199,9 +187,7 @@ pub struct UsageValues {
     pub turns: Option<u64>,
 }
 
-/// Cost and tokens come out of whatever the agent printed last. Agents stream
-/// one JSON object per line and put the totals in the final one, so the last
-/// line that parses as an object wins and every path is read from it.
+// agents stream one JSON object per line with totals in the last one, so the last parseable line wins
 pub fn extract_usage(output: &str, paths: &UsagePaths) -> UsageValues {
     let mut values = UsageValues::default();
     let Some(last) = output.lines().rev().find_map(|line| {
@@ -223,10 +209,7 @@ pub fn extract_usage(output: &str, paths: &UsagePaths) -> UsageValues {
     values
 }
 
-/// "You've hit your session limit - resets 12:40am (Australia/Melbourne)".
-/// Without this the loop counts an exhausted agent as a finished iteration and
-/// burns the rest of the run doing nothing. The extra minute is slack against
-/// a clock that disagrees with the vendor's.
+// without this a session-limit notice reads as a finished iteration and burns the rest of the run doing nothing
 pub fn seconds_until_reset(notice: &str, now: jiff::Zoned) -> Option<u64> {
     static RESET: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let re = RESET.get_or_init(|| {
@@ -277,18 +260,12 @@ pub struct StageResult {
 }
 
 const POLL: Duration = Duration::from_millis(200);
-/// How long a SIGTERM gets to be honoured before the child is killed outright.
+// how long a SIGTERM gets to be honoured before the child is killed outright
 const GRACE: Duration = Duration::from_secs(10);
-/// A reset further out than this is not a limit worth waiting for. A notice
-/// whose reset has already passed rolls to the same time tomorrow, which is
-/// how a stale line becomes a day-long sleep that only the STOP file ends.
+// a stale reset rolls to the same time tomorrow, so a further-out one isn't worth a day-long sleep
 const MAX_WAIT: u64 = 6 * 3600;
 
-/// Runs one stage. A session limit is a notice with a reset time in it -- the
-/// words alone are not one, since a stage working on this file quotes them --
-/// so a retry needs both the pattern and a parseable reset, and it happens at
-/// most twice: an agent that prints the notice forever would hold the run
-/// forever.
+// retried at most twice: an agent that prints the limit notice forever would hold the run forever
 pub fn spawn(
     s: &StageSpawn,
     events: &mut Writer,
@@ -296,9 +273,7 @@ pub fn spawn(
     rate_limit: &Regex,
 ) -> Result<StageResult, AgentError> {
     let mut attempt = 0u32;
-    // One clock for the stage, not per attempt: the retries and the waits
-    // between them are time the run has spent, and this is what a seconds
-    // budget is measured against.
+    // one clock for the whole stage, not per attempt: retries and waits count against the seconds budget
     let started = Instant::now();
     loop {
         let (exit, output, timed_out) = run_once(s, events)?;
@@ -350,9 +325,7 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         .argv
         .iter()
         .map(|word| {
-            // The prompt goes in last, one pass each: a prompt that quotes
-            // `{turns}` or `{prompt}` -- and a role prompt about this file
-            // will -- must reach the agent as the characters the role wrote.
+            // prompt substituted last, one pass each: a prompt that quotes {turns} or {prompt} must reach the agent verbatim
             let word = word.replace("{turns}", &turns);
             let word = match &timeout {
                 Some(t) => word.replace("{timeout}", t),
@@ -373,8 +346,7 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         .stderr(Stdio::piped())
         .spawn()?;
 
-    // stdout and stderr interleave into one buffer: most presets put their
-    // progress on stderr, and the gates read the pair as one stream.
+    // stdout and stderr interleave into one buffer: most presets put progress on stderr and gates read one stream
     let buffer = Arc::new(Mutex::new(String::new()));
     let mut readers = Vec::new();
     if let Some(out) = child.stdout.take() {
@@ -459,8 +431,7 @@ fn drain<R: Read + Send + 'static>(
     })
 }
 
-/// At most one `stage.output` a second: the TUI redraws off these, and a
-/// chatty agent would otherwise write more event lines than output lines.
+// at most one stage.output a second, or a chatty agent writes more event lines than the TUI can redraw off
 fn flush(buffer: &Mutex<String>, sent: &mut usize, stage: &str, events: &mut Writer) {
     let chunk = match buffer.lock() {
         Ok(text) => {
@@ -690,11 +661,8 @@ mod tests {
         );
     }
 
-    /// A stub that prints a session-limit notice whose reset is `bsd`/`gnu`
-    /// ahead, computed at run time. A notice is only a limit while its reset
-    /// is still ahead, so a fixed timestamp would be in the past by the second
-    /// retry and roll to the next day -- a real day-long sleep, not a test.
-    /// BSD `date` first, GNU second, so it runs on macOS and Linux.
+    // reset computed at run time, not fixed: a fixed timestamp would be in the past by the second retry
+    // BSD `date` first, GNU second, so this runs on both macOS and Linux
     fn limit_notice(bsd: &str, gnu: &str) -> String {
         const FMT: &str = "'+hit your session limit resets %I:%M%p (UTC)'";
         format!("date -u -v+{bsd} {FMT} 2>/dev/null || date -u -d '{gnu}' {FMT}")
@@ -779,8 +747,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = crate::config::load(dir.path()).unwrap().agent;
         cfg.preset = "gemini".into();
-        // gemini caps turns in its own config, so the preset's own argv has no
-        // {turns} to keep -- but a command that spells one out means it.
         cfg.command = Some(vec![
             "mytool".into(),
             "--turns".into(),

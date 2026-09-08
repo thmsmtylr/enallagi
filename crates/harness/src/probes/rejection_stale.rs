@@ -1,6 +1,3 @@
-//! A block carrying a rejection that is not back in the queue, and a block
-//! parked at `needs-spec`.
-
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
 

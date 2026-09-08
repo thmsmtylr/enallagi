@@ -133,8 +133,7 @@ fn force_back(
                         .push(format!("{task}: the queue was not committed: {err}"));
                 }
             }
-            // The queue still says `done`, so a `task.status` here would be a status change the
-            // file does not carry. The refusal is the warning; the gate still fails.
+            // the queue still says done, so a task.status event here isn't a change the file carries
             Err(err) => {
                 ctx.warnings
                     .push(format!("{task}: TASKS.md could not be rewritten: {err}"));
@@ -152,9 +151,7 @@ fn force_back(
     fail(reason)
 }
 
-// `verifier-not-implementer`: the task was `ready` when the implement stage started, so `done`
-// now was written by the agent whose work it is. Forced back, and the rest of the round skipped
-// -- there is nothing at review to verify.
+// a done written by the implementer itself (not the verifier) is forced back to ready; nothing left to verify
 fn implementer_not_done(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -179,8 +176,7 @@ fn implementer_not_done(ctx: &mut GateCtx) -> GateOutcome {
     }
 }
 
-// The verifier writes its verdict into the working tree and stops. Nothing else commits it, so a
-// rejection could otherwise sit uncommitted until a human noticed.
+// nothing else commits the verifier's verdict; an uncommitted rejection could otherwise sit unnoticed
 fn commit_verdict(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -208,9 +204,7 @@ fn commit(ctx: &mut GateCtx, paths: &[&str], msg: &str) -> GateOutcome {
     }
 }
 
-// Nothing between "the verifier wrote done" and "TASKS.md says done" ever executed a command, so
-// a false VERIFIED was indistinguishable from a real one. This runs the gate and forces a `done`
-// the tree cannot support back to `ready`.
+// without this a false VERIFIED (nothing ran to check it) was indistinguishable from a real one
 fn verdict(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -221,9 +215,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         Ok(_) => {}
     }
 
-    // A lane that never commits leaves the work in the tree and the check is green either way, so
-    // the task reaches `done` with the implementation on no branch. STOP is the harness's own
-    // marker and never a lane's work.
+    // STOP is the harness's own marker, never a lane's work, so it's excluded from the uncommitted count
     let left = porcelain(ctx.root)
         .into_iter()
         .filter(|l| !l.ends_with(" STOP"))
@@ -267,9 +259,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
     )
 }
 
-// The iteration's own commits, diffed against the task's `scope:` globs. It also routes the three
-// loops: a diff touching the harness under a task that did not declare `rows: none — harness` is
-// a product task editing the measure of its own product lever.
+// diffs the iteration's own commits against the task's scope: globs; also routes the three loops via rows: none — harness
 fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -291,16 +281,10 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         if BOOKKEEPING.contains(&f.as_str()) {
             continue;
         }
-        // test-hashes.json and harness.lock are exempt from BOTH axes when every key they re-cut
-        // names a file the scope line already covers: the keys are the thing being authorised, so
-        // the file itself never needs naming. Clearing only the harness axis moved the deadlock
-        // rather than lifting it -- no task names test-hashes.json on its scope line, so the file
-        // came back as out_of instead.
+        // test-hashes.json/harness.lock are exempt on both axes when every key they re-cut is in scope
         if let Some(key_re) = recut_keys_pattern(&f) {
             let keys = recut_keys(ctx.root, &base, &f, key_re);
             if !keys.is_empty() {
-                // A hash key is a path already. A lock key is a skill id, and it is in scope when
-                // the directory that skill is vendored into is.
                 let skills = skills_dir_for(ctx.cfg);
                 let as_path = |k: &str| match f.as_str() {
                     "harness.lock" => format!("{skills}/{k}/SKILL.md"),
@@ -314,14 +298,11 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
                 if off.is_empty() {
                     continue;
                 }
-                // The key is what was authorised, so the rejection names it rather than leaving
-                // the lane to diff the file itself.
                 let named = format!("{f} ({})", off.join(" "));
                 harness_hit.push(named.clone());
                 out_of.push(named);
                 continue;
             }
-            // A recut file whose keys could not be read is judged like any other path.
         }
         if is_harness_path(ctx.cfg, &f) {
             harness_hit.push(f.clone());
@@ -335,9 +316,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     if rows.contains("none") && rows.contains("harness") {
         harness_hit.clear();
     }
-    // The baseline only ever shrinks. A harness task may edit it -- that is what clearing an
-    // inherited failure looks like -- but a line ADDED is a red check made green by hand, under
-    // any rows: value.
+    // the baseline only ever shrinks; a line ADDED is a red check made green by hand, whatever rows: says
     let grew = git(ctx.root, &["diff", &base, "HEAD", "--", ".check-baseline"])
         .map(|d| {
             d.lines()
@@ -488,9 +467,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
             return CheckReport {
                 red: true,
                 unnamed: true,
-                // the one sentinel `probes` also writes, so a caller turning
-                // this report into a `CheckOutcome` can tell "never started"
-                // from "started and came back red"
+                // the one sentinel `probes` also writes, so a caller can tell "never started" from "started and red"
                 output: format!("the check could not be run: {err}"),
                 ..CheckReport::default()
             };
@@ -508,8 +485,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         };
     }
 
-    // One failure name per line, extracted with the project's own pattern. A pattern that does not
-    // compile names nothing, which is the fail-closed answer rather than a crash.
+    // a pattern that doesn't compile names nothing -- fail closed, not a crash
     let mut names: Vec<String> = match regex::Regex::new(&cfg.check.fail_name) {
         Ok(re) => output
             .lines()
@@ -580,8 +556,7 @@ fn check_gate(ctx: &mut GateCtx) -> GateOutcome {
     ))
 }
 
-// A fix that needs the spec or the contract is neither a promotion nor a kill: the adjudicator
-// leaves the block at proposed and prints a line beginning HALT that names it. The run stops.
+// a fix needing the spec or contract is neither a promotion nor a kill; the adjudicator halts and the run stops
 fn adjudicator_halt(ctx: &mut GateCtx) -> GateOutcome {
     let Some(id) = halt_id(&ctx.stage_output) else {
         return pass("the adjudicator did not halt");
@@ -612,9 +587,7 @@ fn halt_id(output: &str) -> Option<String> {
         .find_map(|l| task.find(l).map(|m| m.as_str().to_string()))
 }
 
-// A dry round is one that leaves nothing a lane can legally take -- `ready_unattended` empty after
-// the pair. An empty queue on its own is not exhaustion; the pipeline's `end_after_dry_rounds`
-// decides when a run of them is.
+// an empty queue alone isn't exhaustion; pipeline's end_after_dry_rounds decides how many in a row is
 fn dry_round(ctx: &mut GateCtx) -> GateOutcome {
     match takeable(ctx.root, ctx.cfg) {
         Some(task) => {
@@ -1071,8 +1044,6 @@ mod tests {
 
     #[test]
     fn a_lock_recut_is_read_off_the_skill_ids() {
-        // A lock key is a skill id, and it is in scope through the directory that skill is
-        // vendored into -- `.claude/skills/<id>` under the default preset.
         let lock = |ids: &[&str]| {
             let mut text = "version = 1\n".to_string();
             for id in ids {
