@@ -29,7 +29,7 @@ archived: DECISIONS.md — full block at `git show f342583:TASKS.md`
 ## [T-006] .harness/RAILS.md:58 enforced by test-hashes.json, which does not exist
 scope: test-hashes.json
 blockedBy: T-005
-status: ready
+status: review
 probe: rail-unenforced
 rows: none — harness
 command: `harness probe`
@@ -50,6 +50,19 @@ notes: |
   hook refuses the edit tool on it (hooks.rs:93-96, "the reference itself"), so re-cut it from a
   shell (`shasum -a 256` into a redirect); a key added fresh needs no scope entry (gates.rs:300),
   and the verifier reads the diff.
+  2026-09-08 implementer: three keys added from the shell, the roles.rs key untouched. Red first:
+  `./target/debug/harness probe` → `PROBE hash-uncovered 1`, `FINDING hash-uncovered .harness/RAILS.md:58
+  ... names harness.toml and test-hashes.json has no key for it`; after the write → `PROBE rail-unenforced 0`,
+  `PROBE hash-uncovered 0`. Scrutinise: the three values are `shasum -a 256 harness.toml Cargo.toml
+  crates/harness/Cargo.toml` at c529b4d (b28d83ae…, 5f693c40…, 03fb9e7d…) and the floor test passes
+  against the repo (1 passed). Keys are sorted; the probe and floor test read a map, not an order.
+  Commands:
+    $ shasum -a 256 harness.toml Cargo.toml crates/harness/Cargo.toml   # values pasted into a heredoc > test-hashes.json
+    $ cargo test -p harness -q --test floor -- every_file_test_hashes_covers_still_hashes_to_its_recorded_digest
+    test result: ok. 1 passed; 0 failed; 0 ignored; 16 filtered out
+    $ cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo exit=$?
+    test result: ok. 190 passed; 0 failed; 1 ignored (+ 8, 5, 9, 15 (2 ignored), 21, 29, 27, 4 passed) → exit=0
+    $ git add test-hashes.json TASKS.md PROGRESS.md && git commit -m "feat(hashes): T-006 test-hashes.json covers harness.toml and the build config"
 
 ## [T-007] tdd is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
