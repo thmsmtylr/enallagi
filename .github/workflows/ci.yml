@@ -1,18 +1,11 @@
-# The floor, on a machine that is not the author's. Two runners on purpose: macos-latest ships
-# bash 3.2 and BSD sed, ubuntu-latest ships bash 5 and GNU sed, and both parser defects this
-# package has had were that difference. The matrix is the regression test for bugs already paid for.
-# The `rust` job runs the same two-runner matrix for the crate replacing this package: its own
-# `cargo test` on both userlands, not a re-check of the shell floor. `cross-build` proves the four
-# binaries this project ships at release actually compile, cross-compiled from Linux with zig.
-#
-# Every `uses:` is pinned to a 40-character commit SHA with its tag in a trailing comment, and
-# `selftest.sh::every github action is pinned to a commit sha` fails on any that is not. The SHAs
-# were resolved on 2026-09-04 with `gh api repos/<repo>/commits/<tag> --jq .sha`, and the
-# 2026-09-08 addition (the rust and cross-build jobs) the same way.
-#
-# HARNESS_EVALS is deliberately NOT set anywhere in this file: the evals spawn a real agent, and a
-# CI job holding a model credential is the blast radius this package argues against. Those
-# assertions report `skip`.
+# `shell` lints the scripts that remain (driver.sh, docs/*.sh, adapters/bun-turbo/*.sh, evals/*.sh)
+# with bash -n, shellcheck at full severity, and `docs/bootstrap.sh --check` against the whole log.
+# `driver` runs the ignored test that drives the release binary through a real install. `rust` runs
+# fmt, clippy at -D warnings and the workspace test suite on both userlands. `cross-build` proves the
+# four release targets compile. Every `uses:` is pinned to a 40-character commit SHA with its tag in
+# a trailing comment (`every_github_action_is_pinned_to_a_commit_sha`, crates/harness/tests/floor.rs).
+# HARNESS_EVALS is deliberately never set: the evals spawn a real agent, and a CI job holding a model
+# credential is the blast radius this project argues against.
 name: ci
 
 on:
@@ -26,15 +19,9 @@ permissions:
   contents: read
 
 jobs:
-  floor:
-    name: floor (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
+  shell:
+    name: shell
+    runs-on: ubuntu-latest
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -45,50 +32,20 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # preinstalled on the ubuntu image, absent from the macOS one
       - name: shellcheck is on the runner
-        run: command -v shellcheck || brew install shellcheck
+        run: command -v shellcheck || sudo apt-get install -y shellcheck
       - name: every script parses on this bash
         run: git ls-files '*.sh' | xargs -n1 bash -n
-      # full severity, no -S downgrade. .harness/** is install.sh's output, linted at its source.
       - name: shellcheck at full severity
-        run: git ls-files '*.sh' | grep -v '^\.harness/' | xargs shellcheck
-      - name: the queue parser answers its own fixtures
-        run: python3 harness/tasks.py --selftest
+        run: git ls-files '*.sh' | xargs shellcheck
       - name: the bootstrap record holds against this history
         run: ./docs/bootstrap.sh --check
-      - name: the floor
-        run: ./selftest.sh
 
-  # Its own job, as bats-core runs shfmt and shellcheck separately: a formatting failure never
-  # masks a correctness one. shfmt is not on either runner image; go is on the ubuntu one.
-  shfmt:
-    name: shfmt
-    runs-on: ubuntu-latest
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: every shipped script is shfmt clean
-        run: |
-          go install mvdan.cc/sh/v3/cmd/shfmt@v3.14.0
-          git ls-files '*.sh' | grep -v '^\.harness/' | xargs "$(go env GOPATH)/bin/shfmt" --diff
-
-  # Its own job for the same reason shfmt is: it installs five throwaway repos and drives five loop
-  # iterations through the installed package, so this job's own command takes 3:13.77 against the
-  # 2:05.57 the floor above takes without it (`time HARNESS_DRIVER=1 ./selftest.sh` and
-  # `time ./selftest.sh`, on the author's machine on this tree, 2026-09-06). `HARNESS_DRIVER=1` is
-  # set HERE and nowhere
-  # else in this file. Without it, `the package driver reports shortfalls as FINDING lines` — the
-  # only assertion in selftest.sh that reaches the built artifact rather than reading text — prints
-  # `skip` on every run, including every CI run, and a gate asserts what it EXECUTED.
-  # `selftest.sh::ci runs the floor with the driver reaching the artifact` fails if this job goes
-  # away, if its variable does, if the variable is set to the empty string, and if the job is left
-  # here but switched off with an `if:` — that last one is the shape T-004 was rejected for
-  # (`aff0b33`), where the row stays green while nothing runs.
+  # `the_package_driver_reports_shortfalls_as_finding_lines` is `#[ignore]`d because it installs a
+  # throwaway repo and drives the release binary through it; `--include-ignored driver` selects that
+  # one test by name and none of the other ignored tests (the retired shellcheck/shfmt stand-ins, the
+  # eval that needs HARNESS_EVALS). HARNESS_DRIVER=1 is set HERE and nowhere else in this file --
+  # without it the test still runs but skips the assertion that reaches the artifact.
   driver:
     name: driver
     runs-on: ubuntu-latest
@@ -96,19 +53,21 @@ jobs:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
-      # fetch-depth: 0 for the floor job's reason: the floor runs `docs/bootstrap.sh --check`
-      # (selftest.sh:574), which derives its record from the whole log and has none at depth 1.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - name: the floor, with the driver reaching the artifact
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: the driver reaches the built artifact
         env:
           HARNESS_DRIVER: '1'
-        run: ./selftest.sh
+        run: cargo test -p harness --test floor -- --include-ignored driver
 
-  # The crate's own floor: fmt, clippy at -D warnings, and its test suite, on both userlands
-  # for the same reason the `floor` job above is a matrix.
+  # fmt, clippy at -D warnings, and the workspace test suite, on both userlands: macos-latest and
+  # ubuntu-latest differ in their default toolchains and filesystem behaviour, and this is the only
+  # job here that runs the crate's tests.
   rust:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
