@@ -11,7 +11,7 @@ archived: DECISIONS.md — full block at `git show ec81489:TASKS.md`
 ## [T-002] the pipeline resolves and commits declared roles, and the immutable hook covers them
 scope: crates/harness/src/pipeline.rs, crates/harness/src/hooks.rs, crates/harness/src/roles.rs, crates/harness/src/gates.rs, crates/harness/tests/roles.rs, crates/harness/tests/loop.rs, README.md
 blockedBy: T-001
-status: review
+status: done
 rows: `tests/roles.rs::an_undeclared_role_falls_back_to_the_installed_or_embedded_file`, `tests/roles.rs::the_immutable_hook_refuses_an_edit_to_a_vendored_role`
 criteria:
   - before rendering a role stage, `pipeline` calls `roles::resolve` for the stage's role when a `[[role]]` declares it; the vendored file and `harness.lock` are committed in the same `chore(skills): vendor …` commit the pipeline already makes for skills (rename the message to `chore(vendor): …` and update the existing loop test that asserts it); an undeclared role takes the existing `role_source` path unchanged
@@ -41,6 +41,34 @@ notes: |
     test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
     git add crates/harness/src/pipeline.rs crates/harness/src/hooks.rs crates/harness/src/roles.rs crates/harness/src/gates.rs crates/harness/tests/roles.rs crates/harness/tests/loop.rs README.md TASKS.md PROGRESS.md
     git commit -m "feat(pipeline): T-002 a declared role is resolved and committed before its stage, and the lock covers it"
+  2026-09-08 verifier, at 83bc070 (T-002 is e0d0d34, parent 898d1eb; origin/main is the pre-port
+  tree, so the diff base is 898d1eb): VERIFIED.
+    git status --porcelain → empty; git diff 898d1eb e0d0d34 --stat → PROGRESS.md README.md TASKS.md
+    gates.rs hooks.rs pipeline.rs tests/loop.rs tests/roles.rs, all on scope: or bookkeeping; no
+    Cargo.toml, .harness, .check-baseline or test-hashes.json change (test-hashes.json does not exist)
+    PATH="$HOME/.cargo/bin:$PATH" cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check
+    → exit 0; 11 suites, passed=305 failed=0 ignored=3 (summed from the `test result` lines).
+    .check-baseline has no test lines; no failure names to match. The implementer's 301 reproduces
+    by delta: 297 at T-001 + 4 `#[test]` in 898d1eb..e0d0d34 = 301, + 4 in e0d0d34..HEAD = 305.
+    cargo test -p harness -q --test roles → 4 passed; --test loop a_fetched_skill → 1 passed.
+  Criteria: (1) pipeline.rs:585-599 resolves a declared role before role_source and halts under
+  `role`; commit_vendored writes `chore(vendor): <ids>`; loop.rs::a_fetched_skill_is_committed_before_the_stage_that_needs_it
+  moved the role source to vendor/roles/ and asserts the commit name, the role file in ls-files and
+  the lock entry, so it fails without the resolve. (2) gates.rs added_ids/recut_ids per lock table,
+  role_file() the one path spelling; unit tests scope_exempts_a_freshly_vendored_role_outside_scope
+  and scope_rejects_a_recut_role_outside_scope. (3) hooks.rs locked_hit walks lock.role with exact
+  path match; message "is locked by harness.lock" for both. (4) git diff 898d1eb e0d0d34 -- README.md
+  is the `[[role]]` block after `[[skill]]` and one sentence under Skills, nothing else. (5) above.
+  Probes (scratch, /tmp): `harness hook immutable` in a repo whose lock has one `[[role]]`: exit 2
+  for .harness/roles/implementer.md, its absolute form, ./-prefixed and ../-traversal forms; exit 0
+  for implementer.md.bak and verifier.md. `harness run 1` on a fixture-shaped repo with `[[role]]`
+  declared and vendor/roles/implementer.md absent: events.jsonl `"halt":"role"`, no spawn, no commit;
+  with it present: one commit `chore(vendor): implementer` carrying .harness/roles/implementer.md and
+  harness.lock, the run role file rendered from it, porcelain empty.
+  Ponytail: nothing significant. Minor: a failed vendor commit still halts under `skill` with the text
+  "vendored skills could not be committed" when the list holds a role (pipeline.rs:685); no test
+  covers the pipeline-level halt on a failed role resolve, only the probe above and roles.rs's unit
+  test of resolve. Friction line present, first occurrence.
 
 ## [T-003] no file tests/roles.rs for criterion tests/roles.rs::a_declared_role_is_fetched_vendored_and_committed_before_its_stage
 scope: crates/harness/src/probes/spec_untested.rs, crates/harness/tests/probes.rs
