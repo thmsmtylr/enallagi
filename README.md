@@ -214,6 +214,15 @@ different preset, command or model.
 Shipped: `tdd`, `ponytail`, `debugging`, `review-received`, `verify-before-done`,
 `review-requested`, `brainstorming`.
 
+**`[[role]]`** (none shipped)
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `name` | string, `^[a-z0-9-]+$` | required |
+| `source` | string (`github:owner/repo`, `git+file://`, `path:`) | required |
+| `path` | string, relative; the file is `<path>/<name>.md` | required |
+| `rev` | string, optional | none |
+
 ## Agent presets
 
 `agent.preset` selects one of thirteen (`crates/harness/adapters/presets/*.toml`), or `custom`
@@ -252,7 +261,9 @@ its own `timeout`.
 
 `--frozen` (or `CI` set in the environment) refuses to re-fetch a skill whose vendored hash no
 longer matches the lock, rather than silently re-vendoring it. `harness hook skills` prints every
-declared skill's id, why it is relied on, and its gate at the start of a turn.
+declared skill's id, why it is relied on, and its gate at the start of a turn. A `[[role]]` resolves
+the same way: fetched, vendored to `<harness_dir>/roles/<name>.md`, pinned under `[[role]]` in
+`harness.lock`, committed by the pipeline before its stage, and refused by `harness hook immutable`.
 
 ## Events
 

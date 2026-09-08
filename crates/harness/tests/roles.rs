@@ -4,6 +4,8 @@ use harness::agent::presets;
 use harness::config;
 use harness::events::{Kind, Log, Writer};
 use harness::fixture::Repo;
+use harness::hooks;
+use harness::pipeline::{self, RunOpts};
 use harness::roles;
 use harness::skills::{self, ResolveOpts, SkillError};
 use sha2::{Digest, Sha256};
@@ -141,4 +143,83 @@ fn a_role_whose_vendored_file_drifted_is_refused_under_frozen() {
         .expect("unfrozen refetches");
     assert_eq!(got[0].result, "fetched");
     assert_eq!(fs::read_to_string(&vendored).expect("restored"), BODY);
+}
+
+// one implement stage on a stub agent; the run renders <harness_dir>/run/roles/implementer.md before spawning
+fn pipeline_repo() -> Repo {
+    let repo = Repo::new();
+    repo.write(
+        ".harness/.gitignore",
+        "events.jsonl\n*.log\nlogs/\nloop.pid\nrun/\n",
+    );
+    let agent = repo.stub_agent("echo '{\"total_cost_usd\":0.1}'\n");
+    let check = repo.stub_check("exit 0\n");
+    let argv: Vec<String> = agent.iter().map(|a| format!("\"{a}\"")).collect();
+    let toml = format!(
+        "[agent]\npreset = \"custom\"\ncommand = [{}]\n\n[agent.usage]\ncost = \"total_cost_usd\"\n\n\
+         [check]\ncommand = \"{check}\"\n\n\
+         [[pipeline]]\nname = \"task\"\nwhen = \"queue.takeable\"\nstages = [\"implement\"]\n\n\
+         [[stage]]\nname = \"implement\"\nrole = \"implementer\"\nturns = 5\n",
+        argv.join(", ")
+    );
+    let skills = repo.local_skills(&toml);
+    repo.write("harness.toml", &format!("{toml}{skills}"));
+    repo.write(
+        "TASKS.md",
+        "## [T-001] do the thing\n\nscope: src/a.ts\nrows: none — harness\nstatus: ready\ncriteria:\n  - it happens\n",
+    );
+    repo.write("SPEC.md", "# spec\n");
+    repo.write("PROGRESS.md", "# progress\n");
+    repo.commit_all("harness");
+    repo
+}
+
+fn run_once(repo: &Repo) {
+    let opts = RunOpts {
+        max_iter: 1,
+        ..RunOpts::default()
+    };
+    pipeline::run(&repo.root, &opts, Box::new(|_| {})).expect("run");
+}
+
+#[test]
+fn an_undeclared_role_falls_back_to_the_installed_or_embedded_file() {
+    let installed = pipeline_repo();
+    installed.write(".harness/roles/implementer.md", BODY);
+    installed.commit_all("installed role");
+    run_once(&installed);
+    let rendered = installed.root.join(".harness/run/roles/implementer.md");
+    assert_eq!(fs::read_to_string(&rendered).expect("rendered"), BODY);
+    assert!(skills::read_lock(&installed.root)
+        .expect("lock")
+        .role
+        .is_empty());
+
+    let embedded = pipeline_repo();
+    run_once(&embedded);
+    let rendered = embedded.root.join(".harness/run/roles/implementer.md");
+    let text = fs::read_to_string(&rendered).expect("rendered");
+    assert!(text.contains("You implement ONE task"), "{text}");
+    assert!(!embedded.root.join(".harness/roles/implementer.md").exists());
+    assert!(skills::read_lock(&embedded.root)
+        .expect("lock")
+        .role
+        .is_empty());
+}
+
+#[test]
+fn the_immutable_hook_refuses_an_edit_to_a_vendored_role() {
+    let repo = Repo::new();
+    repo.write(
+        "harness.lock",
+        "version = 1\n\n[[role]]\nid = \"implementer\"\nsource = \"path:vendor\"\nsha256 = \"ab\"\n",
+    );
+    let input = |path: &str| format!(r#"{{"tool_input":{{"file_path":"{path}"}}}}"#);
+    let (code, msg) = hooks::immutable(&repo.root, &input(".harness/roles/implementer.md"));
+    assert_eq!(code, 2, "{msg}");
+    assert!(msg.contains("harness.lock"), "{msg}");
+    assert!(msg.contains("locked role `implementer`"), "{msg}");
+
+    let (code, msg) = hooks::immutable(&repo.root, &input(".harness/roles/verifier.md"));
+    assert_eq!(code, 0, "{msg}");
 }
