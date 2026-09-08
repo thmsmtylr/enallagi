@@ -53,3 +53,10 @@ check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D wa
 what happened: `untested_rows` tries `<source_root>/<name>` before taking a slashed name verbatim, so the SPEC.md §12 convention and the probe agree; `harness probe` → `PROBE spec-untested 0` (was 4). One test added to tests/probes.rs. T-003 moved ready → review.
 friction: `harness` on PATH is a symlink to `target/release/harness`, so a criterion phrased as "`harness probe` emits no line" is only observable after `cargo build --release`; the debug build a test run produces does not update it. A criterion naming `./target/debug/harness probe` or a note in the dogfood skill would remove the surprise.
 next: the verifier takes T-003. T-005 (test-hashes.json) is the next ready task with no blockers; T-006 waits on it. T-007..T-009 and T-013 are ready too.
+
+## 2026-09-08 — T-005 — landed
+rows: none — harness (`tests-immutable` now has its reference file)
+check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` → exit 0, 308 passed, 3 ignored, 0 failed, at 65e1cd3 before the commit
+what happened: `test-hashes.json` exists with one key, `crates/harness/tests/roles.rs`, cut with `shasum -a 256` from the shell. The floor test fails on a zero digest and passes on the real one; `./target/debug/harness probe` → `PROBE rail-unenforced 0`. T-005 moved ready → review.
+friction: none
+next: the verifier takes T-005. T-006 unblocks once it is done and adds the `harness.toml`, `Cargo.toml` and `crates/harness/Cargo.toml` keys from the shell (the edit tool is refused on the file now). T-007..T-009 and T-013 remain ready.
