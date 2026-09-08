@@ -213,7 +213,7 @@ id = "review-received"
 source = "github:obra/superpowers"
 path = "skills/receiving-code-review"
 rev = "v6.3.0"
-gate = "none"
+gate = "rejection-repeat"
 why = "a rejected task answers every rejection point before it is re-implemented"
 
 [[skill]]
