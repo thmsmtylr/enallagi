@@ -60,6 +60,10 @@ pub fn lock_path(root: &Path) -> PathBuf {
     root.join("harness.lock")
 }
 
+pub fn parse_lock(text: &str) -> Result<Lock, SkillError> {
+    toml::from_str(text).map_err(|e| SkillError::Lock(e.to_string()))
+}
+
 // a missing lock reads as empty, but an unparseable one is an error -- silently re-fetching over a corrupt pin defeats the pin
 pub fn read_lock(root: &Path) -> Result<Lock, SkillError> {
     let text = match fs::read_to_string(lock_path(root)) {
@@ -67,7 +71,7 @@ pub fn read_lock(root: &Path) -> Result<Lock, SkillError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Lock::default()),
         Err(e) => return Err(e.into()),
     };
-    toml::from_str(&text).map_err(|e| SkillError::Lock(e.to_string()))
+    parse_lock(&text)
 }
 
 pub fn write_lock(root: &Path, lock: &Lock) -> Result<(), SkillError> {

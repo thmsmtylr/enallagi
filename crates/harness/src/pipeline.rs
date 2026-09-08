@@ -649,7 +649,7 @@ impl<'a> Loop<'a> {
     }
 
     // "fetched" is the ordinary signal; the porcelain fallback also catches a vendored dir left
-    // untracked by an earlier run (e.g. one before this fix existed).
+    // untracked by an earlier run.
     fn skills_dirty(&self, resolved: &[skills::ResolvedSkill]) -> bool {
         if resolved.iter().any(|s| s.result == "fetched") {
             return true;
