@@ -17,7 +17,7 @@ archived: DECISIONS.md — full block at `git show b1cc210:TASKS.md`
 ## [T-003] no file tests/roles.rs for criterion tests/roles.rs::a_declared_role_is_fetched_vendored_and_committed_before_its_stage
 scope: crates/harness/src/probes/spec_untested.rs, crates/harness/tests/probes.rs
 blockedBy: none
-status: ready
+status: review
 probe: spec-untested
 rows: `tests/roles.rs::a_declared_role_is_fetched_vendored_and_committed_before_its_stage`, `tests/roles.rs::a_role_whose_vendored_file_drifted_is_refused_under_frozen`, `tests/roles.rs::an_undeclared_role_falls_back_to_the_installed_or_embedded_file`, `tests/roles.rs::the_immutable_hook_refuses_an_edit_to_a_vendored_role`
 command: `harness probe`
@@ -39,6 +39,21 @@ notes: |
   the probe's path rule, not the row: SPEC.md §12 says rows live under `crates/harness/`, harness.toml
   sets `source_root` to exactly that, and spec_untested.rs:17 takes any name with a `/` as
   repo-root-relative. T-004 was the same defect at SPEC.md:17 and was killed rather than carried twice.
+  2026-09-08 implementer: `untested_rows` (spec_untested.rs:17-22) now builds `<source_root>/<name>`
+  first and takes the name verbatim only when it has a `/` and that path is absent; a name with no
+  `/` resolves as before. New test `a_row_with_a_slash_resolves_under_source_root_before_the_repo_root`
+  in tests/probes.rs, red before (left: 1, right: 0), green after. Scrutinise: the seeded row
+  `src/thing.test.ts` still counts as untested under default `source_root = "src"` because
+  `src/src/thing.test.ts` does not exist, which is the fallback branch doing its job. `harness` on PATH
+  is a symlink to target/release, so `cargo build --release` was needed for `harness probe` to show it.
+  `./target/debug/harness probe` and `harness probe` (after release build) both → `PROBE spec-untested 0`,
+  `PROBE queue-uncovered 0`. `git diff --stat HEAD -- SPEC.md crates/harness/src/probes/queue_uncovered.rs`
+  → empty. `cargo test -p harness -q --test probes` → 27 passed. Check →
+  `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+  exit 0 (190+8+5+9+15+21+29+27+4 passed, 3 ignored, 0 failed) at a55bcf6 before the commit.
+  Committed: `git add crates/harness/src/probes/spec_untested.rs crates/harness/tests/probes.rs TASKS.md PROGRESS.md`
+  then `git commit -m "feat(probes): T-003 a row with a slash resolves under source_root first"`
+  (first commit e71e483 missed TASKS.md on a bad edit anchor; amended in place, nothing pushed).
 
 ## [T-005] .harness/RAILS.md:57 enforced by test-hashes.json, which does not exist
 scope: test-hashes.json

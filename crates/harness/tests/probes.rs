@@ -457,3 +457,24 @@ fn a_ceiling_with_no_kill_line_is_still_reported() {
     );
     assert_eq!(live(&run(&repo, &cfg)), 1);
 }
+
+#[test]
+fn a_row_with_a_slash_resolves_under_source_root_before_the_repo_root() {
+    let (repo, cfg) = seeded_with(
+        "[layout]\nsource_root = \"crate\"\ntest_file_suffix_re = '\\.rs'\ntest_decl_patterns = [\"fn {name}(\"]\n",
+    );
+    repo.write(
+        "SPEC.md",
+        "# SPEC\n\n## 11. Exit criteria\n\n| Criterion | Test |\n| --- | --- |\n| c | `tests/x.rs::t` |\n\n## 12. Notes\n",
+    );
+    let untested = |results: &[(String, ProbeResult)]| {
+        render(results)
+            .lines()
+            .filter(|l| l.starts_with("FINDING spec-untested SPEC.md:7 "))
+            .count()
+    };
+    assert_eq!(untested(&run(&repo, &cfg)), 1);
+    repo.write("crate/tests/x.rs", "#[test]\nfn t() {}\n");
+    let results = run(&repo, &cfg);
+    assert_eq!(untested(&results), 0, "{}", render(&results));
+}

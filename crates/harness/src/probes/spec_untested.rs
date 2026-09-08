@@ -14,10 +14,12 @@ pub fn untested_rows(ctx: &ProbeCtx) -> Res<Vec<Untested>> {
     let src = &ctx.cfg.layout.source_root;
     let mut out = Vec::new();
     for row in common::spec_rows(ctx)? {
-        let path = if row.name.contains('/') {
+        // SPEC.md §12: rows live under source_root, so a name with a slash is tried there first
+        let under_root = format!("{src}/{}", row.name);
+        let path = if row.name.contains('/') && !common::exists(ctx.root, &under_root) {
             row.name.clone()
         } else {
-            format!("{src}/{}", row.name)
+            under_root
         };
         let message = if !common::exists(ctx.root, &path) {
             format!("no file {path} for criterion {}::{}", row.name, row.test)
