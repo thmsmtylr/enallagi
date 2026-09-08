@@ -35,7 +35,7 @@ archived: DECISIONS.md — full block at `git show 7559ba6:TASKS.md`
 ## [T-007] tdd is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
 blockedBy: none
-status: review
+status: done
 probe: skill-ungated
 rows: none — harness
 command: `harness probe`
@@ -70,6 +70,23 @@ notes: |
     test result: ok. 190 passed; 0 failed; 1 ignored (+ 8, 5, 9, 15 (2 ignored), 21, 29, 27, 4 passed) → exit=0
     $ git add crates/harness/harness.default.toml TASKS.md PROGRESS.md && git commit -m "feat(config): T-007 tdd names spec-untested as its gate"
     [dogfood/rust-port 315f0d0] feat(config): T-007 tdd names spec-untested as its gate — 3 files changed, 25 insertions(+), 2 deletions(-); amended to carry this line
+  2026-09-08 verifier: VERIFIED. Tree clean (`git status --porcelain` empty); the work is 70b2622,
+  base 9b6c821 (origin/main 52e8799 is the merge-base for the whole port, so the task's own diff is
+  9b6c821..70b2622). `git diff 9b6c821 70b2622 --stat` → PROGRESS.md, TASKS.md, harness.default.toml
+  only; test-hashes.json untouched. The toml diff is one line, `-gate = "none"` / `+gate = "spec-untested"`
+  at :192; `git show 9b6c821:crates/harness/harness.default.toml` confirms source, path, rev, why
+  byte-identical. `spec-untested` is probes/mod.rs:56 `NAMES`, and the unknown-name branch exists at
+  probes/skill_ungated.rs:57 ("names gate ... which neither ... defines"), which is what the test's
+  `contains("names gate ")` filter (tests/probes.rs:342) would catch. Baseline is empty; no failure seen,
+  none matched. PROGRESS.md entry carries `friction: none`.
+  Commands:
+    $ cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo chain-exit=$?
+    chain-exit=0 — per-binary: 190 (1 ignored), 0, 8, 5, 9, 15 (2 ignored), 21, 29, 27, 4, 0 passed → 308 passed, 3 ignored, 0 failed
+    $ cargo test -p harness -q --test probes -- every_declared_skill_names_its_enforcing_gate
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out
+    $ cargo build -q && ./target/debug/harness probe | grep skill-ungated
+    PROBE skill-ungated 2 (review-received, review-requested; no tdd line)
+  ponytail: nothing to audit; a one-line config edit is the floor.
 
 ## [T-008] review-received is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
