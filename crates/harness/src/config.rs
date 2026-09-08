@@ -71,6 +71,8 @@ pub enum ConfigError {
     BadSkillPath { id: String, path: String },
     #[error("stage {stage}: timeout `{value}` is not <n>s, <n>m or <n>h")]
     BadTimeout { stage: String, value: String },
+    #[error("pipeline {pipeline}: when references probe `{probe}`, not one of {}", crate::probes::NAMES.join(", "))]
+    UnknownProbe { pipeline: String, probe: String },
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -316,8 +318,23 @@ pub fn validate(
         }
     }
     for p in &cfg.pipeline {
-        if let Err(e) = parse_when(&p.when) {
-            errs.push(e);
+        match parse_when(&p.when) {
+            Ok(pred) => {
+                // `!probe.x` still names a probe one level down
+                let mut cur = &pred;
+                while let Predicate::Not(inner) = cur {
+                    cur = inner;
+                }
+                if let Predicate::Probe(name) = cur {
+                    if !crate::probes::NAMES.contains(&name.as_str()) {
+                        errs.push(ConfigError::UnknownProbe {
+                            pipeline: p.name.clone(),
+                            probe: name.clone(),
+                        });
+                    }
+                }
+            }
+            Err(e) => errs.push(e),
         }
         for stage in &p.stages {
             if !stage_names.contains(stage.as_str()) {
@@ -731,6 +748,14 @@ mod tests {
     }
 
     #[test]
+    fn a_typoed_probe_name_is_refused_before_any_stage_runs() {
+        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        c.pipeline[0].when = "probe.typoed".into();
+        let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
+        assert!(errs.iter().any(|e| e.to_string().contains("typoed")));
+    }
+
+    #[test]
     fn no_turn_cap_and_no_timeout_is_refused() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
         c.agent.preset = "aider".into();
@@ -999,7 +1024,7 @@ mod tests {
 
     #[test]
     fn the_shipped_json_migrates_into_a_valid_config() {
-        let json = include_str!("../../../harness.default.json");
+        let json = include_str!("../tests/fixtures/harness.default.json");
         let (text, renamed) = migrate_json(json).unwrap();
         assert!(renamed.iter().any(|r| r == "skills -> skill"));
         assert!(renamed

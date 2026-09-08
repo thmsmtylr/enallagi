@@ -49,17 +49,14 @@ record with no refusals in it is a record of a loop that was not gating anything
 
 Measured, not asserted, against the Rust binary that replaced the bash package:
 
-- `cargo test --workspace -q` → 207 passed / 1 failed / 6 ignored across the workspace's six test
-  binaries. The one failure, `ci_runs_the_floor_on_a_gnu_and_a_bsd_userland`
-  (`crates/harness/tests/floor.rs`), asserts the `floor`/`shfmt` job shape that
-  `.github/workflows/ci.yml` retired in this same task; the test lives in `crates/`, out of scope
-  here (a parallel worktree owns it).
+- `cargo test -p harness -q 2>&1 | grep 'test result'` → 285 passed / 0 failed / 3 ignored, summed
+  across the crate's `test result:` lines (lib, main, seven integration files, doctests).
 - `target/release/harness probe`, run after `harness init` into a fresh, otherwise-empty git repo →
   exit 0. `spec-untested 1`, `queue-uncovered 1`, `rail-unenforced 2`, `hash-uncovered 1`,
   `skill-ungated 3`, `check-red 1` — all from the seeded templates' own unfilled placeholders
   (`src/thing.test.ts` named and absent, `test-hashes.json` unwritten, three `[[skill]]` entries
   still carrying `gate = "none"`, no check command configured). Every other text probe reports 0;
-  the five telemetry probes and `driver` report OFF — no `events.jsonl` yet, no `driverCommand`
+  the five telemetry probes and `driver` report OFF — no `events.jsonl` yet, no `driver_command`
   configured.
 - `./driver.sh` → `EXIT=0`, **no `FINDING` lines**. The four adversarial lane modes — work left
   uncommitted, no PROGRESS.md entry, an edit outside `scope:`, a red floor — are still caught,

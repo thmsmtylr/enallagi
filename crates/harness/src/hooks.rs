@@ -55,6 +55,8 @@ fn normalize(root: &Path, rel: &str) -> PathBuf {
     realpath_like(&joined)
 }
 
+// resolves symlinks on the longest existing ancestor only: a nonexistent tail (a file about to be
+// created) has nothing on disk to canonicalize, so it is appended to the resolved ancestor as-is
 fn realpath_like(p: &Path) -> PathBuf {
     let normalized = lexical_normalize(p);
     let mut existing = normalized.clone();

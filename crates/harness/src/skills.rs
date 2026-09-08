@@ -15,6 +15,8 @@ pub enum SkillError {
     BadSource { id: String, spec: String },
     #[error("skill id `{id}` must match ^[a-z0-9-]+$")]
     BadId { id: String },
+    #[error("skill {id}: path `{path}` must be relative and free of `..`")]
+    BadPath { id: String, path: String },
     #[error("skill {id} is not declared in harness.toml")]
     Undeclared { id: String },
     #[error("skill {id} is unresolved: {why}")]
@@ -175,6 +177,13 @@ pub fn resolve(
             .iter()
             .find(|s| &s.id == id)
             .ok_or_else(|| SkillError::Undeclared { id: id.clone() })?;
+        // same second lock on the door as valid_id: the path becomes a filesystem join below
+        if !valid_path(&decl.path) {
+            return Err(SkillError::BadPath {
+                id: id.clone(),
+                path: decl.path.clone(),
+            });
+        }
         let dir = base.join(id);
         let entry = lock.skill.iter().position(|e| &e.id == id);
 
@@ -368,18 +377,19 @@ fn clone(url: &str, rev: Option<&str>, dir: &Path) -> Result<(), SkillError> {
 fn clone_into(url: &str, rev: Option<&str>, parent: &Path, tmp: &Path) -> Result<(), SkillError> {
     let target = tmp.to_string_lossy().to_string();
     let Some(rev) = rev else {
-        git::git(parent, &["clone", "--depth", "1", url, &target])?;
+        // `--` stops a url or target that starts with `-` from being read as a flag
+        git::git(parent, &["clone", "--depth", "1", "--", url, &target])?;
         return Ok(());
     };
     if git::git_ok(
         parent,
-        &["clone", "--depth", "1", "--branch", rev, url, &target],
+        &["clone", "--depth", "1", "--branch", rev, "--", url, &target],
     ) {
         return Ok(());
     }
     // --branch takes a branch or a tag, never a commit sha
     let _ = fs::remove_dir_all(tmp);
-    git::git(parent, &["clone", url, &target])?;
+    git::git(parent, &["clone", "--", url, &target])?;
     git::git(tmp, &["checkout", "-q", rev])?;
     Ok(())
 }
@@ -715,6 +725,23 @@ mod tests {
         )
         .expect_err("bad id");
         assert!(matches!(err, SkillError::BadId { .. }));
+    }
+
+    #[test]
+    fn a_path_that_escapes_its_directory_is_refused_before_it_becomes_a_join() {
+        let repo = Repo::new();
+        let cfg = config("path:vendor/tdd", "../escape", None);
+        let mut w = writer(&repo.root);
+        let err = resolve(
+            &repo.root,
+            &cfg,
+            &preset("claude"),
+            &["tdd".to_string()],
+            &opts(&repo, false),
+            &mut w,
+        )
+        .expect_err("bad path");
+        assert!(matches!(err, SkillError::BadPath { .. }));
     }
 
     #[test]

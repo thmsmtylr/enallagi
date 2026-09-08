@@ -3,7 +3,7 @@
 use super::{common, ProbeCtx, ProbeResult};
 use std::process::Command;
 
-pub const OFF: &str = "no driverCommand in harness.toml, or HARNESS_DRIVER is unset. Nothing here exercised the built artifact.";
+pub const OFF: &str = "no driver_command in harness.toml, or HARNESS_DRIVER is unset. Nothing here exercised the built artifact.";
 
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
     let command = &ctx.cfg.layout.driver_command;

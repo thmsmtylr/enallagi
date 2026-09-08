@@ -4,7 +4,7 @@ An autonomous task loop for a coding agent, installed into any git repository. O
 linked binary: it reads a queue (`TASKS.md`), runs one task per fresh agent process through five
 separated roles, and re-derives every `done` from the tree rather than from what the agent said.
 No daemon, no service, no vendor lock: the agent is whatever headless command `harness.toml` names.
-Runtime dependencies: `git`, that agent CLI, and the check command `harness.toml` names.
+Runtime dependencies: `git`, `sh`, that agent CLI, and the check command `harness.toml` names.
 
 Targets `x86_64` and `aarch64` on `linux-musl` and `apple-darwin`.
 
@@ -50,8 +50,9 @@ next stage boundary (the dollar and token budgets need an `[agent.usage]` the pr
 fill, and the run halts if the budget is set and nothing was observed); the adjudicator halting on
 a fix that needs a human (`needs-spec`); a stage that could not start.
 
-`harness run` draws a TUI whenever stdout is a tty; `--no-tui` suppresses it, `--dry-run` runs the
-gates without committing, `--frozen` refuses rather than re-vendors a skill whose hash has moved.
+`harness run` draws a TUI whenever stdout is a tty; `--no-tui` suppresses it, `--dry-run` prints the
+plan and the probe output and spawns nothing — it runs no gates — `--frozen` refuses rather than
+re-vendors a skill whose hash has moved.
 
 ## What is enforced, and by what
 

@@ -104,6 +104,28 @@ fn no_token_survives_substitution() {
     }
 }
 
+// every seeded document must name the binary's own subcommands, never the shell scripts it replaced
+#[test]
+fn no_seeded_document_names_a_deleted_script() {
+    let repo = Repo::new();
+    with(&repo, &adapter("claude"));
+    let dead = regex::Regex::new(
+        r"loop\.sh|archive-done\.sh|probes\.sh|tasks\.py|install\.sh|selftest\.sh|harness\.json",
+    )
+    .expect("regex");
+    for rel in walk(&repo.root) {
+        let Ok(text) = fs::read_to_string(repo.root.join(&rel)) else {
+            continue;
+        };
+        assert!(
+            !dead.is_match(&text),
+            "{}: {:?}",
+            rel.display(),
+            dead.find(&text).map(|m| m.as_str())
+        );
+    }
+}
+
 #[test]
 fn re_init_is_idempotent() {
     let repo = Repo::new();
@@ -171,7 +193,6 @@ fn init_writes_the_harness_gitignore() {
             "logs/",
             "worktrees/",
             "loop.pid",
-            "skills/",
             "run/",
             "__pycache__/",
         ]
