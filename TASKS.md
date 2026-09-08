@@ -29,7 +29,7 @@ archived: DECISIONS.md — full block at `git show f342583:TASKS.md`
 ## [T-006] .harness/RAILS.md:58 enforced by test-hashes.json, which does not exist
 scope: test-hashes.json
 blockedBy: T-005
-status: review
+status: done
 probe: rail-unenforced
 rows: none — harness
 command: `harness probe`
@@ -63,6 +63,22 @@ notes: |
     $ cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo exit=$?
     test result: ok. 190 passed; 0 failed; 1 ignored (+ 8, 5, 9, 15 (2 ignored), 21, 29, 27, 4 passed) → exit=0
     $ git add test-hashes.json TASKS.md PROGRESS.md && git commit -m "feat(hashes): T-006 test-hashes.json covers harness.toml and the build config"
+  2026-09-08 verifier: VERIFIED. `git status --porcelain` empty at 58ad8db; diff HEAD~1 touches only
+  test-hashes.json, TASKS.md, PROGRESS.md; `rows: none — harness` so the hashes file is in-lane, and
+  every key is added fresh (no key on origin/main: file absent there), none re-cut. `.check-baseline`
+  has no entries; no failure to match. PROGRESS.md entry carries `friction: none`.
+    $ shasum -a 256 harness.toml Cargo.toml crates/harness/Cargo.toml crates/harness/tests/roles.rs
+    b28d83ae…  harness.toml / 5f693c40…  Cargo.toml / 03fb9e7d…  crates/harness/Cargo.toml / 0e2ec946…  roles.rs
+    → all four equal the committed values; `layout.harness_files` (harness.toml:15) names exactly Cargo.toml and crates/harness/Cargo.toml.
+    $ cargo test -p harness -q --test floor -- every_file_test_hashes_covers_still_hashes_to_its_recorded_digest
+    test result: ok. 1 passed; 0 failed; 0 ignored; 16 filtered out
+    $ cargo build -q && ./target/debug/harness probe | grep -E "rail-unenforced|hash-uncovered"
+    PROBE rail-unenforced 0 / PROBE hash-uncovered 0 (no FINDING for RAILS.md:58)
+    $ cargo test --workspace -q; cargo clippy --all-targets -q -- -D warnings; cargo fmt --all --check
+    exit 0 / 0 / 0; 190+0+8+5+9+15+21+29+27+4+0 = 308 passed, 3 ignored, 0 failed (uncached, second run identical)
+  Break attempt: `sed` one hex digit of the harness.toml key → floor test FAILED at floor.rs:306,
+  left: ["harness.toml"] right: []; `git checkout -- test-hashes.json` restored, tree clean.
+  Ponytail: three JSON keys, nothing to cut.
 
 ## [T-007] tdd is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
