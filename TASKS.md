@@ -29,7 +29,7 @@ archived: DECISIONS.md — full block at `git show f342583:TASKS.md`
 ## [T-006] .harness/RAILS.md:58 enforced by test-hashes.json, which does not exist
 scope: test-hashes.json
 blockedBy: T-005
-status: review
+status: done
 gate: the verifier returned done and the scope gate rejected it: touched test-hashes.json (crates/harness/tests/roles.rs), which the scope line does not name
 probe: rail-unenforced
 rows: none — harness
@@ -99,6 +99,31 @@ notes: |
     190+0+8+5+9+15+21+29+27+4+0 passed, 3 ignored, 0 failed → exit=0
     $ git add test-hashes.json TASKS.md PROGRESS.md && git commit -q -m "chore(hashes): T-006 answers the scope-gate rejection, file unchanged" && git status --short
     (2 files changed: PROGRESS.md, TASKS.md; test-hashes.json unchanged; porcelain empty)
+  2026-09-08 verifier (second pass): VERIFIED. `git status --porcelain` empty at 88022a5. `origin/main`
+  is 52e8799 (the merge-base); diff base for the task's file is c529b4d..58ad8db, and 61f8600..HEAD touches
+  only TASKS.md and PROGRESS.md. `rows: none — harness`, so test-hashes.json is in-lane. `.check-baseline`
+  has no entries; no failure to match. PROGRESS.md entry at line 75 carries a `friction:` line, first
+  occurrence (grep count 1; nothing in LEARNINGS.md or PROGRESS.archive.md).
+    $ shasum -a 256 harness.toml Cargo.toml crates/harness/Cargo.toml crates/harness/tests/roles.rs
+    b28d83ae… / 5f693c40… / 03fb9e7d… / 0e2ec946… → all four equal the committed values; `git show
+    2ee7163:test-hashes.json` holds the same roles.rs value, so T-005's key is kept. harness.toml:15
+    `harness_files = ["Cargo.toml", "crates/harness/Cargo.toml"]`, both keyed.
+    $ cargo test --workspace -q; cargo clippy --all-targets -q -- -D warnings; cargo fmt --all --check
+    exit 0 / 0 / 0; 190+0+8+5+9+15+21+29+27+4+0 = 308 passed, 0 failed, 3 ignored
+    $ cargo test -p harness -q --test floor -- every_file_test_hashes_covers_still_hashes_to_its_recorded_digest
+    test result: ok. 1 passed; 0 failed; 0 ignored; 16 filtered out
+    $ cargo build -q && ./target/debug/harness probe | grep -E "rail-unenforced|hash-uncovered|RAILS.md:58"
+    PROBE rail-unenforced 0 / PROBE hash-uncovered 0 (no FINDING line)
+  Gate rejection reproduced as a false positive: `git diff c529b4d 58ad8db -- test-hashes.json` shows the
+  roles.rs key on a `-` line (no trailing comma) and a `+` line (trailing comma) with an identical value;
+  gates.rs:502 `recut_keys` reads the diff text, gates.rs:483 `keys_at` finds the key at base, so it is
+  classed re-cut. The launcher's `iter_base` is the iteration's starting HEAD (pipeline.rs:365), and this
+  iteration's diff on test-hashes.json is empty, so `gate_scope` has nothing to match on the re-run.
+  Break attempt: `sed` one hex digit of the Cargo.toml key → floor test FAILED at floor.rs:306, left:
+  ["Cargo.toml"] right: []; `git checkout -- test-hashes.json` restored, porcelain empty. The test's
+  second assertion iterates the whole map over the repo root, not a hardcoded key (floor.rs:306).
+  Ponytail: four JSON keys, nothing to cut. The value-aware compare the friction names belongs to a
+  gates.rs task the probe can raise; not fixed here (off scope, and not mine to fix).
 
 ## [T-007] tdd is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
