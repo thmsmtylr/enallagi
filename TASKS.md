@@ -29,7 +29,8 @@ archived: DECISIONS.md — full block at `git show f342583:TASKS.md`
 ## [T-006] .harness/RAILS.md:58 enforced by test-hashes.json, which does not exist
 scope: test-hashes.json
 blockedBy: T-005
-status: done
+status: ready
+gate: the verifier returned done and the scope gate rejected it: touched test-hashes.json (crates/harness/tests/roles.rs), which the scope line does not name
 probe: rail-unenforced
 rows: none — harness
 command: `harness probe`
