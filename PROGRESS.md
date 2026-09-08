@@ -32,3 +32,10 @@ output.
 stays here. The **second** occurrence of the same thing becomes a line in LEARNINGS.md — one rule per surprise rewrites the operating manual every week, which costs more than the friction it removes.
 
 ---
+
+## 2026-09-08 — T-001 — landed
+rows: `tests/roles.rs::a_declared_role_is_fetched_vendored_and_committed_before_its_stage`, `tests/roles.rs::a_role_whose_vendored_file_drifted_is_refused_under_frozen`
+check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` → exit 0, 297 passed, 0 failed, at 2610220 before the commit
+what happened: `[[role]]` parses and validates in config.rs, `Lock.role` pins it, and `roles::resolve` vendors `<path>/<name>.md` to `<harness_dir>/roles/<name>.md`. The skills loop was refactored into `skills::pin`, which both resolvers call, so the semantics match by construction. T-001 moved ready → review.
+friction: the row name for the first test carries a clause ("and committed before its stage") that belongs to T-002's scope; the implementer has to decide how much of a row one task may satisfy. A row split at the task boundary would remove the judgment call.
+next: the verifier takes T-001. T-002 (pipeline resolves and commits declared roles, immutable hook, scope gate) is blocked on it and extends `tests/roles.rs`.

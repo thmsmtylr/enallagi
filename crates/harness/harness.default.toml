@@ -1,8 +1,8 @@
 # Every answer the harness substitutes into roles, hooks and gates. Copy the
 # keys you want to change into harness.toml at your repo root; this file is
 # embedded in the binary and is the base every harness.toml is merged over.
-# Tables merge key by key. Arrays -- including [[pipeline]], [[stage]] and
-# [[skill]] -- replace the default array whole.
+# Tables merge key by key. Arrays -- including [[pipeline]], [[stage]],
+# [[skill]] and [[role]] -- replace the default array whole.
 
 # preset is the headless invocation of YOUR coding agent, named rather than
 # spelled out: claude, codex, gemini, opencode, copilot, goose, aider, amp,
@@ -232,3 +232,15 @@ path = "skills/brainstorming"
 rev = "v6.3.0"
 gate = "queue-uncovered"
 why = "criteria are written before code, which here happens in the queue and not in a chat"
+
+# A role prompt shared across repositories is declared like a skill and
+# resolved through the same fetch, cache, vendor and lock: <path>/<name>.md in
+# the source lands at <harness_dir>/roles/<name>.md and is pinned in
+# harness.lock under [[role]]. An undeclared role reads
+# <harness_dir>/roles/<name>.md if present, else the copy in the binary.
+#
+# [[role]]
+# name = "implementer"
+# source = "github:<owner>/<repo>"
+# path = "roles"
+# rev = "v1"

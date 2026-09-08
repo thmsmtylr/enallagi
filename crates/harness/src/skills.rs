@@ -1,7 +1,7 @@
 //! Fetches declared skills from git or a path, vendors and pins them, and renders them into role prompts.
 
 use crate::agent::Preset;
-use crate::config::{Config, SkillDecl};
+use crate::config::Config;
 use crate::events::{Kind, Writer};
 use crate::git;
 use sha2::{Digest, Sha256};
@@ -45,6 +45,9 @@ pub struct Lock {
     pub version: u32,
     #[serde(default)]
     pub skill: Vec<LockEntry>,
+    // skipped when empty so a lock written before roles existed round-trips unchanged
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub role: Vec<LockEntry>,
 }
 
 impl Default for Lock {
@@ -52,6 +55,7 @@ impl Default for Lock {
         Lock {
             version: 1,
             skill: Vec::new(),
+            role: Vec::new(),
         }
     }
 }
@@ -77,6 +81,7 @@ pub fn read_lock(root: &Path) -> Result<Lock, SkillError> {
 pub fn write_lock(root: &Path, lock: &Lock) -> Result<(), SkillError> {
     let mut lock = lock.clone();
     lock.skill.sort_by(|a, b| a.id.cmp(&b.id));
+    lock.role.sort_by(|a, b| a.id.cmp(&b.id));
     let text = toml::to_string(&lock).map_err(|e| SkillError::Lock(e.to_string()))?;
     fs::write(lock_path(root), text)?;
     Ok(())
@@ -189,62 +194,22 @@ pub fn resolve(
             });
         }
         let dir = base.join(id);
-        let entry = lock.skill.iter().position(|e| &e.id == id);
-
-        match cached(&lock, entry, decl, &dir) {
-            Ok(body) => {
-                let commit = entry.and_then(|i| lock.skill[i].commit.clone());
-                events.emit(Kind::SkillResolved {
-                    id: id.clone(),
-                    commit,
-                    result: "cached".into(),
-                });
-                out.push(ResolvedSkill {
-                    id: id.clone(),
-                    dir,
-                    result: "cached".into(),
-                    body,
-                });
-            }
-            Err(why) => {
-                if opts.frozen {
-                    events.emit(Kind::SkillResolved {
-                        id: id.clone(),
-                        commit: entry.and_then(|i| lock.skill[i].commit.clone()),
-                        result: "refused".into(),
-                    });
-                    return Err(SkillError::Unresolved {
-                        id: id.clone(),
-                        why,
-                    });
-                }
-                let (source_root, commit) = fetch(root, decl, opts)?;
-                let body = vendor(&source_root.join(&decl.path), &dir)?;
-                let new = LockEntry {
-                    id: id.clone(),
-                    source: decl.source.clone(),
-                    rev: decl.rev.clone(),
-                    commit: commit.clone(),
-                    sha256: sha256(body.as_bytes()),
-                };
-                match entry {
-                    Some(i) => lock.skill[i] = new,
-                    None => lock.skill.push(new),
-                }
-                dirty = true;
-                events.emit(Kind::SkillResolved {
-                    id: id.clone(),
-                    commit,
-                    result: "fetched".into(),
-                });
-                out.push(ResolvedSkill {
-                    id: id.clone(),
-                    dir,
-                    result: "fetched".into(),
-                    body,
-                });
-            }
-        }
+        let p = Pin {
+            id,
+            source: &decl.source,
+            rev: decl.rev.as_deref(),
+            file: dir.join("SKILL.md"),
+        };
+        let (result, body) = pin(root, &p, &mut lock.skill, opts, events, |src| {
+            vendor(&src.join(&decl.path), &dir)
+        })?;
+        dirty |= result == "fetched";
+        out.push(ResolvedSkill {
+            id: id.clone(),
+            dir,
+            result,
+            body,
+        });
     }
 
     if dirty {
@@ -253,35 +218,98 @@ pub fn resolve(
     Ok(out)
 }
 
-fn cached(
-    lock: &Lock,
-    entry: Option<usize>,
-    decl: &SkillDecl,
-    dir: &Path,
-) -> Result<String, String> {
-    let Some(e) = entry.map(|i| &lock.skill[i]) else {
+/// One thing to pin: a skill or a role. `file` is the vendored file the lock's sha256 covers.
+pub(crate) struct Pin<'a> {
+    pub id: &'a str,
+    pub source: &'a str,
+    pub rev: Option<&'a str>,
+    pub file: PathBuf,
+}
+
+/// The cache, fetch, vendor and lock cycle shared by skills and roles. `vendor` is given the
+/// fetched source root and returns the pinned body. Returns (`cached` | `fetched`, body).
+pub(crate) fn pin(
+    root: &Path,
+    p: &Pin,
+    entries: &mut Vec<LockEntry>,
+    opts: &ResolveOpts,
+    events: &mut Writer,
+    vendor: impl FnOnce(&Path) -> Result<String, SkillError>,
+) -> Result<(String, String), SkillError> {
+    let at = entries.iter().position(|e| e.id == p.id);
+    let entry = at.map(|i| &entries[i]);
+    let commit = entry.and_then(|e| e.commit.clone());
+    match cached(entry, p) {
+        Ok(body) => {
+            events.emit(Kind::SkillResolved {
+                id: p.id.into(),
+                commit,
+                result: "cached".into(),
+            });
+            Ok(("cached".into(), body))
+        }
+        Err(why) => {
+            if opts.frozen {
+                events.emit(Kind::SkillResolved {
+                    id: p.id.into(),
+                    commit,
+                    result: "refused".into(),
+                });
+                return Err(SkillError::Unresolved {
+                    id: p.id.into(),
+                    why,
+                });
+            }
+            let (source_root, commit) = fetch(root, p, opts)?;
+            let body = vendor(&source_root)?;
+            let new = LockEntry {
+                id: p.id.into(),
+                source: p.source.into(),
+                rev: p.rev.map(String::from),
+                commit: commit.clone(),
+                sha256: sha256(body.as_bytes()),
+            };
+            match at {
+                Some(i) => entries[i] = new,
+                None => entries.push(new),
+            }
+            events.emit(Kind::SkillResolved {
+                id: p.id.into(),
+                commit,
+                result: "fetched".into(),
+            });
+            Ok(("fetched".into(), body))
+        }
+    }
+}
+
+fn cached(entry: Option<&LockEntry>, p: &Pin) -> Result<String, String> {
+    let Some(e) = entry else {
         return Err("no lock entry".into());
     };
-    if e.source != decl.source || e.rev != decl.rev {
+    if e.source != p.source || e.rev.as_deref() != p.rev {
         return Err("the declaration moved away from the lock".into());
     }
-    let body = fs::read_to_string(dir.join("SKILL.md")).map_err(|_| "not vendored".to_string())?;
+    let body = fs::read_to_string(&p.file).map_err(|_| "not vendored".to_string())?;
     if sha256(body.as_bytes()) != e.sha256 {
-        return Err("the vendored SKILL.md does not match its locked sha256".into());
+        return Err(format!(
+            "the vendored {} does not match its locked sha256",
+            p.file.file_name().unwrap_or_default().to_string_lossy()
+        ));
     }
     Ok(body)
 }
 
 fn fetch(
     root: &Path,
-    decl: &SkillDecl,
+    p: &Pin,
     opts: &ResolveOpts,
 ) -> Result<(PathBuf, Option<String>), SkillError> {
     let bad = || SkillError::BadSource {
-        id: decl.id.clone(),
-        spec: decl.source.clone(),
+        id: p.id.into(),
+        spec: p.source.into(),
     };
-    let source = decl.source.trim();
+    let source = p.source.trim();
 
     if let Some(rest) = source.strip_prefix("path:") {
         let p = Path::new(rest);
@@ -313,9 +341,8 @@ fn fetch(
         return Err(bad());
     };
 
-    let rev = decl.rev.as_deref();
-    let dir = cache_path(&opts.cache_dir, &url, rev.unwrap_or("HEAD"));
-    clone(&url, rev, &dir)?;
+    let dir = cache_path(&opts.cache_dir, &url, p.rev.unwrap_or("HEAD"));
+    clone(&url, p.rev, &dir)?;
     let commit = git::git(&dir, &["rev-parse", "HEAD"])?;
     Ok((dir, Some(commit)))
 }
@@ -466,6 +493,7 @@ pub fn render(
 mod tests {
     use super::*;
     use crate::agent::presets;
+    use crate::config::SkillDecl;
     use crate::events::Log;
     use crate::fixture::Repo;
 
