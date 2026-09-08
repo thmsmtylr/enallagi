@@ -363,12 +363,12 @@ impl<'a> Loop<'a> {
 
         let ready_before = self.ids_at("ready");
         let rejections_before = self.rejections();
-        let task = gates::takeable(self.root, self.cfg);
+        let takeable = gates::takeable(self.root, self.cfg);
         let iter_base = git::head(self.root);
         let progress_before = file_len(&self.root.join("PROGRESS.md"));
 
         // fires only after a discovery round already found nothing takeable; attended:true blocks alone are the ordinary human-wait state
-        if task.is_none() && self.dry_rounds >= 1 {
+        if takeable.is_none() && self.dry_rounds >= 1 {
             if let Some(id) = self.first_attended_ready() {
                 self.halt(
                     &id,
@@ -385,6 +385,16 @@ impl<'a> Loop<'a> {
                 .warnings
                 .push("no pipeline's `when` held; nothing to run.".to_string());
             return false;
+        };
+
+        // the review pipeline verifies a task stranded at review, not the ordinary ready-and-unattended one
+        let task = if matches!(
+            config::parse_when(&pipeline.when),
+            Ok(Predicate::QueueReviewing)
+        ) {
+            self.first_at_review()
+        } else {
+            takeable
         };
 
         for name in &pipeline.stages {
@@ -915,6 +925,10 @@ impl<'a> Loop<'a> {
         queue::ids_at(&self.blocks(), status)
     }
 
+    fn first_at_review(&self) -> Option<String> {
+        self.ids_at("review").into_iter().next()
+    }
+
     fn first_attended_ready(&self) -> Option<String> {
         self.blocks()
             .iter()
@@ -1026,6 +1040,21 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
     match when {
         Predicate::Not(inner) => !holds(root, cfg, inner, warnings),
         Predicate::QueueTakeable => gates::takeable(root, cfg).is_some(),
+        // an unreadable or unparseable queue is not evidence of a task at review, so this fails closed like `takeable`
+        Predicate::QueueReviewing => {
+            match std::fs::read_to_string(root.join("TASKS.md"))
+                .map_err(|e| e.to_string())
+                .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
+            {
+                Ok(blocks) => !queue::ids_at(&blocks, "review").is_empty(),
+                Err(err) => {
+                    warnings.push(format!(
+                        "TASKS.md: {err}; queue.reviewing treated as false (fail closed)"
+                    ));
+                    false
+                }
+            }
+        }
         // an unreadable or unparseable queue is not evidence the queue is empty, so this fails closed like `takeable`
         Predicate::QueueEmpty => {
             match std::fs::read_to_string(root.join("TASKS.md"))
