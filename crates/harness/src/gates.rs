@@ -275,22 +275,37 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     }
 
     let pats = scope_globs(&field_of(ctx.root, &task, "scope"));
+    // a fetched skill is vendored here by the pipeline, not by the task's own scope: line, so its
+    // files are exempt like bookkeeping -- only a re-cut of a key the role did NOT ask for is a finding
+    let skills_prefix = format!("{}/", skills_dir_for(ctx.cfg));
     let mut out_of: Vec<String> = Vec::new();
     let mut harness_hit: Vec<String> = Vec::new();
     for f in diff_names(ctx.root, &base) {
-        if BOOKKEEPING.contains(&f.as_str()) {
+        if BOOKKEEPING.contains(&f.as_str()) || f.starts_with(&skills_prefix) {
             continue;
         }
-        // test-hashes.json/harness.lock are exempt on both axes when every key they re-cut is in scope
+        // test-hashes.json/harness.lock are exempt when every RE-CUT key (present at base too, with
+        // a new value) is in scope; a key ADDED fresh (absent at base) is the role fetching what it needed
         if let Some(key_re) = recut_keys_pattern(&f) {
-            let keys = recut_keys(ctx.root, &base, &f, key_re);
-            if !keys.is_empty() {
+            let touched = recut_keys(ctx.root, &base, &f, key_re);
+            if f == "harness.lock" && touched.is_empty() {
+                continue;
+            }
+            if !touched.is_empty() {
+                let base_keys = keys_at(ctx.root, &base, &f, key_re);
+                let recut: Vec<String> = touched
+                    .into_iter()
+                    .filter(|k| base_keys.contains(k))
+                    .collect();
+                if recut.is_empty() {
+                    continue;
+                }
                 let skills = skills_dir_for(ctx.cfg);
                 let as_path = |k: &str| match f.as_str() {
                     "harness.lock" => format!("{skills}/{k}/SKILL.md"),
                     _ => k.to_string(),
                 };
-                let off: Vec<&str> = keys
+                let off: Vec<&str> = recut
                     .iter()
                     .filter(|k| !in_scope(&as_path(k), &pats))
                     .map(String::as_str)
@@ -405,6 +420,26 @@ fn recut_keys_pattern(f: &str) -> Option<&'static str> {
         "harness.lock" => Some(r#"^[+-]\s*id\s*=\s*"([^"]+)""#),
         _ => None,
     }
+}
+
+// same key regex as recut_keys_pattern, applied to a revision's whole file rather than a diff, to
+// tell an added key (present in HEAD, absent at base) from a re-cut of one already at base
+fn keys_at(root: &Path, rev: &str, file: &str, diff_key_re: &str) -> Vec<String> {
+    let plain = format!("^{}", &diff_key_re[5..]);
+    let (Ok(re), Ok(text)) = (
+        regex::Regex::new(&plain),
+        git(root, &["show", &format!("{rev}:{file}")]),
+    ) else {
+        return Vec::new();
+    };
+    let mut keys: Vec<String> = text
+        .lines()
+        .filter_map(|l| re.captures(l))
+        .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
 }
 
 fn recut_keys(root: &Path, base: &str, file: &str, key_re: &str) -> Vec<String> {
@@ -1044,26 +1079,44 @@ mod tests {
     }
 
     #[test]
-    fn a_lock_recut_is_read_off_the_skill_ids() {
-        let lock = |ids: &[&str]| {
-            let mut text = "version = 1\n".to_string();
-            for id in ids {
-                text.push_str(&format!("\n[[skill]]\nid = \"{id}\"\nsha256 = \"aaa\"\n"));
-            }
-            text
-        };
-        let relock = |ids: &[&str]| {
-            let mut env = Env::new("exit 0\n");
-            env.queue("done", ".claude/skills/tdd/**", "§11 row 1");
-            env.repo.commit_all("verdict");
-            let base = env.head();
-            env.repo.write("harness.lock", &lock(ids));
-            env.repo.commit_all("relock");
-            run("scope", &mut env.ctx(Some("T-001"), Some(&base)))
-        };
+    fn scope_exempts_a_freshly_added_lock_key_outside_scope() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", ".claude/skills/tdd/**", "§11 row 1");
+        env.repo.write(
+            "harness.lock",
+            "version = 1\n\n[[skill]]\nid = \"tdd\"\nsha256 = \"aaa\"\n",
+        );
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        // the role fetched a second skill this stage; its id is new to the lock, absent at base
+        env.repo.write(
+            "harness.lock",
+            "version = 1\n\n[[skill]]\nid = \"tdd\"\nsha256 = \"aaa\"\n\n[[skill]]\nid = \"tdd-old\"\nsha256 = \"aaa\"\n",
+        );
+        env.repo.commit_all("vendor tdd-old");
 
-        assert!(relock(&["tdd"]).pass);
-        let out = relock(&["tdd", "tdd-old"]);
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
+    fn scope_rejects_a_recut_of_an_existing_lock_key_outside_scope() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", ".claude/skills/tdd/**", "§11 row 1");
+        env.repo.write(
+            "harness.lock",
+            "version = 1\n\n[[skill]]\nid = \"tdd\"\nsha256 = \"aaa\"\n\n[[skill]]\nid = \"tdd-old\"\nsha256 = \"aaa\"\n",
+        );
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        // tdd-old was already at base and is present at this key slot -- a re-cut, not an addition
+        env.repo.write(
+            "harness.lock",
+            "version = 1\n\n[[skill]]\nid = \"tdd\"\nsha256 = \"aaa\"\n\n[[skill]]\nid = \"tdd-newer\"\nsha256 = \"aaa\"\n",
+        );
+        env.repo.commit_all("recut tdd-old");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
         assert!(
             out.reason.contains("harness.lock (tdd-old)"),
