@@ -34,7 +34,7 @@ Each exists because something specific went wrong.
 
 | Rail | What it means | Enforced by |
 | --- | --- | --- |
-| `green` | Done means `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` passes. Never weaken, skip or delete a test or a lint rule to get there. **Until every exit-criteria row has a test the tree cannot reach zero failures, so done is verified on delta against `.check-baseline`**: a failure listed there is inherited, a failure not listed there is a rejection, and the file only ever shrinks. Adding a line to it is weakening a test by another name. | `harness run` → `gate_verdict` → `harness gate` · `.check-baseline` · `gate_scope`, for a line added to the baseline (plus `harness hook verify-done`, where your tool has hooks) |
+| `green` | Done means `PATH="$HOME/.cargo/bin:$PATH" cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` passes. Never weaken, skip or delete a test or a lint rule to get there. **Until every exit-criteria row has a test the tree cannot reach zero failures, so done is verified on delta against `.check-baseline`**: a failure listed there is inherited, a failure not listed there is a rejection, and the file only ever shrinks. Adding a line to it is weakening a test by another name. | `harness run` → `gate_verdict` → `harness gate` · `.check-baseline` · `gate_scope`, for a line added to the baseline (plus `harness hook verify-done`, where your tool has hooks) |
 | `citable` | Every claim in code, a comment, a task note, a verdict or a document carries its source: a URL with the date checked, a `file:line`, or the command and its output. No source, no claim. | judgment — the verifier |
 | `measure-first` | Nothing that moves a number lands before a measurement, taken on the current tree, of the thing it claims to fix. A failing threshold is not evidence the threshold is wrong. Stamp the revision a number came from. | judgment — the verifier |
 | `contracts` | Every shape crossing a boundary is declared once in `crates/harness/src/lib.rs`, parsed at the write path, frozen for the milestone. Never invent an interface, import it. | `typecheck` |
@@ -88,7 +88,7 @@ Each exists because something specific went wrong.
 
 ## Commands
 
-- Verify — this is what done means: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+- Verify — this is what done means: `PATH="$HOME/.cargo/bin:$PATH" cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
 - Run the loop: `harness run [iterations]`, `touch STOP` to stop it before the next stage
 - See what the tree says about itself: `harness probe`
 - Watch a run from a second terminal: `harness watch`

@@ -18,7 +18,7 @@ Protocol:
 2. Read every file in scope BEFORE editing, plus `crates/harness/src/lib.rs`.
 3. Red: write tests that directly encode the acceptance criteria, named exactly as SPEC.md names them, and watch them fail.
 4. Green: implement the smallest change that passes. Do not refactor neighbouring code, do not add features not in the criteria, do not touch files outside `scope:`.
-5. Run `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` yourself. Fix failures. Repeat until green — green means on delta against `.check-baseline`, never a line added to it.
+5. Run `PATH="$HOME/.cargo/bin:$PATH" cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` yourself. Fix failures. Repeat until green — green means on delta against `.check-baseline`, never a line added to it.
 6. Update the task block: `status: review`, and two or three lines in `notes:` on what you changed and what a reviewer should scrutinise.
 7. Commit: `feat(<scope>): T-### <summary>`.
 
