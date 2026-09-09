@@ -1,51 +1,26 @@
-# Every answer the harness substitutes into roles, hooks and gates. Copy the
-# keys you want to change into harness.toml at your repo root; this file is
-# embedded in the binary and is the base every harness.toml is merged over.
-# Tables merge key by key. Arrays -- including [[pipeline]], [[stage]],
-# [[skill]] and [[role]] -- replace the default array whole.
+# Embedded defaults; harness.toml deep-merges over them, tables key by key and arrays whole.
 
-# preset is the headless invocation of YOUR coding agent, named rather than
-# spelled out: claude, codex, gemini, opencode, copilot, goose, aider, amp,
-# cursor, kimi, qwen, omp, pi, or "custom" with an explicit command list.
-# [agent.<role>] overrides it per role -- [agent.scout], [agent.adjudicator],
-# [agent.implementer], [agent.verifier], [agent.researcher] -- each taking its
-# own preset, command, model or usage, so one role can run on a different
-# model or vendor from another. Any other key of [agent] is refused, because a
-# misspelled role would otherwise never apply. Independent verification is the
-# reason to use this: a verifier on the model that wrote the code measures
-# self-consistency.
+# preset names the agent's headless command (claude, codex, ... or custom with a command list); [agent.<role>] overrides it per role.
 [agent]
 preset = "claude"
 rate_limit_pattern = "hit your session limit"
 
-# command is what runs to decide whether the tree is green, and force is the
-# same check with its cache defeated. fail_name lifts the failing test's name
-# out of the output; capture group 1 is the name.
+# command decides whether the tree is green; force is the same check uncached; fail_name's group 1 is the failing test's name.
 [check]
 command = "bun run check"
 force = "bun run check -- --force"
 fail_name = '\(fail\) (.+?)(?: \[[0-9.]+m?s\])?$'
 
 [layout]
-# AGENTS.md is the core context file: an open format read by 20+ tools and
-# present in 60,000+ repos (agents.md, 2026). pointer_files are one-line
-# adapters for tools that read their own file instead; Claude Code does not
-# read AGENTS.md natively (anthropics/claude-code#34235).
+# context_file is the file every role reads first; pointer_files are one-line pointers to it for tools that read their own.
 context_file = "AGENTS.md"
 pointer_files = ["CLAUDE.md", "GEMINI.md", "QWEN.md", ".github/copilot-instructions.md"]
 
-# harness_dir holds the launcher, hooks and roles and is vendor-neutral.
-# skills_dir is your tool's Agent Skills directory (.claude/skills,
-# .codex/skills, .gemini/skills, .cursor/skills, .github/skills); unset means
-# the preset's own directory.
+# harness_dir holds the roles, hooks and scratch state; skills_dir is the agent's skills directory, unset meaning the preset's own.
 harness_dir = ".harness"
 skill_invocation = "invoke it via the Skill tool"
 
-# driver_command is the ONLY probe that exercises the built artifact rather
-# than reading text. Empty means off; it also needs HARNESS_DRIVER=1 in the
-# environment, because it costs wall-clock on every scout round. It runs in a
-# throwaway directory with a stripped environment, must exit 0 whenever it
-# REACHED the artifact, and prints one line per shortfall beginning `FINDING `.
+# driver_command runs the built artifact in a throwaway directory and prints one `FINDING ` line per shortfall; empty is off, and HARNESS_DRIVER=1 is also required.
 driver_command = ""
 
 spec = "SPEC.md"
@@ -124,18 +99,10 @@ machinery = [
   "target",
 ]
 
-# learnings_cap bounds LEARNINGS.md, which every task reads at its start.
-# GRASP keeps a capacity-bounded skill library, 10 in its experiments, where
-# an ADD at capacity is blocked unless a paired REMOVE frees a slot
-# (arXiv:2605.29668); its ungated baseline regressed below the no-skills
-# baseline as memory accumulated. Context files also cost: over 20% more
-# inference, and about 3% of success rate when LLM-generated
-# (arXiv:2602.11988). 12 here because an entry is one line and five ship as
-# seeds.
+# learnings_cap is the most entries LEARNINGS.md may hold; at the cap, adding one means removing one.
 learnings_cap = 12
 
-# a task a budget halt stranded at review (implemented, never verified) gets first crack at every
-# run, ahead of starting a new one -- otherwise it sits at review while task/discover cycle around it
+# review runs before task: a task left at review is verified before a new one is taken.
 [[pipeline]]
 name = "review"
 when = "queue.reviewing"
@@ -176,13 +143,7 @@ role = "adjudicator"
 turns = 40
 post = ["commit-round", "adjudicator-halt", "dry-round"]
 
-# The skills the roles rely on. Six are named in a role prompt and
-# brainstorming is not: here criteria are written into the queue before code
-# rather than in a chat, which is what its gate records. A prompt asks for one
-# and continues when it is missing, so a skill is a soft dependency and only
-# its gate makes it non-optional: `gate` names the probe, rail or hook that
-# fails without the behaviour, or the literal `none` where nothing yet does.
-# Rename a skill's id here and in roles/.
+# gate names the probe, rail or hook that fails without the skill, or the literal `none`; an id renamed here is renamed in roles/ too.
 
 [[skill]]
 id = "tdd"
@@ -240,14 +201,4 @@ rev = "v6.3.0"
 gate = "queue-uncovered"
 why = "criteria are written before code, which here happens in the queue and not in a chat"
 
-# A role prompt shared across repositories is declared like a skill and
-# resolved through the same fetch, cache, vendor and lock: <path>/<name>.md in
-# the source lands at <harness_dir>/roles/<name>.md and is pinned in
-# harness.lock under [[role]]. An undeclared role reads
-# <harness_dir>/roles/<name>.md if present, else the copy in the binary.
-#
-# [[role]]
-# name = "implementer"
-# source = "github:<owner>/<repo>"
-# path = "roles"
-# rev = "v1"
+# [[role]] takes name, source, path and rev as [[skill]] does; <path>/<name>.md vendors to <harness_dir>/roles/<name>.md and pins in harness.lock.

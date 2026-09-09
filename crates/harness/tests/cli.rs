@@ -191,3 +191,65 @@ fn skills_check_refuses_what_sync_then_locks() {
         "{listed}"
     );
 }
+
+#[test]
+fn the_shipped_documents_describe_and_do_not_argue() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let read = |rel: &str| std::fs::read_to_string(root.join(rel)).expect(rel);
+    let argues = regex::Regex::new(
+        r"\b(because|which is why|the reason|worth|deliberately|on purpose|we |our )\b",
+    )
+    .expect("regex");
+    let mut offences = Vec::new();
+
+    let readme = read("README.md");
+    if readme.lines().count() > 280 {
+        offences.push(format!("README.md is {} lines", readme.lines().count()));
+    }
+    let intent = read("docs/intent.md");
+    for (name, text) in [("README.md", &readme), ("docs/intent.md", &intent)] {
+        for (i, line) in text.lines().enumerate() {
+            if argues.is_match(line) {
+                offences.push(format!("{name}:{} {line}", i + 1));
+            }
+        }
+    }
+
+    let headings: Vec<&str> = intent
+        .lines()
+        .filter_map(|l| l.strip_prefix("## "))
+        .collect();
+    let wanted = [
+        "Problem",
+        "Proposed outcome",
+        "What exists today",
+        "Where it goes",
+        "Affected users and systems",
+        "Constraints",
+        "Open questions",
+        "References",
+    ];
+    if headings != wanted {
+        offences.push(format!("docs/intent.md headings {headings:?}"));
+    }
+
+    let toml = harness::config::DEFAULT_TOML;
+    let mut run = 0usize;
+    for (i, line) in toml.lines().enumerate() {
+        run = if line.trim_start().starts_with('#') {
+            run + 1
+        } else {
+            0
+        };
+        if run == 2 {
+            offences.push(format!(
+                "harness.default.toml:{} comment runs past one line",
+                i
+            ));
+        }
+        if line.contains("arXiv") {
+            offences.push(format!("harness.default.toml:{} cites a paper", i + 1));
+        }
+    }
+    assert!(offences.is_empty(), "{}", offences.join("\n"));
+}
