@@ -1,12 +1,10 @@
 # harness
 
 An autonomous task loop for a coding agent, installed into any git repository. One statically
-linked binary: it reads a queue (`TASKS.md`), runs one task per fresh agent process through five
-separated roles, and re-derives every `done` from the tree rather than from what the agent said.
-No daemon, no service, no vendor lock: the agent is whatever headless command `harness.toml` names.
-Runtime dependencies: `git`, `sh`, that agent CLI, and the check command `harness.toml` names.
-
-Targets `x86_64` and `aarch64` on `linux-musl` and `apple-darwin`.
+linked binary reads a queue (`TASKS.md`), runs one task per fresh agent process through five
+separated roles, and re-derives every `done` from the tree. No daemon: the agent is whatever
+headless command `harness.toml` names. Runtime dependencies: `git`, `sh`, that agent CLI, and the
+check command. Targets `x86_64` and `aarch64` on `linux-musl` and `apple-darwin`.
 
 ## Install
 
@@ -18,24 +16,22 @@ chmod +x harness-aarch64-apple-darwin
 sudo mv harness-aarch64-apple-darwin /usr/local/bin/harness
 ```
 
-Or from source: `cargo install --path crates/harness`.
-
-Then, in the repository to run it on:
+Or from source: `cargo install --path crates/harness`. Then, in the repository to run it on:
 
 ```bash
 harness init                    # writes harness.toml, seeds the documents from defaults
-$EDITOR harness.toml            # agent.preset, check.command, layout.spec -- the three that matter
+$EDITOR harness.toml            # agent.preset, check.command, layout.spec
 harness init                    # re-run: substitutes the edited answers
 harness init --adapter claude   # optional: writes .claude/agents/ and the hook wiring
 ```
 
-`harness init` prints the exact `git add` line for everything it wrote. Commit it: `verdict`
-counts an untracked path as work off the branch. `--dry-run` prints the plan without writing it.
-What gets written and what is only ever seeded once is in Files, below.
+`harness init` prints the exact `git add` line for everything it wrote; `verdict` counts an
+untracked path as work off the branch. `--dry-run` prints the plan without writing it.
 
 ## What a run does
 
-`harness run --iterations <N>` (`-n <N>`) runs up to N iterations (default 3), each a pipeline chosen by the queue's state:
+`harness run --iterations <N>` (`-n <N>`) runs up to N iterations (default 3), each a pipeline
+chosen by the queue's state:
 
 | Pipeline | `when` | Stages |
 | --- | --- | --- |
@@ -44,25 +40,24 @@ What gets written and what is only ever seeded once is in Files, below.
 | `discover` | `!queue.takeable` | **scout** → **adjudicate** |
 
 Every stage is a separate process spawned from a role prompt under `.harness/roles/`, turn-capped
-per stage. `review` runs first and takes priority over `task`: a task a budget halt stranded at
-`review` (implemented, never verified) gets its verify stage before a new one starts. `discover`
-ends the run after two consecutive rounds that leave nothing takeable.
+per stage. `review` runs before `task`. `discover` ends the run after two consecutive rounds that
+leave nothing takeable.
 
-Halts: a `STOP` file in the repo root; `BUDGET_SECONDS` / `BUDGET_USD` / `BUDGET_TOKENS` (or the
-equivalent `--budget-seconds` / `--budget-usd` / `--budget-tokens` flag, which wins when both are
-set) at the next stage boundary (the dollar and token budgets need an `[agent.usage]` the preset's
-output can fill, and the run halts if the budget is set and nothing was observed); the adjudicator
-halting on a fix that needs a human (`needs-spec`); a stage that could not start.
-
-`harness run` draws a TUI whenever stdout is a tty; `--no-tui` suppresses it, `--dry-run` prints the
-plan and the probe output and spawns nothing — it runs no gates — `--frozen` refuses rather than
-re-vendors a skill whose hash has moved.
+A run halts on a `STOP` file in the repo root; on `BUDGET_SECONDS` / `BUDGET_USD` /
+`BUDGET_TOKENS` (or `--budget-seconds` / `--budget-usd` / `--budget-tokens`, which wins) at the
+next stage boundary, where the dollar and token budgets need an `[agent.usage]` the preset fills
+and halt when nothing was observed; on the adjudicator parking a fix at `needs-spec`; and on a
+stage that could not start. `--dry-run` prints the plan and the probe output, spawns nothing and
+runs no gates. `--frozen` refuses to re-vendor a skill whose hash has moved. `harness run` draws a
+live view whenever stdout is a tty (`--no-tui` suppresses it) and `harness watch` attaches
+read-only to a running loop's event log: three panes (queue, stages, output), `Tab` cycles focus,
+`Up`/`Down` scroll the focused pane, `?` toggles help, `q` quits.
 
 ## What is enforced, and by what
 
-Every claim below is a mechanism in `crates/harness/src/gates.rs`, not a sentence in a prompt.
-`[[stage]].post` names the gates that run after a stage; a gate that fails forces the task back to
-`ready` (or halts the run, for the adjudicator) and writes the reason next to the status.
+Every rule below is a mechanism in `crates/harness/src/gates.rs`. `[[stage]].post` names the gates
+run after a stage; a failed gate forces the task back to `ready` (or halts the run, for the
+adjudicator) and writes its reason next to the status.
 
 | Rule | Gate | Runs after |
 | --- | --- | --- |
@@ -71,8 +66,8 @@ Every claim below is a mechanism in `crates/harness/src/gates.rs`, not a sentenc
 | Only the task's `scope:` globs are touched; a product task never edits the harness | `scope` | verify |
 | The check, on delta against `.check-baseline` | `check-delta` | wherever a stage's `post` names it |
 
-Independent of the pipeline: `harness hook <name>`, wired into an adapter's hooks file where the
-tool has one, reading its input from stdin.
+`harness hook <name>` runs independently of the pipeline, wired into an adapter's hooks file where
+the tool has one, reading its input from stdin.
 
 | Hook | Fires on | Does |
 | --- | --- | --- |
@@ -109,9 +104,9 @@ notes: the implementer's and the verifier's own words; output pasted, not summar
 | `unblock` | drops a `blockedBy` id that is now `done` |
 | `rejections [file]` | `REJECTED` lines out of `DECISIONS.md` (`file` defaults there) |
 
-`file` after the other arguments defaults to `TASKS.md`. `status` is a block's first word;
-anything after it is the reason. `done` blocks archive to `DECISIONS.md`, leaving a stub the
-launcher still reads.
+`file` after the other arguments defaults to `TASKS.md`. `status` is a block's first word; the rest
+of the line is its reason. `done` blocks archive to `DECISIONS.md`, leaving a stub the launcher
+still reads.
 
 ## Probes
 
@@ -149,27 +144,15 @@ The last five read `.harness/events.jsonl` and report `OFF` until it exists.
 Embedded in the binary as `harness.default.toml`; a repo's `harness.toml` deep-merges over it
 (tables key by key, arrays whole). Unknown keys are refused per table.
 
-**`[agent]`**
+**`[agent]`** takes `preset` (default `claude`), `command` (string list, default the preset's
+own), `model` (optional), `usage` (a table of JSON paths `cost`, `input_tokens`, `output_tokens`,
+`turns`, default the preset's own) and `rate_limit_pattern` (default `hit your session limit`).
+`[agent.scout]`, `[agent.adjudicator]`, `[agent.implementer]`, `[agent.verifier]` and
+`[agent.researcher]` take the same fields minus `rate_limit_pattern`.
 
-| Field | Type | Default |
-| --- | --- | --- |
-| `preset` | string | `claude` |
-| `command` | string list | the preset's own `argv` |
-| `model` | string, optional | none |
-| `usage` | table (`cost`, `input_tokens`, `output_tokens`, `turns`, each a JSON path) | the preset's own |
-| `rate_limit_pattern` | string | `hit your session limit` |
-
-`[agent.scout]`, `[agent.adjudicator]`, `[agent.implementer]`, `[agent.verifier]`,
-`[agent.researcher]` take the same fields minus `rate_limit_pattern`, to run one role on a
-different preset, command or model.
-
-**`[check]`**
-
-| Field | Type | Default |
-| --- | --- | --- |
-| `command` | string | `bun run check` |
-| `force` | string | `bun run check -- --force` |
-| `fail_name` | regex, capture group 1 | `` \(fail\) (.+?)(?: \[[0-9.]+m?s\])?$ `` |
+**`[check]`** takes `command` (default `bun run check`), `force` (the same check uncached, default
+`bun run check -- --force`) and `fail_name` (a regex whose capture group 1 is the failing test's
+name, default `` \(fail\) (.+?)(?: \[[0-9.]+m?s\])?$ ``).
 
 **`[layout]`** (selected fields; the rest are the `litter`/`scope` allowlists)
 
@@ -179,121 +162,66 @@ different preset, command or model.
 | `skills_dir` | string, optional | the preset's own |
 | `spec`, `rows_heading`, `rows_end_heading` | string | `SPEC.md`, `## 11. Exit criteria`, `## 12.` |
 | `context_file` | string | `AGENTS.md` |
-| `pointer_files` | string list | `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md` |
+| `pointer_files` | string list | `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` |
 | `driver_command` | string | empty (off) |
 | `learnings_cap` | integer | `12` |
 | `allowed_prefixes`, `docs`, `harness_files`, `harness_globs`, `harness_allow`, `machinery` | string lists | `litter`'s and `scope`'s allowlists |
 
-**`[[pipeline]]`** (three shipped, `review`, `task` and `discover`)
+**`[[pipeline]]`** (three shipped: `review`, `task`, `discover`) takes `name`, `when` (one of
+`queue.takeable`, `queue.reviewing`, `queue.empty`, `task.attended`, `check.red`, `probe.<name>`,
+any `!`-negated), `stages` (stage names, in order) and `end_after_dry_rounds` (default `0`, `2` on
+`discover`).
 
-| Field | Type | Default |
-| --- | --- | --- |
-| `name` | string | required |
-| `when` | predicate | `queue.takeable`, `queue.reviewing`, `queue.empty`, `task.attended`, `check.red`, `probe.<name>`, any `!`-negated |
-| `stages` | string list | stage names, in order |
-| `end_after_dry_rounds` | integer | `0` (`2` on `discover`) |
-
-**`[[stage]]`** (four shipped: implement, verify, scout, adjudicate)
+**`[[stage]]`** (four shipped: `implement`, `verify`, `scout`, `adjudicate`)
 
 | Field | Type | Default |
 | --- | --- | --- |
 | `name` | string | required |
 | `role` xor `command` | string | one role name, or a literal command |
 | `turns` | integer | `40` (`120`/`100`/`30`/`40` shipped) |
-| `timeout` | `<n>s` \| `<n>m` \| `<n>h`, optional | none — required if the preset's `turn_cap` is `none` |
+| `timeout` | `<n>s` \| `<n>m` \| `<n>h`, optional | none; required if the preset's `turn_cap` is `none` |
 | `env` | table of string→string | `{}` |
 | `post` | gate-name list | `[]` |
 
-**`[[skill]]`** (seven shipped)
+**`[[skill]]`** (seven shipped: `tdd`, `ponytail`, `debugging`, `review-received`,
+`verify-before-done`, `review-requested`, `brainstorming`) and **`[[role]]`** (none shipped)
 
-| Field | Type | Default |
-| --- | --- | --- |
-| `id` | string, `^[a-z0-9-]+$` | required |
-| `source` | string (`github:owner/repo`) | required |
-| `path` | string, relative | required |
-| `rev` | string, optional | none |
-| `gate` | string (`none`, or a real gate/probe/rail name) | required |
-| `why` | string | required |
-
-Shipped: `tdd`, `ponytail`, `debugging`, `review-received`, `verify-before-done`,
-`review-requested`, `brainstorming`.
-
-**`[[role]]`** (none shipped)
-
-| Field | Type | Default |
-| --- | --- | --- |
-| `name` | string, `^[a-z0-9-]+$` | required |
-| `source` | string (`github:owner/repo`, `git+file://`, `path:`) | required |
-| `path` | string, relative; the file is `<path>/<name>.md` | required |
-| `rev` | string, optional | none |
+| Field | Type | `[[skill]]` | `[[role]]` |
+| --- | --- | --- | --- |
+| `id` / `name` | string, `^[a-z0-9-]+$` | `id`, required | `name`, required |
+| `source` | string (`github:owner/repo`, `git+file://`, `path:`) | required | required |
+| `path` | string, relative | the skill directory | the directory holding `<name>.md` |
+| `rev` | string, optional | none | none |
+| `gate` | string (`none`, or a real gate/probe/rail name) | required | — |
+| `why` | string | required | — |
 
 ## Agent presets
 
-`agent.preset` selects one of thirteen (`crates/harness/adapters/presets/*.toml`), or `custom`
-with an explicit `agent.command`.
-
-| Preset | Headless command | Usage reported | Turn cap |
-| --- | --- | --- | --- |
-| `claude` | `claude -p {prompt} --output-format stream-json --verbose --max-turns {turns} --dangerously-skip-permissions` | cost, tokens, turns | flag |
-| `codex` | `codex exec {prompt} --json --dangerously-bypass-approvals-and-sandbox` | tokens | none |
-| `gemini` | `gemini -p {prompt} --output-format stream-json --yolo` | — | config |
-| `opencode` | `opencode run {prompt} --format json --auto` | — | config |
-| `copilot` | `copilot -p {prompt} --allow-all-tools --max-autopilot-continues {turns}` | — | flag |
-| `goose` | `goose run -t {prompt} --output-format stream-json --max-turns {turns}` | — | flag |
-| `aider` | `aider --message {prompt} --yes-always` | — | none |
-| `amp` | `amp -x {prompt} --stream-json --dangerously-allow-all` | tokens | none |
-| `cursor` | `agent -p {prompt} --output-format stream-json --force` | — | none |
-| `kimi` | `kimi -p {prompt} --output-format stream-json --yolo` | — | config |
-| `qwen` | `qwen -p {prompt} --output-format stream-json --yolo --max-session-turns {turns}` | tokens | flag |
-| `omp` | `omp -p {prompt} --mode json --yolo --max-time {timeout}` | — | time |
-| `pi` | `pi -p {prompt} --mode json` | — | none |
-
-`turn_cap`: `flag` fills `{turns}` into the command; `config` needs the cap set in the tool's own
-config; `time` fills `{timeout}` in place of a turn count; `none` caps nothing, so the stage needs
-its own `timeout`.
+`agent.preset` selects one of thirteen, or `custom` with an explicit `agent.command`: `claude`,
+`codex`, `gemini`, `opencode`, `copilot`, `goose`, `aider`, `amp`, `cursor`, `kimi`, `qwen`, `omp`,
+`pi`. Each is a file in `crates/harness/adapters/presets/` naming the headless command, the usage
+fields the tool reports (`claude` reports cost, tokens and turns; `codex`, `amp` and `qwen` report
+tokens) and its `turn_cap`: `flag` fills `{turns}` into the command, `config` needs the cap set in
+the tool's own config, `time` fills `{timeout}` in place of a turn count, and `none` caps nothing,
+so the stage needs its own `timeout`.
 
 ## Skills
 
-`harness skills check|sync|list [--frozen]` operates on the `[[skill]]` list, vendoring each into
-`layout.skills_dir` (or the preset's own) at the pinned `rev` and recording it in `harness.lock`.
-
-| Command | Does |
-| --- | --- |
-| `list` | one line per skill: id, source, and the locked commit or content hash, or `unlocked` |
-| `sync` | vendors every skill at its pinned `rev`, writing `harness.lock` |
-| `check` | verifies the vendored copy against `harness.lock`; writes nothing |
-
-`--frozen` (or `CI` set in the environment) refuses to re-fetch a skill whose vendored hash no
-longer matches the lock, rather than silently re-vendoring it. `harness hook skills` prints every
-declared skill's id, why it is relied on, and its gate at the start of a turn. A `[[role]]` resolves
-the same way: fetched, vendored to `<harness_dir>/roles/<name>.md`, pinned under `[[role]]` in
-`harness.lock`, committed by the pipeline before its stage, and refused by `harness hook immutable`.
+`harness skills sync` vendors every `[[skill]]` into `layout.skills_dir` (or the preset's own) at
+its pinned `rev` and writes `harness.lock`; `check` verifies the vendored copies against the lock
+and writes nothing; `list` prints one line per skill with its id, source and locked commit or
+content hash (or `unlocked`). `--frozen` (or `CI` set in the environment) refuses to re-fetch a
+skill whose vendored hash no longer matches the lock. A `[[role]]` resolves the same way: fetched,
+vendored to `<harness_dir>/roles/<name>.md`, pinned under `[[role]]` in `harness.lock`, committed
+by the pipeline before its stage, and refused by `harness hook immutable`.
 
 ## Events
 
 `harness events [--role <r>] [--task <t>] [--since <ts>] [--json]` reads `.harness/events.jsonl`,
-one JSON object per line, written by every `harness run`.
-
-| Kind | Carries |
-| --- | --- |
-| `run.start` | `config_sha256`, `pipeline` |
-| `run.end` | `halts`, `landed`, `promoted`, `killed`, `warnings` |
-| `stage.start` | `stage`, `role`, `command`, `task` |
-| `stage.output` | `stage`, `chunk` |
-| `stage.end` | `stage`, `task`, `seconds`, `exit`, `cost`, `input_tokens`, `output_tokens`, `turns` |
-| `gate` | `gate`, `task`, `pass`, `reason` |
-| `task.status` | `task`, `from`, `to`, `reason`, `by` |
-| `halt` | `halt`, `reason` |
-| `limit` | `stage`, `matched`, `sleep_seconds`, `attempt` |
-| `skill.resolved` | `id`, `commit`, `result` |
-| `probe` | `name`, `count`, `error` |
-
-## TUI
-
-`harness run` draws a live view whenever stdout is a tty (`--no-tui` suppresses it); `harness
-watch` attaches read-only to a running loop's own event log from a second terminal. Three panes —
-queue, stages, output. `Tab` cycles focus, `Up`/`Down` scroll the focused pane, `?` toggles a help
-overlay, `q` quits.
+one JSON object per line, written by every `harness run`. The kinds are `run.start`, `run.end`,
+`stage.start`, `stage.output`, `stage.end` (with `seconds`, `exit`, `cost`, `input_tokens`,
+`output_tokens`, `turns`), `gate`, `task.status`, `halt`, `limit`, `skill.resolved` and `probe`;
+each carries the stage, task, gate or probe it names and its reason or result.
 
 ## Files
 
@@ -306,30 +234,23 @@ overlay, `q` quits.
 | `.harness/RAILS.md` | the rails, each naming its enforcement, always resubstituted |
 | `.harness/.gitignore` | ignores the harness's own scratch state |
 | `<skills_dir>/running-the-loop/{SKILL.md,references/task-block.md}` | the harness's own usage skill, in the preset's skill directory (`.claude/skills/` by default) |
-| `TASKS.md`, `PROGRESS.md`, `LEARNINGS.md`, `DECISIONS.md`, `.check-baseline` | seeded once: the queue, the append-only record, the rules, the archive, the inherited red |
-| `AGENTS.md` | the context file every role reads first, seeded once |
-| `SPEC.md` | seeded once, under the heading `layout.rows_heading` names |
-| `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md` | one-line pointers to `AGENTS.md`, from `layout.pointer_files` |
+| `TASKS.md`, `PROGRESS.md`, `LEARNINGS.md`, `DECISIONS.md`, `.check-baseline`, `AGENTS.md`, `SPEC.md` | seeded once: the queue, the append-only record, the rules, the archive, the inherited red, the context file every role reads first, the spec under the heading `layout.rows_heading` names |
+| `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | one-line pointers to `AGENTS.md`, from `layout.pointer_files` |
 | `evals/README.md` | the eval runner's own documentation |
 
-`--adapter <preset>` adds more; see Adapters below.
+`--adapter <preset>` adds the tool-specific parts: `.claude/agents/` and `.claude/settings.json`
+hook wiring for `claude`; for a preset whose `hooks_file` is set (`codex`, `gemini`, `copilot`,
+`cursor`, `qwen`), that file, merged with one that already exists; for any other preset, nothing.
+`bun-turbo` is not an agent and not an `--adapter` value; see `adapters/README.md`.
 
 ## Evals
 
-`harness eval [--gate <name>] [names...]` builds a fixture repo per eval package under `evals/`,
-runs the configured agent once with the eval's prompt, and checks its assertion. With no names,
-every eval in `evals/` runs. `--gate <name>` runs the named eval with its rule present, again with
-the rule ablated, and every other eval; a rule is accepted only when the gated eval fails without
-it and nothing else regresses. An agent that does not run, or a fixture that cannot be built, is
-an error and never a pass. Three ship: `scout`, `adjudicator`, `verifier`.
-
-## Adapters
-
-`harness init --adapter <preset>` names one of the thirteen agent presets and adds the parts that
-are tool-specific: `.claude/agents/` and `.claude/settings.json` hook wiring for `claude`; for a
-preset whose `hooks_file` is set (`codex`, `gemini`, `copilot`, `cursor`, `qwen`), that file,
-merged with one that already exists; for any other preset, nothing. `bun-turbo` is not an agent
-and not an `--adapter` value — see `adapters/README.md`.
+`harness eval [--gate <name>] [names...]` builds a fixture repo per eval package under `evals/`
+(every one, with no names), runs the configured agent once with the eval's prompt, and checks its
+assertion. `--gate <name>` runs the named eval with its rule present, again with the rule ablated,
+and every other eval; the rule is accepted only when the gated eval fails without it and nothing
+else regresses. An agent that does not run, or a fixture that cannot be built, is an error, never a
+pass. Three ship: `scout`, `adjudicator`, `verifier`.
 
 ## Testing this package
 
@@ -343,16 +264,16 @@ HARNESS_DRIVER=1 cargo test -p harness --test floor -- --include-ignored driver
 ```
 
 CI runs `cargo fmt`, `cargo clippy -D warnings` and `cargo test --workspace` on `ubuntu-latest` and
-`macos-latest`; a `shell` job runs `bash -n` and `shellcheck` at full severity over what remains
-(`driver.sh`, `docs/*.sh`, `adapters/bun-turbo/*.sh`, `evals/*.sh`) plus `docs/bootstrap.sh
---check`; a `driver` job runs the ignored test above against the release binary.
+`macos-latest`; a `shell` job runs `bash -n`, `shellcheck` and `docs/bootstrap.sh --check` over
+`driver.sh`, `docs/*.sh`, `adapters/bun-turbo/*.sh` and `evals/*.sh`; a `driver` job runs the
+ignored test above against the release binary.
 
 ## Not included
 
 Parallel lanes (`harness worktree [N]` isolates one, fast-forwarded back). A held-out test suite.
-A driver for your own artifact (`driver.sh` is the worked example for this one).
-`test-hashes.json` (`hash-uncovered` reports its absence until you write it). Evals for the
-implementer and researcher roles.
+A driver for your own artifact (`driver.sh` is the worked example for this one). `test-hashes.json`
+(`hash-uncovered` reports its absence until you write it). Evals for the implementer and researcher
+roles.
 
 ## License
 
