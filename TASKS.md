@@ -47,7 +47,7 @@ archived: DECISIONS.md — full block at `git show 116893e:TASKS.md`
 ## [T-009] review-requested is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
 blockedBy: none
-status: review
+status: done
 gate: the verifier returned done and the gate was red at 6fe5898. no failure could be named
 probe: skill-ungated
 rows: none — harness
@@ -120,6 +120,30 @@ notes: |
     test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out
     $ git add crates/harness/harness.default.toml TASKS.md PROGRESS.md && git commit -q -m "chore(config): T-009 answers the verdict-gate rejection, file unchanged" && git status --short
     (2 files changed: PROGRESS.md, TASKS.md; harness.default.toml unchanged; porcelain empty)
+  2026-09-09 verifier (re-review): VERIFIED. `git status --porcelain` → empty. Base: origin/main
+  (52e8799) is an ancestor; the task's own range is 59e31df..HEAD (6ba5ca7), `--name-only` → PROGRESS.md,
+  TASKS.md, crates/harness/harness.default.toml; the toml hunk is `-gate = "none"` / `+gate = "verdict-flip"`
+  at line 232 and nothing else. test-hashes.json and .check-baseline are not in that range (their delta vs
+  origin/main is 773cd0d, 2ee7163, 58ad8db: T-005/T-006, done). `verdict-flip` is a probe name
+  (probes/mod.rs:71, 98; telemetry.rs:356). Criteria, each run here:
+    $ cargo build -q; ./target/debug/harness probe | grep -E "skill-ungated|review-requested"  → PROBE skill-ungated 0
+    $ ./target/debug/harness probe | grep -c review-requested  → 0
+    $ cargo test -p harness -q --test probes -- every_declared_skill_names_its_enforcing_gate
+      → 1 passed; 0 failed; 26 filtered out (asserts cfg.skill.len() == 7 and no "names gate" finding)
+    $ cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check
+      → exit 0, twice; per binary 190+0+8+5+9+15+21+29+27+4+0 = 308 passed, 3 ignored, 0 failed both runs.
+  .check-baseline has no names, so no failure to match. On the earlier gate red at 6fe5898: the verdict gate ran
+  check_delta (gates.rs:545, `sh -c` of harness.toml [check].command) and went red in 3 s (events seq 118 07:46:52
+  → seq 121 07:46:55), which is the lib binary's 2.4 s plus a cached compile, not a full pass (~13 s); consistent
+  with one lib test failing under `cargo test -q`, whose `<name> --- FAILED` line the `fail_name` regex
+  (harness.toml:7) cannot capture. It does not reproduce: `cargo test -p harness --lib -q` ×3 → 190 passed;
+  0 failed; 1 ignored each run, plus the two full chains above. The implementer's answer names this correctly and
+  leaves it as a first-occurrence friction in PROGRESS.md:103; harness.toml and gates.rs are off this scope, so
+  it is not this task's to fix. Both PROGRESS.md entries carry `friction:`; the first cites LEARNINGS.md's
+  `[seed]` uncommitted-is-lost rule (LEARNINGS.md:24) as its second occurrence, already a rule, `PROBE
+  friction-repeat 0`. Probe findings that remain (check-unnamed 1, litter 1 on test-hashes.json, install-stale 1,
+  ponytail-ceiling 3, stage-outlier 5) predate this range and touch no file on its scope. Ponytail: one config
+  line, nothing to cut. No dependency added, no test touched.
 
 ## [T-013] ponytail-ceiling crates/harness/src/gates.rs:451 marker with no dated kill line naming its text
 scope: crates/harness/src/gates.rs, crates/harness/src/skills.rs
