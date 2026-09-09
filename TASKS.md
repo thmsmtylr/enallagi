@@ -47,7 +47,8 @@ archived: DECISIONS.md — full block at `git show 116893e:TASKS.md`
 ## [T-009] review-requested is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
 blockedBy: none
-status: done
+status: ready
+gate: the verifier returned done and the gate was red at 6fe5898. no failure could be named
 probe: skill-ungated
 rows: none — harness
 command: `harness probe`
