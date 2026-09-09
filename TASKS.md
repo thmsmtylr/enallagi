@@ -47,7 +47,7 @@ archived: DECISIONS.md — full block at `git show 116893e:TASKS.md`
 ## [T-009] review-requested is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
 blockedBy: none
-status: review
+status: done
 gate: the verifier returned done and the gate was red at d86c4f8. no failure could be named
 gate: the verifier returned done and the gate was red at 6fe5898. no failure could be named
 probe: skill-ungated
@@ -182,6 +182,33 @@ notes: |
       → exit=0; per-binary 190+0+8+5+9+15+21+29+27+4+0 = 308 passed, 3 ignored, 0 failed
     $ git add TASKS.md PROGRESS.md && git commit -q -m "chore(config): T-009 answers the second verdict-gate rejection, file unchanged" && git status --short
       → 2 files committed (TASKS.md, PROGRESS.md), harness.default.toml unchanged; `git status --short` → ?? STOP (STOP is the operator's halt marker, untracked); amended once to carry this line
+  2026-09-09 verifier (third review): VERIFIED. `git status --porcelain` → empty, STOP absent. Base: origin/main
+  (52e8799) is an ancestor; `git log 59e31df..HEAD` is ten commits, seven of them T-009's (b3afb37 and the six
+  verdict/answer commits) touching only PROGRESS.md, TASKS.md, crates/harness/harness.default.toml; the other
+  three are the operator's, not this task's (2557015 harness.toml `fail_name`, 3c534ab test-hashes.json
+  re-cut of the `harness.toml` key, 5bbe681 gates.rs, none named T-009). The re-cut key is honest:
+  `shasum -a 256 harness.toml` → 415943ae…cef07, equal to the key. The toml hunk over the whole range is
+  `-gate = "none"` / `+gate = "verdict-flip"` at line 232 and nothing else; `verdict-flip` is a probe name
+  (probes/mod.rs:71, 98; telemetry.rs:356). .check-baseline vs origin/main adds comment lines only, no name.
+  The cause of both gate reds is gone: `sh -c 'kill -INT $$'; echo $?` → 130 in this lane (was 0 under the
+  backgrounded launcher), and the launcher now runs as pid 46070 under a fresh parent. Criteria, each run here:
+    $ sed -n 232p crates/harness/harness.default.toml → gate = "verdict-flip"
+    $ cargo build -q; ./target/debug/harness probe | grep -E 'skill-ungated|review-requested' → PROBE skill-ungated 0
+    $ ./target/debug/harness probe | grep -c review-requested → 0
+    $ cargo test -p harness -q --test probes -- every_declared_skill_names_its_enforcing_gate
+      → 1 passed; 0 failed; 26 filtered out (probes.rs:334 asserts cfg.skill.len() == 7 and no "names gate" finding)
+    $ cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo exit=$?
+      → exit=0; per-binary 191+0+8+5+9+15+21+29+27+4+0 = 309 passed, 3 ignored, 0 failed (one more than the
+      308 in the notes above: 5bbe681 added a lib test). `a_signalled_child_reports_128_plus_the_signal` is
+      among the 191.
+    $ echo '{}' | ./target/debug/harness hook verify-done → exit 0
+  All three T-009 PROGRESS.md entries carry `friction:`. The third (PROGRESS.md:110) is the second occurrence
+  of "a red the gate cannot name is unanswerable", and `harness probe` → `PROBE friction-repeat 1` says so:
+  it belongs in LEARNINGS.md as a gated rule, which is off this scope and the operator's 2557015/5bbe681 have
+  since changed the behaviour it describes. Remaining probe findings (check-unnamed 1, ponytail-ceiling 3,
+  litter 1, install-stale 1, verdict-flip 1 on this task's two flips, stage-outlier 6) touch no file on scope.
+  Ponytail: one config line, nothing to cut. No dependency, no test touched. A scratch crate outside the repo
+  to exercise the new `fail_name` regex was denied by the shell sandbox and not run; it is off scope.
 
 ## [T-013] ponytail-ceiling crates/harness/src/gates.rs:451 marker with no dated kill line naming its text
 scope: crates/harness/src/gates.rs, crates/harness/src/skills.rs
