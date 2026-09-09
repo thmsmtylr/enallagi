@@ -173,7 +173,7 @@ notes: |
 ## [T-016] the licence is MIT
 scope: LICENSE, NOTICE, Cargo.toml, crates/harness/Cargo.toml, README.md, crates/harness/tests/floor.rs
 blockedBy: none
-status: review
+status: ready
 rows: none — harness
 criteria:
   - `LICENSE` is the MIT License text with `Copyright (c) 2026 Thomas Taylor`; `NOTICE` is deleted; `git ls-files NOTICE` prints nothing
@@ -206,3 +206,40 @@ notes: |
   → `M  LICENSE`, `D  NOTICE`, `M  PROGRESS.md`, `M  README.md`, `M  TASKS.md`, `M  crates/harness/Cargo.toml`,
   `M  crates/harness/tests/floor.rs`, `M  test-hashes.json`, then `196882c feat(licence): T-016 the licence
   is MIT`, then `0`. Amended once (`git commit --amend --no-edit`) to carry this paste; the tree diff is the same.
+
+  2026-09-10 verifier, at 1b67f3d: REJECTED: criterion 2 fails at HEAD.
+  - Criterion 2's grep (the second command on TASKS.md:181, run verbatim) prints `TASKS.md:193:  Criterion
+    1: ... Criterion 2: the A***** grep → no output, exit 1` and exits 0; the criterion says it prints nothing
+    and `grep -rln` names TASKS.md as the only file. The hit is the implementer's own note at TASKS.md:193,
+    written after the grep was run and committed in 1b67f3d, so the tree the note describes is not the tree
+    on the branch. The criterion line itself survives only because its `grep -v target/` drops it. Fix: reword
+    that note (say "the criterion 2 grep"), and keep the licence's old name out of every note, verdict and
+    PROGRESS.md line while this block exists, or the criterion can never hold. This verdict does the same.
+  Everything else holds; nothing below needs re-doing:
+  - `git status --porcelain` → empty before and after; the work is committed as 1b67f3d.
+  - Criterion 1: LICENSE line 1 `MIT License`, line 3 `Copyright (c) 2026 Thomas Taylor`, 21 lines; body from
+    `Permission` diffed word-for-word against `~/.cargo/registry/src/*/anyhow-1.0.104/LICENSE-MIT` → identical.
+    `git ls-files NOTICE | wc -l` → 0; `ls NOTICE` → No such file.
+  - Criterion 3: README.md:278-280 → `## License`, blank, `MIT. See \`LICENSE\`.`
+  - Criterion 4: red-green reproduced, not trusted: `git show HEAD~1:LICENSE > LICENSE; cargo test -p harness
+    -q --test floor the_licence_is_mit` → `panicked at crates/harness/tests/floor.rs:633:5`, 0 passed 1 failed;
+    `git checkout -- LICENSE` → porcelain empty. The test's two asserts are the criterion's two clauses.
+  - `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+    → exit=0; 11 binaries, 312 passed, 3 ignored, 0 failed, matching the implementer's paste; clippy and fmt
+    empty. `.check-baseline` has no entries and gained none.
+  - Diff base: origin/main is 125 commits behind (171 files), so the task's own commit is the base:
+    `git diff HEAD~1 --name-only` → LICENSE, NOTICE, PROGRESS.md, README.md, TASKS.md, crates/harness/Cargo.toml,
+    crates/harness/tests/floor.rs, test-hashes.json. All on `scope:` or the loop's record; test-hashes.json
+    moved one key, `crates/harness/Cargo.toml`, an on-scope file under `rows: none — harness` (harness-lane
+    exempt, RAILS.md:63); `shasum -a 256` → 915284c7…4a17f matches the key. That file's diff is one line,
+    `license = "MIT"`. floor.rs diff is one added test; no test weakened, no dependency added, no network,
+    no litter. Workspace Cargo.toml unchanged.
+  - PROGRESS.md T-016 entry has a `friction:` line and calls itself the second occurrence of "promoted with
+    criteria its scope cannot reach"; `harness probe` at 1b67f3d does not yet emit friction-repeat for it, but
+    a third would. It belongs in LEARNINGS.md via `harness eval --gate`, off this task's scope. Probe output
+    before and after is the same set (check-unnamed 1, litter 1 test-hashes.json, friction-repeat 2 for older
+    entries); nothing new from this task.
+  - Ponytail: 11-line test on the file's existing `repo_root` and `read` helpers; nothing to cut.
+  - Off scope, for a future task and not a rejection reason: `harness.toml:18` and
+    `crates/harness/harness.default.toml:61` both still list `NOTICE` in `docs`; the second ships to every
+    `harness init`.
