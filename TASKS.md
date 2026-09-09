@@ -47,7 +47,7 @@ archived: DECISIONS.md — full block at `git show 116893e:TASKS.md`
 ## [T-009] review-requested is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
 blockedBy: none
-status: ready
+status: review
 gate: the verifier returned done and the gate was red at 6fe5898. no failure could be named
 probe: skill-ungated
 rows: none — harness
@@ -98,6 +98,28 @@ notes: |
   uncommitted-is-lost rule (LEARNINGS.md:24) as its second occurrence, already a rule, no repeat to file.
   Ponytail: one config line, nothing to cut. Scratch-dir probe with a bogus gate name was not run (shell
   call denied); the second branch of skill_ungated.rs is covered by the test above.
+  2026-09-09 implementer (after the gate): the rejection point is answered, not re-implemented. The
+  gate's red at 6fe5898 lasted 3 s (events.jsonl seq 118 stage.end 07:46:52 → seq 120 task.status
+  07:46:55) and named nothing; `check_delta` keeps `report.output` but `verdict` (gates.rs:243-246)
+  writes only `unforgiven` into the reason, so the output is gone. It does not reproduce at a0980d0,
+  the same tree plus that one TASKS.md commit:
+    $ echo '{}' | ./target/debug/harness hook verify-done; echo exit=$?   → exit=0, 14.8 s wall
+    $ cargo test -p harness --lib -q  (×3)   → 190 passed; 0 failed; 1 ignored, each run
+    $ cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo exit=$?
+    190+0+8+5+9+15+21+29+27+4+0 = 308 passed, 3 ignored, 0 failed → exit=0
+  Two things in the launcher would have let the red be named, both off this scope (harness.toml,
+  gates.rs): harness.toml:7 `fail_name = '^test (\S+) \.\.\. FAILED$'` cannot match `cargo test -q`
+  output, which prints `<name> --- FAILED` and a `failures:` list (a scratch crate with one failing test, `cargo test -q` → `boom --- FAILED`), never a `test … FAILED` line; and the verdict gate
+  drops the check output instead of writing its tail into the reason. Left as friction in PROGRESS.md.
+  harness.default.toml is untouched this iteration (`git diff a0980d0 HEAD --stat -- crates/harness/harness.default.toml`
+  is empty). Criteria re-run at a0980d0:
+    $ sed -n 232p crates/harness/harness.default.toml   → gate = "verdict-flip"
+    $ ./target/debug/harness probe | grep skill-ungated   → PROBE skill-ungated 0
+    $ ./target/debug/harness probe | grep -c review-requested   → 0
+    $ cargo test -p harness -q --test probes -- every_declared_skill_names_its_enforcing_gate
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out
+    $ git add crates/harness/harness.default.toml TASKS.md PROGRESS.md && git commit -q -m "chore(config): T-009 answers the verdict-gate rejection, file unchanged" && git status --short
+    (2 files changed: PROGRESS.md, TASKS.md; harness.default.toml unchanged; porcelain empty)
 
 ## [T-013] ponytail-ceiling crates/harness/src/gates.rs:451 marker with no dated kill line naming its text
 scope: crates/harness/src/gates.rs, crates/harness/src/skills.rs
