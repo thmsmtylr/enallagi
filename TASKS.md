@@ -53,7 +53,7 @@ archived: DECISIONS.md — full block at `git show e28d6ae:TASKS.md`
 ## [T-013] ponytail-ceiling crates/harness/src/gates.rs:451 marker with no dated kill line naming its text
 scope: crates/harness/src/gates.rs, crates/harness/src/skills.rs
 blockedBy: none
-status: ready
+status: review
 probe: ponytail-ceiling
 rows: none — harness
 command: `harness probe`
@@ -72,6 +72,20 @@ notes: |
   `layout.skills_dir`, then the preset's `skills_dir`, then `<harness_dir>/skills`, the same three
   in the same order as gates.rs:452-463. DECISIONS.md is off scope: nothing to record when the
   shortcut goes.
+  2026-09-09 implementer: `skills_dir_for` (gates.rs:457) is now one expression over
+  `init::skills_root(cfg, presets.get(&cfg.agent.preset))`, which calls `skills::skills_dir` for a
+  known preset and owns the `custom` arm (config.rs:465 lets `custom` through validate with no
+  preset file, so the lookup can miss); the marker and the three-branch body are gone. Signature
+  kept: hooks.rs:186 (off scope) calls it. skills.rs is on scope and needed no edit. No new test:
+  a pure refactor, guarded by the existing `skills_dir_falls_back_from_layout_to_preset_to_harness_dir`
+  (gates.rs:1337), which ran red-then-green against the probe: before, `./target/debug/harness probe`
+  → `FINDING ponytail-ceiling crates/harness/src/gates.rs:456 …`; after → `PROBE ponytail-ceiling 2`,
+  both lines DECISIONS.md:418 and TASKS.md:62 (this block's own quoted output; leaves at archive).
+  Scrutinise: gates → init is a new module edge; the alternative was deriving Default on Preset
+  (agent.rs, off scope). `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` → exit=0,
+  191+0+8+5+9+15+21+29+27+4+0 = 309 passed, 3 ignored, 0 failed, at 9880c5a before the commit.
+  Commit: `git add crates/harness/src/gates.rs crates/harness/src/skills.rs TASKS.md PROGRESS.md && git commit -q -m "feat(gates): T-013 skills_dir_for delegates to init::skills_root, marker gone"`
+  → `3 files changed, 25 insertions(+), 12 deletions(-)` (gates.rs, TASKS.md, PROGRESS.md; skills.rs unchanged), `git status --porcelain` empty.
 ## [T-014] the templates, roles and skill carry no rationale prose: a comment states a rule or a format, nothing else
 scope: templates/*.md, roles/*.md, skills/running-the-loop/**, evals/README.md, adapters/README.md, adapters/bun-turbo/README.md, crates/harness/tests/init.rs, crates/harness/tests/probes.rs
 blockedBy: none
