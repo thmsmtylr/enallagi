@@ -65,7 +65,7 @@ archived: DECISIONS.md — full block at `git show 11e8ea6:TASKS.md`
 ## [T-015] README.md, docs/intent.md and harness.default.toml describe, and do not argue
 scope: README.md, docs/intent.md, crates/harness/harness.default.toml, crates/harness/src/config.rs, crates/harness/tests/cli.rs, AGENTS.md, harness.toml, test-hashes.json, templates/pointer.md, templates/RAILS.md, .harness/RAILS.md, CLAUDE.md, GEMINI.md, QWEN.md, .github/copilot-instructions.md
 blockedBy: none
-status: review
+status: done
 gate: operator widened the scope to the files the verifier named on 2026-09-10; criteria unchanged
 rows: none — harness
 criteria:
@@ -204,6 +204,45 @@ notes: |
   and templates/RAILS.md unchanged), then `232502e feat(docs): T-015 the context file names the check,
   test-hashes.json is a document, the moved citations live only in docs/intent.md`, then `0`.
   Amended once (`git commit --amend --no-edit`) to carry this paste; the tree diff is the same.
+  2026-09-10 verifier, at 1a1d212: VERIFIED. Both rejection points from the 1f84fe8 verdict reproduce as fixed,
+  and every other criterion holds on re-run.
+  `git status --porcelain` → empty. `$BASE` = 8f0cb50 (HEAD~1; the re-take is one commit, origin/main is the
+  whole port behind). `git show --name-only 1a1d212` → .github/copilot-instructions.md, .harness/RAILS.md,
+  AGENTS.md, CLAUDE.md, GEMINI.md, QWEN.md, crates/harness/tests/cli.rs, harness.toml, templates/pointer.md,
+  test-hashes.json, plus TASKS.md and PROGRESS.md: every scope file or the record. The one test-hashes.json key
+  moved is `harness.toml`, on scope; `shasum -a 256 harness.toml` → 693425d9…afa18, the key's value. No
+  launcher, hook, check-script or `.check-baseline` edit; `.check-baseline` has no failure lines.
+  `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+  → exit 0; per-binary 191+0+9+5+9+16+22+29+27+4+0 = 312 passed, 3 ignored, 0 failed; clippy and fmt output
+  empty. Matches the notes' figure.
+  Criterion 4: `cargo build -q && ./target/debug/harness probe` → `PROBE check-unnamed 0`, `PROBE litter 0`,
+  `PROBE hash-uncovered 0`, `PROBE install-stale 7`. Same binary in `git worktree add /tmp/t015-parent 8f0cb50`
+  → check-unnamed 1, litter 1, install-stale 7; so the two counts this task owns went 1 → 0 and install-stale
+  is untouched. Worktree removed, `git worktree list` → one entry.
+  Criterion 2, "nowhere else": `grep -rnE '2602\.11988|2605\.29668|34235|agents\.md' --include='*.md'
+  --include='*.toml' --include='*.rs' --include='*.json' . | grep -vE 'target/|docs/superpowers/|docs/intent.md|PROGRESS|DECISIONS|TASKS.md'`
+  → cli.rs:266 (the test's token list) and crates/harness/tests/fixtures/harness.default.json:13 and :156.
+  The fixture is the migration test's pre-migration input, not hashed, not a shipped document, off scope,
+  and disclosed in the notes; not a rejection. `grep -c arXiv crates/harness/harness.default.toml` → 0; ten
+  `#` lines (1, 3, 8, 15, 19, 23, 102, 105, 146, 204), none adjacent. docs/intent.md `## References` is five
+  one-line bullets. `.harness/RAILS.md:65` and `templates/RAILS.md:50` are byte-identical (`sed -n`).
+  The four pointer files each equal `sed 's/__CONTEXT_FILE__/AGENTS.md/g' templates/pointer.md` (`diff -q`).
+  Criterion 1: `wc -l README.md` → 280; the grep → no output, exit 1. Criterion 3: the grep → no output,
+  exit 1; `grep -n '^## ' docs/intent.md` → the eight headings in order, `wc -l` → 120.
+  Red-then-green: at 8f0cb50 `git show 8f0cb50:<f> | grep -nE` over the eight files the test reads → seven
+  citation lines (AGENTS.md:48, CLAUDE.md:4, GEMINI.md:4, QWEN.md:4, copilot-instructions.md:4,
+  pointer.md:3, .harness/RAILS.md:65), plus check-unnamed 1 and `docs` without test-hashes.json → nine, the
+  notes' figure. Mutation: drop the `export PATH` prefix from AGENTS.md:8 and append `#34235` to CLAUDE.md,
+  `cargo test -p harness --test cli the_shipped_documents_describe_and_do_not_argue` → FAILED with exactly
+  `CLAUDE.md:5 cites a paper docs/intent.md owns` and the check-unnamed Finding; both files restored,
+  `git status --porcelain` → empty. The test bites on both new clauses.
+  Frauds: cli.rs diff is 42 added lines in one existing test, nothing weakened or deleted; no dependency
+  added; no network call; no litter. PROGRESS.md:159 carries `friction:`; it is the fourth occurrence of
+  the scope-line-noise friction (PROGRESS.md:124, :131, :159) and `harness probe` → `friction-repeat 2`:
+  the LEARNINGS.md line is still owed, under a task that names LEARNINGS.md on scope.
+  Ponytail: the test uses `config::load`, `probes::run_all` and the existing `read` closure, one caller
+  each; nothing to cut. Minor, not a rejection: the check-unnamed Finding reports AGENTS.md line 6 for the
+  line `sed -n 8p` prints, so the probe's line numbers are two low in that section.
 
 ## [T-016] the licence is MIT
 scope: LICENSE, NOTICE, Cargo.toml, crates/harness/Cargo.toml, README.md, crates/harness/tests/floor.rs
