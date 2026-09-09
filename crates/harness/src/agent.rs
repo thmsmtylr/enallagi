@@ -606,7 +606,8 @@ mod tests {
     #[test]
     fn a_signalled_child_reports_128_plus_the_signal() {
         let r = crate::fixture::Repo::new();
-        let argv = r.stub_agent("kill -INT $$");
+        // KILL, not INT: a job started with `&` from a non-interactive shell inherits SIGINT ignored
+        let argv = r.stub_agent("kill -KILL $$");
         let mut w = Writer::new(Log::open(&r.root.join(".harness")));
         let res = spawn(
             &spawner(argv, &r.root),
@@ -615,7 +616,7 @@ mod tests {
             &Regex::new("never").unwrap(),
         )
         .unwrap();
-        assert_eq!(res.exit, 130);
+        assert_eq!(res.exit, 137);
     }
 
     #[test]
