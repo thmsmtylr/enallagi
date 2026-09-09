@@ -63,9 +63,10 @@ status: done
 archived: DECISIONS.md — full block at `git show 11e8ea6:TASKS.md`
 
 ## [T-015] README.md, docs/intent.md and harness.default.toml describe, and do not argue
-scope: README.md, docs/intent.md, crates/harness/harness.default.toml, crates/harness/src/config.rs, crates/harness/tests/cli.rs
+scope: README.md, docs/intent.md, crates/harness/harness.default.toml, crates/harness/src/config.rs, crates/harness/tests/cli.rs, AGENTS.md, harness.toml, test-hashes.json, templates/pointer.md, templates/RAILS.md, .harness/RAILS.md, CLAUDE.md, GEMINI.md, QWEN.md, .github/copilot-instructions.md
 blockedBy: none
-status: blocked -- criteria 2 and 4 need AGENTS.md, harness.toml or templates/pointer.md, none on scope; see the 2026-09-10 implementer note
+status: ready
+gate: operator widened the scope to the files the verifier named on 2026-09-10; criteria unchanged
 rows: none — harness
 criteria:
   - `README.md` is at most 280 lines; every section is a table, a fenced command, or sentences in the present tense that state what a command or field does; `grep -nE '\b(because|which is why|the reason|worth|deliberately|on purpose|we |our )\b' README.md` prints nothing
