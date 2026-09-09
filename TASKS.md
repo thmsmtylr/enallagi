@@ -65,7 +65,7 @@ archived: DECISIONS.md — full block at `git show 11e8ea6:TASKS.md`
 ## [T-015] README.md, docs/intent.md and harness.default.toml describe, and do not argue
 scope: README.md, docs/intent.md, crates/harness/harness.default.toml, crates/harness/src/config.rs, crates/harness/tests/cli.rs
 blockedBy: none
-status: review
+status: ready
 rows: none — harness
 criteria:
   - `README.md` is at most 280 lines; every section is a table, a fenced command, or sentences in the present tense that state what a command or field does; `grep -nE '\b(because|which is why|the reason|worth|deliberately|on purpose|we |our )\b' README.md` prints nothing
@@ -108,6 +108,60 @@ notes: |
   `M  crates/harness/tests/cli.rs`, `M  docs/intent.md` (config.rs unchanged), then `e7ef427 feat(docs):
   T-015 README.md, docs/intent.md and harness.default.toml describe, and do not argue`, then `0`.
   Amended once (`git commit --amend --no-edit`) to carry this paste; the tree diff is the same.
+
+  2026-09-10 verifier, at 1f84fe8: REJECTED: two criteria fail as written, and neither can be met from
+  this task's `scope:`, so the fix is the adjudicator's (widen the scope or amend the criterion), not
+  another implementation. The document work itself reproduces and stays on the branch.
+  (1) Criterion 4 asks for `check-unnamed 0` and `litter 0`. `./target/debug/harness probe` at
+  1f84fe8 → `PROBE check-unnamed 1` (`FINDING check-unnamed AGENTS.md:7 the Commands section names
+  no command matching harness.toml check (export PATH=…)`) and `PROBE litter 1` (`FINDING litter
+  test-hashes.json:0 tracked and neither product nor a document that governs it`). Same binary in a
+  `git worktree add /tmp/t015-base HEAD~1` → the same two lines, so both predate the task, as the
+  notes say. The fixes are AGENTS.md:7 and harness.toml's `docs` array; neither file is on scope.
+  Resolution: add `AGENTS.md, harness.toml` to `scope:` (`rows: none — harness` already permits
+  harness.toml) or strike the probe clause from criterion 4. Until then an implementer taking this at
+  `ready` should park it `blocked` with this reason rather than re-implement.
+  (2) Criterion 2 says the moved citations "appear nowhere else". `grep -rnE 'arXiv|2602\.11988|2605\.29668|34235' --include='*.md' --include='*.toml' --include='*.rs' . | grep -vE 'target/|docs/superpowers/|docs/intent.md|PROGRESS|DECISIONS|TASKS.md'`
+  → claude-code#34235 at CLAUDE.md:4, GEMINI.md:4, QWEN.md:4, .github/copilot-instructions.md:4
+  (all generated from templates/pointer.md:3); arXiv:2602.11988 at AGENTS.md:48; arXiv:2605.29668 at
+  .harness/RAILS.md:65. All off scope, all disclosed in the implementer's notes. Same resolution:
+  scope in AGENTS.md and templates/pointer.md (the pointers regenerate from it), or narrow the
+  clause to the scope files.
+  Everything else verified, and it holds for the re-take:
+  `git status --porcelain` → empty; `$BASE` = HEAD~1 (origin/main resolves but is the whole Rust
+  port behind; the task is one commit). `git show HEAD --name-only` → README.md, docs/intent.md,
+  crates/harness/harness.default.toml, crates/harness/tests/cli.rs, TASKS.md, PROGRESS.md; config.rs
+  untouched and on scope. `git diff HEAD~1 --stat -- .harness .check-baseline test-hashes.json` → empty;
+  `.check-baseline` has no failure lines.
+  `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+  → exit 0; per-binary 191+0+9+5+9+15+22+29+27+4+0 = 311 passed, 3 ignored, 0 failed; clippy and fmt
+  output empty. Matches the notes' figure.
+  Criterion 1: `wc -l README.md` → 280; the criterion grep → no output, exit 1. Tense scan
+  `grep -nE '\b(was|were|had|will|would|should)\b'` → README.md:49 (`when nothing was observed`, a
+  present-tense halt clause) and :132 (`has drifted`); neither argues.
+  Criterion 2, the parts that hold: `grep -n '^\s*#' crates/harness/harness.default.toml` → ten
+  lines (1, 3, 8, 15, 19, 23, 102, 105, 146, 204), none adjacent, each one line; `wc -l` → 204.
+  docs/intent.md `## References` is five one-line bullets, each with a URL.
+  Criterion 3: `grep -n '^## ' docs/intent.md` → the eight headings in the criterion's order and no
+  others; the criterion grep → no output, exit 1; `wc -l` → 120. The control table's new names
+  resolve: `crates/harness/src/{gates,hooks,agent}.rs` exist, gates.rs:61-63 dispatch `verdict`,
+  `scope`, `check-delta`. "twenty-one" re-derived: `./target/debug/harness probe | grep -c '^PROBE '`
+  → 21. Crate list in Constraints matches `crates/harness/Cargo.toml` `[dependencies]` (twelve plus
+  tempfile). `ls crates/harness/adapters/presets/*.toml | wc -l` → 13, as README says.
+  Red check re-derived from HEAD~1 with shell instead of a second build: old README 359 lines (1
+  offence) and 2 grep hits; old intent 8 grep hits and a heading list of nine (1); old toml 2 `arXiv`
+  lines and 10 two-line comment runs (awk) → 1+2+8+1+2+10 = 24, the notes' figure. The new test
+  reads the same four inputs, so it was red at HEAD~1 and is green now.
+  Frauds: no test weakened or deleted (cli.rs diff is one added test); `regex` is already a
+  dependency, none added; no launcher/hook/check-script/baseline/hash edit; no network call; no
+  litter (`git status` clean, worktree removed, `git worktree list` → one entry).
+  PROGRESS.md:134-139 carries a `friction:` line; `grep -n check-unnamed PROGRESS.md LEARNINGS.md`
+  → only this entry, so first occurrence as stated. `friction-repeat 2` at PROGRESS.md:131 and :110
+  predates this task and is still owed a LEARNINGS.md line.
+  Ponytail: 62-line test on `std::fs` and the existing `regex` dep, one caller each; nothing to cut.
+  Minor, not a rejection: cli.rs:245 reports the comment-run offence at index `i` while :250 uses
+  `i + 1`, so the run message is one line low; the presets table collapsed to prose loses the
+  per-preset command line, which now lives only in `adapters/presets/*.toml`.
 
 ## [T-016] the licence is MIT
 scope: LICENSE, NOTICE, Cargo.toml, crates/harness/Cargo.toml, README.md, crates/harness/tests/floor.rs
