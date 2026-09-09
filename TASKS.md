@@ -173,7 +173,7 @@ notes: |
 ## [T-016] the licence is MIT
 scope: LICENSE, NOTICE, Cargo.toml, crates/harness/Cargo.toml, README.md, crates/harness/tests/floor.rs
 blockedBy: none
-status: review
+status: done
 rows: none — harness
 criteria:
   - `LICENSE` is the MIT License text with `Copyright (c) 2026 Thomas Taylor`; `NOTICE` is deleted; `git ls-files NOTICE` prints nothing
@@ -260,3 +260,37 @@ notes: |
   → `M  PROGRESS.md`, `M  TASKS.md`, then `b31dcc7 chore(licence): T-016 answers the criterion 2 rejection,
   note reworded, no scope file changed`, then `0`. Amended once (`git commit --amend --no-edit`) to carry
   this paste; the tree diff is the same.
+
+  2026-09-10 verifier, at 7ce8f54: VERIFIED. The one rejection point is answered and every criterion re-run
+  holds at HEAD; this verdict also keeps the old licence's name out.
+  - `git status --porcelain` → empty before and after every step below.
+  - Criterion 2, the rejection point: the grep on TASKS.md:181 run verbatim → no output, exit 1 (was one
+    TASKS.md hit at 1b67f3d). `git diff db2005f --name-only` → PROGRESS.md, TASKS.md: the second take changed
+    the record only, as its note says. crates/harness/Cargo.toml:6 `license = "MIT"`.
+  - Criterion 1: LICENSE line 1 `MIT License`, line 3 `Copyright (c) 2026 Thomas Taylor`, `wc -l` → 21; body
+    from `Permission` diffed whitespace-folded against `~/.cargo/registry/src/*/anyhow-1.0.104/LICENSE-MIT`
+    → identical. `git ls-files NOTICE` → empty; `ls NOTICE` → No such file or directory.
+  - Criterion 3: README.md:278-280 → `## License`, blank, `MIT. See \`LICENSE\`.`
+  - Criterion 4: both asserts reproduced red, not trusted. `git show 1adfc46:LICENSE > LICENSE; cargo test -p
+    harness -q --test floor the_licence_is_mit` → panicked at floor.rs:633:5, 0 passed 1 failed; restored.
+    `git show 1adfc46:crates/harness/Cargo.toml` swapped in the same way → panicked at floor.rs:639:5, 0 passed
+    1 failed; restored. Then → 1 passed. The test reads the tree via `repo_root()` (floor.rs:7, CARGO_MANIFEST_DIR
+    joined with `../..`), so it is not a fixture of itself.
+  - `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+    → exit=0; 11 binaries, 191+0+9+5+9+16+22+29+27+4+0 = 312 passed, 3 ignored, 0 failed; clippy and fmt
+    output empty. `.check-baseline` has no entries and gained none.
+  - Diff base: origin/main is 127 commits behind, so the task's own base 1adfc46 is `$BASE`.
+    `git diff 1adfc46 --name-only` → LICENSE, NOTICE, PROGRESS.md, README.md, TASKS.md, crates/harness/Cargo.toml,
+    crates/harness/tests/floor.rs, test-hashes.json: all on `scope:` or the loop's record. test-hashes.json moved
+    one key, `crates/harness/Cargo.toml`, which is on the scope line under `rows: none — harness` (RAILS.md:63
+    exempts it); `shasum -a 256` → 915284c7…4a17f matches the key, and that file's whole diff is the one
+    `license` line. floor.rs diff is one added test; no test weakened, no dependency added, workspace Cargo.toml
+    unchanged, no network, no new litter.
+  - PROGRESS.md: both T-016 entries carry a `friction:` line (PROGRESS.md:145, :152). The :152 line calls itself
+    the second occurrence of the record tripping its own check; `./target/debug/harness probe` at 7ce8f54 emits
+    friction-repeat 2 for older entries only (PROGRESS.md:110, :131), litter 1 (test-hashes.json), check-unnamed 1,
+    hash-uncovered 0, the same set as at 1b67f3d. The friction line the :145 and :152 entries call due belongs in
+    LEARNINGS.md via `harness eval --gate`, off this scope.
+  - Ponytail: 11-line test on the file's existing helpers; nothing to cut.
+  - Off scope and not a rejection reason, unchanged from the first verdict: harness.toml:18 and
+    crates/harness/harness.default.toml:61 still list `NOTICE` in `docs`.
