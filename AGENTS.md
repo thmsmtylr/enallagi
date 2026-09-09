@@ -1,13 +1,12 @@
 # <project>
 
-<!-- The core context file. Read by 20+ coding agents; the tool-specific files beside it are
-     one-line pointers to this one. Keep it SHORT: context files are followed but over-specifying
-     costs success — see the note at the bottom before you add to it. -->
+<!-- The core context file, read by every agent on every session. Keep it SHORT; detail belongs in a
+     skill or a reference file the agent loads on demand. -->
 
 ## Commands
 
-- Verify, and this is what done means: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
-- Uncached, for any number you quote to a human: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+- Verify, and this is what done means: `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+- Uncached, for any number you quote to a human: `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
 - One loop iteration: `harness run --iterations 1`; `touch STOP` halts it
 - What the tree says about itself: `harness probe`
 
@@ -43,10 +42,5 @@ decide most reviews:
 
 ---
 
-<!-- On length: across 138 real tasks and four agents, context files raised inference cost by over
-     20%; LLM-generated ones cost about 3% of success rate and human-written ones bought about 4%
-     (Gloaguen et al., arXiv:2602.11988). Instructions ARE followed — a tool named here is used
-     ~1.6 times per task versus almost never when unnamed — so the risk is not that this file is
-     ignored, it is that every unnecessary requirement in it makes the task harder. Add a line here
-     only when an agent got it wrong without one. Detail belongs in a skill or a reference file the
-     agent loads on demand, not here. -->
+<!-- Add a line here only when an agent got it wrong without one. Detail belongs in a skill or a
+     reference file the agent loads on demand, not here. -->

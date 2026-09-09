@@ -251,5 +251,47 @@ fn the_shipped_documents_describe_and_do_not_argue() {
             offences.push(format!("harness.default.toml:{} cites a paper", i + 1));
         }
     }
+
+    // the citations moved to docs/intent.md appear in no other shipped document
+    let cfg = harness::config::load(&root).expect("harness.toml");
+    let mut elsewhere = vec![
+        cfg.layout.context_file.clone(),
+        "templates/pointer.md".to_string(),
+        "templates/RAILS.md".to_string(),
+        format!("{}/RAILS.md", cfg.layout.harness_dir),
+    ];
+    elsewhere.extend(cfg.layout.pointer_files.iter().cloned());
+    for rel in &elsewhere {
+        for (i, line) in read(rel).lines().enumerate() {
+            if ["34235", "2605.29668", "2602.11988", "agents.md"]
+                .iter()
+                .any(|cite| line.contains(cite))
+            {
+                offences.push(format!("{rel}:{} cites a paper docs/intent.md owns", i + 1));
+            }
+        }
+    }
+
+    // `harness probe` reads check-unnamed 0 and litter 0
+    let green = harness::probes::CheckOutcome {
+        ran: true,
+        red: false,
+        output: String::new(),
+    };
+    let ctx = harness::probes::ProbeCtx {
+        root: &root,
+        cfg: &cfg,
+        check: Some(&green),
+        driver: false,
+    };
+    for (name, result) in harness::probes::run_all(&ctx, &["check-unnamed".to_string()]) {
+        match result {
+            harness::probes::ProbeResult::Count(found) if found.is_empty() => {}
+            other => offences.push(format!("{name}: {other:?}")),
+        }
+    }
+    if !cfg.layout.docs.iter().any(|d| d == "test-hashes.json") {
+        offences.push("harness.toml docs omits test-hashes.json, which litter flags".to_string());
+    }
     assert!(offences.is_empty(), "{}", offences.join("\n"));
 }
