@@ -8,8 +8,7 @@ Statuses: `proposed` (the scout's, inert to the loop) · `ready` · `blocked` ·
 behind it) · `needs-spec` (the contract does not answer a question the task hit).
 
 Finished blocks archive to DECISIONS.md — `harness run` moves them at the top of each
-iteration, leaving a stub with the fields the loop still reads. Keep this file small: every
-process an iteration spawns re-reads all of it.
+iteration, leaving a stub with the fields the loop still reads. Keep this file small.
 
 ## Block format
 
@@ -24,11 +23,9 @@ criteria:
 notes: <what a reviewer should scrutinise; the implementer's and the verifier's own words>
 ```
 
-`T-###` above is written unnumbered on purpose: `## [T-<digits>]` is the exact shape
-`harness tasks ready` scans for, and it does not know this one is inside a code fence —
-a numbered example here is a task the loop will take. `blockedBy:` is empty, `none`, or a
-comma-separated list of ids. `attended: true` marks a task
-needing a human credential and no launcher auto-selects it.
+Keep the example above unnumbered: `harness tasks ready` scans for `## [T-<digits>]` and does not
+know a code fence from a block. `blockedBy:` is empty, `none`, or a comma-separated list of ids.
+`attended: true` marks a task needing a human credential and no launcher auto-selects it.
 
 ---
 

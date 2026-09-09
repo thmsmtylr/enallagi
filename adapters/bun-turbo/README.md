@@ -24,6 +24,5 @@ After installing, in the target repo:
 ```
 
 `check.ts` carries this repo's own constants — `SPEC_ROW_COUNT`, `MAX_LINES`, `MAX_COMPLEXITY`,
-the section heading it slices, the seed. Read it once and set them; they are the four numbers that
-make it yours. It is the one file in the package that is not tokenised, because a floor you have
-not read is a floor you do not have.
+the section heading it slices, the seed. Read it once and set them. It is the one file in the
+package that is not tokenised.
