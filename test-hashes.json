@@ -1,6 +1,6 @@
 {
   "Cargo.toml": "5f693c4033d7c7287534c50f376eb426a2f3864466e6ab0e0829cfd44c4afc59",
-  "crates/harness/Cargo.toml": "03fb9e7d418020abe4b9b1b1772be6fce722a71fb1dc3f4359b49da39b16074e",
+  "crates/harness/Cargo.toml": "915284c7d3d3b12f53a57a7fd07e26c85423a9700fe4a408fc707a4fcf74a17f",
   "crates/harness/tests/roles.rs": "0e2ec9467eca1163f757d1bfa210d573d50bd2153c86570143efcaf8a8d0648d",
   "harness.toml": "415943ae8efa71e4791e74a8ac17b5293ba6facb93a9815f1dba9b3aebbcef07"
 }

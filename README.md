@@ -277,4 +277,4 @@ roles.
 
 ## License
 
-Apache-2.0. See `LICENSE` and `NOTICE`.
+MIT. See `LICENSE`.

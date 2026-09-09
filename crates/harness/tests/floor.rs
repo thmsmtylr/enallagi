@@ -625,3 +625,16 @@ fn the_trimmed_role_prompts_still_pass_their_evals() {
     assert_eq!(code, 0, "{stdout}{stderr}");
     assert_eq!(stdout.lines().filter(|l| l.ends_with(" PASS")).count(), 3);
 }
+
+#[test]
+fn the_licence_is_mit() {
+    let root = repo_root();
+    let licence = read(&root.join("LICENSE"));
+    assert!(
+        licence.starts_with("MIT License"),
+        "{}",
+        licence.lines().next().unwrap_or("")
+    );
+    let manifest = read(&root.join("crates/harness/Cargo.toml"));
+    assert!(manifest.contains("license = \"MIT\""), "{manifest}");
+}
