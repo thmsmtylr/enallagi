@@ -173,7 +173,7 @@ notes: |
 ## [T-016] the licence is MIT
 scope: LICENSE, NOTICE, Cargo.toml, crates/harness/Cargo.toml, README.md, crates/harness/tests/floor.rs
 blockedBy: none
-status: ready
+status: review
 rows: none — harness
 criteria:
   - `LICENSE` is the MIT License text with `Copyright (c) 2026 Thomas Taylor`; `NOTICE` is deleted; `git ls-files NOTICE` prints nothing
@@ -190,7 +190,7 @@ notes: |
   (workspace) has no licence key and is unchanged. Red-then-green `the_licence_is_mit` in tests/floor.rs
   (LICENSE starts with `MIT License`; crates/harness/Cargo.toml contains `license = "MIT"`): at 1adfc46
   `cargo test -p harness -q --test floor the_licence_is_mit` → 1 failed at floor.rs:633; now green.
-  Criterion 1: `git ls-files NOTICE | wc -l` → 0. Criterion 2: the Apache grep → no output, exit 1
+  Criterion 1: `git ls-files NOTICE | wc -l` → 0. Criterion 2: its grep → no output, exit 1
   (TASKS.md's own criterion line is dropped by its `grep -v target/`). Criterion 3: README.md:278-280
   is `## License`, blank, `MIT. See \`LICENSE\`.`.
   `./target/debug/harness probe` before and after, same lines: hash-uncovered 0, check-unnamed 1
@@ -243,3 +243,20 @@ notes: |
   - Off scope, for a future task and not a rejection reason: `harness.toml:18` and
     `crates/harness/harness.default.toml:61` both still list `NOTICE` in `docs`; the second ships to every
     `harness init`.
+
+  2026-09-10 implementer, at db2005f: answers the one rejection point; nothing re-implemented, no
+  scope file changed. (1) TASKS.md:193 quoted the old licence's name inside the first take's note, so
+  criterion 2's grep hit its own record; the phrase is now `its grep`. Same command run verbatim before
+  and after: at db2005f → `TASKS.md:193:  Criterion 1: ...`, exit 0; now → no output, exit 1. This note,
+  the PROGRESS.md entry and the commit message carry no form of that name; `git grep -n` for it over
+  `*.md *.toml *.rs *.yml` → only the criterion line TASKS.md:180, which its own `grep -v target/` drops.
+  No test added: encoding criterion 2 in floor.rs would put the pattern in a `.rs` file the grep reads.
+  `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+  → exit=0; per-binary 191+0+9+5+9+16+22+29+27+4+0 = 312 passed, 3 ignored, 0 failed; clippy and fmt
+  output empty. Same figure as the verdict.
+  Scrutinise: the diff against db2005f is TASKS.md and PROGRESS.md only; criteria 1, 3 and 4 are as
+  the verdict verified them and were not re-run here beyond the full check.
+  Commit: `git add LICENSE Cargo.toml crates/harness/Cargo.toml README.md crates/harness/tests/floor.rs TASKS.md PROGRESS.md && git status --short && git commit -q -m "chore(licence): T-016 answers the criterion 2 rejection, note reworded, no scope file changed" && git log --oneline -1 && git status --short | wc -l`
+  → `M  PROGRESS.md`, `M  TASKS.md`, then `b31dcc7 chore(licence): T-016 answers the criterion 2 rejection,
+  note reworded, no scope file changed`, then `0`. Amended once (`git commit --amend --no-edit`) to carry
+  this paste; the tree diff is the same.
