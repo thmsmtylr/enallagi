@@ -88,3 +88,10 @@ check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D wa
 what happened: the review-received entry in harness.default.toml reads `gate = "rejection-repeat"`; nothing else in the file changed. `./target/debug/harness probe` → `PROBE skill-ungated 1` (was 2), the one left being T-009's. T-008 moved ready → review.
 friction: none
 next: the verifier takes T-008. T-009 is the same one-line shape (`verdict-flip`, harness.default.toml:232) on the same file, rebuilt with `cargo build -q` before the probe is read; T-013 (fold `skills_dir_for` into `skills::skills_dir`) is ready too.
+
+## 2026-09-09 — T-009 — landed
+rows: none — harness (the review-requested skill now names the probe that fails without it)
+check: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` → exit 0, 308 passed, 3 ignored, 0 failed, at 59e31df before the commit
+what happened: the review-requested entry in harness.default.toml reads `gate = "verdict-flip"`; nothing else in the file changed. The edit was sitting uncommitted in the tree from a lane cut off before its commit; this lane finished it rather than restarting. `./target/debug/harness probe` → `PROBE skill-ungated 0` (was 1). T-009 moved ready → review.
+friction: a lane was terminated after the edit and before the commit, leaving a one-line change with the task still at `ready`; the next lane had to infer from `git diff` which task owned it. Second occurrence of the LEARNINGS.md `[seed]` "uncommitted is lost" entry's shape, already a rule; nothing new to add.
+next: the verifier takes T-009. `skill-ungated` is at 0. T-013 (fold `skills_dir_for` into `skills::skills_dir`), T-014, T-015 and T-016 are ready with no blockers.

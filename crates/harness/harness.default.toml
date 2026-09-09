@@ -229,7 +229,7 @@ id = "review-requested"
 source = "github:obra/superpowers"
 path = "skills/requesting-code-review"
 rev = "v6.3.0"
-gate = "none"
+gate = "verdict-flip"
 why = "the verifier works a checklist rather than reading the diff for whatever stands out"
 
 [[skill]]
