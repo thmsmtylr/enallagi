@@ -65,7 +65,7 @@ archived: DECISIONS.md — full block at `git show 11e8ea6:TASKS.md`
 ## [T-015] README.md, docs/intent.md and harness.default.toml describe, and do not argue
 scope: README.md, docs/intent.md, crates/harness/harness.default.toml, crates/harness/src/config.rs, crates/harness/tests/cli.rs, AGENTS.md, harness.toml, test-hashes.json, templates/pointer.md, templates/RAILS.md, .harness/RAILS.md, CLAUDE.md, GEMINI.md, QWEN.md, .github/copilot-instructions.md
 blockedBy: none
-status: ready
+status: review
 gate: operator widened the scope to the files the verifier named on 2026-09-10; criteria unchanged
 rows: none — harness
 criteria:
@@ -170,6 +170,40 @@ notes: |
   criterion 2's "nowhere else"). `blockedBy: none` keeps it parked: queue.rs:193-198 releases a blocked
   task only when it has a non-empty blocker list and every blocker is done. To resume: add those files to
   `scope:` or narrow the two clauses to the scope files, then set `ready`.
+
+  2026-09-10 implementer, at 8f0cb50, on the widened scope: both rejection points answered, nothing off scope
+  touched. (1) AGENTS.md:8-9 carry harness.toml's check verbatim (`export PATH=…` prefix); harness.toml's `docs`
+  names test-hashes.json and the file's key in test-hashes.json is re-cut with `shasum -a 256` (on-scope file,
+  exempt under harness-lane). (2) templates/pointer.md is `See @__CONTEXT_FILE__.` plus a one-line comment with
+  no citation, and CLAUDE.md, GEMINI.md, QWEN.md and .github/copilot-instructions.md are its render; AGENTS.md's
+  two comments are the template's (templates/AGENTS.md:3-4, :46-47); .harness/RAILS.md:65 is templates/RAILS.md:50
+  verbatim. templates/RAILS.md carried no moved citation and is unchanged. The test
+  `the_shipped_documents_describe_and_do_not_argue` in tests/cli.rs grew the two criteria: the four citation tokens
+  over the context file, the pointer files (from `cfg.layout.pointer_files`), templates/pointer.md, both RAILS.md;
+  `probes::run_all` on `check-unnamed` against the repo with a stubbed green check; `cfg.layout.docs` naming
+  test-hashes.json (litter's tracked-file half; the untracked half is not asserted so a scratch file in a dev
+  tree cannot fail the suite). Red at 8f0cb50: nine offences, the verdict's seven citation lines plus
+  check-unnamed and docs. Green now.
+  `./target/debug/harness probe` after `cargo build -q` → `PROBE check-unnamed 0`, `PROBE litter 0`,
+  `PROBE hash-uncovered 0`; `PROBE install-stale 7` before and after (.harness/RAILS.md differs from the
+  template in rows this task did not touch; not a criterion).
+  Criterion 1: `wc -l README.md` → 280; the grep over README.md and docs/intent.md → no output, exit 1.
+  Criterion 2 grep `grep -rnE '2602\.11988|2605\.29668|34235|agents\.md' --include='*.md' --include='*.toml'
+  --include='*.rs' . | grep -vE 'target/|docs/superpowers/|docs/intent.md|PROGRESS|DECISIONS|TASKS.md'`
+  → one line, crates/harness/tests/cli.rs:266, the test's own token list; no document cites a paper.
+  crates/harness/tests/fixtures/harness.default.json:13 names 34235 as migration input; not .md/.toml/.rs and
+  off scope.
+  `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+  → exit 0; per-binary 191+0+9+5+9+16+22+29+27+4+0 = 312 passed, 3 ignored, 0 failed; clippy and fmt output empty.
+  Scrutinise: the test reads the live repo through `config::load(root)`, so a future `pointer_files` edit widens
+  its reach silently; `.harness/RAILS.md` still fails install-stale for unrelated rows.
+  Commit: `git add README.md docs/intent.md crates/harness/harness.default.toml crates/harness/src/config.rs crates/harness/tests/cli.rs AGENTS.md harness.toml test-hashes.json templates/pointer.md templates/RAILS.md .harness/RAILS.md CLAUDE.md GEMINI.md QWEN.md .github/copilot-instructions.md TASKS.md PROGRESS.md && git status --short && git commit -q -m "feat(docs): T-015 …" && git log --oneline -1 && git status --short | wc -l`
+  → `M  .github/copilot-instructions.md`, `M  .harness/RAILS.md`, `M  AGENTS.md`, `M  CLAUDE.md`, `M  GEMINI.md`,
+  `M  PROGRESS.md`, `M  QWEN.md`, `M  TASKS.md`, `M  crates/harness/tests/cli.rs`, `M  harness.toml`,
+  `M  templates/pointer.md`, `M  test-hashes.json` (README.md, docs/intent.md, harness.default.toml, config.rs
+  and templates/RAILS.md unchanged), then `232502e feat(docs): T-015 the context file names the check,
+  test-hashes.json is a document, the moved citations live only in docs/intent.md`, then `0`.
+  Amended once (`git commit --amend --no-edit`) to carry this paste; the tree diff is the same.
 
 ## [T-016] the licence is MIT
 scope: LICENSE, NOTICE, Cargo.toml, crates/harness/Cargo.toml, README.md, crates/harness/tests/floor.rs
