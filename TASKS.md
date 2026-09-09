@@ -47,7 +47,7 @@ archived: DECISIONS.md — full block at `git show 116893e:TASKS.md`
 ## [T-009] review-requested is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
 blockedBy: none
-status: ready
+status: review
 gate: the verifier returned done and the gate was red at d86c4f8. no failure could be named
 gate: the verifier returned done and the gate was red at 6fe5898. no failure could be named
 probe: skill-ungated
@@ -145,6 +145,43 @@ notes: |
   friction-repeat 0`. Probe findings that remain (check-unnamed 1, litter 1 on test-hashes.json, install-stale 1,
   ponytail-ceiling 3, stage-outlier 5) predate this range and touch no file on its scope. Ponytail: one config
   line, nothing to cut. No dependency added, no test touched.
+  2026-09-09 implementer (after the second gate): the rejection point is answered, not re-implemented;
+  harness.default.toml is untouched (`git diff 0620606 HEAD --stat -- crates/harness/harness.default.toml` is
+  empty). The red is reproduced and named, and it is not T-009's. The launcher (pid 44909) was started as
+  `( harness run … ) &` from a non-interactive `zsh -c` (its parent 44908 in `ps -axo pid,ppid,command`). A
+  background job of a non-interactive shell inherits SIGINT and SIGQUIT ignored (POSIX XCU 2.11 Signals and
+  Error Handling, https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_11,
+  2026-09-09); the disposition survives exec, so the verdict gate's `sh -c` check (gates.rs:551-555), the lib
+  test binary and the stub agent all run with SIGINT ignored, and
+  `agent::tests::a_signalled_child_reports_128_plus_the_signal` (agent.rs:607-619, stub `kill -INT $$`,
+  asserts 130) gets 0. Measured here, both ways:
+    $ sh -c 'kill -INT $$'; echo $?                                          → 130
+    $ zsh -c '(sh -c "kill -INT \$\$"; echo $?) & wait'                       → 0   (bash -c: 0 too)
+    $ zsh -c '(sh -c "kill -TERM \$\$"; echo $?) & wait'                      → 143
+    $ cargo test -p harness --lib -q a_signalled_child_reports_128_plus_the_signal   → 1 passed (foreground)
+    $ zsh -c '(cargo test -p harness --lib -q a_signalled_child_reports_128_plus_the_signal) & wait'
+      → assertion `left == right` failed  left: 0  right: 130; test result: FAILED. 0 passed; 1 failed
+  The lib binary is the first `cargo test --workspace -q` runs and takes 2.4 s, which is the gate's 3 s red
+  both times (events.jsonl seq 324 07:56:17 → seq 325 07:56:20; seq 119 → 120 on the first). `cargo test -q`
+  prints `<name> --- FAILED`, which harness.toml:7 `fail_name = '^test (\S+) \.\.\. FAILED$'` cannot match,
+  so `unforgiven` is empty and the reason reads "no failure could be named". The same command under the
+  launcher's own environment (`ps eww -p 44909` → env file, `env -i` + `/bin/sh -c`, stdin from the tool and
+  from /dev/null), run in the foreground: exit 0, 14 s, 308 passed, 0 failed, both times. So the red is
+  deterministic under this launcher process and independent of the task: no `done` can pass the verdict gate
+  until `harness run` is started in the foreground (or by anything that resets SIGINT before exec), or the test
+  stops depending on the inherited disposition, e.g. agent.rs:609 `kill -TERM $$` and 143, which background
+  jobs do not ignore (measured above). agent.rs, harness.toml and gates.rs are off this scope. STOP is in the
+  tree (written 07:58 by the operator session), so the run halts at this boundary (pipeline.rs:741) and no
+  verify round is spent on a gate that cannot go green. Criteria re-run at 0620606:
+    $ sed -n 232p crates/harness/harness.default.toml                          → gate = "verdict-flip"
+    $ cargo build -q; ./target/debug/harness probe | grep -E 'skill-ungated|review-requested'   → PROBE skill-ungated 0
+    $ ./target/debug/harness probe | grep -c review-requested                 → 0
+    $ cargo test -p harness -q --test probes -- every_declared_skill_names_its_enforcing_gate
+      → test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out
+    $ cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo exit=$?
+      → exit=0; per-binary 190+0+8+5+9+15+21+29+27+4+0 = 308 passed, 3 ignored, 0 failed
+    $ git add TASKS.md PROGRESS.md && git commit -q -m "chore(config): T-009 answers the second verdict-gate rejection, file unchanged" && git status --short
+      → 2 files committed (TASKS.md, PROGRESS.md), harness.default.toml unchanged; `git status --short` → ?? STOP (STOP is the operator's halt marker, untracked); amended once to carry this line
 
 ## [T-013] ponytail-ceiling crates/harness/src/gates.rs:451 marker with no dated kill line naming its text
 scope: crates/harness/src/gates.rs, crates/harness/src/skills.rs
