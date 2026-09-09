@@ -47,7 +47,7 @@ archived: DECISIONS.md — full block at `git show 116893e:TASKS.md`
 ## [T-009] review-requested is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
 blockedBy: none
-status: ready
+status: review
 gate: the verifier returned done and the gate was red (exit 101) at 3ae257d. agent::tests::a_signalled_child_reports_128_plus_the_signal; check tail: agent::tests::a_signalled_child_reports_128_plus_the_signal | test result: FAILED. 190 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.41s | error: test failed, to rerun pass `--lib`
 gate: the verifier returned done and the gate was red at d86c4f8. no failure could be named
 gate: the verifier returned done and the gate was red at 6fe5898. no failure could be named
@@ -210,6 +210,34 @@ notes: |
   litter 1, install-stale 1, verdict-flip 1 on this task's two flips, stage-outlier 6) touch no file on scope.
   Ponytail: one config line, nothing to cut. No dependency, no test touched. A scratch crate outside the repo
   to exercise the new `fail_name` regex was denied by the shell sandbox and not run; it is off scope.
+  2026-09-09 implementer (after the third gate): the rejection point is answered, not re-implemented;
+  harness.default.toml is untouched (`git diff 0620606 HEAD --stat -- crates/harness/harness.default.toml`
+  is empty). This time the gate named the test (5bbe681 carries the output tail):
+  `a_signalled_child_reports_128_plus_the_signal`, 190 passed; 1 failed, the same cause as the second
+  rejection. The launcher is again a `&` job of a non-interactive `zsh -c` (`ps -axo pid,ppid,command`:
+  46070 `harness run --iterations 6 --budget-usd 35 --no-tui`, parent 46069 `/bin/zsh -c … (harness run …
+  > …/tasks-run-3.log 2>&1 …) & sleep 1`), so its `sh -c` check runs with SIGINT ignored and HEAD's stub
+  `kill -INT $$` (3b06ecc agent.rs:609, asserts 130 at :618) exits 0. The lane measures `sh -c 'kill -INT
+  $$'` → 130 because the agent CLI resets dispositions in its children, which is why every verifier sees
+  green and the gate does not. The fix is already in the tree, uncommitted, and not this task's: the
+  operator's working-tree edit to agent.rs (`git diff --stat -- crates/harness/src/agent.rs` → 1 file
+  changed, 3 insertions(+), 2 deletions(-)) makes the stub `kill -KILL $$` and the assert 137. Measured the
+  way the gate runs it:
+    $ zsh -c '(cargo test -p harness --lib -q a_signalled_child_reports_128_plus_the_signal) & wait'
+      → test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 191 filtered out; finished in 0.47s
+      (the same command under HEAD's stub: `left: 0 right: 130`, 0 passed; 1 failed, second-gate note above)
+  agent.rs is off this scope and is the operator's edit, so it is not staged here; until it is committed,
+  the verdict gate's dirty-tree rule (gates.rs:892 `verdict_forces_back_a_done_with_a_dirty_tree`) is the
+  next red, and it is not this test's. Criteria re-run at 3b06ecc, tree carrying that edit:
+    $ sed -n 232p crates/harness/harness.default.toml → gate = "verdict-flip"
+    $ cargo build -q; ./target/debug/harness probe | grep -E 'skill-ungated|review-requested' → PROBE skill-ungated 0
+    $ ./target/debug/harness probe | grep -c review-requested → 0
+    $ cargo test -p harness -q --test probes -- every_declared_skill_names_its_enforcing_gate
+      → test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out; finished in 0.22s
+    $ cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo exit=$?
+      → exit=0; per-binary 191+0+8+5+9+15+21+29+27+4+0 = 309 passed, 3 ignored, 0 failed
+    $ git add TASKS.md PROGRESS.md && git commit -q -m "chore(config): T-009 answers the third verdict-gate rejection, file unchanged" && git status --short
+      → 2 files committed (TASKS.md, PROGRESS.md); `git status --short` → ` M crates/harness/src/agent.rs` (operator, unstaged) and `?? STOP`; amended once to carry this line
 
 ## [T-013] ponytail-ceiling crates/harness/src/gates.rs:451 marker with no dated kill line naming its text
 scope: crates/harness/src/gates.rs, crates/harness/src/skills.rs
