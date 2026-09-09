@@ -453,18 +453,12 @@ fn is_harness_path(cfg: &Config, f: &str) -> bool {
         )
 }
 
-// ponytail: unify with skills::skills_dir (Task 8) once it resolves the same sources.
+// `custom` passes validate but has no preset file, so the lookup may miss; skills_root owns that arm
 pub(crate) fn skills_dir_for(cfg: &Config) -> String {
-    if let Some(dir) = &cfg.layout.skills_dir {
-        return dir.clone();
-    }
-    if let Some(dir) = crate::agent::presets()
-        .get(&cfg.agent.preset)
-        .and_then(|p| p.skills_dir.clone())
-    {
-        return dir;
-    }
-    format!("{}/skills", cfg.layout.harness_dir)
+    let presets = crate::agent::presets();
+    crate::init::skills_root(cfg, presets.get(&cfg.agent.preset))
+        .to_string_lossy()
+        .into_owned()
 }
 
 // harness.lock has its own struct and is compared with skills::parse_lock, not this text pattern
