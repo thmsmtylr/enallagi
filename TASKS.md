@@ -47,7 +47,7 @@ archived: DECISIONS.md — full block at `git show 116893e:TASKS.md`
 ## [T-009] review-requested is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
 blockedBy: none
-status: review
+status: done
 probe: skill-ungated
 rows: none — harness
 command: `harness probe`
@@ -80,6 +80,23 @@ notes: |
   Commit: `git add crates/harness/harness.default.toml TASKS.md PROGRESS.md && git commit -q -m
   "feat(config): T-009 review-requested names verdict-flip as its gate"` → 6ae2827 (amended to carry
   these lines); `git status --porcelain` → empty.
+  2026-09-09 verifier: VERIFIED. `git status --porcelain` → empty; the change is on the branch at b3afb37
+  (6ae2827 in the note above is the pre-amend SHA). Base: origin/main is an ancestor, so the task diff is
+  `git diff HEAD~1`: PROGRESS.md, TASKS.md, crates/harness/harness.default.toml; the toml hunk is exactly
+  `-gate = "none"` / `+gate = "verdict-flip"` at line 232, 1 insertion 1 deletion, source/path/rev/why
+  untouched. test-hashes.json and .check-baseline are not in the diff; their delta against origin/main is
+  T-005/T-006 (2ee7163, 58ad8db), already done. `verdict-flip` is a probe name (probes/mod.rs:71, 98).
+  `cargo build -q` then `./target/debug/harness probe | grep skill-ungated` → `PROBE skill-ungated 0`;
+  `grep -c review-requested` over the probe output → 0.
+  `cargo test -p harness -q --test probes -- every_declared_skill_names_its_enforcing_gate` → 1 passed,
+  0 failed; the test asserts 7 skills and no "names gate" finding, so the name is checked against the
+  probe list, not merely against "none".
+  `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+  → exit 0; per-binary 190+0+8+5+9+15+21+29+27+4+0 = 308 passed, 3 ignored, 0 failed; .check-baseline is
+  empty, no failure to match. PROGRESS.md entry carries `friction:`; it cites the LEARNINGS.md `[seed]`
+  uncommitted-is-lost rule (LEARNINGS.md:24) as its second occurrence, already a rule, no repeat to file.
+  Ponytail: one config line, nothing to cut. Scratch-dir probe with a bogus gate name was not run (shell
+  call denied); the second branch of skill_ungated.rs is covered by the test above.
 
 ## [T-013] ponytail-ceiling crates/harness/src/gates.rs:451 marker with no dated kill line naming its text
 scope: crates/harness/src/gates.rs, crates/harness/src/skills.rs
