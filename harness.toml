@@ -4,7 +4,7 @@ preset = "claude"
 [check]
 command = "export PATH=\"$HOME/.cargo/bin:$PATH\"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check"
 force = "export PATH=\"$HOME/.cargo/bin:$PATH\"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check"
-fail_name = '^test (\S+) \.\.\. FAILED$'
+fail_name = '^(?:test )?(\S+) (?:\.\.\. |--- )FAILED$'
 
 [layout]
 contract_file = "crates/harness/src/lib.rs"
