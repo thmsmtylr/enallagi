@@ -47,7 +47,7 @@ archived: DECISIONS.md — full block at `git show 116893e:TASKS.md`
 ## [T-009] review-requested is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
 blockedBy: none
-status: ready
+status: review
 probe: skill-ungated
 rows: none — harness
 command: `harness probe`
@@ -65,6 +65,21 @@ notes: |
   verdict that flips between passes over the same task, which is what a verifier reading the diff
   for whatever stands out looks like from the event log, and a checklist is what stops it. The
   embedded default is the entry the probe reads here; harness.toml is off scope.
+  2026-09-09 implementer: one line, harness.default.toml:232 `gate = "none"` → `gate = "verdict-flip"`;
+  `git diff --stat` → 1 file changed, 1 insertion(+), 1 deletion(-). The edit was already in the tree
+  uncommitted when this lane started (a prior lane cut off mid-flight); finished, not restarted.
+  Red is the previous iteration's recorded probe at 0d590d0: `PROBE skill-ungated 1`, the FINDING
+  naming review-requested. After `cargo build -q`: `./target/debug/harness probe | grep skill-ungated`
+  → `PROBE skill-ungated 0`, no line names review-requested.
+  `cargo test -p harness -q --test probes -- every_declared_skill_names_its_enforcing_gate` → 1 passed.
+  Reviewer: confirm the diff is that one line and that `verdict-flip` is a probe name
+  (probes/mod.rs:71, 98; telemetry.rs:95); the probe must be read from a fresh `cargo build`, not the
+  `harness` symlink.
+  Gate: `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check`
+  → exit 0; per-binary 190+8+5+9+15+21+29+27+4 = 308 passed, 3 ignored, 0 failed.
+  Commit: `git add crates/harness/harness.default.toml TASKS.md PROGRESS.md && git commit -q -m
+  "feat(config): T-009 review-requested names verdict-flip as its gate"` → 6ae2827 (amended to carry
+  these lines); `git status --porcelain` → empty.
 
 ## [T-013] ponytail-ceiling crates/harness/src/gates.rs:451 marker with no dated kill line naming its text
 scope: crates/harness/src/gates.rs, crates/harness/src/skills.rs
