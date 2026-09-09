@@ -247,7 +247,12 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
     } else {
         report.unforgiven.join(", ")
     };
-    let reason = format!("the verifier returned done and the gate was red at {sha}. {named}");
+    let tail3 = report.tail(3).join(" | ");
+    let reason = format!(
+        "the verifier returned done and the gate was red (exit {}) at {sha}. {named}; check tail: {tail3}",
+        report.exit
+    );
+    let tail8 = report.tail(8).join("\n");
     force_back(
         ctx,
         "verdict",
@@ -255,7 +260,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         &reason,
         &format!("chore({task}): harness gate rejected a false VERIFIED"),
         &format!(
-            "{task} was forced back to ready by the gate: the verifier said done, the gate was red."
+            "{task} was forced back to ready by the gate: the verifier said done, the gate was red.\ncheck tail:\n{tail8}"
         ),
     )
 }
@@ -534,11 +539,26 @@ pub struct CheckReport {
     pub forgiven: Vec<String>,
     pub unnamed: bool,
     pub output: String,
+    pub exit: i32,
 }
 
 impl CheckReport {
     pub fn accepts(&self) -> bool {
         !self.red || (!self.unnamed && self.unforgiven.is_empty())
+    }
+
+    // the last n non-empty lines of output, so a rejection can show what the check actually saw
+    pub fn tail(&self, n: usize) -> Vec<String> {
+        let lines: Vec<&str> = self
+            .output
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        lines[lines.len().saturating_sub(n)..]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 }
 
@@ -561,10 +581,12 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
                 unnamed: true,
                 // the one sentinel `probes` also writes, so a caller can tell "never started" from "started and red"
                 output: format!("the check could not be run: {err}"),
+                exit: -1,
                 ..CheckReport::default()
             };
         }
     };
+    let exit = out.status.code().unwrap_or(-1);
     let output = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -573,6 +595,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
     if out.status.success() {
         return CheckReport {
             output,
+            exit,
             ..CheckReport::default()
         };
     }
@@ -598,6 +621,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         unforgiven,
         forgiven,
         output,
+        exit,
     }
 }
 
@@ -640,11 +664,14 @@ fn check_gate(ctx: &mut GateCtx) -> GateOutcome {
             "check green".to_string()
         });
     }
+    let tail3 = report.tail(3).join(" | ");
     if report.unnamed {
-        return fail("check RED, and no failure could be named — nothing to forgive");
+        return fail(format!(
+            "check RED, and no failure could be named — nothing to forgive; check tail: {tail3}"
+        ));
     }
     fail(format!(
-        "check RED, not on the baseline: {}",
+        "check RED, not on the baseline: {}; check tail: {tail3}",
         report.unforgiven.join(", ")
     ))
 }
@@ -852,6 +879,16 @@ mod tests {
     }
 
     #[test]
+    fn tail_skips_blank_lines_and_keeps_the_last_n() {
+        let report = CheckReport {
+            output: "one\n\ntwo\n\n\nthree\nfour\n".to_string(),
+            ..CheckReport::default()
+        };
+        assert_eq!(report.tail(2), vec!["three", "four"]);
+        assert_eq!(report.tail(8), vec!["one", "two", "three", "four"]);
+    }
+
+    #[test]
     fn verdict_forces_back_a_done_with_a_dirty_tree() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
@@ -879,17 +916,28 @@ mod tests {
 
     #[test]
     fn verdict_forces_back_a_done_with_a_red_check() {
-        let mut env = Env::new("echo boom\nexit 1\n");
+        let mut env = Env::new("echo boom\necho 'error: something'\necho done\nexit 101\n");
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.commit_all("verdict");
 
         let out = run("verdict", &mut env.ctx(Some("T-001"), None));
         assert!(!out.pass);
         assert!(out.reason.contains("gate was red"), "{}", out.reason);
+        assert!(out.reason.contains("exit 101"), "{}", out.reason);
+        assert!(out.reason.contains("check tail:"), "{}", out.reason);
+        assert!(out.reason.contains("error: something"), "{}", out.reason);
         assert!(env.tasks_text().contains("status: ready"));
         assert!(env
             .log()
             .contains("chore(T-001): harness gate rejected a false VERIFIED"));
+        assert_eq!(env.warnings.len(), 1);
+        assert!(env.warnings[0].contains("boom"), "{}", env.warnings[0]);
+        assert!(
+            env.warnings[0].contains("error: something"),
+            "{}",
+            env.warnings[0]
+        );
+        assert!(env.warnings[0].contains("done"), "{}", env.warnings[0]);
     }
 
     #[test]
