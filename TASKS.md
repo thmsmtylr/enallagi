@@ -47,7 +47,8 @@ archived: DECISIONS.md — full block at `git show 116893e:TASKS.md`
 ## [T-009] review-requested is declared with gate: none -- nothing fails without it, so relying on it is a hope
 scope: crates/harness/harness.default.toml
 blockedBy: none
-status: done
+status: ready
+gate: the verifier returned done and the gate was red (exit 101) at 3ae257d. agent::tests::a_signalled_child_reports_128_plus_the_signal; check tail: agent::tests::a_signalled_child_reports_128_plus_the_signal | test result: FAILED. 190 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.41s | error: test failed, to rerun pass `--lib`
 gate: the verifier returned done and the gate was red at d86c4f8. no failure could be named
 gate: the verifier returned done and the gate was red at 6fe5898. no failure could be named
 probe: skill-ungated
