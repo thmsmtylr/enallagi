@@ -23,9 +23,7 @@ waits for the reset rather than counting an exhausted agent as a finished iterat
 
 ## Skills
 
-Skills are installed **per tool, not per repository** — Superpowers states it plainly: "Installation
-differs by harness. If you use more than one, install Superpowers separately for each one."
-`layout.skills_dir` in `harness.toml` decides where this project's own skill lands; unset, it
+Skills are installed **per tool, not per repository**. `layout.skills_dir` in `harness.toml` decides where this project's own skill lands; unset, it
 falls back to the preset's own `skills_dir` (`claude`: `.claude/skills`, `kimi`: `.agents/skills`,
 `opencode`: `.opencode/skills`, `pi`: `.pi/skills`), and then to `<harness_dir>/skills` for a
 preset that names none.

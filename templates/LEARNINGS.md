@@ -1,13 +1,7 @@
 # LEARNINGS
 
-<!-- One line per costly mistake: - [date] <what went wrong> → <rule instead> (evals/<name>) -->
-<!-- A dated entry names the eval that decided it was worth its place. Write the eval first, run -->
-<!-- `harness eval --gate <name>`, and add the line only on ACCEPT: the eval has to fail without -->
-<!-- the rule and pass with it, and regress nothing that was passing. `[seed]` entries predate -->
-<!-- the gate. The file is capped (learningsCap): at the cap, adding a rule means removing one. -->
-<!-- Read at the start of every task. Rails are named in CLAUDE.md, never numbered. -->
-<!-- Every entry names a file, a command or a hook. One that names nothing is unenforceable, -->
-<!-- and `harness probe` `learning-unenforced` will say so. -->
+<!-- One line per costly mistake: - [date] <what went wrong> → <rule instead> (evals/<name>). A dated line lands only on ACCEPT from `harness eval --gate <name>`; `[seed]` entries predate the gate. Read at the start of every task.
+     Capped (learningsCap): at the cap, adding a rule means removing one. Every entry names a file, a command or a hook, or `harness probe` `learning-unenforced` reports it. Rails are named in CLAUDE.md, never numbered. -->
 
 - [seed] **ZERO IS NOT PASS.** A build tool that ran no task, a hook that matched no file, a filter
   that selected no package and a glob that found nothing all exit 0. In every case the absence of a

@@ -17,10 +17,9 @@ entries and none of the handoff.
 Restate the task's acceptance criteria in one sentence before writing code. If you cannot, the task
 is `needs-spec` and the question goes in its `notes:`.
 
-## The four roles, and why they are separate
+## The four roles
 
-An agent that finds its own work and then grades it is not a loop. Each role has one job and one
-thing it may never do:
+Each role has one job and one thing it may never do:
 
 | Role | Does | May never |
 | --- | --- | --- |
@@ -54,7 +53,7 @@ Stopping with `BLOCKED` and a written reason is a success, not a failure.
 Every iteration's `PROGRESS.md` entry ends with `friction:` — one thing that cost time and a rule or
 a check could prevent, or `none`. The first occurrence is evidence and stays there. The **second**
 occurrence of the same thing becomes a line in `LEARNINGS.md`, and `harness probe` → `friction-repeat`
-keeps emitting it until it is. One rule per surprise rewrites the operating manual every week, which costs more than the friction it removes.
+keeps emitting it until it is.
 
 ## The rails
 

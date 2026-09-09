@@ -456,3 +456,34 @@ fn the_fixture_installs_the_harness() {
     assert!(repo.root.join(".harness/RAILS.md").is_file());
     assert!(read(&repo, ".harness/RAILS.md").contains("`true`"));
 }
+
+#[test]
+fn the_seeded_documents_state_rules_and_do_not_argue() {
+    let repo = Repo::new();
+    install(&repo);
+    let argues = regex::Regex::new(
+        r"\b(because|which is why|the reason|worth|deliberately|on purpose|it turns out|in practice)\b",
+    )
+    .expect("regex");
+    let mut offences = Vec::new();
+    for rel in walk(&repo.root) {
+        let name = rel.to_string_lossy().to_string();
+        if !name.ends_with(".md") {
+            continue;
+        }
+        let text = read(&repo, &name);
+        let (mut inside, mut run) = (false, 0usize);
+        for (i, line) in text.lines().enumerate() {
+            if argues.is_match(line) {
+                offences.push(format!("{name}:{} {line}", i + 1));
+            }
+            let comment = inside || line.trim_start().starts_with("<!--");
+            inside = comment && !line.contains("-->");
+            run = if comment { run + 1 } else { 0 };
+            if run == 3 {
+                offences.push(format!("{name}:{} comment runs past two lines", i - 1));
+            }
+        }
+    }
+    assert!(offences.is_empty(), "{}", offences.join("\n"));
+}
