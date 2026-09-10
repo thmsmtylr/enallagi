@@ -7,7 +7,7 @@ pub struct Args {
     pub args: Vec<String>,
 }
 
-const USAGE: &str = "harness tasks: usage: harness tasks <list|ready|ready-unattended|ids-at|block|field|set-status|unblock|rejections> [args] [file]";
+const USAGE: &str = "harness tasks: usage: harness tasks <list|ready|ready-unattended|ids-at|block|field|set-status|unblock|rejections|archive> [args] [file]";
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
     let a = &args.args;
@@ -117,6 +117,26 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 if let Err(e) = (Queue { path }).write(&out) {
                     return Ok(fail(&e));
                 }
+            }
+            Ok(0)
+        }
+        "archive" => {
+            let cwd = std::env::current_dir()?;
+            let root = match crate::git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
+                Ok(top) => PathBuf::from(top),
+                Err(_) => cwd,
+            };
+            let cfg = crate::config::load(&root)?;
+            let report = crate::archive::archive_done(&root, &cfg, false)?;
+            if let Some(refused) = report.refused {
+                eprintln!("{refused}");
+                return Ok(1);
+            }
+            if report.moved.is_empty() {
+                println!("nothing to archive");
+            }
+            for id in &report.moved {
+                println!("{id}");
             }
             Ok(0)
         }

@@ -295,3 +295,56 @@ fn the_shipped_documents_describe_and_do_not_argue() {
     }
     assert!(offences.is_empty(), "{}", offences.join("\n"));
 }
+
+#[test]
+fn tasks_archive_moves_a_done_block_and_names_it() {
+    let r = harness::fixture::Repo::new();
+    r.write(
+        "TASKS.md",
+        "# TASKS\n\n\
+         ## [T-001] finished work\n\
+         scope: src/schema.ts\n\
+         status: done\n\
+         notes: the verifier's own words\n\
+         \n\
+         ## [T-002] still open\n\
+         scope: src/schema.ts\n\
+         status: ready\n",
+    );
+    r.write("DECISIONS.md", "# DECISIONS\n");
+    r.commit_all("seed the queue");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["tasks", "archive"])
+        .current_dir(&r.root)
+        .output()
+        .expect("run harness tasks archive");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        vec!["T-001"],
+        "{stdout}"
+    );
+
+    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    assert!(tasks.contains("archived: DECISIONS.md"), "{tasks}");
+    assert!(!tasks.contains("notes: the verifier"), "{tasks}");
+    assert!(tasks.contains("## [T-002] still open"), "{tasks}");
+    let decisions = std::fs::read_to_string(r.root.join("DECISIONS.md")).expect("DECISIONS.md");
+    assert!(
+        decisions.contains("notes: the verifier's own words"),
+        "{decisions}"
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["tasks", "archive"])
+        .current_dir(&r.root)
+        .output()
+        .expect("run harness tasks archive twice");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "nothing to archive"
+    );
+}

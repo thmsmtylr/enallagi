@@ -900,3 +900,33 @@ fn a_task_at_review_wins_over_one_ready_for_the_pipeline_choice() {
         "T-002 is untouched: the task pipeline never ran"
     );
 }
+
+#[test]
+fn the_run_archives_the_task_it_landed_in_its_last_iteration() {
+    let r = repo(&base_toml(""), REVIEW_TASK);
+    let verify = verifier(&r);
+    with_verifier(&r, &verify);
+    r.write("DECISIONS.md", "# DECISIONS\n");
+    r.commit_all("stubs");
+
+    let (digest, _) = go(&r, &opts(1));
+    assert_eq!(digest.landed, vec!["T-001".to_string()]);
+
+    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    assert!(tasks.contains("archived: DECISIONS.md"), "{tasks}");
+    assert!(
+        !tasks.contains("criteria:"),
+        "the body went with it: {tasks}"
+    );
+    let decisions = std::fs::read_to_string(r.root.join("DECISIONS.md")).expect("DECISIONS.md");
+    assert!(decisions.contains("## [T-001] do the thing"), "{decisions}");
+    // loop.pid still names this process on the way out, so the live-loop refusal must not fire
+    assert!(
+        !digest
+            .warnings
+            .iter()
+            .any(|w| w.contains("an agent is running")),
+        "{:?}",
+        digest.warnings
+    );
+}

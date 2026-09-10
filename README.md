@@ -103,10 +103,10 @@ notes: the implementer's and the verifier's own words; output pasted, not summar
 | `set-status <id> <status> <reason>` | rewrites a block's status and reason |
 | `unblock` | drops a `blockedBy` id that is now `done` |
 | `rejections [file]` | `REJECTED` lines out of `DECISIONS.md` (`file` defaults there) |
+| `archive` | every `done` block to `DECISIONS.md`, oldest `PROGRESS.md` entries to `PROGRESS.archive.md` |
 
 `file` after the other arguments defaults to `TASKS.md`. `status` is a block's first word; the rest
-of the line is its reason. `done` blocks archive to `DECISIONS.md`, leaving a stub the launcher
-still reads.
+of the line is its reason. A run archives each iteration and on the way out, leaving a stub.
 
 ## Probes
 
