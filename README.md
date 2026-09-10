@@ -61,7 +61,7 @@ adjudicator) and writes its reason next to the status.
 
 | Rule | Gate | Runs after |
 | --- | --- | --- |
-| Only the verifier may set `done` | `implementer-not-done` | implement |
+| Only the verifier may set `done`, and an implementer that stopped short of `review` skips the rest of the iteration | `implementer-not-done` | implement |
 | The work is committed, and the check is green on delta, before `done` is accepted | `verdict` | verify |
 | Only the task's `scope:` globs are touched; a product task never edits the harness | `scope` | verify |
 | The check, on delta against `.check-baseline` | `check-delta` | wherever a stage's `post` names it |

@@ -83,7 +83,7 @@ archived: DECISIONS.md — full block at `git show 587dbfa:TASKS.md`
 ## [T-018] no verify stage when the implementer left the task anywhere but review
 scope: crates/harness/src/gates.rs, crates/harness/src/pipeline.rs, crates/harness/tests/loop.rs, README.md
 blockedBy: none
-status: ready
+status: review
 rows: none — harness
 criteria:
   - `gates::implementer_not_done` returns `skip_rest: true` for every status that is not `review`: `done` keeps today's force-back and its commit, while `blocked`, `needs-spec`, `deferred`, `ready` and a missing status pass with a reason naming the status and skip the remaining stages
@@ -94,6 +94,70 @@ criteria:
 notes: |
   Measured on 2026-09-10: a verify stage ran against a task the implementer had parked `blocked`,
   found nothing at review, and cost $1.45 saying so.
+
+  Implemented 2026-09-10. `implementer_not_done` (gates.rs:156) now matches `review` first and
+  passes it, returns `pass` with `skip_rest: true` and the reason `the implementer left it at
+  <status>` for anything else that is not `done` (`no status` when the field is absent), and keeps
+  the `done` arm's force-back and its `chore(<task>)` commit untouched.
+
+  Scrutinise the pipeline.rs half: `Flow::SkipRest` used to `return !self.stopped` from the
+  iteration, which skipped `promotions` and `task_outcome` too. It now `break`s, so the round still
+  records its outcome -- that is where criterion 2's digest line `T-001 ended the iteration at
+  blocked, not done.` comes from (pipeline.rs:883, pre-existing text). Breaking also skips the
+  `boundary` check that the cut stages would have made, which dropped the halt in
+  `a_dollar_budget_over_a_cost_nothing_reports_halts`; the skip arm calls `self.boundary(false)`
+  before breaking to pay that back. Both are worth a reviewer's eye.
+
+  Commands run, at ac935f1 plus this change, before the commit:
+
+      $ export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo "EXIT=$?"
+      test result: ok. 192 passed; 0 failed; 1 ignored
+      test result: ok. 0 passed; 0 failed; 0 ignored
+      test result: ok. 10 passed; 0 failed; 0 ignored
+      test result: ok. 5 passed; 0 failed; 0 ignored
+      test result: ok. 9 passed; 0 failed; 0 ignored
+      test result: ok. 16 passed; 0 failed; 2 ignored
+      test result: ok. 22 passed; 0 failed; 0 ignored
+      test result: ok. 31 passed; 0 failed; 0 ignored
+      test result: ok. 27 passed; 0 failed; 0 ignored
+      test result: ok. 4 passed; 0 failed; 0 ignored
+      test result: ok. 0 passed; 0 failed; 0 ignored
+      EXIT=0
+
+  316 passed, 3 ignored, 0 failed. Red first, both new tests:
+
+      $ cargo test --workspace -q   # before the gates.rs change
+      gates::tests::an_implementer_stopping_short_of_review_skips_the_rest --- FAILED
+      blocked: GateOutcome { pass: true, reason: "the implementer left it at review", skip_rest: false, halt: false }
+
+      $ cargo test --test loop -q an_implementer_that_stops_short   # before the pipeline.rs change
+      assertion `left == right` failed: verify may not spawn
+        left: 2
+       right: 1
+
+  Criterion 4: `git diff --stat` reads `README.md | 2 +-`, the one table row. Criterion 3:
+  `implementer_not_done_forces_back_and_skips_rest` is unedited and green.
+
+  Staged and committed (this block's own text is part of that commit, amended in):
+
+      $ git add crates/harness/src/gates.rs crates/harness/src/pipeline.rs crates/harness/tests/loop.rs README.md TASKS.md PROGRESS.md
+      $ git status --porcelain
+      M  PROGRESS.md
+      M  README.md
+      M  TASKS.md
+      M  crates/harness/src/gates.rs
+      M  crates/harness/src/pipeline.rs
+      M  crates/harness/tests/loop.rs
+      $ git -c commit.gpgsign=false commit -q -m 'feat(gates): T-018 ...'
+      $ git show --stat --oneline HEAD
+      8d64ec1 feat(gates): T-018 no verify stage when the implementer left the task anywhere but review
+       PROGRESS.md                    |  7 +++++++
+       README.md                      |  2 +-
+       TASKS.md                       | 45 +++++++++++++++++++++++++++++++++++++++++-
+       crates/harness/src/gates.rs    | 42 +++++++++++++++++++++++++++++++++++++--
+       crates/harness/src/pipeline.rs |  8 ++++++--
+       crates/harness/tests/loop.rs   | 37 ++++++++++++++++++++++++++++++++++
+       6 files changed, 135 insertions(+), 6 deletions(-)
 
 ## [T-019] queue-hygiene checks the scope of open blocks, not of done ones
 scope: crates/harness/src/probes/queue_hygiene.rs, crates/harness/tests/probes.rs, README.md
