@@ -478,3 +478,21 @@ fn a_row_with_a_slash_resolves_under_source_root_before_the_repo_root() {
     let results = run(&repo, &cfg);
     assert_eq!(untested(&results), 0, "{}", render(&results));
 }
+
+#[test]
+fn a_done_blocks_scope_is_history_and_an_open_blocks_scope_must_name_a_file() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        "\n## [T-002] the finished one, whose files a later cleanup deleted\nscope: src/gone.rs\nblockedBy: none\nstatus: done\n\n## [T-003] the open one nobody can take\nscope: src/missing.rs\nblockedBy: none\nstatus: ready\n",
+    );
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "queue-hygiene");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0].message.contains("src/missing.rs"),
+        "{}",
+        found[0].message
+    );
+}

@@ -125,7 +125,7 @@ per shortfall. A probe that cannot run prints `PROBE <name> ERROR`, never a coun
 | `skill-ungated` | a `[[skill]]` entry with `gate = "none"`, or a gate that names nothing real |
 | `ponytail-ceiling` | a `ponytail:` marker in code with no dated kill line already naming its text |
 | `rejection-stale` | a `REJECTED` note under a status other than `ready`, or a block parked at `needs-spec` |
-| `queue-hygiene` | a duplicate id, a missing status, a blocker no block defines, a `done` block matching no scope |
+| `queue-hygiene` | a duplicate id, a missing status, a blocker no block defines, an open block matching no scope |
 | `friction-repeat` | two `PROGRESS.md` friction lines that are the same friction reworded, with no rule covering it |
 | `check-red` | the forced check is failing |
 | `litter` | a tracked, untracked or ignored path on no allowlist |
