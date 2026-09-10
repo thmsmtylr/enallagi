@@ -83,7 +83,7 @@ archived: DECISIONS.md — full block at `git show 587dbfa:TASKS.md`
 ## [T-018] no verify stage when the implementer left the task anywhere but review
 scope: crates/harness/src/gates.rs, crates/harness/src/pipeline.rs, crates/harness/tests/loop.rs, README.md
 blockedBy: none
-status: review
+status: done
 rows: none — harness
 criteria:
   - `gates::implementer_not_done` returns `skip_rest: true` for every status that is not `review`: `done` keeps today's force-back and its commit, while `blocked`, `needs-spec`, `deferred`, `ready` and a missing status pass with a reason naming the status and skip the remaining stages
@@ -158,6 +158,107 @@ notes: |
        crates/harness/src/pipeline.rs |  8 ++++++--
        crates/harness/tests/loop.rs   | 37 ++++++++++++++++++++++++++++++++++
        6 files changed, 135 insertions(+), 6 deletions(-)
+
+  ---
+
+  VERIFIED 2026-09-10 by the verifier, at a882221, working tree clean (`git status --porcelain`
+  empty before and after this pass). `$BASE` = `HEAD~1` (ac935f1): `origin/main` verifies but is
+  138 commits behind this branch (`git rev-list --count origin/main..HEAD` = 138), so it cannot
+  scope one iteration. Every command below was run in this session.
+
+      $ export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo "EXIT=$?"
+      test result: ok. 192 passed; 0 failed; 1 ignored     (unittests src/lib.rs)
+      test result: ok. 0 passed; 0 failed; 0 ignored       (unittests src/main.rs)
+      test result: ok. 10 passed; 0 failed; 0 ignored      (tests/cli.rs)
+      test result: ok. 5 passed; 0 failed; 0 ignored       (tests/cli_smoke.rs)
+      test result: ok. 9 passed; 0 failed; 0 ignored       (tests/eval.rs)
+      test result: ok. 16 passed; 0 failed; 2 ignored      (tests/floor.rs)
+      test result: ok. 22 passed; 0 failed; 0 ignored      (tests/init.rs)
+      test result: ok. 31 passed; 0 failed; 0 ignored      (tests/loop.rs)
+      test result: ok. 27 passed; 0 failed; 0 ignored      (tests/probes.rs)
+      test result: ok. 4 passed; 0 failed; 0 ignored       (tests/roles.rs)
+      test result: ok. 0 passed; 0 failed; 0 ignored       (Doc-tests harness)
+      EXIT=0
+
+  316 passed, 3 ignored, 0 failed, over 11 targets, reproducing the implementer's per-binary counts
+  line for line. Target names came from a second `cargo test --workspace 2>&1 | grep -E "^\s+Running|^\s+Doc-tests"`.
+  ZERO IS NOT PASS, so both zeros are named: `unittests src/main.rs` (a binary with no `#[test]`)
+  and `Doc-tests harness` (no doctests). Both are pre-existing and neither is a target this task
+  touched. `.check-baseline` is empty of test names and gained no line in this diff
+  (`git diff HEAD~1 -- .check-baseline` is empty), so any failure would have been a rejection; there
+  were none to match against it.
+
+  Criterion 1 - PASS. `gates.rs:157` matches `review` first and returns `skip_rest: false`; the next
+  arm returns `skip_rest: true` with `the implementer left it at <status>`, `no status` when the
+  field is absent; the `done` arm still calls `force_back` and sets `skip_rest = true` at
+  `gates.rs:181`, so `done` keeps its force-back and its `chore(<task>)` commit.
+
+  Criterion 2 - PASS, and the test is load-bearing, not a tautology. Red-checked in a throwaway
+  worktree at `/tmp/t018-red` (removed; `git worktree list` now shows only this checkout):
+
+      $ git checkout HEAD~1 -- crates/harness/src/pipeline.rs   # gates.rs left at HEAD
+      $ cargo test --test loop -q an_implementer_that_stops_short
+      panicked at crates/harness/tests/loop.rs:857:5: []
+      test result: FAILED. 0 passed; 1 failed; 30 filtered out
+
+  The `ends(&events).len() == 1` and no-`stage.start`-for-verify assertions survive that revert, so
+  the gates.rs half alone cuts the stage; the digest line `T-001 ended the iteration at blocked, not
+  done.` is what the pipeline.rs half buys, and it is the pre-existing text at `pipeline.rs:888`.
+  The gates.rs half was red-checked the other way, reverting only the match arm and keeping the new
+  test:
+
+      $ cargo test -q --lib an_implementer_stopping_short
+      panicked at crates/harness/src/gates.rs:1090:13:
+      blocked: GateOutcome { pass: true, reason: "the implementer left it at review", skip_rest: false, halt: false }
+      test result: FAILED. 0 passed; 1 failed; 192 filtered out
+
+  The `self.boundary(false)` payback is load-bearing too, so it is not dead code:
+
+      $ # pipeline.rs skip arm with the boundary call deleted
+      $ cargo test -q --workspace
+      a_dollar_budget_over_a_cost_nothing_reports_halts --- FAILED
+      test result: FAILED. 30 passed; 1 failed
+
+  Criterion 3 - PASS. `git diff HEAD~1 -- crates/harness/src/gates.rs | grep "^-"` removes exactly
+  two lines: the old doc comment and the old `!= Some("done")` arm.
+  `implementer_not_done_forces_back_and_skips_rest` is not among them and is green in the run above.
+
+  Criterion 4 - PASS. `git diff HEAD~1 -- README.md` is one hunk, one line, the
+  `implementer-not-done` table row; `README.md | 2 +-`. No other README change.
+
+  Criterion 5 - PASS, EXIT=0 above.
+
+  Frauds checked and clear. `git diff HEAD~1 -- test-hashes.json` is empty, so no key was re-cut and
+  no testcase body needed reading behind one. `git diff HEAD~1 --name-only` is the four scope files
+  plus `TASKS.md` and `PROGRESS.md`, both in `gates.rs`'s `BOOKKEEPING` (`gates.rs:12`) and exempt
+  from `one-scope`. `rows: none — harness` is the correct lane for a diff in `gates.rs` and
+  `pipeline.rs`, so `harness-lane` holds rather than being dodged. No test weakened, skipped or
+  deleted. No dependency added (`Cargo.toml` and `Cargo.lock` are not in the diff). No shape
+  redefined locally. No network call in either new test; both drive a shell-script stub. No number
+  asserted that this pass did not re-run. `harness probe` reports `litter 0` and the tree is clean.
+  `PROGRESS.md`'s new entry carries a `friction:` line, and it is a first occurrence -- the two
+  `friction-repeat` findings the probe still emits point at `PROGRESS.md:131` (3 times) and
+  `PROGRESS.md:110` (2 times), both older than this task and both still owed their LEARNINGS.md
+  lines, which is the loop's debt and not T-018's. `install-stale 7` is unchanged by this diff,
+  which touches nothing under `roles/` or `.harness/`.
+
+  Ponytail: nothing to cut. Two lines changed in the gate (one match arm, struct-update syntax over
+  a helper), three in the pipeline. No abstraction, no new caller-less indirection, no config for a
+  constant.
+
+  Two residuals, named because a later reader will meet them, neither a rejection and neither
+  contradicting the criteria:
+  - The `blocked` arm skips `verify`, and `commit-verdict` lived on that stage
+    (`harness.default.toml:132`), so nothing in the launcher now commits `TASKS.md` when the
+    implementer parks a task short of `review`. The `done` arm still commits, via `force_back`. This
+    is asymmetric on purpose per criterion 1, and the implementer's own prompt makes the commit its
+    last required step, but the belt-and-braces commit is gone. There is no commit rail in
+    `.harness/RAILS.md` for it to erode (`grep -n commit .harness/RAILS.md` returns only the
+    `one-scope` row), so it stays a note.
+  - The notes above cite `8d64ec1`, which is a real commit object (`git cat-file -t 8d64ec1` →
+    `commit`) but not on the branch: it was amended into `a882221`. The evidence reproduces at
+    `a882221`, so the stale sha is a citation to a dangling object, not a claim about a tree nobody
+    can check out.
 
 ## [T-019] queue-hygiene checks the scope of open blocks, not of done ones
 scope: crates/harness/src/probes/queue_hygiene.rs, crates/harness/tests/probes.rs, README.md
