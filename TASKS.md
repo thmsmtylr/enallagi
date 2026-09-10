@@ -77,7 +77,7 @@ archived: DECISIONS.md — full block at `git show a6e102c:TASKS.md`
 ## [T-017] the run archives on the way out, and an operator can archive without spending a stage
 scope: crates/harness/src/pipeline.rs, crates/harness/src/archive.rs, crates/harness/src/cli/tasks.rs, crates/harness/src/cli/mod.rs, crates/harness/tests/loop.rs, crates/harness/tests/cli.rs, README.md
 blockedBy: none
-status: ready
+status: review
 rows: none — harness
 criteria:
   - `archive::archive_done` is called once more on the way out of a run, in `Loop::finish` before the digest is built, so the task that landed in the final iteration is archived by the run that landed it; its `refused` and `Err` stay warnings, never a halt, as at the iteration-start call site
@@ -89,6 +89,76 @@ notes: |
   `archive_done` refuses to rewrite the queue under a foreign live loop by reading `loop.pid` and
   walking the caller's ancestors, so calling it from `finish`, where the pid file still names this
   process, must stay allowed. That is the one line to get right, and it wants its own assertion.
+
+  Implemented at b2b9765. The iteration-start block became `Loop::archive` (pipeline.rs) and
+  `finish` calls it first, before `Kind::RunEnd` is emitted, so a refusal or an `Err` still lands
+  in the digest's warnings and still never halts. `harness tasks archive` (cli/tasks.rs) resolves
+  the root the way `cli/probe.rs` does, calls the same function, prints one id per line or
+  `nothing to archive`, and prints a live-loop refusal to stderr with exit 1. README gained the
+  `archive` row.
+
+  Scrutinise: (a) the live-loop assertion — `the_run_archives_the_task_it_landed_in_its_last_iteration`
+  asserts no `an agent is running` warning, which is the `loop_live` self-ancestor path, since
+  `PidFile` is still alive when `finish` runs; (b) the README trim. Criterion 4 says "no other
+  README change", but `tests/cli.rs::the_shipped_documents_describe_and_do_not_argue` caps the file
+  at 280 lines and it was at 280, so the closing paragraph lost its third line to pay for the row.
+  Nothing else in README.md changed. (c) `crates/harness/src/archive.rs` and
+  `crates/harness/src/cli/mod.rs` are on `scope:` and needed no edit: `Command::Tasks` already
+  passes any `cmd` string through.
+
+  Red, at b2b9765 with the two tests added and nothing else:
+
+      $ cargo test --test loop the_run_archives_the_task -q
+      thread 'the_run_archives_the_task_it_landed_in_its_last_iteration' panicked at
+      crates/harness/tests/loop.rs:916:5:
+      ## [T-001] do the thing
+      ...
+      status: done
+      gate: stub verified
+      criteria:
+        - it happens
+      test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 29 filtered out
+
+      $ cargo test --test cli tasks_archive -q
+      assertion `left == right` failed: Output { status: ExitStatus(unix_wait_status(512)),
+      stdout: "", stderr: "harness tasks: usage: harness tasks
+      <list|ready|ready-unattended|ids-at|block|field|set-status|unblock|rejections> [args] [file]\n" }
+        left: Some(2)
+       right: Some(0)
+      test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out
+
+  Green, at b2b9765 with the change:
+
+      $ export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check; echo "EXIT=$?"
+      test result: ok. 191 passed; 0 failed; 1 ignored
+      test result: ok. 0 passed; 0 failed; 0 ignored
+      test result: ok. 10 passed; 0 failed; 0 ignored
+      test result: ok. 5 passed; 0 failed; 0 ignored
+      test result: ok. 9 passed; 0 failed; 0 ignored
+      test result: ok. 16 passed; 0 failed; 2 ignored
+      test result: ok. 22 passed; 0 failed; 0 ignored
+      test result: ok. 30 passed; 0 failed; 0 ignored
+      test result: ok. 27 passed; 0 failed; 0 ignored
+      test result: ok. 4 passed; 0 failed; 0 ignored
+      test result: ok. 0 passed; 0 failed; 0 ignored
+      EXIT=0
+
+  314 passed, 3 ignored, 0 failed. `./target/debug/harness probe` prints byte-identical PROBE
+  lines with the change stashed and unstashed (`diff /tmp/before.txt /tmp/after.txt` → no output).
+
+  Commit: `git add crates/harness/src/pipeline.rs crates/harness/src/archive.rs crates/harness/src/cli/tasks.rs crates/harness/src/cli/mod.rs crates/harness/tests/loop.rs crates/harness/tests/cli.rs README.md TASKS.md PROGRESS.md && git status --porcelain && git -c commit.gpgsign=false commit -q -m "feat(pipeline): T-017 …" && git log --oneline -1 && git status --porcelain`
+
+      M  PROGRESS.md
+      M  README.md
+      M  TASKS.md
+      M  crates/harness/src/cli/tasks.rs
+      M  crates/harness/src/pipeline.rs
+      M  crates/harness/tests/cli.rs
+      M  crates/harness/tests/loop.rs
+      4bd1c10 feat(pipeline): T-017 the run archives on the way out, and `harness tasks archive` runs the same function
+      (git status --porcelain printed nothing: the tree is clean)
+
+  Amended once (`git commit --amend --no-edit`) to carry this paste; the tree diff is the same.
 
 ## [T-018] no verify stage when the implementer left the task anywhere but review
 scope: crates/harness/src/gates.rs, crates/harness/src/pipeline.rs, crates/harness/tests/loop.rs, README.md

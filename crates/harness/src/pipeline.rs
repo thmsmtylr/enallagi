@@ -327,8 +327,22 @@ impl<'a> Loop<'a> {
         Ok(self.finish(iterations))
     }
 
+    // neither a refusal nor an error is a halt: the queue is still readable and the round can run
+    fn archive(&mut self) {
+        match archive::archive_done(self.root, self.cfg, false) {
+            Ok(report) => {
+                if let Some(refused) = report.refused {
+                    self.digest.warnings.push(refused);
+                }
+            }
+            Err(err) => self.digest.warnings.push(format!("archive: {err}")),
+        }
+    }
+
     // every exit path funnels through here, so every run ends with one digest
     fn finish(&mut self, iterations: u32) -> Digest {
+        // the task the last iteration landed is archived by the run that landed it, not the next one
+        self.archive();
         self.digest.iterations = iterations;
         self.emit(Kind::RunEnd {
             halts: self.digest.halts.clone(),
@@ -349,15 +363,7 @@ impl<'a> Loop<'a> {
         }
 
         self.unblock();
-        match archive::archive_done(self.root, self.cfg, false) {
-            // neither is a halt: the queue is still readable and the round can run
-            Ok(report) => {
-                if let Some(refused) = report.refused {
-                    self.digest.warnings.push(refused);
-                }
-            }
-            Err(err) => self.digest.warnings.push(format!("archive: {err}")),
-        }
+        self.archive();
 
         let ready_before = self.ids_at("ready");
         let rejections_before = self.rejections();
