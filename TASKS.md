@@ -91,3 +91,55 @@ scope: crates/harness/src/probes/queue_hygiene.rs, crates/harness/tests/probes.r
 blockedBy: none
 status: done
 archived: DECISIONS.md — full block at `git show 9c0b4af:TASKS.md`
+
+## [T-024] friction-repeat PROGRESS.md:131 the same friction is recorded 3 times and LEARNINGS.md carries no rule for it
+scope: LEARNINGS.md, evals/**
+blockedBy:
+status: ready
+probe: friction-repeat
+rows: none — harness
+command: `harness probe`
+output: |
+  PROBE friction-repeat 2
+  FINDING friction-repeat PROGRESS.md:131 the same friction is recorded 3 times and LEARNINGS.md carries no rule for it: probes.rs sat on the scope line and needed no edit; third occurrence of T-002's and T-013'
+criteria:
+  - `evals/scope-noise/` holds `setup.sh`, `prompt.txt`, `assert.sh` and `ablate.sh`, the four-file shape `evals/README.md` names; `evals/verifier/` is the only existing eval with all four, so copy it
+  - `cargo run -q -p harness -- eval --gate scope-noise` prints a line beginning `GATE scope-noise ACCEPT`. A `REJECT` is a result, not a failure: paste it and move this block to `blocked` rather than reshaping the rule until it passes
+  - LEARNINGS.md carries one new dated entry for the scope-line friction, naming `evals/scope-noise` and naming a file, a command or a hook; `cargo run -q -p harness -- probe` still prints `PROBE learning-unenforced 0` and `PROBE learning-ungated 0`
+  - `cargo run -q -p harness -- probe` prints no `FINDING friction-repeat` line for `PROGRESS.md:131`
+  - `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
+notes: promoted 2026-09-10. The friction is T-002's, restated at T-013 and T-014: a scope file the task never touches is noise the scope gate cannot tell from a forgotten edit; PROGRESS.md:131 closes with "Whoever next holds LEARNINGS.md on scope owes the scope-line-noise rule", and this block is that holder. Every criterion runs `cargo run -q -p harness -- …`, never the `harness` on PATH: that is a stale `target/release` build predating T-019 and it answers a different question (see T-023's kill line in DECISIONS.md). The cap is not binding — LEARNINGS.md holds 5 entries against `learnings_cap = 12` (crates/harness/harness.default.toml:103) — so nothing has to be removed to add this one. Rule coverage is per-line word-set containment (friction_repeat.rs:57), so the entry has to carry the friction's own words or the probe stays loud. The scope glob is `evals/**` rather than `evals/scope-noise/**` because a directory that does not exist yet matches no file and queue-hygiene calls that an open block nobody can take; the criteria pin the directory instead. Touch no eval but the new one.
+
+## [T-025] friction-repeat PROGRESS.md:110 the same friction is recorded 2 times and LEARNINGS.md carries no rule for it
+scope: LEARNINGS.md, evals/**
+blockedBy:
+status: ready
+probe: friction-repeat
+rows: none — harness
+command: `harness probe`
+output: |
+  PROBE friction-repeat 2
+  FINDING friction-repeat PROGRESS.md:110 the same friction is recorded 2 times and LEARNINGS.md carries no rule for it: second occurrence: a red the gate cannot name is unanswerable: `fail_name` in harness.toml
+criteria:
+  - `evals/unnamed-red/` holds `setup.sh`, `prompt.txt`, `assert.sh` and `ablate.sh`, the four-file shape `evals/README.md` names; copy `evals/verifier/`, the only existing eval with all four
+  - `cargo run -q -p harness -- eval --gate unnamed-red` prints a line beginning `GATE unnamed-red ACCEPT`. A `REJECT` is a result, not a failure: paste it and move this block to `blocked` rather than reshaping the rule until it passes
+  - LEARNINGS.md carries one new dated entry for that friction, naming `evals/unnamed-red` and naming a file, a command or a hook; `cargo run -q -p harness -- probe` still prints `PROBE learning-unenforced 0` and `PROBE learning-ungated 0`
+  - `cargo run -q -p harness -- probe` prints no `FINDING friction-repeat` line for `PROGRESS.md:110`
+  - `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
+notes: promoted 2026-09-10. The friction is that a red the verdict gate cannot name is unanswerable: two lanes re-ran blind before the failing test was named (PROGRESS.md:110). The mechanism is already repaired — harness.toml:7 now carries a `fail_name` that matches both `… --- FAILED` and `… ... FAILED`, which is what `cargo test -q` actually prints — so this block owes the rule that keeps it repaired, not the repair; harness.toml and gates.rs are off scope and stay off it. Every criterion runs `cargo run -q -p harness -- …`, never the `harness` on PATH, which is a stale `target/release` build (see T-023's kill line in DECISIONS.md). T-024 also holds LEARNINGS.md on scope: take them one at a time, one checkout one writer (LEARNINGS.md, seed entry 3). Cap is not binding: 5 entries against `learnings_cap = 12`. The scope glob is `evals/**` rather than `evals/unnamed-red/**` because a directory that does not exist yet matches no file and queue-hygiene calls that an open block nobody can take; the criteria pin the directory instead. Touch no eval but the new one.
+
+## [T-026] install-stale .harness/RAILS.md:0 the installed copy differs from the source it was built from; re-run `harness init`
+scope: .harness/RAILS.md, templates/RAILS.md
+blockedBy:
+status: proposed
+probe: install-stale
+rows: none — harness
+command: `harness probe`
+output: |
+  PROBE install-stale 1
+  FINDING install-stale .harness/RAILS.md:0 the installed copy differs from the source it was built from; re-run `harness init`
+criteria:
+  - the fix touches `.harness/RAILS.md`, a governing document: the adjudicator halts the run for a human on this block rather than promoting it
+  - `harness probe` no longer emits a `FINDING install-stale` line for `.harness/RAILS.md`
+notes: proposed from the output above on 2026-09-10. HALT 2026-09-10 — the fix changes `.harness/RAILS.md`, a governing document, so this is neither a kill nor a task. `diff templates/RAILS.md .harness/RAILS.md` shows the divergence is deliberate, not drift: the installed copy is the written rails, the template is the shipped skeleton that still carries the `__CONTEXT_FILE__` and `__SPEC__` placeholders and leaves the rail table commented out. `harness init`, which the finding recommends, would overwrite `.harness/RAILS.md` with that skeleton and destroy the rails text. A human decides which side is the source: either `templates/RAILS.md` is rewritten to say what `.harness/RAILS.md` says with the placeholders restored, so a re-init is safe, or `install-stale` stops calling a deliberately diverged install stale. Neither is the adjudicator's to write. One number in the block is the stale binary's: `cargo run -q -p harness -- probe` reports `PROBE install-stale 7`, not 1 — `.harness/RAILS.md` plus five `.harness/roles/*.md` and `.claude/skills/running-the-loop/SKILL.md`, all installed 2026-09-08 against sources T-014 rewrote 2026-09-09. Only the RAILS.md row halts: for the other six a re-init writes what the sources already say and destroys nothing. They are outside this block and unproposed.
+
