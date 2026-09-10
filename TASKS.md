@@ -95,7 +95,7 @@ archived: DECISIONS.md — full block at `git show 9c0b4af:TASKS.md`
 ## [T-024] friction-repeat PROGRESS.md:131 the same friction is recorded 3 times and LEARNINGS.md carries no rule for it
 scope: LEARNINGS.md, evals/**
 blockedBy:
-status: ready
+status: blocked
 probe: friction-repeat
 rows: none — harness
 command: `harness probe`
@@ -109,6 +109,42 @@ criteria:
   - `cargo run -q -p harness -- probe` prints no `FINDING friction-repeat` line for `PROGRESS.md:131`
   - `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
 notes: promoted 2026-09-10. The friction is T-002's, restated at T-013 and T-014: a scope file the task never touches is noise the scope gate cannot tell from a forgotten edit; PROGRESS.md:131 closes with "Whoever next holds LEARNINGS.md on scope owes the scope-line-noise rule", and this block is that holder. Every criterion runs `cargo run -q -p harness -- …`, never the `harness` on PATH: that is a stale `target/release` build predating T-019 and it answers a different question (see T-023's kill line in DECISIONS.md). The cap is not binding — LEARNINGS.md holds 5 entries against `learnings_cap = 12` (crates/harness/harness.default.toml:103) — so nothing has to be removed to add this one. Rule coverage is per-line word-set containment (friction_repeat.rs:57), so the entry has to carry the friction's own words or the probe stays loud. The scope glob is `evals/**` rather than `evals/scope-noise/**` because a directory that does not exist yet matches no file and queue-hygiene calls that an open block nobody can take; the criteria pin the directory instead. Touch no eval but the new one.
+  2026-09-10 implementer: BLOCKED on criterion 2, a REJECT, recorded as the criterion directs and not reshaped.
+  `evals/scope-noise/` holds the four files (criterion 1). It is an adjudicator eval: setup.sh appends a
+  `hash-uncovered` proposal quoting a live `harness probe` run, with `scope: test-hashes.json, harness.toml`;
+  assert.sh passes only if T-901 is promoted to ready with `test-hashes.json` on its scope line and without
+  `harness.toml`, which the fix reads to hash and never changes (T-005's `scope: test-hashes.json` is the
+  precedent). The candidate rule is carried verbatim inside setup.sh; ablate.sh leaves a marker because
+  eval.rs:110 runs ablation before setup, so setup.sh builds the same fixture minus that entry. Both arms
+  built and failed assert.sh before any agent ran (status: proposed), so neither can pass empty.
+  Run twice, the second time on the committed setup.sh:
+    $ cargo run -q -p harness -- eval --gate scope-noise
+    GATE scope-noise REJECT the case passes with the rule ablated, so the rule changed no outcome
+    gate rc=1
+  Reading: the adjudicator narrowed the scope line with or without the LEARNINGS.md line, because
+  roles/adjudicator.md:21 already says "Write `scope:` as the globs a fix touches and nothing wider".
+  A LEARNINGS.md line that restates it is not load-bearing on this model and fixture.
+  LEARNINGS.md is unchanged: its header (LEARNINGS.md:5) takes a dated line "only on ACCEPT", so the
+  candidate was added, measured and removed; criterion 3 is therefore unmet, and so is criterion 4:
+    $ cargo run -q -p harness -- probe | grep -E 'learning-un|friction'
+    PROBE learning-unenforced 0
+    PROBE learning-ungated 0
+    PROBE friction-repeat 2
+    FINDING friction-repeat PROGRESS.md:131 the same friction is recorded 3 times and LEARNINGS.md carries no rule for it: ...
+    FINDING friction-repeat PROGRESS.md:110 ... (T-025's)
+  Criterion 5:
+    $ export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check
+    EXIT=0; per-binary 192+0+10+5+9+16+22+31+28+4+0 = 317 passed, 3 ignored, 0 failed, at 90b5f20 plus this diff
+  For a human: `friction-repeat` counts only LEARNINGS.md as coverage (friction_repeat.rs:58), so it
+  keeps demanding a rule the gate refuses. Either the probe counts a role-prompt line as coverage, or
+  the PROGRESS.md:131 finding is killed to `## Rejected findings` citing this REJECT. Both are off this
+  scope. T-025 has the same shape and may meet the same wall.
+  Commit (scope paths only, no `git add -A`; LEARNINGS.md is on scope but unchanged, so not staged):
+    $ git add evals/scope-noise/setup.sh evals/scope-noise/prompt.txt evals/scope-noise/assert.sh evals/scope-noise/ablate.sh TASKS.md PROGRESS.md
+    $ git commit -q -F - <<'EOF' ... EOF; echo "commit rc=$?"; git log --oneline -1; git status --porcelain
+    commit rc=0
+    8b8c1c8 feat(evals): T-024 scope-noise eval; the gate rejects the rule, block parked
+  then `git commit --amend --no-edit` with this note staged, so the hash above is the pre-amend one.
 
 ## [T-025] friction-repeat PROGRESS.md:110 the same friction is recorded 2 times and LEARNINGS.md carries no rule for it
 scope: LEARNINGS.md, evals/**
