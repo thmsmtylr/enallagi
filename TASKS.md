@@ -149,7 +149,7 @@ notes: promoted 2026-09-10. The friction is T-002's, restated at T-013 and T-014
 ## [T-025] friction-repeat PROGRESS.md:110 the same friction is recorded 2 times and LEARNINGS.md carries no rule for it
 scope: LEARNINGS.md, evals/**
 blockedBy:
-status: ready
+status: blocked
 probe: friction-repeat
 rows: none — harness
 command: `harness probe`
@@ -163,6 +163,50 @@ criteria:
   - `cargo run -q -p harness -- probe` prints no `FINDING friction-repeat` line for `PROGRESS.md:110`
   - `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
 notes: promoted 2026-09-10. The friction is that a red the verdict gate cannot name is unanswerable: two lanes re-ran blind before the failing test was named (PROGRESS.md:110). The mechanism is already repaired — harness.toml:7 now carries a `fail_name` that matches both `… --- FAILED` and `… ... FAILED`, which is what `cargo test -q` actually prints — so this block owes the rule that keeps it repaired, not the repair; harness.toml and gates.rs are off scope and stay off it. Every criterion runs `cargo run -q -p harness -- …`, never the `harness` on PATH, which is a stale `target/release` build (see T-023's kill line in DECISIONS.md). T-024 also holds LEARNINGS.md on scope: take them one at a time, one checkout one writer (LEARNINGS.md, seed entry 3). Cap is not binding: 5 entries against `learnings_cap = 12`. The scope glob is `evals/**` rather than `evals/unnamed-red/**` because a directory that does not exist yet matches no file and queue-hygiene calls that an open block nobody can take; the criteria pin the directory instead. Touch no eval but the new one.
+  2026-09-10 implementer: BLOCKED on criterion 2, a REJECT, recorded as the criterion directs and not reshaped.
+  `evals/unnamed-red/` holds the four files (criterion 1; `ls evals/unnamed-red` → ablate.sh assert.sh
+  prompt.txt setup.sh, the .sh files 100755 like evals/scope-noise). It is an implementer eval: setup.sh
+  rewrites the seeded T-001 into "the check is `sh check.sh`" (scope: harness.toml, AGENTS.md) and adds a
+  check.sh that prints `<name> --- FAILED`, the form PROGRESS.md:103 records `cargo test -q` printing; the
+  seeded `fail_name` (`\(fail\) …`) names nothing in it. Neither the task nor its criteria name `fail_name`.
+  assert.sh does what the gate does (gates.rs:573 runs the configured command under `sh -c`, gates.rs:606
+  takes `fail_name`'s group 1 per line) with one test made to fail, and passes only if `zz_broken` is named.
+  The candidate rule is carried verbatim in setup.sh; ablate.sh leaves scope-noise's marker (eval.rs:110
+  ablates before setup). Pre-flight, no agent, fixtures built with `target/debug/harness init` at ef29fdc:
+    [with]         setup rc=0 rule-lines=1 marker=gone T-001=1 tree=0; assert rc=1
+    [ablated]      setup rc=0 rule-lines=0 marker=gone T-001=1 tree=0; assert rc=1
+    [fixed]        command "sh check.sh", fail_name '^(\S+) --- FAILED$' by hand; assert rc=0
+    [command-only] command "sh check.sh", fail_name left; `sh check.sh` rc=0; assert rc=1
+  The gate, one run:
+    $ cargo run -q -p harness -- eval --gate unnamed-red
+    GATE unnamed-red REJECT the case passes with the rule ablated, so the rule changed no outcome
+    gate rc=1
+  (16:19:35 → 16:25:30 AEST.) Reading: without the rule the implementer still left a `fail_name` that names
+  `zz_broken`, so on this model and fixture the line is not load-bearing. The agent's output is not kept
+  (eval.rs:92-93), so what it wrote is not quoted. One sample, not re-run: a second sample taken only after a
+  REJECT biases the gate toward ACCEPT.
+  The candidate's single line covers the friction by the probe's own measure: 32 of the 58 tokens of
+  PROGRESS.md:103's friction, 0.552 against FRICTION_OVERLAP 0.5 (friction_repeat.rs:8), from a python copy
+  of `common::normal`. LEARNINGS.md is unchanged (LEARNINGS.md:5, "only on ACCEPT"), so criteria 3 and 4 are unmet:
+    $ cargo run -q -p harness -- probe 2>&1 | grep -E 'learning-un|friction'
+    PROBE learning-unenforced 0
+    PROBE learning-ungated 0
+    PROBE friction-repeat 2
+    FINDING friction-repeat PROGRESS.md:131 ... (T-024's)
+    FINDING friction-repeat PROGRESS.md:110 the same friction is recorded 2 times and LEARNINGS.md carries no rule for it: ...
+  Criterion 5:
+    $ export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check
+    EXIT=0; per-binary 192+0+10+5+9+16+22+31+28+4+0 = 317 passed, 3 ignored, 0 failed, at ef29fdc plus this diff
+  For a human: second block in a row (T-024 first) where `friction-repeat` asks for a LEARNINGS.md line the
+  gate does not admit. PROGRESS.md:110 is either killed to `## Rejected findings` citing this REJECT, or
+  `friction-repeat` takes another form of coverage; both are off this scope. With the rule the eval passed,
+  so it can stay as the check that a changed check keeps `fail_name` naming its red.
+  Commit (scope paths only, no `git add -A`; LEARNINGS.md is on scope but unchanged, so not staged):
+    $ git add evals/unnamed-red/setup.sh evals/unnamed-red/prompt.txt evals/unnamed-red/assert.sh evals/unnamed-red/ablate.sh TASKS.md PROGRESS.md
+    $ git commit -q -F - <<'EOF' ... EOF; echo "commit rc=$?"; git log --oneline -1; git status --porcelain
+    commit rc=0
+    00485b8 feat(evals): T-025 unnamed-red eval; the gate rejects the rule, block parked
+  then `git commit --amend --no-edit` with this note staged, so the hash above is the pre-amend one.
 
 ## [T-026] install-stale .harness/RAILS.md:0 the installed copy differs from the source it was built from; re-run `harness init`
 scope: .harness/RAILS.md, templates/RAILS.md
