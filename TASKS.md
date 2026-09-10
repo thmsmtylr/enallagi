@@ -89,7 +89,7 @@ archived: DECISIONS.md — full block at `git show 9cea7ab:TASKS.md`
 ## [T-019] queue-hygiene checks the scope of open blocks, not of done ones
 scope: crates/harness/src/probes/queue_hygiene.rs, crates/harness/tests/probes.rs, README.md
 blockedBy: none
-status: ready
+status: review
 rows: none — harness
 criteria:
   - the scope-matches-a-file check in `crates/harness/src/probes/queue_hygiene.rs` applies to a block at `ready`, `review`, `blocked` or `needs-spec` and is skipped for `done` and for an archived stub; the duplicate-id, missing-status and dangling-`blockedBy` checks stay unchanged for every block
@@ -101,6 +101,34 @@ notes: |
   Measured on enallagi.ai 2026-09-09: fourteen findings, every one a done block whose scoped files a
   later cleanup deleted. A done block's scope is history; an open block whose scope names nothing is
   a task nobody can take, which is the defect worth reporting.
+
+  Implemented: the scope loop's guard is now a four-status allowlist (`ready`, `review`, `blocked`,
+  `needs-spec`) at queue_hygiene.rs:54, so `done`, `proposed` and `deferred` all fall through
+  untouched; the finding's wording changed from "is done and" to "is open and". The three other
+  checks are above the guard and run for every block, unchanged.
+
+  Scrutinise: an archived stub is skipped by the `done` arm rather than by a check of its own —
+  archive.rs:174 only ever archives a block that is already `done`, so a stub carrying any other
+  status cannot be produced. If you want that belt-and-braces, it is one `common::field(block,
+  "archived").is_some()` line.
+
+  Probe on this repo, `./target/debug/harness probe` rebuilt each way:
+  before (stashed) `PROBE queue-hygiene 1` + `FINDING queue-hygiene TASKS.md:72 T-016 is done and
+  its scope NOTICE matches no file`; after `PROBE queue-hygiene 0`.
+
+  Check: `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy
+  --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` → EXIT=0; per-binary
+  192+0+10+5+9+16+22+31+28+4+0 = 317 passed, 3 ignored, 0 failed, at 4df3a61 before the commit.
+  The new test `a_done_blocks_scope_is_history_and_an_open_blocks_scope_must_name_a_file` was red
+  first: it reported `T-002 is done and its scope src/gone.rs matches no file`.
+
+  Commit: `git add crates/harness/src/probes/queue_hygiene.rs crates/harness/tests/probes.rs
+  README.md TASKS.md PROGRESS.md` → no output; `git status --porcelain` → `M  PROGRESS.md` /
+  `M  README.md` / `M  TASKS.md` / `M  crates/harness/src/probes/queue_hygiene.rs` /
+  `M  crates/harness/tests/probes.rs`; `git commit -m "feat(probes): T-019 queue-hygiene checks the
+  scope of open blocks, not of done ones"` then `git status --porcelain` → empty. These two
+  paragraphs were amended into that commit, so its sha is not quotable from inside it; it is the
+  tip of this branch and its subject is the line above.
 
 ## [T-020] every iteration leaves exactly one PROGRESS.md entry
 scope: crates/harness/src/pipeline.rs, roles/verifier.md, .harness/roles/verifier.md, crates/harness/tests/loop.rs, README.md

@@ -1,4 +1,4 @@
-//! The queue read against itself: a repeated id, a missing status, an undefined blocker, or a done block whose scope matches nothing.
+//! The queue read against itself: a repeated id, a missing status, an undefined blocker, or an open block whose scope matches nothing.
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
@@ -51,7 +51,11 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             }
         }
 
-        if status.as_deref() != Some("done") {
+        // a done block's scope is history; an open block whose scope names nothing is a task nobody can take
+        if !matches!(
+            status.as_deref(),
+            Some("ready" | "review" | "blocked" | "needs-spec")
+        ) {
             continue;
         }
         let Some((scope_at, scope)) = common::field(block, "scope") else {
@@ -68,7 +72,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
                     "TASKS.md",
                     scope_at,
                     format!(
-                        "{} is done and its scope {pattern} matches no file",
+                        "{} is open and its scope {pattern} matches no file",
                         block.id
                     ),
                 ));
