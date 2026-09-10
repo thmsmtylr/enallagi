@@ -152,16 +152,24 @@ fn force_back(
     fail(reason)
 }
 
-// a done written by the implementer itself (not the verifier) is forced back to ready; nothing left to verify
+// a done written by the implementer itself (not the verifier) is forced back to ready; anything short
+// of review has nothing to verify either, so the rest of the iteration is skipped in both cases
 fn implementer_not_done(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
     };
     match status_of(ctx.root, &task) {
         Err(_) => unreadable(ctx, &task),
-        Ok(status) if status.as_deref() != Some("done") => {
+        Ok(status) if status.as_deref() == Some("review") => {
             pass("the implementer left it at review")
         }
+        Ok(status) if status.as_deref() != Some("done") => GateOutcome {
+            skip_rest: true,
+            ..pass(format!(
+                "the implementer left it at {}",
+                status.as_deref().unwrap_or("no status")
+            ))
+        },
         Ok(_) => {
             let mut out = force_back(
                 ctx,
@@ -1077,6 +1085,36 @@ mod tests {
         assert!(env
             .log()
             .contains("chore(T-001): the implementer marked its own task done"));
+    }
+
+    #[test]
+    fn an_implementer_stopping_short_of_review_skips_the_rest() {
+        for status in ["blocked", "needs-spec", "deferred", "ready"] {
+            let mut env = Env::new("exit 0\n");
+            env.queue(status, "src/a.ts", "§11 row 1");
+            env.repo.commit_all("implement");
+            let out = run("implementer-not-done", &mut env.ctx(Some("T-001"), None));
+            assert!(out.pass && out.skip_rest, "{status}: {out:?}");
+            assert!(out.reason.contains(status), "{status}: {}", out.reason);
+        }
+
+        let mut missing = Env::new("exit 0\n");
+        missing
+            .repo
+            .write("TASKS.md", "## [T-001] first\nscope: src/a.ts\n");
+        missing.repo.commit_all("implement");
+        let out = run(
+            "implementer-not-done",
+            &mut missing.ctx(Some("T-001"), None),
+        );
+        assert!(out.pass && out.skip_rest, "{out:?}");
+        assert!(out.reason.contains("no status"), "{}", out.reason);
+
+        let mut review = Env::new("exit 0\n");
+        review.queue("review", "src/a.ts", "§11 row 1");
+        review.repo.commit_all("implement");
+        let out = run("implementer-not-done", &mut review.ctx(Some("T-001"), None));
+        assert!(out.pass && !out.skip_rest, "{out:?}");
     }
 
     #[test]

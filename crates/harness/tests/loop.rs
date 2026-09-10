@@ -827,6 +827,43 @@ fn the_implementer_marking_its_own_task_done_skips_the_verify_stage() {
     assert!(digest.landed.is_empty(), "{:?}", digest.landed);
 }
 
+#[test]
+fn an_implementer_that_stops_short_of_review_skips_the_verify_stage() {
+    let r = repo("", "");
+    let implement = implementer(
+        &r,
+        &format!(
+            "{bin} tasks set-status T-001 blocked 'the fixture is missing'\n",
+            bin = env!("CARGO_BIN_EXE_harness"),
+        ),
+    );
+    let verify = script(&r, "src/fakeverify.sh", "touch verify-ran\n");
+    r.write(
+        "harness.toml",
+        &base_toml(&role_commands(&implement, &verify)),
+    );
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(ends(&events).len(), 1, "verify may not spawn");
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(&e.kind, Kind::StageStart { stage, .. } if stage == "verify")),
+        "{events:#?}"
+    );
+    assert!(!r.root.join("verify-ran").exists());
+    assert!(
+        digest
+            .warnings
+            .iter()
+            .any(|w| w == "T-001 ended the iteration at blocked, not done."),
+        "{:?}",
+        digest.warnings
+    );
+}
+
 fn with_verifier(r: &Repo, verify: &str) {
     r.write(
         "harness.toml",

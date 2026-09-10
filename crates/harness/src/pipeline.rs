@@ -407,8 +407,12 @@ impl<'a> Loop<'a> {
             };
             match self.stage(&stage, task.clone(), iter_base.clone()) {
                 Flow::Go => {}
-                // the round ends here and nothing after this counts toward the digest
-                Flow::SkipRest => return !self.stopped,
+                // no stage after this one runs, but the round's own outcome is still recorded, and
+                // the boundary the skipped stages would have checked is owed here instead
+                Flow::SkipRest => {
+                    self.boundary(false);
+                    break;
+                }
                 Flow::Stop => return false,
             }
         }
