@@ -249,3 +249,66 @@ scope: LICENSE, NOTICE, Cargo.toml, crates/harness/Cargo.toml, README.md, crates
 blockedBy: none
 status: done
 archived: DECISIONS.md — full block at `git show a6e102c:TASKS.md`
+
+## [T-017] the run archives on the way out, and an operator can archive without spending a stage
+scope: crates/harness/src/pipeline.rs, crates/harness/src/archive.rs, crates/harness/src/cli/tasks.rs, crates/harness/src/cli/mod.rs, crates/harness/tests/loop.rs, crates/harness/tests/cli.rs, README.md
+blockedBy: none
+status: ready
+rows: none — harness
+criteria:
+  - `archive::archive_done` is called once more on the way out of a run, in `Loop::finish` before the digest is built, so the task that landed in the final iteration is archived by the run that landed it; its `refused` and `Err` stay warnings, never a halt, as at the iteration-start call site
+  - a test in `crates/harness/tests/loop.rs`: one iteration lands T-001, and after `run` returns, `TASKS.md` holds the stub (`status: done` plus an `archived:` line) and `DECISIONS.md` holds the block; today the stub appears only on the next run
+  - `harness tasks archive` runs the same function and prints one line per moved id, or `nothing to archive`; a test in `crates/harness/tests/cli.rs` drives the real binary over a queue with one done block and asserts the stub, the DECISIONS.md block and exit 0
+  - `README.md`'s `harness tasks` row names `archive` among the subcommands; no other README change
+  - `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
+notes: |
+  `archive_done` refuses to rewrite the queue under a foreign live loop by reading `loop.pid` and
+  walking the caller's ancestors, so calling it from `finish`, where the pid file still names this
+  process, must stay allowed. That is the one line to get right, and it wants its own assertion.
+
+## [T-018] no verify stage when the implementer left the task anywhere but review
+scope: crates/harness/src/gates.rs, crates/harness/src/pipeline.rs, crates/harness/tests/loop.rs, README.md
+blockedBy: none
+status: ready
+rows: none — harness
+criteria:
+  - `gates::implementer_not_done` returns `skip_rest: true` for every status that is not `review`: `done` keeps today's force-back and its commit, while `blocked`, `needs-spec`, `deferred`, `ready` and a missing status pass with a reason naming the status and skip the remaining stages
+  - a test in `crates/harness/tests/loop.rs`: a stub implementer that sets `blocked` runs one iteration, and the event log holds exactly one `stage.end` (the implement stage), no `stage.start` for verify, and the digest carries `T-001 ended the iteration at blocked, not done.`
+  - the existing `implementer_not_done_forces_back_and_skips_rest` test still passes unchanged
+  - `README.md`'s gate table row for `implementer-not-done` states that it also skips the rest of the iteration when the implementer stopped short of review; no other README change
+  - `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
+notes: |
+  Measured on 2026-09-10: a verify stage ran against a task the implementer had parked `blocked`,
+  found nothing at review, and cost $1.45 saying so.
+
+## [T-019] queue-hygiene checks the scope of open blocks, not of done ones
+scope: crates/harness/src/probes/queue_hygiene.rs, crates/harness/tests/probes.rs, README.md
+blockedBy: none
+status: ready
+rows: none — harness
+criteria:
+  - the scope-matches-a-file check in `crates/harness/src/probes/queue_hygiene.rs` applies to a block at `ready`, `review`, `blocked` or `needs-spec` and is skipped for `done` and for an archived stub; the duplicate-id, missing-status and dangling-`blockedBy` checks stay unchanged for every block
+  - a test in `crates/harness/tests/probes.rs`: a queue with a `done` block whose scope names a deleted file yields no finding, and a `ready` block whose scope names a file that does not exist yields one finding naming the pattern
+  - the probe's module doc names what it checks and no longer claims the done case
+  - `README.md`'s probe table row for `queue-hygiene` matches the new behaviour; no other README change
+  - `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
+notes: |
+  Measured on enallagi.ai 2026-09-09: fourteen findings, every one a done block whose scoped files a
+  later cleanup deleted. A done block's scope is history; an open block whose scope names nothing is
+  a task nobody can take, which is the defect worth reporting.
+
+## [T-020] every iteration leaves exactly one PROGRESS.md entry
+scope: crates/harness/src/pipeline.rs, roles/verifier.md, .harness/roles/verifier.md, crates/harness/tests/loop.rs, README.md
+blockedBy: none
+status: ready
+rows: none — harness
+criteria:
+  - an iteration of the `review` pipeline ends with no `wrote no PROGRESS.md entry` warning in the digest, and `PROGRESS.md` grows by exactly one entry
+  - an iteration of the `task` pipeline still grows `PROGRESS.md` by exactly one entry: no duplicate entry from a second role writing one
+  - two tests in `crates/harness/tests/loop.rs`, one per pipeline, asserting the entry count and the absence of the warning; count entries by lines matching `^## ` in `PROGRESS.md`
+  - whichever mechanism is chosen, state it in one line in `README.md` where the pipelines are described; if a role prompt changes, the source under `roles/` and the installed copy under `.harness/roles/` say the same thing and `harness probe` reports `install-stale 0`
+  - `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
+notes: |
+  The warning fires on every review-pipeline iteration today, because the verifier writes no entry and
+  the launcher expects one. Either the record gains the verdict round's line or the launcher stops
+  asking for one; the criteria fix the outcome, not the mechanism.
