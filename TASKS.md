@@ -96,33 +96,10 @@ archived: DECISIONS.md — full block at `git show 9c0b4af:TASKS.md`
 scope: crates/harness/src/pipeline.rs, roles/verifier.md, .harness/roles/verifier.md, crates/harness/tests/loop.rs, README.md
 blockedBy: none
 status: done
-rows: none — harness
-criteria:
-  - an iteration of the `review` pipeline ends with no `wrote no PROGRESS.md entry` warning in the digest, and `PROGRESS.md` grows by exactly one entry
-  - an iteration of the `task` pipeline still grows `PROGRESS.md` by exactly one entry: no duplicate entry from a second role writing one
-  - two tests in `crates/harness/tests/loop.rs`, one per pipeline, asserting the entry count and the absence of the warning; count entries by lines matching `^## ` in `PROGRESS.md`
-  - whichever mechanism is chosen, state it in one line in `README.md` where the pipelines are described; if a role prompt changes, the source under `roles/` and the installed copy under `.harness/roles/` say the same thing and `harness probe` reports `install-stale 0`
-  - `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
-notes: |
-  The warning fires on every review-pipeline iteration today, because the verifier writes no entry and
-  the launcher expects one. Either the record gains the verdict round's line or the launcher stops
-  asking for one; the criteria fix the outcome, not the mechanism.
-  recovered 2026-09-13: the block was lost at 9c0b4af, when T-019's verifier edit deleted its heading and its body merged into T-019's, which `harness run` then archived; restored verbatim from `git show ce92693:TASKS.md`.
-  2026-09-13 operator, done: the launcher writes the entry, not a role prompt, because the tests have to assert it without spawning an agent. `pipeline::progress_stub` appends one entry when an iteration ends with PROGRESS.md no longer than it started, and commits it with `chore(progress): <task> iteration <n>`; the warning it replaces is gone. The entry names the date, the task, the pipeline, the status the task ended at, the stages and the iteration, and its friction line is exactly `friction: none` so `friction-repeat` skips it rather than grouping a phrase that repeats every round. Two tests in `crates/harness/tests/loop.rs` count `^## ` lines: `a_verify_only_iteration_leaves_one_progress_entry_written_by_the_launcher` (1 entry, no warning, `git status` clean) and `and_an_iteration_whose_implementer_wrote_one_gets_no_second_entry` (still 1). The first fails with `progress_stub` stubbed out. README line added under "What a run does"; no role prompt changed, so `PROBE install-stale 0` holds. `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` → EXIT=0; 194+0+10+5+9+16+22+33+29+4+0 = 322 passed, 3 ignored, 0 failed.
+archived: DECISIONS.md — full block at `git show 1294b78:TASKS.md`
 
 ## [T-026] install-stale .harness/RAILS.md:0 the installed copy differs from the source it was built from; re-run `harness init`
 scope: .harness/RAILS.md, templates/RAILS.md
 blockedBy:
 status: done
-probe: install-stale
-rows: none — harness
-command: `harness probe`
-output: |
-  PROBE install-stale 1
-  FINDING install-stale .harness/RAILS.md:0 the installed copy differs from the source it was built from; re-run `harness init`
-criteria:
-  - the fix touches `.harness/RAILS.md`, a governing document: the adjudicator halts the run for a human on this block rather than promoting it
-  - `harness probe` no longer emits a `FINDING install-stale` line for `.harness/RAILS.md`
-notes: proposed from the output above on 2026-09-10. HALT 2026-09-10 — the fix changes `.harness/RAILS.md`, a governing document, so this is neither a kill nor a task. `diff templates/RAILS.md .harness/RAILS.md` shows the divergence is deliberate, not drift: the installed copy is the written rails, the template is the shipped skeleton that still carries the `__CONTEXT_FILE__` and `__SPEC__` placeholders and leaves the rail table commented out. `harness init`, which the finding recommends, would overwrite `.harness/RAILS.md` with that skeleton and destroy the rails text. A human decides which side is the source: either `templates/RAILS.md` is rewritten to say what `.harness/RAILS.md` says with the placeholders restored, so a re-init is safe, or `install-stale` stops calling a deliberately diverged install stale. Neither is the adjudicator's to write. One number in the block is the stale binary's: `cargo run -q -p harness -- probe` reports `PROBE install-stale 7`, not 1 — `.harness/RAILS.md` plus five `.harness/roles/*.md` and `.claude/skills/running-the-loop/SKILL.md`, all installed 2026-09-08 against sources T-014 rewrote 2026-09-09. Only the RAILS.md row halts: for the other six a re-init writes what the sources already say and destroys nothing. They are outside this block and unproposed.
-  2026-09-13 operator, decided and done: `templates/RAILS.md` is the source. The installed copy was written 2026-09-08; T-014 swept the rationale prose out of the templates on 2026-09-09 and never reached the install, so the 16 extra lines were the old text, one paragraph of it duplicated. Measured before acting, on a throwaway clone: `harness init --adapter claude` rewrites 12 files, +77/-194 lines, and touches no document it lists as `kept` (harness.toml, SPEC.md, AGENTS.md, TASKS.md); the `green` rail keeps the substituted check command. Two clauses worth keeping were ported into `templates/RAILS.md` first: the hash check detects rather than prevents because it runs as the same principal as the lane, and the file that names the check is part of the gate. Then `harness init --adapter claude`; `cargo run -q -p harness -- probe` → `PROBE install-stale 0`, down from 7. `cargo test --workspace -q && cargo clippy --all-targets -q -- -D warnings && cargo fmt --all --check` → EXIT=0.
-
+archived: DECISIONS.md — full block at `git show 1294b78:TASKS.md`
