@@ -112,7 +112,7 @@ notes: |
 ## [T-026] install-stale .harness/RAILS.md:0 the installed copy differs from the source it was built from; re-run `harness init`
 scope: .harness/RAILS.md, templates/RAILS.md
 blockedBy:
-status: proposed
+status: done
 probe: install-stale
 rows: none — harness
 command: `harness probe`
@@ -123,4 +123,5 @@ criteria:
   - the fix touches `.harness/RAILS.md`, a governing document: the adjudicator halts the run for a human on this block rather than promoting it
   - `harness probe` no longer emits a `FINDING install-stale` line for `.harness/RAILS.md`
 notes: proposed from the output above on 2026-09-10. HALT 2026-09-10 — the fix changes `.harness/RAILS.md`, a governing document, so this is neither a kill nor a task. `diff templates/RAILS.md .harness/RAILS.md` shows the divergence is deliberate, not drift: the installed copy is the written rails, the template is the shipped skeleton that still carries the `__CONTEXT_FILE__` and `__SPEC__` placeholders and leaves the rail table commented out. `harness init`, which the finding recommends, would overwrite `.harness/RAILS.md` with that skeleton and destroy the rails text. A human decides which side is the source: either `templates/RAILS.md` is rewritten to say what `.harness/RAILS.md` says with the placeholders restored, so a re-init is safe, or `install-stale` stops calling a deliberately diverged install stale. Neither is the adjudicator's to write. One number in the block is the stale binary's: `cargo run -q -p harness -- probe` reports `PROBE install-stale 7`, not 1 — `.harness/RAILS.md` plus five `.harness/roles/*.md` and `.claude/skills/running-the-loop/SKILL.md`, all installed 2026-09-08 against sources T-014 rewrote 2026-09-09. Only the RAILS.md row halts: for the other six a re-init writes what the sources already say and destroys nothing. They are outside this block and unproposed.
+  2026-09-13 operator, decided and done: `templates/RAILS.md` is the source. The installed copy was written 2026-09-08; T-014 swept the rationale prose out of the templates on 2026-09-09 and never reached the install, so the 16 extra lines were the old text, one paragraph of it duplicated. Measured before acting, on a throwaway clone: `harness init --adapter claude` rewrites 12 files, +77/-194 lines, and touches no document it lists as `kept` (harness.toml, SPEC.md, AGENTS.md, TASKS.md); the `green` rail keeps the substituted check command. Two clauses worth keeping were ported into `templates/RAILS.md` first: the hash check detects rather than prevents because it runs as the same principal as the lane, and the file that names the check is part of the gate. Then `harness init --adapter claude`; `cargo run -q -p harness -- probe` → `PROBE install-stale 0`, down from 7. `cargo test --workspace -q && cargo clippy --all-targets -q -- -D warnings && cargo fmt --all --check` → EXIT=0.
 
