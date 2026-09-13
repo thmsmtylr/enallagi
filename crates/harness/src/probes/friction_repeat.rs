@@ -1,6 +1,7 @@
-//! A friction recorded twice in PROGRESS.md with no LEARNINGS.md rule for it: matched by token overlap, not exact text.
+//! A friction recorded twice in PROGRESS.md that neither a LEARNINGS.md rule nor a dated kill line covers: matched by token overlap, not exact text.
 
 use super::common::{self, Res};
+use super::ponytail_ceiling;
 use super::{Finding, ProbeCtx, ProbeResult};
 use std::collections::BTreeSet;
 
@@ -10,6 +11,14 @@ const FRICTION_OVERLAP: f64 = 0.5;
 struct Group {
     first: BTreeSet<String>,
     hits: Vec<(usize, String)>,
+}
+
+fn words(text: &str) -> BTreeSet<String> {
+    common::normal(text)
+        .split(' ')
+        .filter(|w| !w.is_empty())
+        .map(String::from)
+        .collect()
 }
 
 fn overlap(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
@@ -54,24 +63,26 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         }
     }
 
-    // ponytail: rule coverage is per-line word-set containment; a rule that paraphrases every word escapes it
-    let learned: Vec<BTreeSet<String>> = if common::exists(ctx.root, "LEARNINGS.md") {
+    // ponytail: coverage is per-line word-set containment; a rule or kill line that paraphrases every word escapes it
+    let mut coverage: Vec<BTreeSet<String>> = if common::exists(ctx.root, "LEARNINGS.md") {
         common::lines_of(ctx.root, "LEARNINGS.md")?
             .iter()
             .filter(|l| l.starts_with("- "))
-            .map(|l| {
-                common::normal(l)
-                    .split(' ')
-                    .filter(|w| !w.is_empty())
-                    .map(String::from)
-                    .collect()
-            })
+            .map(|l| words(l))
             .collect()
     } else {
         vec![]
     };
+    // a rule the ablation gate refuses closes as a dated refutation instead; `PROGRESS.md` keeps a
+    // kill line about anything else from counting
+    coverage.extend(
+        ponytail_ceiling::kill_lines(ctx)?
+            .iter()
+            .filter(|line| line.contains("PROGRESS.md"))
+            .map(|line| words(line)),
+    );
     let covered = |first: &BTreeSet<String>| {
-        learned.iter().any(|rule| {
+        coverage.iter().any(|rule| {
             !rule.is_empty()
                 && first.intersection(rule).count() as f64 / first.len() as f64 >= FRICTION_OVERLAP
         })
@@ -86,7 +97,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
                 "PROGRESS.md",
                 last.0,
                 format!(
-                    "the same friction is recorded {} times and LEARNINGS.md carries no rule for it: {}",
+                    "the same friction is recorded {} times and no LEARNINGS.md rule or dated kill line covers it: {}",
                     group.hits.len(),
                     common::cut(&last.1, 90)
                 ),

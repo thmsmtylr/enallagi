@@ -252,6 +252,18 @@ fn a_reworded_repeat_of_one_friction_is_reported() {
 }
 
 #[test]
+fn and_a_repeat_a_dated_kill_line_names_is_covered() {
+    let (repo, cfg) = seeded();
+    append(&repo, "PROGRESS.md", FRICTION_FIXTURE);
+    append(
+        &repo,
+        "DECISIONS.md",
+        "\n## Rejected findings\n- [2026-09-13] the same friction is recorded 2 times: FIFTH sighting of a check firing on the prose that documents it - and the first where the \u{2014} refuted by `harness eval --gate prose-check`: `GATE prose-check REJECT the case passes with the rule ablated, so the rule changed no outcome`; PROGRESS.md keeps the evidence\n",
+    );
+    assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
+}
+
+#[test]
 fn and_two_frictions_that_merely_share_words_are_not_collapsed_into_it() {
     let (repo, cfg) = seeded();
     append(&repo, "PROGRESS.md", FRICTION_FIXTURE);

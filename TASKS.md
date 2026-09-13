@@ -92,121 +92,22 @@ blockedBy: none
 status: done
 archived: DECISIONS.md — full block at `git show 9c0b4af:TASKS.md`
 
-## [T-024] friction-repeat PROGRESS.md:131 the same friction is recorded 3 times and LEARNINGS.md carries no rule for it
-scope: LEARNINGS.md, evals/**
-blockedBy:
-status: blocked
-probe: friction-repeat
+## [T-020] every iteration leaves exactly one PROGRESS.md entry
+scope: crates/harness/src/pipeline.rs, roles/verifier.md, .harness/roles/verifier.md, crates/harness/tests/loop.rs, README.md
+blockedBy: none
+status: ready
 rows: none — harness
-command: `harness probe`
-output: |
-  PROBE friction-repeat 2
-  FINDING friction-repeat PROGRESS.md:131 the same friction is recorded 3 times and LEARNINGS.md carries no rule for it: probes.rs sat on the scope line and needed no edit; third occurrence of T-002's and T-013'
 criteria:
-  - `evals/scope-noise/` holds `setup.sh`, `prompt.txt`, `assert.sh` and `ablate.sh`, the four-file shape `evals/README.md` names; `evals/verifier/` is the only existing eval with all four, so copy it
-  - `cargo run -q -p harness -- eval --gate scope-noise` prints a line beginning `GATE scope-noise ACCEPT`. A `REJECT` is a result, not a failure: paste it and move this block to `blocked` rather than reshaping the rule until it passes
-  - LEARNINGS.md carries one new dated entry for the scope-line friction, naming `evals/scope-noise` and naming a file, a command or a hook; `cargo run -q -p harness -- probe` still prints `PROBE learning-unenforced 0` and `PROBE learning-ungated 0`
-  - `cargo run -q -p harness -- probe` prints no `FINDING friction-repeat` line for `PROGRESS.md:131`
-  - `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
-notes: promoted 2026-09-10. The friction is T-002's, restated at T-013 and T-014: a scope file the task never touches is noise the scope gate cannot tell from a forgotten edit; PROGRESS.md:131 closes with "Whoever next holds LEARNINGS.md on scope owes the scope-line-noise rule", and this block is that holder. Every criterion runs `cargo run -q -p harness -- …`, never the `harness` on PATH: that is a stale `target/release` build predating T-019 and it answers a different question (see T-023's kill line in DECISIONS.md). The cap is not binding — LEARNINGS.md holds 5 entries against `learnings_cap = 12` (crates/harness/harness.default.toml:103) — so nothing has to be removed to add this one. Rule coverage is per-line word-set containment (friction_repeat.rs:57), so the entry has to carry the friction's own words or the probe stays loud. The scope glob is `evals/**` rather than `evals/scope-noise/**` because a directory that does not exist yet matches no file and queue-hygiene calls that an open block nobody can take; the criteria pin the directory instead. Touch no eval but the new one.
-  2026-09-10 implementer: BLOCKED on criterion 2, a REJECT, recorded as the criterion directs and not reshaped.
-  `evals/scope-noise/` holds the four files (criterion 1). It is an adjudicator eval: setup.sh appends a
-  `hash-uncovered` proposal quoting a live `harness probe` run, with `scope: test-hashes.json, harness.toml`;
-  assert.sh passes only if T-901 is promoted to ready with `test-hashes.json` on its scope line and without
-  `harness.toml`, which the fix reads to hash and never changes (T-005's `scope: test-hashes.json` is the
-  precedent). The candidate rule is carried verbatim inside setup.sh; ablate.sh leaves a marker because
-  eval.rs:110 runs ablation before setup, so setup.sh builds the same fixture minus that entry. Both arms
-  built and failed assert.sh before any agent ran (status: proposed), so neither can pass empty.
-  Run twice, the second time on the committed setup.sh:
-    $ cargo run -q -p harness -- eval --gate scope-noise
-    GATE scope-noise REJECT the case passes with the rule ablated, so the rule changed no outcome
-    gate rc=1
-  Reading: the adjudicator narrowed the scope line with or without the LEARNINGS.md line, because
-  roles/adjudicator.md:21 already says "Write `scope:` as the globs a fix touches and nothing wider".
-  A LEARNINGS.md line that restates it is not load-bearing on this model and fixture.
-  LEARNINGS.md is unchanged: its header (LEARNINGS.md:5) takes a dated line "only on ACCEPT", so the
-  candidate was added, measured and removed; criterion 3 is therefore unmet, and so is criterion 4:
-    $ cargo run -q -p harness -- probe | grep -E 'learning-un|friction'
-    PROBE learning-unenforced 0
-    PROBE learning-ungated 0
-    PROBE friction-repeat 2
-    FINDING friction-repeat PROGRESS.md:131 the same friction is recorded 3 times and LEARNINGS.md carries no rule for it: ...
-    FINDING friction-repeat PROGRESS.md:110 ... (T-025's)
-  Criterion 5:
-    $ export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check
-    EXIT=0; per-binary 192+0+10+5+9+16+22+31+28+4+0 = 317 passed, 3 ignored, 0 failed, at 90b5f20 plus this diff
-  For a human: `friction-repeat` counts only LEARNINGS.md as coverage (friction_repeat.rs:58), so it
-  keeps demanding a rule the gate refuses. Either the probe counts a role-prompt line as coverage, or
-  the PROGRESS.md:131 finding is killed to `## Rejected findings` citing this REJECT. Both are off this
-  scope. T-025 has the same shape and may meet the same wall.
-  Commit (scope paths only, no `git add -A`; LEARNINGS.md is on scope but unchanged, so not staged):
-    $ git add evals/scope-noise/setup.sh evals/scope-noise/prompt.txt evals/scope-noise/assert.sh evals/scope-noise/ablate.sh TASKS.md PROGRESS.md
-    $ git commit -q -F - <<'EOF' ... EOF; echo "commit rc=$?"; git log --oneline -1; git status --porcelain
-    commit rc=0
-    8b8c1c8 feat(evals): T-024 scope-noise eval; the gate rejects the rule, block parked
-  then `git commit --amend --no-edit` with this note staged, so the hash above is the pre-amend one.
-
-## [T-025] friction-repeat PROGRESS.md:110 the same friction is recorded 2 times and LEARNINGS.md carries no rule for it
-scope: LEARNINGS.md, evals/**
-blockedBy:
-status: blocked
-probe: friction-repeat
-rows: none — harness
-command: `harness probe`
-output: |
-  PROBE friction-repeat 2
-  FINDING friction-repeat PROGRESS.md:110 the same friction is recorded 2 times and LEARNINGS.md carries no rule for it: second occurrence: a red the gate cannot name is unanswerable: `fail_name` in harness.toml
-criteria:
-  - `evals/unnamed-red/` holds `setup.sh`, `prompt.txt`, `assert.sh` and `ablate.sh`, the four-file shape `evals/README.md` names; copy `evals/verifier/`, the only existing eval with all four
-  - `cargo run -q -p harness -- eval --gate unnamed-red` prints a line beginning `GATE unnamed-red ACCEPT`. A `REJECT` is a result, not a failure: paste it and move this block to `blocked` rather than reshaping the rule until it passes
-  - LEARNINGS.md carries one new dated entry for that friction, naming `evals/unnamed-red` and naming a file, a command or a hook; `cargo run -q -p harness -- probe` still prints `PROBE learning-unenforced 0` and `PROBE learning-ungated 0`
-  - `cargo run -q -p harness -- probe` prints no `FINDING friction-repeat` line for `PROGRESS.md:110`
-  - `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
-notes: promoted 2026-09-10. The friction is that a red the verdict gate cannot name is unanswerable: two lanes re-ran blind before the failing test was named (PROGRESS.md:110). The mechanism is already repaired — harness.toml:7 now carries a `fail_name` that matches both `… --- FAILED` and `… ... FAILED`, which is what `cargo test -q` actually prints — so this block owes the rule that keeps it repaired, not the repair; harness.toml and gates.rs are off scope and stay off it. Every criterion runs `cargo run -q -p harness -- …`, never the `harness` on PATH, which is a stale `target/release` build (see T-023's kill line in DECISIONS.md). T-024 also holds LEARNINGS.md on scope: take them one at a time, one checkout one writer (LEARNINGS.md, seed entry 3). Cap is not binding: 5 entries against `learnings_cap = 12`. The scope glob is `evals/**` rather than `evals/unnamed-red/**` because a directory that does not exist yet matches no file and queue-hygiene calls that an open block nobody can take; the criteria pin the directory instead. Touch no eval but the new one.
-  2026-09-10 implementer: BLOCKED on criterion 2, a REJECT, recorded as the criterion directs and not reshaped.
-  `evals/unnamed-red/` holds the four files (criterion 1; `ls evals/unnamed-red` → ablate.sh assert.sh
-  prompt.txt setup.sh, the .sh files 100755 like evals/scope-noise). It is an implementer eval: setup.sh
-  rewrites the seeded T-001 into "the check is `sh check.sh`" (scope: harness.toml, AGENTS.md) and adds a
-  check.sh that prints `<name> --- FAILED`, the form PROGRESS.md:103 records `cargo test -q` printing; the
-  seeded `fail_name` (`\(fail\) …`) names nothing in it. Neither the task nor its criteria name `fail_name`.
-  assert.sh does what the gate does (gates.rs:573 runs the configured command under `sh -c`, gates.rs:606
-  takes `fail_name`'s group 1 per line) with one test made to fail, and passes only if `zz_broken` is named.
-  The candidate rule is carried verbatim in setup.sh; ablate.sh leaves scope-noise's marker (eval.rs:110
-  ablates before setup). Pre-flight, no agent, fixtures built with `target/debug/harness init` at ef29fdc:
-    [with]         setup rc=0 rule-lines=1 marker=gone T-001=1 tree=0; assert rc=1
-    [ablated]      setup rc=0 rule-lines=0 marker=gone T-001=1 tree=0; assert rc=1
-    [fixed]        command "sh check.sh", fail_name '^(\S+) --- FAILED$' by hand; assert rc=0
-    [command-only] command "sh check.sh", fail_name left; `sh check.sh` rc=0; assert rc=1
-  The gate, one run:
-    $ cargo run -q -p harness -- eval --gate unnamed-red
-    GATE unnamed-red REJECT the case passes with the rule ablated, so the rule changed no outcome
-    gate rc=1
-  (16:19:35 → 16:25:30 AEST.) Reading: without the rule the implementer still left a `fail_name` that names
-  `zz_broken`, so on this model and fixture the line is not load-bearing. The agent's output is not kept
-  (eval.rs:92-93), so what it wrote is not quoted. One sample, not re-run: a second sample taken only after a
-  REJECT biases the gate toward ACCEPT.
-  The candidate's single line covers the friction by the probe's own measure: 32 of the 58 tokens of
-  PROGRESS.md:103's friction, 0.552 against FRICTION_OVERLAP 0.5 (friction_repeat.rs:8), from a python copy
-  of `common::normal`. LEARNINGS.md is unchanged (LEARNINGS.md:5, "only on ACCEPT"), so criteria 3 and 4 are unmet:
-    $ cargo run -q -p harness -- probe 2>&1 | grep -E 'learning-un|friction'
-    PROBE learning-unenforced 0
-    PROBE learning-ungated 0
-    PROBE friction-repeat 2
-    FINDING friction-repeat PROGRESS.md:131 ... (T-024's)
-    FINDING friction-repeat PROGRESS.md:110 the same friction is recorded 2 times and LEARNINGS.md carries no rule for it: ...
-  Criterion 5:
-    $ export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check
-    EXIT=0; per-binary 192+0+10+5+9+16+22+31+28+4+0 = 317 passed, 3 ignored, 0 failed, at ef29fdc plus this diff
-  For a human: second block in a row (T-024 first) where `friction-repeat` asks for a LEARNINGS.md line the
-  gate does not admit. PROGRESS.md:110 is either killed to `## Rejected findings` citing this REJECT, or
-  `friction-repeat` takes another form of coverage; both are off this scope. With the rule the eval passed,
-  so it can stay as the check that a changed check keeps `fail_name` naming its red.
-  Commit (scope paths only, no `git add -A`; LEARNINGS.md is on scope but unchanged, so not staged):
-    $ git add evals/unnamed-red/setup.sh evals/unnamed-red/prompt.txt evals/unnamed-red/assert.sh evals/unnamed-red/ablate.sh TASKS.md PROGRESS.md
-    $ git commit -q -F - <<'EOF' ... EOF; echo "commit rc=$?"; git log --oneline -1; git status --porcelain
-    commit rc=0
-    00485b8 feat(evals): T-025 unnamed-red eval; the gate rejects the rule, block parked
-  then `git commit --amend --no-edit` with this note staged, so the hash above is the pre-amend one.
+  - an iteration of the `review` pipeline ends with no `wrote no PROGRESS.md entry` warning in the digest, and `PROGRESS.md` grows by exactly one entry
+  - an iteration of the `task` pipeline still grows `PROGRESS.md` by exactly one entry: no duplicate entry from a second role writing one
+  - two tests in `crates/harness/tests/loop.rs`, one per pipeline, asserting the entry count and the absence of the warning; count entries by lines matching `^## ` in `PROGRESS.md`
+  - whichever mechanism is chosen, state it in one line in `README.md` where the pipelines are described; if a role prompt changes, the source under `roles/` and the installed copy under `.harness/roles/` say the same thing and `harness probe` reports `install-stale 0`
+  - `cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` exits 0
+notes: |
+  The warning fires on every review-pipeline iteration today, because the verifier writes no entry and
+  the launcher expects one. Either the record gains the verdict round's line or the launcher stops
+  asking for one; the criteria fix the outcome, not the mechanism.
+  recovered 2026-09-13: the block was lost at 9c0b4af, when T-019's verifier edit deleted its heading and its body merged into T-019's, which `harness run` then archived; restored verbatim from `git show ce92693:TASKS.md`.
 
 ## [T-026] install-stale .harness/RAILS.md:0 the installed copy differs from the source it was built from; re-run `harness init`
 scope: .harness/RAILS.md, templates/RAILS.md

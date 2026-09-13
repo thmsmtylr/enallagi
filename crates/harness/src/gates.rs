@@ -60,6 +60,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "commit-verdict" => commit_verdict(ctx),
         "verdict" => verdict(ctx),
         "scope" => scope(ctx),
+        "queue-intact" => queue_intact(ctx),
         "check-delta" => check_gate(ctx),
         "commit-round" => commit_round(ctx),
         "adjudicator-halt" => adjudicator_halt(ctx),
@@ -412,6 +413,54 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         &format!("chore({task}): harness scope gate rejected a done verdict"),
         &format!("{task} was forced back to ready by the scope gate: {why}."),
     )
+}
+
+// a heading an agent deletes mid-edit leaves a block nothing counts: its body merges into its
+// neighbour and archive moves both out, so the id is gone with the tree still consistent (T-020, 9c0b4af)
+fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
+        return pass("no base");
+    };
+    let before = ids_in_rev(ctx.root, &base);
+    if before.is_empty() {
+        return pass("no ids at base");
+    }
+    let Ok(text) = tasks_file(ctx.root).read() else {
+        return pass("TASKS.md unreadable; queue-hygiene owns that");
+    };
+    let Ok(now) = queue::parse(&text) else {
+        return pass("TASKS.md unparseable; queue-hygiene owns that");
+    };
+    let archived = std::fs::read_to_string(ctx.root.join("DECISIONS.md")).unwrap_or_default();
+    let lost: Vec<String> = before
+        .into_iter()
+        .filter(|id| !now.iter().any(|b| &b.id == id) && !archived.contains(&format!("[{id}]")))
+        .collect();
+    if lost.is_empty() {
+        return pass("every id at the base is still in the queue or in DECISIONS.md");
+    }
+    let reason = format!(
+        "{} left TASKS.md without reaching DECISIONS.md; recover with `git show {}:TASKS.md`",
+        lost.join(", "),
+        base
+    );
+    ctx.warnings.push(reason.clone());
+    ctx.halts.push(reason.clone());
+    GateOutcome {
+        pass: false,
+        reason,
+        halt: true,
+        ..GateOutcome::default()
+    }
+}
+
+// queue::ids_at is ids at a status; this is ids at a revision
+fn ids_in_rev(root: &Path, rev: &str) -> Vec<String> {
+    git(root, &["show", &format!("{rev}:TASKS.md")])
+        .ok()
+        .and_then(|text| queue::parse(&text).ok())
+        .map(|blocks| blocks.into_iter().map(|b| b.id).collect())
+        .unwrap_or_default()
 }
 
 fn added_ids(base: &[LockEntry], head: &[LockEntry]) -> Vec<String> {
@@ -959,6 +1008,53 @@ mod tests {
         let mut env = Env::new("exit 0\n");
         assert!(run("verdict", &mut env.ctx(None, None)).pass);
         assert!(run("scope", &mut env.ctx(None, None)).pass);
+    }
+
+    #[test]
+    fn a_task_id_that_left_the_queue_without_reaching_decisions_halts_the_run() {
+        let mut env = Env::new("exit 0\n");
+        env.repo.write(
+            "TASKS.md",
+            "## [T-001] first\nscope: src/*\nstatus: review\n\n## [T-002] second\nscope: src/*\nstatus: ready\n",
+        );
+        env.repo.commit_all("queue");
+        let base = env.head();
+        env.repo
+            .write("TASKS.md", "## [T-001] first\nscope: src/*\nstatus: done\n");
+        env.repo.commit_all("heading lost");
+
+        let out = run("queue-intact", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(out.halt);
+        assert!(out.reason.contains("T-002"), "{}", out.reason);
+        assert!(
+            out.reason.contains(&format!("git show {base}:TASKS.md")),
+            "{}",
+            out.reason
+        );
+    }
+
+    #[test]
+    fn and_the_same_id_archived_to_decisions_is_not_a_loss() {
+        let mut env = Env::new("exit 0\n");
+        env.repo.write(
+            "TASKS.md",
+            "## [T-001] first\nscope: src/*\nstatus: review\n\n## [T-002] second\nscope: src/*\nstatus: done\n",
+        );
+        env.repo.commit_all("queue");
+        let base = env.head();
+        env.repo.write(
+            "TASKS.md",
+            "## [T-001] first\nscope: src/*\nstatus: review\n",
+        );
+        env.repo.write(
+            "DECISIONS.md",
+            "# DECISIONS\n\n## [T-002] second\nstatus: done\n",
+        );
+        env.repo.commit_all("archived");
+
+        let out = run("queue-intact", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
     }
 
     #[test]
