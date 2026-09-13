@@ -95,7 +95,7 @@ archived: DECISIONS.md — full block at `git show 9c0b4af:TASKS.md`
 ## [T-020] every iteration leaves exactly one PROGRESS.md entry
 scope: crates/harness/src/pipeline.rs, roles/verifier.md, .harness/roles/verifier.md, crates/harness/tests/loop.rs, README.md
 blockedBy: none
-status: ready
+status: done
 rows: none — harness
 criteria:
   - an iteration of the `review` pipeline ends with no `wrote no PROGRESS.md entry` warning in the digest, and `PROGRESS.md` grows by exactly one entry
@@ -108,6 +108,7 @@ notes: |
   the launcher expects one. Either the record gains the verdict round's line or the launcher stops
   asking for one; the criteria fix the outcome, not the mechanism.
   recovered 2026-09-13: the block was lost at 9c0b4af, when T-019's verifier edit deleted its heading and its body merged into T-019's, which `harness run` then archived; restored verbatim from `git show ce92693:TASKS.md`.
+  2026-09-13 operator, done: the launcher writes the entry, not a role prompt, because the tests have to assert it without spawning an agent. `pipeline::progress_stub` appends one entry when an iteration ends with PROGRESS.md no longer than it started, and commits it with `chore(progress): <task> iteration <n>`; the warning it replaces is gone. The entry names the date, the task, the pipeline, the status the task ended at, the stages and the iteration, and its friction line is exactly `friction: none` so `friction-repeat` skips it rather than grouping a phrase that repeats every round. Two tests in `crates/harness/tests/loop.rs` count `^## ` lines: `a_verify_only_iteration_leaves_one_progress_entry_written_by_the_launcher` (1 entry, no warning, `git status` clean) and `and_an_iteration_whose_implementer_wrote_one_gets_no_second_entry` (still 1). The first fails with `progress_stub` stubbed out. README line added under "What a run does"; no role prompt changed, so `PROBE install-stale 0` holds. `export PATH="$HOME/.cargo/bin:$PATH"; cargo test --workspace -q 2>&1 && cargo clippy --all-targets -q -- -D warnings 2>&1 && cargo fmt --all --check` → EXIT=0; 194+0+10+5+9+16+22+33+29+4+0 = 322 passed, 3 ignored, 0 failed.
 
 ## [T-026] install-stale .harness/RAILS.md:0 the installed copy differs from the source it was built from; re-run `harness init`
 scope: .harness/RAILS.md, templates/RAILS.md

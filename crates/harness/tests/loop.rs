@@ -905,6 +905,74 @@ fn a_task_stranded_at_review_gets_its_verify_stage_on_the_next_run() {
     assert_eq!(digest.landed, vec!["T-001".to_string()]);
 }
 
+fn entries(r: &Repo) -> usize {
+    std::fs::read_to_string(r.root.join("PROGRESS.md"))
+        .expect("PROGRESS.md")
+        .lines()
+        .filter(|l| l.starts_with("## "))
+        .count()
+}
+
+#[test]
+fn a_verify_only_iteration_leaves_one_progress_entry_written_by_the_launcher() {
+    let r = repo(&base_toml(""), REVIEW_TASK);
+    let verify = verifier(&r);
+    with_verifier(&r, &verify);
+    r.commit_all("stubs");
+
+    let (digest, _) = go(&r, &opts(1));
+    assert_eq!(
+        entries(&r),
+        1,
+        "{}",
+        std::fs::read_to_string(r.root.join("PROGRESS.md")).unwrap()
+    );
+    assert!(
+        !digest
+            .warnings
+            .iter()
+            .any(|w| w.contains("no PROGRESS.md entry")),
+        "{:?}",
+        digest.warnings
+    );
+    let text = std::fs::read_to_string(r.root.join("PROGRESS.md")).expect("PROGRESS.md");
+    assert!(text.contains("review pipeline"), "{text}");
+    assert!(text.contains("\nfriction: none\n"), "{text}");
+    assert!(
+        harness::git::porcelain(&r.root).is_empty(),
+        "the entry is committed"
+    );
+}
+
+#[test]
+fn and_an_iteration_whose_implementer_wrote_one_gets_no_second_entry() {
+    let r = repo("", "");
+    let implement = implementer(&r, "echo '## stub entry' >>PROGRESS.md\n");
+    let verify = verifier(&r);
+    r.write(
+        "harness.toml",
+        &base_toml(&role_commands(&implement, &verify)),
+    );
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let (digest, _) = go(&r, &opts(1));
+    assert_eq!(
+        entries(&r),
+        1,
+        "{}",
+        std::fs::read_to_string(r.root.join("PROGRESS.md")).unwrap()
+    );
+    assert!(
+        !digest
+            .warnings
+            .iter()
+            .any(|w| w.contains("no PROGRESS.md entry")),
+        "{:?}",
+        digest.warnings
+    );
+}
+
 #[test]
 fn a_task_at_review_wins_over_one_ready_for_the_pipeline_choice() {
     let r = repo(&base_toml(""), REVIEW_AND_READY_TASKS);

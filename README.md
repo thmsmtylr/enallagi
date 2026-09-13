@@ -41,7 +41,8 @@ chosen by the queue's state:
 
 Every stage is a separate process spawned from a role prompt under `.harness/roles/`, turn-capped
 per stage. `review` runs before `task`. `discover` ends the run after two consecutive rounds that
-leave nothing takeable.
+leave nothing takeable. Every iteration leaves exactly one `PROGRESS.md` entry: the launcher writes
+one itself, and commits it, when no role did.
 
 A run halts on a `STOP` file in the repo root; on `BUDGET_SECONDS` / `BUDGET_USD` /
 `BUDGET_TOKENS` (or `--budget-seconds` / `--budget-usd` / `--budget-tokens`, which wins) at the

@@ -419,7 +419,7 @@ impl<'a> Loop<'a> {
 
         self.promotions(&ready_before, &rejections_before);
         match &task {
-            Some(task) => self.task_outcome(task, progress_before),
+            Some(task) => self.task_outcome(task, &pipeline, progress_before),
             None => {
                 if let Some(reason) = self.proposed_names_contract() {
                     self.halt("proposed", reason);
@@ -866,7 +866,7 @@ impl<'a> Loop<'a> {
         }
     }
 
-    fn task_outcome(&mut self, task: &str, progress_before: u64) {
+    fn task_outcome(&mut self, task: &str, pipeline: &config::Pipeline, progress_before: u64) {
         let status = self
             .blocks()
             .iter()
@@ -889,11 +889,41 @@ impl<'a> Loop<'a> {
                 other.unwrap_or("no status")
             )),
         }
-        // the entry is all the next iteration inherits, so a silent iteration is itself the finding
+        // the entry is all the next iteration inherits, so the launcher writes the facts it has
+        // rather than warning that a role left none -- a verify-only round has no other record
         if file_len(&self.root.join("PROGRESS.md")) <= progress_before {
+            self.progress_stub(task, pipeline, status.as_deref());
+        }
+    }
+
+    fn progress_stub(&mut self, task: &str, pipeline: &config::Pipeline, status: Option<&str>) {
+        // `friction: none` exactly: friction-repeat skips that word and would group any other phrasing
+        let entry = format!(
+            "\n## {date} — {task} — {name} pipeline, left at {status}\n\
+             what happened: no role wrote an entry this iteration {iter}, so the launcher wrote \
+             this one. Stages: {stages}. The round's reasoning is in the task's own notes in \
+             TASKS.md.\nfriction: none\n",
+            date = jiff::Zoned::now().strftime("%Y-%m-%d"),
+            name = pipeline.name,
+            status = status.unwrap_or("no status"),
+            iter = self.writer.iter,
+            stages = pipeline.stages.join(", "),
+        );
+        let path = self.root.join("PROGRESS.md");
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        if let Err(err) = std::fs::write(&path, format!("{existing}{entry}")) {
+            self.digest
+                .warnings
+                .push(format!("PROGRESS.md: {task} got no entry: {err}"));
+            return;
+        }
+        if let Err(err) = git::commit_paths(
+            self.root,
+            &["PROGRESS.md"],
+            &format!("chore(progress): {task} iteration {}", self.writer.iter),
+        ) {
             self.digest.warnings.push(format!(
-                "iteration {} wrote no PROGRESS.md entry for {task}.",
-                self.writer.iter
+                "PROGRESS.md: the launcher's entry is uncommitted: {err}"
             ));
         }
     }
