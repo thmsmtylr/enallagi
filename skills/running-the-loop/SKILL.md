@@ -52,8 +52,9 @@ Stopping with `BLOCKED` and a written reason is a success, not a failure.
 
 Every iteration's `PROGRESS.md` entry ends with `friction:` — one thing that cost time and a rule or
 a check could prevent, or `none`. The first occurrence is evidence and stays there. The **second**
-occurrence of the same thing becomes a line in `LEARNINGS.md`, and `harness probe` → `friction-repeat`
-keeps emitting it until it is.
+occurrence of the same thing is decided: a line in `LEARNINGS.md`, which `harness eval --gate` must
+admit, or a dated kill line in `DECISIONS.md` quoting the `--gate` run that refused the rule.
+`harness probe` → `friction-repeat` keeps emitting it until one of the two is written.
 
 ## The rails
 

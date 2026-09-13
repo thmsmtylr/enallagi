@@ -31,7 +31,7 @@ For each task with `status: review`:
    - A live network call in a test → REJECT
    - Unmeasured claims: a number reasoned to rather than run, a figure with no fixture or revision stamp, a constant tuned so a check passes. Re-derive every number yourself and REJECT the ones that do not reproduce, even when the underlying behaviour is right (`measure-first`).
    - Litter: a scratch file, a log, a throwaway experiment left in the tree (`tidy`)
-   - **A PROGRESS.md entry with no `friction:` line** → REJECT (`friction`). `friction: none` is a valid answer; a missing line is not. If the same friction is already written there twice, say so in your verdict: the second occurrence belongs in LEARNINGS.md, and `harness probe` → `friction-repeat` will keep emitting it until it is
+   - **A PROGRESS.md entry with no `friction:` line** → REJECT (`friction`). `friction: none` is a valid answer; a missing line is not. If the same friction is already written there twice, say so in your verdict: the second occurrence owes a decision — a LEARNINGS.md rule `harness eval --gate` admits, or a dated kill line in DECISIONS.md quoting the `--gate` run that refused it — and `harness probe` → `friction-repeat` keeps emitting it until one is written
 5. Over-engineering audit (ponytail): flag minor bloat in notes; REJECT when significant — a dependency the ladder does not justify, an abstraction with one caller, code the platform gives free.
 6. Try to break it: write one or two probe inputs in a scratch file outside the repo and run them if practical.
 

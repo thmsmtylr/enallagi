@@ -123,13 +123,13 @@ end_after_dry_rounds = 2
 name = "implement"
 role = "implementer"
 turns = 120
-post = ["implementer-not-done"]
+post = ["queue-intact", "implementer-not-done"]
 
 [[stage]]
 name = "verify"
 role = "verifier"
 turns = 100
-post = ["commit-verdict", "verdict", "scope"]
+post = ["commit-verdict", "queue-intact", "verdict", "scope"]
 
 [[stage]]
 name = "scout"
@@ -141,7 +141,7 @@ env = { HARNESS_DRIVER = "1" }
 name = "adjudicate"
 role = "adjudicator"
 turns = 40
-post = ["commit-round", "adjudicator-halt", "dry-round"]
+post = ["commit-round", "queue-intact", "adjudicator-halt", "dry-round"]
 
 # gate names the probe, rail or hook that fails without the skill, or the literal `none`; an id renamed here is renamed in roles/ too.
 

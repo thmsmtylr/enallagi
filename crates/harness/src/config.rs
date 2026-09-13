@@ -22,6 +22,7 @@ pub const GATE_NAMES: &[&str] = &[
     "commit-verdict",
     "verdict",
     "scope",
+    "queue-intact",
     "check-delta",
     "commit-round",
     "adjudicator-halt",

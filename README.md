@@ -56,14 +56,14 @@ read-only to a running loop's event log: three panes (queue, stages, output), `T
 ## What is enforced, and by what
 
 Every rule below is a mechanism in `crates/harness/src/gates.rs`. `[[stage]].post` names the gates
-run after a stage; a failed gate forces the task back to `ready` (or halts the run, for the
-adjudicator) and writes its reason next to the status.
+run after a stage; a failed gate forces the task back to `ready` (or halts the run) and writes its reason next to the status.
 
 | Rule | Gate | Runs after |
 | --- | --- | --- |
 | Only the verifier may set `done`, and an implementer that stopped short of `review` skips the rest of the iteration | `implementer-not-done` | implement |
 | The work is committed, and the check is green on delta, before `done` is accepted | `verdict` | verify |
 | Only the task's `scope:` globs are touched; a product task never edits the harness | `scope` | verify |
+| A task id at the iteration's base commit is still in TASKS.md, or in DECISIONS.md; a lost heading halts the run | `queue-intact` | implement, verify, adjudicate |
 | The check, on delta against `.check-baseline` | `check-delta` | wherever a stage's `post` names it |
 
 `harness hook <name>` runs independently of the pipeline, wired into an adapter's hooks file where
@@ -126,7 +126,7 @@ per shortfall. A probe that cannot run prints `PROBE <name> ERROR`, never a coun
 | `ponytail-ceiling` | a `ponytail:` marker in code with no dated kill line already naming its text |
 | `rejection-stale` | a `REJECTED` note under a status other than `ready`, or a block parked at `needs-spec` |
 | `queue-hygiene` | a duplicate id, a missing status, a blocker no block defines, an open block matching no scope |
-| `friction-repeat` | two `PROGRESS.md` friction lines that are the same friction reworded, with no rule covering it |
+| `friction-repeat` | two `PROGRESS.md` friction lines that are the same friction reworded, with neither a rule nor a dated kill line covering it |
 | `check-red` | the forced check is failing |
 | `litter` | a tracked, untracked or ignored path on no allowlist |
 | `install-stale` | in this repo's own checkout: an installed file that has drifted from what `harness init` would write now |
@@ -263,10 +263,9 @@ HARNESS_DRIVER=1 cargo test -p harness --test floor -- --include-ignored driver
 ./docs/bootstrap.sh --check            # the record of this repo having built itself, derived from git
 ```
 
-CI runs `cargo fmt`, `cargo clippy -D warnings` and `cargo test --workspace` on `ubuntu-latest` and
-`macos-latest`; a `shell` job runs `bash -n`, `shellcheck` and `docs/bootstrap.sh --check` over
-`driver.sh`, `docs/*.sh`, `adapters/bun-turbo/*.sh` and `evals/*.sh`; a `driver` job runs the
-ignored test above against the release binary.
+CI runs `cargo fmt`, `cargo clippy -D warnings` and `cargo test --workspace` on `ubuntu-latest` and `macos-latest`;
+a `shell` job runs `bash -n`, `shellcheck` and `docs/bootstrap.sh --check` over `driver.sh`, `docs/*.sh`,
+`adapters/bun-turbo/*.sh` and `evals/*.sh`; a `driver` job runs the ignored test above against the release binary.
 
 ## Not included
 
