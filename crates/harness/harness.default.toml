@@ -67,7 +67,7 @@ docs = [
   "PROGRESS.archive.md",
   "PROGRESS.md",
   "QWEN.md",
-  "RESEARCH.md",
+  "REFERENCES.md",
   "SPEC.md",
   "TASKS.md",
   "harness.default.toml",
