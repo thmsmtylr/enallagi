@@ -538,9 +538,12 @@ fn harness_run_without_a_tty_prints_one_line_per_event_and_exits_0() {
     r.write("TASKS.md", TASKS);
     r.commit_all("stubs");
 
+    // this asserts what a tty-less run prints; CI would make the run --frozen and refuse the
+    // fixture's unvendored skills, which is `a_stage_refuses_to_start_on_an_unresolved_skill_under_frozen`
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_harness"))
         .args(["run", "--no-tui", "--iterations", "1"])
         .current_dir(&r.root)
+        .env_remove("CI")
         .output()
         .expect("run harness run");
     let stdout = String::from_utf8_lossy(&out.stdout);

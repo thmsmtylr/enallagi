@@ -365,14 +365,7 @@ fn seed_pointer(
 
 // install-stale also has to know this path to tell an overwritten file from a seeded one
 pub(crate) fn skills_root(cfg: &Config, preset: Option<&Preset>) -> PathBuf {
-    match preset {
-        Some(preset) => skills::skills_dir(cfg, preset),
-        // `custom`, which has no directory of its own
-        None => match cfg.layout.skills_dir.as_deref() {
-            Some(dir) => PathBuf::from(dir),
-            None => Path::new(&cfg.layout.harness_dir).join("skills"),
-        },
-    }
+    skills::skills_dir(cfg, preset)
 }
 
 // order matters: this is the order the tool fires the events in

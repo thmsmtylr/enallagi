@@ -131,6 +131,40 @@ fn events_since_keeps_only_events_at_or_after() {
 }
 
 #[test]
+fn skills_sync_works_under_a_custom_preset_which_has_no_directory_of_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut toml = String::from(
+        "[agent]\npreset = \"custom\"\ncommand = [\"./lane.sh\", \"{prompt}\", \"{turns}\"]\n\n",
+    );
+    for id in [
+        "tdd",
+        "ponytail",
+        "debugging",
+        "review-received",
+        "verify-before-done",
+        "review-requested",
+        "brainstorming",
+    ] {
+        toml.push_str(&format!(
+            "[[skill]]\nid = \"{id}\"\nsource = \"path:vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"x\"\n\n"
+        ));
+        std::fs::create_dir_all(root.join(format!("vendor/{id}"))).unwrap();
+        std::fs::write(root.join(format!("vendor/{id}/SKILL.md")), "body\n").unwrap();
+    }
+    std::fs::write(root.join("harness.toml"), toml).unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["skills", "sync"])
+        .current_dir(root)
+        .output()
+        .expect("run harness skills sync");
+    assert!(out.status.success(), "{out:?}");
+    assert!(root.join(".harness/skills/tdd/SKILL.md").is_file());
+    assert!(root.join("harness.lock").is_file());
+}
+
+#[test]
 fn skills_check_refuses_what_sync_then_locks() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
