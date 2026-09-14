@@ -1,1 +1,6 @@
 target/
+
+# Vendored skills are other people's work, fetched from harness.lock by `harness skills sync` and
+# never redistributed here. `running-the-loop` is this repo's own and stays tracked.
+.claude/skills/*
+!.claude/skills/running-the-loop/
