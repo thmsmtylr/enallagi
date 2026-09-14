@@ -89,8 +89,18 @@ cost = "total_cost_usd"
 [check]
 command = "$check"
 TOML
+    # The role prompts name skills by `{{skill:id}}`; declare them from local directories so the
+    # resolve runs with nothing to fetch. CI forces --frozen, which refuses a stage whose skills are
+    # not already vendored and locked, so `skills sync` runs before the loop does.
+    for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming; do
+      mkdir -p "vendor/$id"
+      printf '# %s\n' "$id" >"vendor/$id/SKILL.md"
+      printf '\n[[skill]]\nid = "%s"\nsource = "path:vendor/%s"\npath = ""\ngate = "none"\nwhy = "the driver fixture"\n' \
+        "$id" "$id" >>harness.toml
+    done
 
     "$HARNESS_BIN" init >/dev/null 2>&1 || exit 3
+    "$HARNESS_BIN" skills sync >/dev/null 2>&1 || exit 3
 
     # The seeded T-001 ships with an empty scope: line. Give it one, so the scope gate has
     # something to judge the lane's diff against.

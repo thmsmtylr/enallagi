@@ -6,7 +6,7 @@ use std::sync::{mpsc, Arc};
 
 use crate::events::{self, Event, Kind};
 use crate::pipeline::{self, RunOpts};
-use crate::{git, tui};
+use crate::{git, skills, tui};
 
 pub struct Args {
     pub iterations: u32,
@@ -29,7 +29,8 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     let opts = RunOpts {
         max_iter: args.iterations,
         dry_run: args.dry_run,
-        frozen: args.frozen,
+        // CI is frozen whether or not anyone passed the flag: fetching a skill mid-run breaks the lock
+        frozen: args.frozen || skills::frozen_from_env(std::env::var_os("CI").as_deref()),
         tui,
         budget_usd: args.budget_usd,
         budget_seconds: args.budget_seconds,

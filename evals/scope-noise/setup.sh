@@ -37,6 +37,7 @@ finding=$(harness probe | grep '^FINDING hash-uncovered ')
   printf 'status: proposed\n'
   printf 'probe: hash-uncovered\n'
   printf 'rows: none — harness\n'
+  # shellcheck disable=SC2016  # the backticks are markdown in the task block, not a command
   printf 'command: `harness probe`\n'
   printf 'output: |\n  %s\n' "$finding"
   printf 'notes: proposed from the output above.\n'

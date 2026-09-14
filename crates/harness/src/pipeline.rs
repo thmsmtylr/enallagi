@@ -589,8 +589,9 @@ impl<'a> Loop<'a> {
             }
         };
 
-        // CI is frozen whether or not anyone passed the flag; fetching a skill mid-flight breaks the lock
-        let frozen = self.opts.frozen || std::env::var_os("CI").is_some();
+        // the CI-implies-frozen decision is the CLI's, so a test's RunOpts is not overruled by the
+        // environment it happens to run in
+        let frozen = self.opts.frozen;
         // a declared role is vendored to the path role_source reads first, so the fallback below stays as is
         let mut resolved_roles = Vec::new();
         if self.cfg.role.iter().any(|r| r.name == role) {
@@ -622,7 +623,7 @@ impl<'a> Loop<'a> {
         let resolved_skills = match skills::resolve(
             self.root,
             self.cfg,
-            &resolved.preset,
+            Some(&resolved.preset),
             &ids,
             &ResolveOpts {
                 frozen,

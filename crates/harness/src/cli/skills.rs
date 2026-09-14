@@ -35,9 +35,8 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             .collect::<Vec<_>>()
             .join("\n"))
     })?;
-    let preset = presets
-        .get(&cfg.agent.preset)
-        .ok_or_else(|| anyhow::anyhow!("harness: unknown agent preset {}", cfg.agent.preset))?;
+    // a custom preset has no directory of its own; layout.skills_dir or <harness_dir>/skills answers
+    let preset = presets.get(&cfg.agent.preset);
     let ids: Vec<String> = cfg.skill.iter().map(|s| s.id.clone()).collect();
 
     if let SkillsCmd::List = args.cmd {

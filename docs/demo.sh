@@ -62,6 +62,14 @@ echo '{"total_cost_usd": 0.01}'
 LANE
 chmod +x src/lane.sh
 
+# The skills the role prompts name are declared with `path:` sources this script writes, so the real
+# resolve, vendor and lock path runs with nothing to fetch. Dropping them instead leaves the prompts'
+# `{{skill:id}}` tokens unmatched and the run refuses the stage.
+for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming; do
+  mkdir -p "vendor/$id"
+  printf '# %s\n' "$id" >"vendor/$id/SKILL.md"
+done
+
 # a real repo puts its test command in check.command
 cat >harness.toml <<'TOML'
 [agent]
@@ -74,6 +82,10 @@ cost = "total_cost_usd"
 [check]
 command = "true"
 TOML
+for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming; do
+  printf '\n[[skill]]\nid = "%s"\nsource = "path:vendor/%s"\npath = ""\ngate = "none"\nwhy = "the demo fixture"\n' \
+    "$id" "$id" >>harness.toml
+done
 
 step "install into a throwaway repo  ($D)"
 INSTALL=$("$HARNESS_BIN" init 2>&1) || {
@@ -88,6 +100,12 @@ printf 'installed %s files\n' "$(printf '%s\n' "$INSTALL" | grep -c '^  wrote: '
 # something to judge the lane's diff against.
 sed -i.bak 's|^scope:$|scope: src/allowed.ts|' TASKS.md && rm -f TASKS.md.bak
 git add -A && git commit -qm 'chore: T-001 setup' >/dev/null
+
+# `CI` forces --frozen, which refuses a stage whose skills are not already vendored and locked, so
+# the demo vendors them first. The sources are local, so this reaches no network.
+step "vendor the declared skills and pin them in harness.lock"
+"$HARNESS_BIN" skills sync | sed 's/^/  /'
+git add -A && git commit -qm 'chore: vendor the declared skills' >/dev/null
 
 step "the queue"
 "$HARNESS_BIN" tasks list

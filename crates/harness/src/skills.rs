@@ -116,11 +116,12 @@ pub fn required_ids(role_text: &str) -> Vec<String> {
 }
 
 // configured dir, else the preset's own, else <harness_dir>/skills for a preset with no skills mechanism
-pub fn skills_dir(cfg: &Config, preset: &Preset) -> PathBuf {
+// None is `custom`, or any preset this build does not know: it has no directory of its own
+pub fn skills_dir(cfg: &Config, preset: Option<&Preset>) -> PathBuf {
     if let Some(dir) = cfg.layout.skills_dir.as_deref() {
         return PathBuf::from(dir);
     }
-    if let Some(dir) = preset.skills_dir.as_deref() {
+    if let Some(dir) = preset.and_then(|p| p.skills_dir.as_deref()) {
         return PathBuf::from(dir);
     }
     Path::new(&cfg.layout.harness_dir).join("skills")
@@ -141,7 +142,7 @@ impl Default for ResolveOpts {
 }
 
 // CI freezes skills like --frozen: an unattended run must fail on a stale lock, not fetch new instructions
-fn frozen_from_env(ci: Option<&OsStr>) -> bool {
+pub(crate) fn frozen_from_env(ci: Option<&OsStr>) -> bool {
     ci.is_some()
 }
 
@@ -166,7 +167,7 @@ pub struct ResolvedSkill {
 pub fn resolve(
     root: &Path,
     cfg: &Config,
-    preset: &Preset,
+    preset: Option<&Preset>,
     ids: &[String],
     opts: &ResolveOpts,
     events: &mut Writer,
@@ -553,8 +554,15 @@ mod tests {
         let mut w = writer(&repo.root);
 
         let ids = vec!["tdd".to_string()];
-        let got =
-            resolve(&repo.root, &cfg, &claude, &ids, &opts(&repo, false), &mut w).expect("resolve");
+        let got = resolve(
+            &repo.root,
+            &cfg,
+            Some(&claude),
+            &ids,
+            &opts(&repo, false),
+            &mut w,
+        )
+        .expect("resolve");
         assert_eq!(got[0].result, "fetched");
         let vendored = repo.root.join(".claude/skills/tdd/SKILL.md");
         assert_eq!(fs::read_to_string(&vendored).expect("vendored"), BODY);
@@ -570,8 +578,15 @@ mod tests {
         assert_eq!(lock.skill[0].commit, None);
         let before = fs::read_to_string(lock_path(&repo.root)).expect("lock text");
 
-        let again = resolve(&repo.root, &cfg, &claude, &ids, &opts(&repo, false), &mut w)
-            .expect("resolve again");
+        let again = resolve(
+            &repo.root,
+            &cfg,
+            Some(&claude),
+            &ids,
+            &opts(&repo, false),
+            &mut w,
+        )
+        .expect("resolve again");
         assert_eq!(again[0].result, "cached");
         assert_eq!(
             fs::read_to_string(lock_path(&repo.root)).expect("lock text"),
@@ -600,7 +615,7 @@ mod tests {
         let got = resolve(
             &repo.root,
             &cfg,
-            &claude,
+            Some(&claude),
             &["tdd".to_string()],
             &opts(&repo, false),
             &mut w,
@@ -633,14 +648,28 @@ mod tests {
         let claude = preset("claude");
         let mut w = writer(&repo.root);
         let ids = vec!["tdd".to_string()];
-        resolve(&repo.root, &cfg, &claude, &ids, &opts(&repo, false), &mut w)
-            .expect("first resolve");
+        resolve(
+            &repo.root,
+            &cfg,
+            Some(&claude),
+            &ids,
+            &opts(&repo, false),
+            &mut w,
+        )
+        .expect("first resolve");
 
         let vendored = repo.root.join(".claude/skills/tdd/SKILL.md");
         fs::write(&vendored, "tampered\n").expect("tamper");
 
-        let err = resolve(&repo.root, &cfg, &claude, &ids, &opts(&repo, true), &mut w)
-            .expect_err("frozen refuses");
+        let err = resolve(
+            &repo.root,
+            &cfg,
+            Some(&claude),
+            &ids,
+            &opts(&repo, true),
+            &mut w,
+        )
+        .expect_err("frozen refuses");
         assert!(matches!(&err, SkillError::Unresolved { id, .. } if id == "tdd"));
         let events = Log::open(&repo.root.join(".harness"))
             .read()
@@ -650,8 +679,15 @@ mod tests {
             Kind::SkillResolved { id, result, .. } if id == "tdd" && result == "refused"
         )));
 
-        let got = resolve(&repo.root, &cfg, &claude, &ids, &opts(&repo, false), &mut w)
-            .expect("unfrozen refetches");
+        let got = resolve(
+            &repo.root,
+            &cfg,
+            Some(&claude),
+            &ids,
+            &opts(&repo, false),
+            &mut w,
+        )
+        .expect("unfrozen refetches");
         assert_eq!(got[0].result, "fetched");
         assert_eq!(fs::read_to_string(&vendored).expect("restored"), BODY);
     }
@@ -666,7 +702,7 @@ mod tests {
         let got = resolve(
             &repo.root,
             &cfg,
-            &aider,
+            Some(&aider),
             &["tdd".to_string()],
             &opts(&repo, false),
             &mut w,
@@ -695,7 +731,7 @@ mod tests {
             let got = resolve(
                 &repo.root,
                 &cfg,
-                &p,
+                Some(&p),
                 &["tdd".to_string()],
                 &opts(&repo, false),
                 &mut w,
@@ -714,7 +750,7 @@ mod tests {
         let err = resolve(
             &repo.root,
             &cfg,
-            &preset("claude"),
+            Some(&preset("claude")),
             &["tdd".to_string()],
             &opts(&repo, false),
             &mut w,
@@ -750,7 +786,7 @@ mod tests {
         let err = resolve(
             &repo.root,
             &cfg,
-            &preset("claude"),
+            Some(&preset("claude")),
             &["../escape".to_string()],
             &opts(&repo, false),
             &mut w,
@@ -767,7 +803,7 @@ mod tests {
         let err = resolve(
             &repo.root,
             &cfg,
-            &preset("claude"),
+            Some(&preset("claude")),
             &["tdd".to_string()],
             &opts(&repo, false),
             &mut w,
@@ -797,7 +833,7 @@ mod tests {
         resolve(
             &repo.root,
             &cfg,
-            &preset("claude"),
+            Some(&preset("claude")),
             &["one".to_string(), "two".to_string()],
             &opts(&repo, false),
             &mut w,
@@ -829,7 +865,7 @@ mod tests {
         resolve(
             &repo.root,
             &cfg,
-            &preset("claude"),
+            Some(&preset("claude")),
             &["tdd".to_string()],
             &opts(&repo, false),
             &mut w,
