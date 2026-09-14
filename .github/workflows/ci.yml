@@ -1,6 +1,7 @@
 # `shell` lints the scripts that remain (driver.sh, docs/*.sh, adapters/bun-turbo/*.sh, evals/*.sh)
 # with bash -n, shellcheck at full severity, and `docs/bootstrap.sh --check` against the whole log.
-# `driver` runs the ignored test that drives the release binary through a real install. `rust` runs
+# `driver` runs the ignored test that drives the release binary through a real install. `skills`
+# fetches every pinned skill from harness.lock and checks it against its pin. `rust` runs
 # fmt, clippy at -D warnings and the workspace test suite on both userlands. `cross-build` proves the
 # four release targets compile. Every `uses:` is pinned to a 40-character commit SHA with its tag in
 # a trailing comment (`every_github_action_is_pinned_to_a_commit_sha`, crates/harness/tests/floor.rs).
@@ -64,6 +65,28 @@ jobs:
         env:
           HARNESS_DRIVER: '1'
         run: cargo test -p harness --test floor -- --include-ignored driver
+
+  # The vendored skills are not in the tree: `sync` fetches them from harness.lock and `check`
+  # refuses a pin whose vendored content no longer hashes to what the lock records, so a tag moved
+  # or deleted upstream fails here rather than at a stage.
+  skills:
+    name: skills
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: every declared skill resolves from the lock
+        run: cargo run -q -p harness -- skills sync
+      - name: and matches the pin the lock records
+        run: cargo run -q -p harness -- skills check
 
   # fmt, clippy at -D warnings, and the workspace test suite, on both userlands: macos-latest and
   # ubuntu-latest differ in their default toolchains and filesystem behaviour, and this is the only

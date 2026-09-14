@@ -1,6 +1,13 @@
 version = 1
 
 [[skill]]
+id = "brainstorming"
+source = "github:obra/superpowers"
+rev = "v6.3.0"
+commit = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
+sha256 = "74edf03ea6d24ef53db48677b93558d14a979bdf052ca3f57ecdca0c66791608"
+
+[[skill]]
 id = "debugging"
 source = "github:obra/superpowers"
 rev = "v6.3.0"
