@@ -45,10 +45,6 @@ const DOCS: &[(&str, &str)] = &[
         ".check-baseline",
         include_str!("../../../templates/dot.check-baseline"),
     ),
-    (
-        "RESEARCH.md",
-        include_str!("../../../templates/RESEARCH.md"),
-    ),
 ];
 
 const SKILL: &[(&str, &str)] = &[

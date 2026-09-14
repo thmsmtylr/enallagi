@@ -77,9 +77,6 @@ fn init_exits_0_on_a_fresh_repo() {
     assert!(repo.root.join("harness.toml").is_file());
     assert!(repo.root.join(".harness/RAILS.md").is_file());
     assert!(report.wrote.contains(&"harness.toml".to_string()));
-    // the researcher may only append to a table that exists, so the file has to be seeded with one
-    let research = read(&repo, "RESEARCH.md");
-    assert!(research.contains("| Source | What it says |"), "{research}");
     for path in ["harness.toml", ".harness", "TASKS.md", "evals"] {
         assert!(
             report.track.contains(&path.to_string()),
