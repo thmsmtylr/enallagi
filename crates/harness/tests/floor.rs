@@ -581,6 +581,45 @@ fn no_shipped_file_carries_rhetorical_filler() {
     }
 }
 
+// main ships the package; what `harness init` writes lives only on dogfood/* branches
+#[test]
+#[ignore = "main only: ci.yml runs it on main and on pull requests into main"]
+fn main_tracks_no_instance_file() {
+    let mut instance = std::collections::BTreeSet::from(["test-hashes.json".to_string()]);
+    for name in harness::agent::presets().keys() {
+        let repo = Repo::new();
+        let opts = InitOpts {
+            adapter: Some(name.clone()),
+            dry_run: true,
+        };
+        let planned = init::planned_files(&repo.root, &opts).expect("plan an install");
+        instance.extend(planned.into_iter().map(|(path, _)| path));
+    }
+    // seeded by init, but its source is this file
+    instance.remove("evals/README.md");
+    assert!(instance.contains("TASKS.md"), "{instance:?}");
+
+    let out = Command::new("git")
+        .args(["ls-files"])
+        .current_dir(repo_root())
+        .output()
+        .expect("git ls-files");
+    assert!(out.status.success(), "{:?}", out);
+    let tracked: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| instance.contains(*l))
+        .map(String::from)
+        .collect();
+    assert_eq!(tracked, Vec::<String>::new());
+
+    let (code, out) = script(&repo_root().join("docs/bootstrap.sh"), &repo_root(), &[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        !out.contains("(in flight)"),
+        "a dogfood round is open:\n{out}"
+    );
+}
+
 #[test]
 fn the_shell_package_is_gone() {
     let gone = [
