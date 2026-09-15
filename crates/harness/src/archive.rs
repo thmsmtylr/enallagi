@@ -428,7 +428,7 @@ mod tests {
             .arg("30")
             .spawn()
             .expect("spawn sleep");
-        r.write(".harness/loop.pid", &child.id().to_string());
+        r.write(".enallagi/loop.pid", &child.id().to_string());
 
         let cfg = cfg(&r.root);
         let before = fs::read_to_string(r.root.join("TASKS.md")).unwrap();

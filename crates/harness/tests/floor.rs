@@ -123,14 +123,14 @@ fn no_installed_script_hardcodes_a_vendor_path_or_process() {
     )
     .expect("install");
 
-    let dir = repo.root.join(".harness");
+    let dir = repo.root.join(".enallagi");
     for rel in walk(&dir) {
         let Ok(text) = fs::read_to_string(dir.join(&rel)) else {
             continue;
         };
         assert!(
             !vendor.is_match(&text),
-            ".harness/{}: {:?}",
+            ".enallagi/{}: {:?}",
             rel.display(),
             vendor.find(&text).map(|m| m.as_str())
         );

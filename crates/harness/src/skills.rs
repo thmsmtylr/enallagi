@@ -499,12 +499,12 @@ mod tests {
     use crate::fixture::Repo;
 
     fn writer(root: &Path) -> Writer {
-        Writer::new(Log::open(&root.join(".harness")))
+        Writer::new(Log::open(&root.join(".enallagi")))
     }
 
     fn config(source: &str, path: &str, rev: Option<&str>) -> Config {
         let mut cfg = Config::default();
-        cfg.layout.harness_dir = ".harness".into();
+        cfg.layout.harness_dir = ".enallagi".into();
         cfg.layout.skill_invocation = "invoke it via the Skill tool".into();
         cfg.skill = vec![SkillDecl {
             id: "tdd".into(),
@@ -671,7 +671,7 @@ mod tests {
         )
         .expect_err("frozen refuses");
         assert!(matches!(&err, SkillError::Unresolved { id, .. } if id == "tdd"));
-        let events = Log::open(&repo.root.join(".harness"))
+        let events = Log::open(&repo.root.join(".enallagi"))
             .read()
             .expect("events");
         assert!(events.iter().any(|e| matches!(
@@ -708,7 +708,7 @@ mod tests {
             &mut w,
         )
         .expect("resolve");
-        assert!(repo.root.join(".harness/skills/tdd/SKILL.md").is_file());
+        assert!(repo.root.join(".enallagi/skills/tdd/SKILL.md").is_file());
 
         let out = render("first {{skill:tdd}} then work.", &got, &aider, &cfg);
         assert!(out.starts_with(

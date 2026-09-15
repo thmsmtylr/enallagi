@@ -39,7 +39,7 @@ chosen by the queue's state:
 | `task` | `queue.takeable` | **implement** → **verify** |
 | `discover` | `!queue.takeable` | **scout** → **adjudicate** |
 
-Every stage is a separate process spawned from a role prompt under `.harness/roles/`, turn-capped
+Every stage is a separate process spawned from a role prompt under `.enallagi/roles/`, turn-capped
 per stage. `review` runs before `task`. `discover` ends the run after two consecutive rounds that
 leave nothing takeable. Every iteration leaves exactly one `PROGRESS.md` entry: the launcher writes
 one itself, and commits it, when no role did.
@@ -77,7 +77,7 @@ the tool has one, reading its input from stdin.
 | `verify-done` | stop | reports the check's own state before the agent claims done |
 | `skills` | prompt-submit | prints every declared skill's id, why it is relied on, and its gate |
 
-The full rail list, including the judgment calls no mechanism checks, is `.harness/RAILS.md`.
+The full rail list, including the judgment calls no mechanism checks, is `.enallagi/RAILS.md`.
 
 ## The queue
 
@@ -138,7 +138,7 @@ per shortfall. A probe that cannot run prints `PROBE <name> ERROR`, never a coun
 | `limit-repeat` | two rate limits on stages back-to-back in the run's own sequence |
 | `driver` | off unless `driver_command` is set and `HARNESS_DRIVER=1`; whatever the built artifact reports |
 
-The last five read `.harness/events.jsonl` and report `OFF` until it exists.
+The last five read `.enallagi/events.jsonl` and report `OFF` until it exists.
 
 ## harness.toml
 
@@ -159,7 +159,7 @@ name, default `` \(fail\) (.+?)(?: \[[0-9.]+m?s\])?$ ``).
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `harness_dir` | string | `.harness` |
+| `harness_dir` | string | `.enallagi` |
 | `skills_dir` | string, optional | the preset's own |
 | `spec`, `rows_heading`, `rows_end_heading` | string | `SPEC.md`, `## 11. Exit criteria`, `## 12.` |
 | `context_file` | string | `AGENTS.md` |
@@ -218,7 +218,7 @@ by the pipeline before its stage, and refused by `harness hook immutable`.
 
 ## Events
 
-`harness events [--role <r>] [--task <t>] [--since <ts>] [--json]` reads `.harness/events.jsonl`,
+`harness events [--role <r>] [--task <t>] [--since <ts>] [--json]` reads `.enallagi/events.jsonl`,
 one JSON object per line, written by every `harness run`. The kinds are `run.start`, `run.end`,
 `stage.start`, `stage.output`, `stage.end` (with `seconds`, `exit`, `cost`, `input_tokens`,
 `output_tokens`, `turns`), `gate`, `task.status`, `halt`, `limit`, `skill.resolved` and `probe`;
@@ -226,14 +226,14 @@ each carries the stage, task, gate or probe it names and its reason or result.
 
 ## Files
 
-`harness init` writes, relative to the repo root (`.harness` is `layout.harness_dir`):
+`harness init` writes, relative to the repo root (`.enallagi` is `layout.harness_dir`):
 
 | Path | What |
 | --- | --- |
 | `harness.toml` | seeded once from the embedded defaults; never overwritten once present |
-| `.harness/roles/{scout,adjudicator,implementer,verifier,researcher}.md` | the five role prompts, always resubstituted |
-| `.harness/RAILS.md` | the rails, each naming its enforcement, always resubstituted |
-| `.harness/.gitignore` | ignores the harness's own scratch state |
+| `.enallagi/roles/{scout,adjudicator,implementer,verifier,researcher}.md` | the five role prompts, always resubstituted |
+| `.enallagi/RAILS.md` | the rails, each naming its enforcement, always resubstituted |
+| `.enallagi/.gitignore` | ignores the harness's own scratch state |
 | `<skills_dir>/running-the-loop/{SKILL.md,references/task-block.md}` | the harness's own usage skill, in the preset's skill directory (`.claude/skills/` by default) |
 | `TASKS.md`, `PROGRESS.md`, `LEARNINGS.md`, `DECISIONS.md`, `.check-baseline`, `AGENTS.md`, `SPEC.md` | seeded once: the queue, the append-only record, the rules, the archive, the inherited red, the context file every role reads first, the spec under the heading `layout.rows_heading` names |
 | `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | one-line pointers to `AGENTS.md`, from `layout.pointer_files` |

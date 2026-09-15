@@ -108,7 +108,7 @@ mod tests {
 
     fn repo_with_harness_dir() -> Repo {
         let r = Repo::new();
-        r.write(".gitignore", ".harness/worktrees/\n");
+        r.write(".gitignore", ".enallagi/worktrees/\n");
         r.write("harness.toml", "");
         r.commit_all("gitignore worktrees");
         r

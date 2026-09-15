@@ -9,6 +9,9 @@ use crate::agent::{Presets, TurnCap};
 
 pub const DEFAULT_TOML: &str = include_str!("../harness.default.toml");
 
+// read when layout.harness_dir is unset and the default directory is absent, so installs made before the rename keep running
+const LEGACY_HARNESS_DIR: &str = ".harness";
+
 pub const ROLE_NAMES: &[&str] = &[
     "scout",
     "adjudicator",
@@ -281,9 +284,14 @@ pub fn parse_when(s: &str) -> Result<Predicate, ConfigError> {
 pub fn load(root: &Path) -> Result<Config, ConfigError> {
     let mut base: toml::Value = parse_toml(DEFAULT_TOML, "harness.default.toml")?;
     let path = root.join("harness.toml");
+    let mut dir_configured = false;
     if path.is_file() {
         let text = std::fs::read_to_string(&path)?;
         let user: toml::Value = parse_toml(&text, "harness.toml")?;
+        dir_configured = user
+            .get("layout")
+            .and_then(|l| l.get("harness_dir"))
+            .is_some();
         // check.force follows check.command, so overriding the check without pinning force can't leave the old tool behind
         let user_check = user.get("check");
         if let (Some(command), None) = (
@@ -295,6 +303,24 @@ pub fn load(root: &Path) -> Result<Config, ConfigError> {
             }
         }
         merge(&mut base, &user);
+    }
+    if let Some(layout) = base.get_mut("layout").and_then(|l| l.as_table_mut()) {
+        let default = layout["harness_dir"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        if !dir_configured
+            && !root.join(&default).exists()
+            && root.join(LEGACY_HARNESS_DIR).is_dir()
+        {
+            layout.insert("harness_dir".into(), LEGACY_HARNESS_DIR.into());
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                eprintln!(
+                    "harness: using the legacy {LEGACY_HARNESS_DIR}/ directory; `harness init --move` moves it to {default}/"
+                )
+            });
+        }
     }
     base.try_into()
         .map_err(|e: toml::de::Error| ConfigError::Parse {
@@ -876,7 +902,7 @@ mod tests {
         let c = load(tempfile::tempdir().unwrap().path()).unwrap();
         assert_eq!(
             subst("run __CHECK__ in __HARNESS_DIR__", &c),
-            "run bun run check in .harness"
+            "run bun run check in .enallagi"
         );
     }
 
@@ -915,10 +941,36 @@ mod tests {
         .unwrap();
         let c = load(d.path()).unwrap();
         assert_eq!(c.layout.spec, "DESIGN.md");
-        assert_eq!(c.layout.harness_dir, ".harness", "untouched keys survive");
+        assert_eq!(c.layout.harness_dir, ".enallagi", "untouched keys survive");
         assert_eq!(c.stage.len(), 1);
         assert_eq!(c.stage[0].name, "only");
         assert_eq!(c.stage[0].turns, 40, "the per-stage default");
+    }
+
+    #[test]
+    fn a_repository_with_only_the_legacy_harness_directory_keeps_it() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join(".harness")).unwrap();
+        assert_eq!(load(d.path()).unwrap().layout.harness_dir, ".harness");
+
+        std::fs::write(
+            d.path().join("harness.toml"),
+            "[layout]\nharness_dir = 'state'\n",
+        )
+        .unwrap();
+        assert_eq!(
+            load(d.path()).unwrap().layout.harness_dir,
+            "state",
+            "a configured directory is never overridden"
+        );
+    }
+
+    #[test]
+    fn the_enallagi_directory_wins_when_both_exist() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join(".harness")).unwrap();
+        std::fs::create_dir(d.path().join(".enallagi")).unwrap();
+        assert_eq!(load(d.path()).unwrap().layout.harness_dir, ".enallagi");
     }
 
     #[test]

@@ -236,7 +236,7 @@ friction: FIFTH sighting of a check firing on the prose that documents it - and 
 next: nothing
 
 ## fixture — a different friction that shares an opening
-friction: none new. One thing worth the next lane's time, not a rule: `.harness/hooks/probes.sh`
+friction: none new. One thing worth the next lane's time, not a rule: `.enallagi/hooks/probes.sh`
 next: nothing
 
 ## fixture — and another, sharing the same opening

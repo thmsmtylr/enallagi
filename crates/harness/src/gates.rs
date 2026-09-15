@@ -861,7 +861,7 @@ mod tests {
     impl Env {
         fn new(check_body: &str) -> Env {
             let repo = Repo::new();
-            repo.write(".harness/.gitignore", "events.jsonl\n*.log\nlogs/\n");
+            repo.write(".enallagi/.gitignore", "events.jsonl\n*.log\nlogs/\n");
             let cmd = repo.stub_check(check_body);
             repo.write(
                 "harness.toml",
@@ -869,7 +869,7 @@ mod tests {
             );
             repo.commit_all("harness");
             let cfg = crate::config::load(&repo.root).expect("load harness.toml");
-            let writer = Writer::new(Log::open(&repo.root.join(".harness")));
+            let writer = Writer::new(Log::open(&repo.root.join(".enallagi")));
             Env {
                 repo,
                 cfg,
@@ -1143,10 +1143,10 @@ mod tests {
     #[test]
     fn scope_allows_a_harness_edit_under_a_harness_task() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".harness/*", "none — harness");
+        env.queue("done", ".enallagi/*", "none — harness");
         env.repo.commit_all("verdict");
         let base = env.head();
-        env.repo.write(".harness/loop.sh", "# edited\n");
+        env.repo.write(".enallagi/loop.sh", "# edited\n");
         env.repo.commit_all("harness edit");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -1157,10 +1157,10 @@ mod tests {
     #[test]
     fn scope_rejects_the_same_edit_under_a_product_task() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".harness/*", "§11 row 1");
+        env.queue("done", ".enallagi/*", "§11 row 1");
         env.repo.commit_all("verdict");
         let base = env.head();
-        env.repo.write(".harness/loop.sh", "# edited\n");
+        env.repo.write(".enallagi/loop.sh", "# edited\n");
         env.repo.commit_all("harness edit");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -1397,7 +1397,7 @@ mod tests {
         env.queue("done", "src/**", "§11 row 1");
         env.repo.commit_all("verdict");
         let base = env.head();
-        env.repo.write(".harness/roles/implementer.md", "# role\n");
+        env.repo.write(".enallagi/roles/implementer.md", "# role\n");
         env.repo
             .write("harness.lock", &role_lock_toml(&[("implementer", "aaa")]));
         env.repo.commit_all("vendor implementer");
@@ -1530,8 +1530,8 @@ mod tests {
     #[test]
     fn skills_dir_falls_back_from_layout_to_preset_to_harness_dir() {
         let mut cfg = Config::default();
-        cfg.layout.harness_dir = ".harness".to_string();
-        assert_eq!(skills_dir_for(&cfg), ".harness/skills");
+        cfg.layout.harness_dir = ".enallagi".to_string();
+        assert_eq!(skills_dir_for(&cfg), ".enallagi/skills");
         cfg.agent.preset = "claude".to_string();
         assert_eq!(skills_dir_for(&cfg), ".claude/skills");
         cfg.layout.skills_dir = Some("vendor/skills".to_string());

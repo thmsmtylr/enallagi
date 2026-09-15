@@ -31,7 +31,7 @@ fn installed() -> Repo {
     );
     let out = harness(&repo, &["init"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
-    assert!(repo.root.join(".harness/RAILS.md").is_file());
+    assert!(repo.root.join(".enallagi/RAILS.md").is_file());
     repo
 }
 

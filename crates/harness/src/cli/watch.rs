@@ -1,6 +1,7 @@
 use std::path::Path;
 
 pub fn run() -> anyhow::Result<i32> {
-    crate::tui::run_attached(Path::new(".harness"), Path::new("TASKS.md"))?;
+    let dir = crate::config::load(Path::new("."))?.layout.harness_dir;
+    crate::tui::run_attached(Path::new(&dir), Path::new("TASKS.md"))?;
     Ok(0)
 }

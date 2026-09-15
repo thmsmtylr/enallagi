@@ -209,7 +209,7 @@ fn write_gate_fixture(pkg: &Path, other_assert: &str) -> PathBuf {
         "true",
         r#"[ -f outcome.txt ] && [ "$(cat outcome.txt)" = PASS ]"#,
         Some(&format!(
-            "sed -i.bak '/{RULE}/d' .harness/roles/verifier.md\nrm -f .harness/roles/verifier.md.bak\n"
+            "sed -i.bak '/{RULE}/d' .enallagi/roles/verifier.md\nrm -f .enallagi/roles/verifier.md.bak\n"
         )),
     );
     write_eval(pkg, "other", "OTHER", "true", other_assert, None);
@@ -219,7 +219,7 @@ fn write_gate_fixture(pkg: &Path, other_assert: &str) -> PathBuf {
         &stub,
         &format!(
             "case \"$1\" in\n\
-             RULE) grep -q '{RULE}' .harness/roles/verifier.md 2>/dev/null && echo PASS >outcome.txt ;;\n\
+             RULE) grep -q '{RULE}' .enallagi/roles/verifier.md 2>/dev/null && echo PASS >outcome.txt ;;\n\
              OTHER) : ;;\n\
              esac\n\
              exit 0\n"

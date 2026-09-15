@@ -575,7 +575,7 @@ mod tests {
     fn spawn_substitutes_and_streams() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent("echo \"prompt=$1 turns=$2\"; echo '{\"total_cost_usd\":0.1}'");
-        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let mut s = spawner(argv, &r.root);
         s.prompt = "hi there".into();
         s.turns = 7;
@@ -608,7 +608,7 @@ mod tests {
         let r = crate::fixture::Repo::new();
         // KILL, not INT: a job started with `&` from a non-interactive shell inherits SIGINT ignored
         let argv = r.stub_agent("kill -KILL $$");
-        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
             &mut w,
@@ -623,7 +623,7 @@ mod tests {
     fn timeout_kills_and_reports_124() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent("sleep 30");
-        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let mut s = spawner(argv, &r.root);
         s.timeout = Some(std::time::Duration::from_secs(1));
         let res = spawn(
@@ -642,7 +642,7 @@ mod tests {
         let r = crate::fixture::Repo::new();
         std::fs::write(r.root.join("STOP"), "").unwrap();
         let argv = r.stub_agent(&limit_notice("1M", "+1 minute"));
-        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let err = spawn(
             &spawner(argv, &r.root),
             &mut w,
@@ -676,7 +676,7 @@ mod tests {
         let runs = r.root.join("runs");
         let notice = limit_notice("1M", "+1 minute");
         let argv = r.stub_agent(&format!("echo x >> {}; {notice}", runs.display()));
-        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
             &mut w,
@@ -708,7 +708,7 @@ mod tests {
     fn the_prompt_is_substituted_last() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent("printf '%s|%s\\n' \"$1\" \"$2\"");
-        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let mut s = spawner(argv, &r.root);
         s.prompt = "see {turns} and {prompt}".into();
         s.turns = 7;
@@ -726,7 +726,7 @@ mod tests {
     fn a_reset_more_than_six_hours_out_is_not_a_limit() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent(&limit_notice("10H", "+10 hours"));
-        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
             &mut w,

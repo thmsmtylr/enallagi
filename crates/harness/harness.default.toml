@@ -17,7 +17,7 @@ context_file = "AGENTS.md"
 pointer_files = ["CLAUDE.md", "GEMINI.md", "QWEN.md", ".github/copilot-instructions.md"]
 
 # harness_dir holds the roles, hooks and scratch state; skills_dir is the agent's skills directory, unset meaning the preset's own.
-harness_dir = ".harness"
+harness_dir = ".enallagi"
 skill_invocation = "invoke it via the Skill tool"
 
 # driver_command runs the built artifact in a throwaway directory and prints one `FINDING ` line per shortfall; empty is off, and HARNESS_DRIVER=1 is also required.
@@ -45,7 +45,7 @@ allowed_prefixes = [
   "src/",
   "packages/",
   "evals/",
-  ".harness/",
+  ".enallagi/",
   ".claude/",
   ".github/",
   ".codex/",

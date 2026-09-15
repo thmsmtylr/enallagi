@@ -15,7 +15,7 @@ use std::path::Path;
 const BODY: &str = "You implement ONE task.\n";
 
 fn writer(root: &Path) -> Writer {
-    Writer::new(Log::open(&root.join(".harness")))
+    Writer::new(Log::open(&root.join(".enallagi")))
 }
 
 fn opts(repo: &Repo, frozen: bool) -> ResolveOpts {
@@ -70,7 +70,7 @@ fn a_declared_role_is_fetched_vendored_and_committed_before_its_stage() {
     assert_eq!(got[0].name, "implementer");
     assert_eq!(got[0].result, "fetched");
     assert_eq!(got[0].body, BODY);
-    let vendored = repo.root.join(".harness/roles/implementer.md");
+    let vendored = repo.root.join(".enallagi/roles/implementer.md");
     assert_eq!(got[0].path, vendored);
     assert_eq!(fs::read_to_string(&vendored).expect("vendored"), BODY);
 
@@ -96,7 +96,7 @@ fn a_declared_role_is_fetched_vendored_and_committed_before_its_stage() {
         fs::read_to_string(repo.root.join("harness.lock")).expect("lock text"),
         text
     );
-    let events = Log::open(&repo.root.join(".harness"))
+    let events = Log::open(&repo.root.join(".enallagi"))
         .read()
         .expect("events");
     let results: Vec<&str> = events
@@ -118,7 +118,7 @@ fn a_role_whose_vendored_file_drifted_is_refused_under_frozen() {
     let names = vec!["implementer".to_string()];
     roles::resolve(&repo.root, &cfg, &names, &opts(&repo, false), &mut w).expect("first");
 
-    let vendored = repo.root.join(".harness/roles/implementer.md");
+    let vendored = repo.root.join(".enallagi/roles/implementer.md");
     fs::write(&vendored, "tampered\n").expect("tamper");
 
     let err = roles::resolve(&repo.root, &cfg, &names, &opts(&repo, true), &mut w)
@@ -127,7 +127,7 @@ fn a_role_whose_vendored_file_drifted_is_refused_under_frozen() {
         matches!(&err, SkillError::Unresolved { id, .. } if id == "implementer"),
         "{err}"
     );
-    let events = Log::open(&repo.root.join(".harness"))
+    let events = Log::open(&repo.root.join(".enallagi"))
         .read()
         .expect("events");
     assert!(events.iter().any(|e| matches!(
@@ -149,7 +149,7 @@ fn a_role_whose_vendored_file_drifted_is_refused_under_frozen() {
 fn pipeline_repo() -> Repo {
     let repo = Repo::new();
     repo.write(
-        ".harness/.gitignore",
+        ".enallagi/.gitignore",
         "events.jsonl\n*.log\nlogs/\nloop.pid\nrun/\n",
     );
     let agent = repo.stub_agent("echo '{\"total_cost_usd\":0.1}'\n");
@@ -185,10 +185,10 @@ fn run_once(repo: &Repo) {
 #[test]
 fn an_undeclared_role_falls_back_to_the_installed_or_embedded_file() {
     let installed = pipeline_repo();
-    installed.write(".harness/roles/implementer.md", BODY);
+    installed.write(".enallagi/roles/implementer.md", BODY);
     installed.commit_all("installed role");
     run_once(&installed);
-    let rendered = installed.root.join(".harness/run/roles/implementer.md");
+    let rendered = installed.root.join(".enallagi/run/roles/implementer.md");
     assert_eq!(fs::read_to_string(&rendered).expect("rendered"), BODY);
     assert!(skills::read_lock(&installed.root)
         .expect("lock")
@@ -197,10 +197,13 @@ fn an_undeclared_role_falls_back_to_the_installed_or_embedded_file() {
 
     let embedded = pipeline_repo();
     run_once(&embedded);
-    let rendered = embedded.root.join(".harness/run/roles/implementer.md");
+    let rendered = embedded.root.join(".enallagi/run/roles/implementer.md");
     let text = fs::read_to_string(&rendered).expect("rendered");
     assert!(text.contains("You implement ONE task"), "{text}");
-    assert!(!embedded.root.join(".harness/roles/implementer.md").exists());
+    assert!(!embedded
+        .root
+        .join(".enallagi/roles/implementer.md")
+        .exists());
     assert!(skills::read_lock(&embedded.root)
         .expect("lock")
         .role
@@ -215,11 +218,11 @@ fn the_immutable_hook_refuses_an_edit_to_a_vendored_role() {
         "version = 1\n\n[[role]]\nid = \"implementer\"\nsource = \"path:vendor\"\nsha256 = \"ab\"\n",
     );
     let input = |path: &str| format!(r#"{{"tool_input":{{"file_path":"{path}"}}}}"#);
-    let (code, msg) = hooks::immutable(&repo.root, &input(".harness/roles/implementer.md"));
+    let (code, msg) = hooks::immutable(&repo.root, &input(".enallagi/roles/implementer.md"));
     assert_eq!(code, 2, "{msg}");
     assert!(msg.contains("harness.lock"), "{msg}");
     assert!(msg.contains("locked role `implementer`"), "{msg}");
 
-    let (code, msg) = hooks::immutable(&repo.root, &input(".harness/roles/verifier.md"));
+    let (code, msg) = hooks::immutable(&repo.root, &input(".enallagi/roles/verifier.md"));
     assert_eq!(code, 0, "{msg}");
 }

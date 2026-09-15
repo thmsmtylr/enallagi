@@ -489,7 +489,7 @@ mod tests {
             .arg("30")
             .spawn()
             .expect("spawn sleep");
-        r.write(".harness/loop.pid", &child.id().to_string());
+        r.write(".enallagi/loop.pid", &child.id().to_string());
         let _reaper = Reaper(child);
 
         let (code, msg) = one_writer(&r.root, &input("TASKS.md"));
@@ -501,7 +501,7 @@ mod tests {
     #[test]
     fn a_write_from_under_the_loop_itself_is_allowed() {
         let r = Repo::new();
-        r.write(".harness/loop.pid", &std::process::id().to_string());
+        r.write(".enallagi/loop.pid", &std::process::id().to_string());
         let (code, msg) = one_writer(&r.root, &input("TASKS.md"));
         assert_eq!(code, 0, "{msg}");
     }
@@ -515,7 +515,7 @@ mod tests {
             .expect("spawn sleep");
         let pid = child.id();
         drop(Reaper(child)); // kills and waits immediately: the pid file must name a dead loop
-        r.write(".harness/loop.pid", &pid.to_string());
+        r.write(".enallagi/loop.pid", &pid.to_string());
 
         let (code, msg) = one_writer(&r.root, &input("TASKS.md"));
         assert_eq!(code, 0, "{msg}");

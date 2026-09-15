@@ -75,9 +75,10 @@ fn init_exits_0_on_a_fresh_repo() {
     let repo = Repo::new();
     let report = install(&repo);
     assert!(repo.root.join("harness.toml").is_file());
-    assert!(repo.root.join(".harness/RAILS.md").is_file());
+    assert!(repo.root.join(".enallagi/RAILS.md").is_file());
+    assert!(!repo.root.join(".harness").exists());
     assert!(report.wrote.contains(&"harness.toml".to_string()));
-    for path in ["harness.toml", ".harness", "TASKS.md", "evals"] {
+    for path in ["harness.toml", ".enallagi", "TASKS.md", "evals"] {
         assert!(
             report.track.contains(&path.to_string()),
             "{:?}",
@@ -183,7 +184,7 @@ fn the_project_skill_is_valid_agentskills_frontmatter() {
 fn init_writes_the_harness_gitignore() {
     let repo = Repo::new();
     install(&repo);
-    let ignore = read(&repo, ".harness/.gitignore");
+    let ignore = read(&repo, ".enallagi/.gitignore");
     let lines: Vec<&str> = ignore.lines().collect();
     assert_eq!(
         lines,
@@ -232,19 +233,19 @@ fn an_installed_file_that_drifted_from_its_source_is_reported() {
     // zero on a freshly installed tree, or this is a permanent finding nobody reads
     assert_eq!(stale(&repo), Vec::new());
 
-    repo.write(".harness/roles/scout.md", "# not what init wrote\n");
-    fs::remove_file(repo.root.join(".harness/roles/verifier.md")).expect("rm");
+    repo.write(".enallagi/roles/scout.md", "# not what init wrote\n");
+    fs::remove_file(repo.root.join(".enallagi/roles/verifier.md")).expect("rm");
     let found = stale(&repo);
     assert_eq!(found.len(), 2, "{found:?}");
     assert!(
-        found.iter().any(|f| f.path == ".harness/roles/scout.md"
+        found.iter().any(|f| f.path == ".enallagi/roles/scout.md"
             && f.message.contains("differs from the source")),
         "{found:?}"
     );
     assert!(
         found
             .iter()
-            .any(|f| f.path == ".harness/roles/verifier.md"
+            .any(|f| f.path == ".enallagi/roles/verifier.md"
                 && f.message.contains("does not have it")),
         "{found:?}"
     );
@@ -262,7 +263,7 @@ fn init_migrates_harness_json_and_prints_each_renamed_key() {
     let repo = Repo::new();
     repo.write(
         "harness.json",
-        r#"{"check": "make check", "spec": "DESIGN.md", "harnessDir": ".harness"}"#,
+        r#"{"check": "make check", "spec": "DESIGN.md", "harnessDir": ".enallagi"}"#,
     );
     let report = install(&repo);
     assert!(read(&repo, "harness.toml").contains("make check"));
@@ -396,7 +397,7 @@ fn a_settings_file_that_is_not_json_is_refused() {
         "{err}"
     );
     assert!(!repo.root.join(".claude/agents").exists());
-    assert!(!repo.root.join(".harness").exists());
+    assert!(!repo.root.join(".enallagi").exists());
 }
 
 #[test]
@@ -448,9 +449,9 @@ fn dry_run_writes_nothing_and_says_what_it_would_write() {
         },
     );
     assert_eq!(walk(&repo.root), before);
-    assert!(report.wrote.contains(&".harness/RAILS.md".to_string()));
+    assert!(report.wrote.contains(&".enallagi/RAILS.md".to_string()));
     let planned = init::planned_files(&repo.root, &InitOpts::default()).expect("plan");
-    assert!(planned.iter().any(|(p, c)| p == ".harness/roles/scout.md"
+    assert!(planned.iter().any(|(p, c)| p == ".enallagi/roles/scout.md"
         && c.contains("harness probe")
         && !c.contains("__HARNESS_DIR__/hooks")));
 }
@@ -459,8 +460,8 @@ fn dry_run_writes_nothing_and_says_what_it_would_write() {
 fn the_fixture_installs_the_harness() {
     let repo = Repo::new();
     repo.init_harness("[check]\ncommand = \"true\"\n");
-    assert!(repo.root.join(".harness/RAILS.md").is_file());
-    assert!(read(&repo, ".harness/RAILS.md").contains("`true`"));
+    assert!(repo.root.join(".enallagi/RAILS.md").is_file());
+    assert!(read(&repo, ".enallagi/RAILS.md").contains("`true`"));
 }
 
 #[test]

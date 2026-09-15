@@ -56,7 +56,7 @@ fn events_with_no_log_exits_0_with_no_output() {
 #[test]
 fn events_json_prints_raw_lines_and_filters_by_task() {
     let dir = tempfile::tempdir().unwrap();
-    let harness_dir = dir.path().join(".harness");
+    let harness_dir = dir.path().join(".enallagi");
     std::fs::create_dir_all(&harness_dir).unwrap();
     std::fs::write(
         harness_dir.join("events.jsonl"),
@@ -83,7 +83,7 @@ fn events_json_prints_raw_lines_and_filters_by_task() {
 #[test]
 fn events_json_echoes_the_file_line_verbatim() {
     let dir = tempfile::tempdir().unwrap();
-    let harness_dir = dir.path().join(".harness");
+    let harness_dir = dir.path().join(".enallagi");
     std::fs::create_dir_all(&harness_dir).unwrap();
     // keys out of order plus an undeclared field: both legal JSONL, and --json must echo them raw, not re-serialize
     let line = r#"{"kind":"halt","reason":"boom","extra_field":"unexpected","seq":1,"iter":0,"run":"r","ts":"2026-09-07T00:00:00Z","halt":"stop"}"#;
@@ -106,7 +106,7 @@ fn events_json_echoes_the_file_line_verbatim() {
 #[test]
 fn events_since_keeps_only_events_at_or_after() {
     let dir = tempfile::tempdir().unwrap();
-    let harness_dir = dir.path().join(".harness");
+    let harness_dir = dir.path().join(".enallagi");
     std::fs::create_dir_all(&harness_dir).unwrap();
     std::fs::write(
         harness_dir.join("events.jsonl"),
@@ -128,6 +128,52 @@ fn events_since_keeps_only_events_at_or_after() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(stdout.lines().count(), 1);
     assert!(stdout.contains("\"reason\":\"late\""));
+}
+
+fn events_in(dir: &std::path::Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["events", "--json"])
+        .current_dir(dir)
+        .output()
+        .expect("run harness events --json")
+}
+
+#[test]
+fn a_legacy_harness_directory_is_read_with_a_warning_naming_the_move() {
+    let dir = tempfile::tempdir().unwrap();
+    let line = r#"{"ts":"2026-09-07T00:00:00Z","run":"r","iter":0,"seq":1,"kind":"halt","halt":"a","reason":"legacy"}"#;
+    std::fs::create_dir_all(dir.path().join(".harness")).unwrap();
+    std::fs::write(
+        dir.path().join(".harness/events.jsonl"),
+        format!("{line}\n"),
+    )
+    .unwrap();
+
+    let out = events_in(dir.path());
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim_end(), line);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(stderr.contains("harness init --move"), "{stderr}");
+}
+
+#[test]
+fn the_enallagi_directory_is_read_without_a_warning_when_both_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let line = r#"{"ts":"2026-09-07T00:00:00Z","run":"r","iter":0,"seq":1,"kind":"halt","halt":"a","reason":"current"}"#;
+    std::fs::create_dir_all(dir.path().join(".harness")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".enallagi")).unwrap();
+    std::fs::write(dir.path().join(".harness/events.jsonl"), "{}\n").unwrap();
+    std::fs::write(
+        dir.path().join(".enallagi/events.jsonl"),
+        format!("{line}\n"),
+    )
+    .unwrap();
+
+    let out = events_in(dir.path());
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim_end(), line);
+    assert!(out.stderr.is_empty(), "{out:?}");
 }
 
 #[test]
@@ -160,7 +206,7 @@ fn skills_sync_works_under_a_custom_preset_which_has_no_directory_of_its_own() {
         .output()
         .expect("run harness skills sync");
     assert!(out.status.success(), "{out:?}");
-    assert!(root.join(".harness/skills/tdd/SKILL.md").is_file());
+    assert!(root.join(".enallagi/skills/tdd/SKILL.md").is_file());
     assert!(root.join("harness.lock").is_file());
 }
 

@@ -131,7 +131,7 @@ fn repo(toml: &str, tasks: &str) -> Repo {
     let repo = Repo::new();
     // what `harness init` ignores under the harness dir; vendored skills and roles are committed
     repo.write(
-        ".harness/.gitignore",
+        ".enallagi/.gitignore",
         "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\n",
     );
     script(&repo, "src/fakecheck.sh", "exit 0\n");
@@ -243,7 +243,7 @@ fn the_launcher_spawns_the_configured_agent_not_a_hardcoded_one() {
 #[test]
 fn the_implement_stage_points_the_agent_at_its_role_file() {
     let r = repo(&base_toml(""), TASKS);
-    assert!(plan_of(&r).contains(".harness/run/roles/implementer.md"));
+    assert!(plan_of(&r).contains(".enallagi/run/roles/implementer.md"));
 }
 
 #[test]
@@ -409,7 +409,7 @@ fn a_stage_on_a_preset_with_no_turn_cap_and_no_timeout_is_refused() {
 fn a_stage_refuses_to_start_on_an_unresolved_skill_under_frozen() {
     let r = repo(&base_toml(""), TASKS);
     r.write(
-        ".harness/roles/implementer.md",
+        ".enallagi/roles/implementer.md",
         "Walk the ladder with {{skill:ponytail}} before you write anything.\n",
     );
     let o = RunOpts {
@@ -586,7 +586,7 @@ fn rendering_a_role_never_eats_the_source_it_rendered_from() {
     let r = repo(&toml, TASKS);
     r.write("vendor/tdd/SKILL.md", "# tdd\n\nWrite the test first.\n");
     r.write(
-        ".harness/roles/implementer.md",
+        ".enallagi/roles/implementer.md",
         "Do the work with {{skill:tdd}} in hand.\n",
     );
 
@@ -599,10 +599,10 @@ fn rendering_a_role_never_eats_the_source_it_rendered_from() {
             "run {run} resolved no skill"
         );
     }
-    let source = std::fs::read_to_string(r.root.join(".harness/roles/implementer.md")).unwrap();
+    let source = std::fs::read_to_string(r.root.join(".enallagi/roles/implementer.md")).unwrap();
     assert!(source.contains("{{skill:tdd}}"), "the source was rewritten");
     let rendered =
-        std::fs::read_to_string(r.root.join(".harness/run/roles/implementer.md")).unwrap();
+        std::fs::read_to_string(r.root.join(".enallagi/run/roles/implementer.md")).unwrap();
     assert!(!rendered.contains("{{skill:"), "the token was not rendered");
 }
 
@@ -705,8 +705,8 @@ fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
         .expect("git ls-files");
     let ls = String::from_utf8_lossy(&ls.stdout);
     assert!(ls.contains("harness.lock"), "{ls}");
-    assert!(ls.contains(".harness/skills/tdd/SKILL.md"), "{ls}");
-    assert!(ls.contains(".harness/roles/implementer.md"), "{ls}");
+    assert!(ls.contains(".enallagi/skills/tdd/SKILL.md"), "{ls}");
+    assert!(ls.contains(".enallagi/roles/implementer.md"), "{ls}");
     let lock = harness::skills::read_lock(&r.root).expect("lock");
     assert_eq!(lock.role.len(), 1, "{lock:?}");
     assert_eq!(lock.role[0].id, "implementer");
