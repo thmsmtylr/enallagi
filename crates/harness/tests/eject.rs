@@ -280,6 +280,32 @@ fn eject_refuses_while_a_lane_worktree_exists_or_a_loop_is_live_naming_each() {
 }
 
 #[test]
+fn eject_refuses_when_the_live_loop_is_an_ancestor_of_the_eject_process() {
+    let r = Repo::new();
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+
+    for flag in ["", "--dry-run"] {
+        let out = Command::new("bash")
+            .args(["-c", "echo $$ > .enallagi/loop.pid; \"$0\" eject $1"])
+            .arg(env!("CARGO_BIN_EXE_harness"))
+            .arg(flag)
+            .current_dir(&r.root)
+            .env_remove("HARNESS_DIR")
+            .output()
+            .expect("spawn bash");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_ne!(out.status.code(), Some(0), "{text}");
+        assert!(text.contains("a loop is live"), "{text}");
+        assert!(r.root.join(".enallagi/TASKS.md").is_file(), "{text}");
+    }
+}
+
+#[test]
 fn eject_keep_record_moves_the_harness_directory_outside_the_repository() {
     let r = Repo::new();
     let (code, out) = harness(&r.root, &["init"]);

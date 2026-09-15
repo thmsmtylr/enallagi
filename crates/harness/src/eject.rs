@@ -1,6 +1,6 @@
 //! Removes what `harness init` put into a repository: the harness directory, the entry points it excluded, and the exclude block.
 
-use crate::{archive, config, git};
+use crate::{config, git};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -46,7 +46,7 @@ fn io(path: impl std::fmt::Display) -> impl FnOnce(std::io::Error) -> EjectError
 pub fn eject(root: &Path, opts: &EjectOpts) -> Result<EjectReport, EjectError> {
     let dir = config::harness_dir(root);
     let mut refusals = lanes(root, &dir)?;
-    if let Some(pid) = archive::loop_live(root, &dir) {
+    if let Some(pid) = loop_pid(root, &dir) {
         refusals.push(format!("a loop is live: pid {pid} in {dir}/loop.pid"));
     }
     if let Some(record) = &opts.keep_record {
@@ -111,6 +111,20 @@ fn lanes(root: &Path, dir: &str) -> Result<Vec<String>, EjectError> {
         .filter(|wt| Path::new(wt).starts_with(&under))
         .map(|wt| format!("a lane worktree exists: {wt}"))
         .collect())
+}
+
+// not archive::loop_live, which exempts the loop's own descendants: a lane inside the loop must not delete it
+fn loop_pid(root: &Path, dir: &str) -> Option<u32> {
+    let pid: u32 = fs::read_to_string(root.join(dir).join("loop.pid"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .is_ok_and(|s| s.success())
+        .then_some(pid)
 }
 
 fn record_refusal(root: &Path, record: &Path) -> Option<String> {
