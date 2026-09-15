@@ -429,6 +429,30 @@ fn ci_runs_the_floor_with_the_driver_reaching_the_artifact() {
     assert_eq!(reading(soft), (true, true, true, 1));
 }
 
+// A fixture that inherits the shipped `[[skill]]` table clones github from a test: it passed on a
+// warm cache and raced itself in CI. Only harness.default.toml may name a remote source.
+#[test]
+fn no_test_fixture_declares_a_skill_the_suite_would_have_to_fetch() {
+    let root = repo_root();
+    let needle = concat!("source = \"", "github:");
+    let mut offences = Vec::new();
+    for dir in ["crates/harness/tests", "crates/harness/src"] {
+        let base = root.join(dir);
+        for rel in walk(&base) {
+            if rel.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = fs::read_to_string(base.join(&rel)).expect("read a source file");
+            for (i, line) in text.lines().enumerate() {
+                if line.contains(needle) {
+                    offences.push(format!("{dir}/{}:{}", rel.display(), i + 1));
+                }
+            }
+        }
+    }
+    assert!(offences.is_empty(), "{}", offences.join("\n"));
+}
+
 #[test]
 fn every_github_action_is_pinned_to_a_commit_sha() {
     // a tag can move; only a full SHA pin is immutable, so every `uses:` must be SHA-pinned

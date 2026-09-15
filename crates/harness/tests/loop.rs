@@ -113,6 +113,20 @@ post = ["commit-round", "adjudicator-halt", "dry-round"]
     )
 }
 
+// Every fixture config must carry the `path:` skills `repo()` wrote: rewriting harness.toml with
+// base_toml alone falls back to the shipped `[[skill]]` table, whose sources are github clones, and
+// the test then reaches the network.
+fn write_toml(r: &Repo, toml: &str) {
+    let full = format!("{toml}{}", r.local_skills(toml));
+    // built, never written literally: the floor test greps this tree for the literal
+    let remote = concat!("source = \"", "github:");
+    assert!(
+        !full.contains(remote) && !full.contains("source = \"git+"),
+        "a fixture config may not name a remote skill source:\n{full}"
+    );
+    r.write("harness.toml", &full);
+}
+
 fn repo(toml: &str, tasks: &str) -> Repo {
     let repo = Repo::new();
     // what `harness init` ignores under the harness dir; vendored skills and roles are committed
@@ -127,8 +141,7 @@ fn repo(toml: &str, tasks: &str) -> Repo {
     }
     repo.write("SPEC.md", "# spec\n");
     repo.write("PROGRESS.md", "# progress\n");
-    let skills = repo.local_skills(toml);
-    repo.write("harness.toml", &format!("{toml}{skills}"));
+    write_toml(&repo, toml);
     repo.commit_all("harness");
     repo
 }
@@ -288,10 +301,7 @@ fn every_spawned_stage_appends_one_record_to_the_run_log() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
-    r.write(
-        "harness.toml",
-        &base_toml(&role_commands(&implement, &verify)),
-    );
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
     r.write("TASKS.md", TASKS);
     r.commit_all("stubs");
 
@@ -304,10 +314,7 @@ fn and_the_record_carries_the_role_the_seconds_and_the_reported_cost() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
-    r.write(
-        "harness.toml",
-        &base_toml(&role_commands(&implement, &verify)),
-    );
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
     r.write("TASKS.md", TASKS);
     r.commit_all("stubs");
 
@@ -340,10 +347,7 @@ fn the_loop_stops_before_a_stage_that_would_exceed_the_budget() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
-    r.write(
-        "harness.toml",
-        &base_toml(&role_commands(&implement, &verify)),
-    );
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
     r.write("TASKS.md", TASKS);
     r.commit_all("stubs");
 
@@ -474,10 +478,7 @@ fn stop_file_halts_at_the_next_boundary() {
     let r = repo("", "");
     let implement = implementer(&r, "touch STOP\n");
     let verify = verifier(&r);
-    r.write(
-        "harness.toml",
-        &base_toml(&role_commands(&implement, &verify)),
-    );
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
     r.write("TASKS.md", TASKS);
     r.commit_all("stubs");
 
@@ -504,7 +505,7 @@ fn a_new_needs_spec_halts() {
         "stages = [\"implement\", \"verify\"]",
         "stages = [\"implement\"]",
     );
-    r.write("harness.toml", &toml);
+    write_toml(&r, &toml);
     r.write("TASKS.md", TASKS);
     r.commit_all("stubs");
 
@@ -531,10 +532,7 @@ fn harness_run_without_a_tty_prints_one_line_per_event_and_exits_0() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
-    r.write(
-        "harness.toml",
-        &base_toml(&role_commands(&implement, &verify)),
-    );
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
     r.write("TASKS.md", TASKS);
     r.commit_all("stubs");
 
@@ -671,10 +669,7 @@ fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
         ),
     );
     let skills = r.local_skills(&toml);
-    r.write(
-        "harness.toml",
-        &(toml + &role_commands(&implement, &verify) + &skills),
-    );
+    write_toml(&r, &(toml + &role_commands(&implement, &verify) + &skills));
     r.commit_all("stubs");
 
     let (_, events) = go(&r, &opts(1));
@@ -740,7 +735,7 @@ fn a_block_left_proposed_whose_fix_names_the_contract_halts() {
     let extra = format!(
         "\n[agent.adjudicator]\ncommand = [\"{adjudicate}\", \"{{prompt}}\", \"{{turns}}\"]\n"
     );
-    r.write("harness.toml", &base_toml(&extra));
+    write_toml(&r, &base_toml(&extra));
     r.write("TASKS.md", "# queue\n");
     r.commit_all("stubs");
 
@@ -809,10 +804,7 @@ fn the_implementer_marking_its_own_task_done_skips_the_verify_stage() {
         ),
     );
     let verify = script(&r, "src/fakeverify.sh", "touch verify-ran\n");
-    r.write(
-        "harness.toml",
-        &base_toml(&role_commands(&implement, &verify)),
-    );
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
     r.write("TASKS.md", TASKS);
     r.commit_all("stubs");
 
@@ -841,10 +833,7 @@ fn an_implementer_that_stops_short_of_review_skips_the_verify_stage() {
         ),
     );
     let verify = script(&r, "src/fakeverify.sh", "touch verify-ran\n");
-    r.write(
-        "harness.toml",
-        &base_toml(&role_commands(&implement, &verify)),
-    );
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
     r.write("TASKS.md", TASKS);
     r.commit_all("stubs");
 
@@ -868,8 +857,8 @@ fn an_implementer_that_stops_short_of_review_skips_the_verify_stage() {
 }
 
 fn with_verifier(r: &Repo, verify: &str) {
-    r.write(
-        "harness.toml",
+    write_toml(
+        r,
         &base_toml(&format!(
             "\n[agent.verifier]\ncommand = [\"{verify}\", \"{{prompt}}\", \"{{turns}}\"]\n"
         )),
@@ -952,10 +941,7 @@ fn and_an_iteration_whose_implementer_wrote_one_gets_no_second_entry() {
     let r = repo("", "");
     let implement = implementer(&r, "echo '## stub entry' >>PROGRESS.md\n");
     let verify = verifier(&r);
-    r.write(
-        "harness.toml",
-        &base_toml(&role_commands(&implement, &verify)),
-    );
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
     r.write("TASKS.md", TASKS);
     r.commit_all("stubs");
 
