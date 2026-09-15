@@ -1483,7 +1483,11 @@ mod tests {
     #[test]
     fn scope_exempts_a_freshly_added_lock_key_outside_scope() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".claude/skills/tdd/**", "§11 row 1");
+        env.queue(
+            "done",
+            ".enallagi/adapters/claude/skills/tdd/**",
+            "§11 row 1",
+        );
         env.repo
             .write("harness.lock", &lock_toml(&[("tdd", "aaa")]));
         env.repo.commit_all("verdict");
@@ -1502,7 +1506,11 @@ mod tests {
     #[test]
     fn scope_rejects_a_sha_only_recut_outside_scope() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".claude/skills/tdd/**", "§11 row 1");
+        env.queue(
+            "done",
+            ".enallagi/adapters/claude/skills/tdd/**",
+            "§11 row 1",
+        );
         env.repo
             .write("harness.lock", &lock_toml(&[("tdd-old", "aaa")]));
         env.repo.commit_all("verdict");
@@ -1524,7 +1532,11 @@ mod tests {
     #[test]
     fn scope_allows_a_sha_only_recut_inside_scope() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".claude/skills/tdd/**", "§11 row 1");
+        env.queue(
+            "done",
+            ".enallagi/adapters/claude/skills/tdd/**",
+            "§11 row 1",
+        );
         env.repo
             .write("harness.lock", &lock_toml(&[("tdd", "aaa")]));
         env.repo.commit_all("verdict");
@@ -1540,7 +1552,11 @@ mod tests {
     #[test]
     fn scope_rejects_a_removed_lock_key_outside_scope() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".claude/skills/tdd/**", "§11 row 1");
+        env.queue(
+            "done",
+            ".enallagi/adapters/claude/skills/tdd/**",
+            "§11 row 1",
+        );
         env.repo.write(
             "harness.lock",
             &lock_toml(&[("tdd", "aaa"), ("tdd-old", "aaa")]),
@@ -1567,14 +1583,17 @@ mod tests {
         env.repo.commit_all("verdict");
         let base = env.head();
         // never went through skills::resolve, so it names no id the lock added this iteration
-        env.repo
-            .write(".claude/skills/other/NOTES.md", "hand-written");
+        env.repo.write(
+            ".enallagi/adapters/claude/skills/other/NOTES.md",
+            "hand-written",
+        );
         env.repo.commit_all("stray file under the skills dir");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
         assert!(
-            out.reason.contains(".claude/skills/other/NOTES.md"),
+            out.reason
+                .contains(".enallagi/adapters/claude/skills/other/NOTES.md"),
             "{}",
             out.reason
         );
@@ -1586,7 +1605,7 @@ mod tests {
         cfg.layout.harness_dir = ".enallagi".to_string();
         assert_eq!(skills_dir_for(&cfg), ".enallagi/skills");
         cfg.agent.preset = "claude".to_string();
-        assert_eq!(skills_dir_for(&cfg), ".claude/skills");
+        assert_eq!(skills_dir_for(&cfg), ".enallagi/adapters/claude/skills");
         cfg.layout.skills_dir = Some("vendor/skills".to_string());
         assert_eq!(skills_dir_for(&cfg), "vendor/skills");
     }

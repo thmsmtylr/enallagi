@@ -285,7 +285,10 @@ fn the_context_file_stays_short() {
 fn the_project_skill_is_valid_agentskills_frontmatter() {
     let repo = Repo::new();
     install(&repo);
-    let skill = read(&repo, ".claude/skills/running-the-loop/SKILL.md");
+    let skill = read(
+        &repo,
+        ".enallagi/adapters/claude/skills/running-the-loop/SKILL.md",
+    );
     assert!(skill.starts_with("---\n"), "{skill:.40}");
     assert!(
         skill.lines().any(|l| l == "name: running-the-loop"),
@@ -293,7 +296,7 @@ fn the_project_skill_is_valid_agentskills_frontmatter() {
     );
     assert!(repo
         .root
-        .join(".claude/skills/running-the-loop/references/task-block.md")
+        .join(".enallagi/adapters/claude/skills/running-the-loop/references/task-block.md")
         .is_file());
 }
 
@@ -407,23 +410,37 @@ fn init_migrates_harness_json_and_prints_each_renamed_key() {
 }
 
 #[test]
-fn the_claude_adapter_writes_agents_and_merges_settings() {
+fn the_claude_adapter_writes_a_plugin_under_the_harness_directory() {
     let repo = Repo::new();
+    let theirs = "{ \"model\": \"opus\" }\n";
+    repo.write(".claude/settings.json", theirs);
     repo.write(
-        ".claude/settings.json",
+        ".enallagi/adapters/claude/hooks/hooks.json",
         r#"{
   "hooks": {
     "PreToolUse": [
       { "matcher": "Edit", "hooks": [ { "type": "command", "command": "./theirs.sh" } ] }
     ]
-  },
-  "permissions": { "deny": [ "Bash(sudo:*)" ] },
-  "model": "opus"
+  }
 }
 "#,
     );
+    let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
+    let under: Vec<&String> = planned
+        .iter()
+        .map(|(path, _)| path)
+        .filter(|path| path.starts_with(".claude/"))
+        .collect();
+    assert!(under.is_empty(), "{under:?}");
     with(&repo, &adapter("claude"));
 
+    let plugin = ".enallagi/adapters/claude";
+    let manifest: serde_json::Value = serde_json::from_str(&read(
+        &repo,
+        &format!("{plugin}/.claude-plugin/plugin.json"),
+    ))
+    .expect("plugin json");
+    assert_eq!(manifest["name"], "harness");
     for role in [
         "scout",
         "adjudicator",
@@ -433,18 +450,19 @@ fn the_claude_adapter_writes_agents_and_merges_settings() {
     ] {
         assert!(
             repo.root
-                .join(format!(".claude/agents/{role}.md"))
+                .join(format!("{plugin}/agents/{role}.md"))
                 .is_file(),
             "no agent file for {role}"
         );
     }
-    let settings: serde_json::Value =
-        serde_json::from_str(&read(&repo, ".claude/settings.json")).expect("settings json");
-    let text = settings.to_string();
-    assert!(text.contains("./theirs.sh"), "the foreign hook was dropped");
-    assert_eq!(
-        settings["model"], "opus",
-        "the rest of the file was dropped"
+    assert!(repo
+        .root
+        .join(format!("{plugin}/skills/running-the-loop/SKILL.md"))
+        .is_file());
+    let hooks = read(&repo, &format!("{plugin}/hooks/hooks.json"));
+    assert!(
+        hooks.contains("./theirs.sh"),
+        "the foreign hook was dropped"
     );
     for command in [
         "harness hook immutable",
@@ -452,26 +470,76 @@ fn the_claude_adapter_writes_agents_and_merges_settings() {
         "harness hook verify-done",
         "harness hook skills",
     ] {
-        assert!(text.contains(command), "no {command} in {text}");
+        assert!(hooks.contains(command), "no {command} in {hooks}");
     }
-    assert!(
-        text.contains("Bash(git push:*)"),
-        "the deny rules were not added"
-    );
-    assert!(
-        text.contains("Bash(sudo:*)"),
-        "a deny rule of theirs was dropped"
-    );
-    assert!(
-        text.contains("\"Monitor\""),
-        "Monitor is not denied: {text}"
-    );
-    assert_eq!(settings["attribution"]["commit"], "", "{text}");
-    assert_eq!(settings["attribution"]["pr"], "", "{text}");
+    assert_eq!(read(&repo, ".claude/settings.json"), theirs);
 
-    let before = read(&repo, ".claude/settings.json");
     with(&repo, &adapter("claude"));
-    assert_eq!(before, read(&repo, ".claude/settings.json"));
+    assert_eq!(hooks, read(&repo, &format!("{plugin}/hooks/hooks.json")));
+}
+
+#[test]
+fn the_claude_preset_loads_the_plugin_and_names_its_skills_by_the_plugin() {
+    let claude = &harness::agent::presets()["claude"];
+    let flag = claude
+        .argv
+        .iter()
+        .position(|w| w == "--plugin-dir")
+        .expect("claude loads the plugin");
+    assert_eq!(claude.argv[flag + 1], "{harness_dir}/adapters/claude");
+    let settings = claude
+        .argv
+        .iter()
+        .position(|w| w == "--settings")
+        .expect("claude carries the deny rules");
+    assert!(claude.argv[settings + 1].contains("Bash(git push:*)"));
+    assert_eq!(
+        claude.skills_dir.as_deref(),
+        Some("{harness_dir}/adapters/claude/skills")
+    );
+    assert!(
+        claude
+            .invocation
+            .as_deref()
+            .is_some_and(|i| i.contains("harness:<id>")),
+        "{:?}",
+        claude.invocation
+    );
+}
+
+#[test]
+fn a_default_claude_install_names_its_skills_plugin_harness() {
+    let repo = Repo::new();
+    install(&repo);
+    let manifest: serde_json::Value = serde_json::from_str(&read(
+        &repo,
+        ".enallagi/adapters/claude/.claude-plugin/plugin.json",
+    ))
+    .expect("plugin json");
+    assert_eq!(manifest["name"], "harness");
+}
+
+#[test]
+fn a_root_layout_keeps_the_claude_skills_under_dot_claude() {
+    let repo = root_layout();
+    let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
+    let paths: Vec<&str> = planned.iter().map(|(path, _)| path.as_str()).collect();
+    assert!(
+        paths.contains(&".claude/skills/running-the-loop/SKILL.md"),
+        "{paths:?}"
+    );
+    let cfg = harness::config::load(&repo.root).expect("config");
+    assert_eq!(cfg.layout.skills_dir.as_deref(), Some(".claude/skills"));
+
+    let unconfigured = Repo::new();
+    unconfigured.write("TASKS.md", "# TASKS\n");
+    let planned = init::planned_files(&unconfigured.root, &adapter("claude")).expect("plan");
+    assert!(
+        planned
+            .iter()
+            .any(|(path, _)| path == ".claude/skills/running-the-loop/SKILL.md"),
+        "{planned:?}"
+    );
 }
 
 #[test]
@@ -575,14 +643,15 @@ fn a_tracked_instruction_file_is_never_written() {
 #[test]
 fn a_settings_file_that_is_not_json_is_refused() {
     let repo = Repo::new();
-    repo.write(".claude/settings.json", "{ not json at all\n");
+    let hooks = ".enallagi/adapters/claude/hooks/hooks.json";
+    repo.write(hooks, "{ not json at all\n");
     let err = init::install(&repo.root, &adapter("claude")).expect_err("invalid json");
     assert!(
-        matches!(err, init::InitError::InvalidJson { ref path, .. } if path == ".claude/settings.json"),
+        matches!(err, init::InitError::InvalidJson { ref path, .. } if path == hooks),
         "{err}"
     );
-    assert!(!repo.root.join(".claude/agents").exists());
-    assert!(!repo.root.join(".enallagi").exists());
+    assert!(!repo.root.join(".enallagi/adapters/claude/agents").exists());
+    assert!(!repo.root.join(".enallagi/TASKS.md").exists());
 }
 
 #[test]
@@ -690,15 +759,11 @@ fn init_plans_every_instance_file_under_the_harness_directory() {
         "GEMINI.md",
         "QWEN.md",
         ".github/copilot-instructions.md",
-        ".claude/settings.json",
     ];
     let paths: Vec<&str> = planned.iter().map(|(path, _)| path.as_str()).collect();
     for path in &paths {
         assert!(
-            path.starts_with(".enallagi/")
-                || entry_points.contains(path)
-                || path.starts_with(".claude/agents/")
-                || path.starts_with(".claude/skills/"),
+            path.starts_with(".enallagi/") || entry_points.contains(path),
             "{path} is planned outside the harness directory"
         );
     }

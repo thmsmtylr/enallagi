@@ -1,21 +1,4 @@
 {
-  "attribution": {
-    "commit": "",
-    "pr": ""
-  },
-  "permissions": {
-    "deny": [
-      "Monitor",
-      "Bash(git push:*)",
-      "Bash(git reset --hard:*)",
-      "Bash(git clean:*)",
-      "Bash(rm -rf:*)",
-      "Read(./.env)",
-      "Read(./.env.local)",
-      "Read(./**/.env)",
-      "Read(./**/.env.local)"
-    ]
-  },
   "hooks": {
     "PreToolUse": [
       {

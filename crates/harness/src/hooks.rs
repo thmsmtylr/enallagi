@@ -423,7 +423,10 @@ mod tests {
             ".enallagi/harness.lock",
             "version = 1\n\n[[skill]]\nid = \"tdd\"\nsource = \"path:skills/tdd\"\nsha256 = \"ab\"\n",
         );
-        let (code, msg) = immutable(&r.root, &input(".claude/skills/tdd/SKILL.md"));
+        let (code, msg) = immutable(
+            &r.root,
+            &input(".enallagi/adapters/claude/skills/tdd/SKILL.md"),
+        );
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("harness.lock"), "{msg}");
     }
@@ -453,13 +456,16 @@ mod tests {
     #[cfg(unix)]
     fn immutable_refuses_a_symlinked_directory_containing_a_locked_skill() {
         let r = Repo::new();
-        r.write(".claude/skills/tdd/SKILL.md", "# tdd\n");
+        r.write(".enallagi/adapters/claude/skills/tdd/SKILL.md", "# tdd\n");
         r.write(
             ".enallagi/harness.lock",
             "version = 1\n\n[[skill]]\nid = \"tdd\"\nsource = \"path:skills/tdd\"\nsha256 = \"ab\"\n",
         );
-        std::os::unix::fs::symlink(r.root.join(".claude/skills/tdd"), r.root.join("alias"))
-            .expect("symlink");
+        std::os::unix::fs::symlink(
+            r.root.join(".enallagi/adapters/claude/skills/tdd"),
+            r.root.join("alias"),
+        )
+        .expect("symlink");
         let (code, msg) = immutable(&r.root, &input("alias/SKILL.md"));
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("harness.lock"), "{msg}");

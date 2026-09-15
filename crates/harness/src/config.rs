@@ -385,7 +385,16 @@ pub fn load(root: &Path) -> Result<Config, ConfigError> {
     if cfg.layout.context_file.is_empty() {
         cfg.layout.context_file = instance_rel(root, &cfg.layout.harness_dir, "AGENTS.md");
     }
+    root_layout_skills(root, &mut cfg);
     Ok(cfg)
+}
+
+// the claude plugin lives in the harness directory; a root-layout install keeps the skills where claude reads them natively
+pub fn root_layout_skills(root: &Path, cfg: &mut Config) {
+    let root_layout = instance_rel(root, &cfg.layout.harness_dir, "TASKS.md") == "TASKS.md";
+    if root_layout && cfg.layout.skills_dir.is_none() && cfg.agent.preset == "claude" {
+        cfg.layout.skills_dir = Some(".claude/skills".to_string());
+    }
 }
 
 fn parse_toml(text: &str, path: &str) -> Result<toml::Value, ConfigError> {

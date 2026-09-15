@@ -1320,6 +1320,55 @@ fn an_installed_repository_lands_a_task_and_changes_nothing_outside_the_harness_
     assert!(harness::git::porcelain(&r.root).is_empty());
 }
 
+#[test]
+fn a_nested_claude_install_lands_a_task_and_writes_nothing_under_dot_claude() {
+    let r = Repo::new();
+    harness::init::install(
+        &r.root,
+        &harness::init::InitOpts {
+            adapter: Some("claude".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("install");
+    script(&r, "src/fakecheck.sh", "exit 0\n");
+    script(&r, "src/fakeagent.sh", QUIET);
+    let implement = script(
+        &r,
+        "src/fakeimpl.sh",
+        &format!(
+            "echo work >src/thing.ts\n\
+             {bin} tasks set-status T-001 review 'stub implemented'\n\
+             echo 'iteration' >>.enallagi/PROGRESS.md\n\
+             git add src/thing.ts >/dev/null 2>&1\n\
+             git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
+             {QUIET}",
+            bin = env!("CARGO_BIN_EXE_harness"),
+        ),
+    );
+    let verify = verifier(&r);
+    let toml = base_toml(&role_commands(&implement, &verify)).replace(
+        "preset = \"custom\"\ncommand = [\"./src/fakeagent.sh\", \"{prompt}\", \"{turns}\"]",
+        "preset = \"claude\"",
+    );
+    assert!(toml.contains("preset = \"claude\""));
+    r.write(
+        ".enallagi/harness.toml",
+        &format!("{toml}{}", r.local_skills(&toml)),
+    );
+    r.write(".enallagi/TASKS.md", TASKS);
+    r.commit_all("installed");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(digest.landed, vec!["T-001".to_string()], "{events:#?}");
+    assert!(r
+        .root
+        .join(".enallagi/adapters/claude/skills/tdd/SKILL.md")
+        .is_file());
+    assert!(!r.root.join(".claude").exists());
+    assert!(harness::git::porcelain(&r.root).is_empty());
+}
+
 fn in_dir(dir: &std::path::Path, args: &[&str]) -> String {
     harness::git::git(dir, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
 }

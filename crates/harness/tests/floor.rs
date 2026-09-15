@@ -497,9 +497,11 @@ fn the_skill_hook_fires_on_a_headless_lane() {
     )
     .expect("install");
 
-    let settings: serde_json::Value =
-        serde_json::from_str(&read(&repo.root.join(".claude/settings.json"))).expect("settings");
-    let on_prompt = settings["hooks"]["UserPromptSubmit"].to_string();
+    let hooks: serde_json::Value = serde_json::from_str(&read(
+        &repo.root.join(".enallagi/adapters/claude/hooks/hooks.json"),
+    ))
+    .expect("hooks");
+    let on_prompt = hooks["hooks"]["UserPromptSubmit"].to_string();
     assert!(on_prompt.contains("harness hook skills"), "{on_prompt}");
 
     // count is asserted so an emptied skill list can't trivially pass this

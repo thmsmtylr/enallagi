@@ -122,7 +122,7 @@ pub fn skills_dir(cfg: &Config, preset: Option<&Preset>) -> PathBuf {
         return PathBuf::from(dir);
     }
     if let Some(dir) = preset.and_then(|p| p.skills_dir.as_deref()) {
-        return PathBuf::from(dir);
+        return PathBuf::from(dir.replace("{harness_dir}", &cfg.layout.harness_dir));
     }
     Path::new(&cfg.layout.harness_dir).join("skills")
 }
@@ -467,10 +467,17 @@ pub fn render(
     cfg: &Config,
 ) -> String {
     let inline = preset.skills_dir.is_none();
-    let invocation = preset
+    let mut invocation = preset
         .invocation
         .as_deref()
-        .unwrap_or(&cfg.layout.skill_invocation);
+        .unwrap_or(&cfg.layout.skill_invocation)
+        .to_string();
+    // a configured skills directory is outside the preset's plugin, so its skills carry no plugin prefix
+    if cfg.layout.skills_dir.is_some() {
+        if let Ok(prefix) = regex::Regex::new(r"[\w-]+:<id>") {
+            invocation = prefix.replace_all(&invocation, "<id>").into_owned();
+        }
+    }
 
     let mut out = role_text.to_string();
     let mut sections = String::new();
@@ -564,11 +571,13 @@ mod tests {
         )
         .expect("resolve");
         assert_eq!(got[0].result, "fetched");
-        let vendored = repo.root.join(".claude/skills/tdd/SKILL.md");
+        let vendored = repo
+            .root
+            .join(".enallagi/adapters/claude/skills/tdd/SKILL.md");
         assert_eq!(fs::read_to_string(&vendored).expect("vendored"), BODY);
         assert!(repo
             .root
-            .join(".claude/skills/tdd/references/more.md")
+            .join(".enallagi/adapters/claude/skills/tdd/references/more.md")
             .is_file());
 
         let lock = read_lock(&repo.root, &cfg.layout.harness_dir).expect("lock");
@@ -625,7 +634,11 @@ mod tests {
 
         assert_eq!(got[0].result, "fetched");
         assert_eq!(
-            fs::read_to_string(repo.root.join(".claude/skills/tdd/SKILL.md")).expect("vendored"),
+            fs::read_to_string(
+                repo.root
+                    .join(".enallagi/adapters/claude/skills/tdd/SKILL.md")
+            )
+            .expect("vendored"),
             BODY
         );
         let tag_sha = crate::git::git(&upstream.root, &["rev-parse", "v1^{commit}"]).expect("sha");
@@ -659,7 +672,9 @@ mod tests {
         )
         .expect("first resolve");
 
-        let vendored = repo.root.join(".claude/skills/tdd/SKILL.md");
+        let vendored = repo
+            .root
+            .join(".enallagi/adapters/claude/skills/tdd/SKILL.md");
         fs::write(&vendored, "tampered\n").expect("tamper");
 
         let err = resolve(
@@ -725,7 +740,10 @@ mod tests {
         let cfg = config(&format!("path:{rel}"), "", None);
         let mut w = writer(&repo.root);
         for (name, expected) in [
-            ("claude", "`tdd` (invoke it via the Skill tool)"),
+            (
+                "claude",
+                "`tdd` (invoke it via the Skill tool as `harness:tdd`)",
+            ),
             ("pi", "`tdd` (invoke it as /skill:tdd)"),
         ] {
             let p = preset(name);
@@ -741,6 +759,29 @@ mod tests {
             let out = render("use {{skill:tdd}}.", &got, &p, &cfg);
             assert_eq!(out, format!("use {expected}."));
         }
+    }
+
+    #[test]
+    fn a_configured_skills_dir_names_the_skill_without_the_plugin() {
+        let repo = Repo::new();
+        let rel = source_dir(&repo, "vendor/tdd");
+        let mut cfg = config(&format!("path:{rel}"), "", None);
+        cfg.layout.skills_dir = Some(".claude/skills".into());
+        let p = preset("claude");
+        let got = resolve(
+            &repo.root,
+            &cfg,
+            Some(&p),
+            &["tdd".to_string()],
+            &opts(&repo, false),
+            &mut writer(&repo.root),
+        )
+        .expect("resolve");
+        assert!(repo.root.join(".claude/skills/tdd/SKILL.md").is_file());
+        assert_eq!(
+            render("use {{skill:tdd}}.", &got, &p, &cfg),
+            "use `tdd` (invoke it via the Skill tool as `tdd`)."
+        );
     }
 
     #[test]
@@ -842,8 +883,11 @@ mod tests {
         .expect("resolve");
 
         let body = |id: &str| {
-            fs::read_to_string(repo.root.join(format!(".claude/skills/{id}/SKILL.md")))
-                .expect("vendored")
+            fs::read_to_string(
+                repo.root
+                    .join(format!(".enallagi/adapters/claude/skills/{id}/SKILL.md")),
+            )
+            .expect("vendored")
         };
         assert_eq!(body("one"), "A body\n");
         assert_eq!(body("two"), "B body\n");
@@ -874,7 +918,11 @@ mod tests {
         .expect("resolve");
 
         assert_eq!(
-            fs::read_to_string(repo.root.join(".claude/skills/tdd/SKILL.md")).expect("vendored"),
+            fs::read_to_string(
+                repo.root
+                    .join(".enallagi/adapters/claude/skills/tdd/SKILL.md")
+            )
+            .expect("vendored"),
             BODY
         );
         assert!(!tmp.exists(), "the .tmp clone must not survive");

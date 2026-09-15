@@ -22,7 +22,7 @@ Or from source: `cargo install --locked --git https://github.com/thmsmtylr/enall
 harness init                    # writes .enallagi/harness.toml, seeds the documents from defaults
 $EDITOR .enallagi/harness.toml  # agent.preset, check.command, layout.spec
 harness init                    # re-run: substitutes the edited answers
-harness init --adapter claude   # optional: writes .claude/agents/ and the hook wiring
+harness init --adapter claude   # optional: the claude plugin's agents and hooks, in .enallagi/adapters/claude/
 ```
 
 Every file the harness owns lives in one directory, `.enallagi/` (`layout.harness_dir`); init writes
@@ -235,13 +235,13 @@ each carries the stage, task, gate or probe it names and its reason or result.
 | --- | --- |
 | `.enallagi/roles/{scout,adjudicator,implementer,verifier,researcher}.md` | the five role prompts, always resubstituted |
 | `.enallagi/RAILS.md`, `.enallagi/.gitignore` | the rails, each naming its enforcement, always resubstituted; the ignore file for the harness's own scratch state |
-| `<skills_dir>/running-the-loop/{SKILL.md,references/task-block.md}` | the harness's own usage skill, in the preset's skill directory (`.claude/skills/` by default) |
+| `<skills_dir>/running-the-loop/{SKILL.md,references/task-block.md}` | the harness's own usage skill, in the preset's skill directory (`.enallagi/adapters/claude/skills/` for `claude`, named `harness:<id>`; `.claude/skills/` in a root-`TASKS.md` layout) |
 | `.enallagi/{harness.toml,TASKS.md,PROGRESS.md,LEARNINGS.md,DECISIONS.md,.check-baseline,SPEC.md,evals/README.md}` | seeded once and never overwritten once present: the answers from the embedded defaults, the queue, the append-only record, the rules, the archive, the inherited red, the spec under the heading `layout.rows_heading` names, the eval runner's documentation |
 | `.enallagi/AGENTS.md`; `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | seeded once: the context file every role reads first (`layout.context_file`); one-line pointers to it, from `layout.pointer_files` and the `--adapter` preset's `instruction_file`, written only for a preset with no `{context_file}` in its argv and never over a tracked file |
 
-`--adapter <preset>` adds the tool-specific parts: `.claude/agents/` and `.claude/settings.json` (hooks,
-`Monitor` denied, commit and PR `attribution` empty) for `claude`; for a preset whose `hooks_file` is set
-(`codex`, `gemini`, `copilot`, `cursor`, `qwen`), that file, merged; for any other preset, nothing.
+`--adapter <preset>` adds the tool-specific parts: for `claude`, the plugin's `agents/` and `hooks/hooks.json`, which every lane
+loads with `--plugin-dir` (deny rules on `--settings`) and an interactive session with `claude --plugin-dir .enallagi/adapters/claude`;
+for a preset whose `hooks_file` is set (`codex`, `gemini`, `copilot`, `cursor`, `qwen`), that file, merged with one that already exists; for any other preset, nothing.
 `bun-turbo` is not an agent and not an `--adapter` value; see `adapters/README.md`.
 
 ## Evals

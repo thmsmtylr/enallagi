@@ -63,7 +63,8 @@ const CONTEXT: &str = include_str!("../../../templates/AGENTS.md");
 const POINTER: &str = include_str!("../../../templates/pointer.md");
 const SPEC_SECTION: &str = include_str!("../../../templates/SPEC.section.md");
 const EVALS_README: &str = include_str!("../../../evals/README.md");
-const CLAUDE_SETTINGS: &str = include_str!("../../../adapters/claude/settings.json");
+const CLAUDE_PLUGIN: &str = "adapters/claude";
+const CLAUDE_HOOKS: &str = include_str!("../../../adapters/claude/hooks/hooks.json");
 
 // scoped to the harness dir, never touches the repo's own .gitignore
 // vendored skills are committed (controller ruling), so skills/ is not ignored here
@@ -201,6 +202,7 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     if pending.as_deref().is_some_and(unset) {
         cfg.layout.context_file = config::instance_rel(root, &dir, "AGENTS.md");
     }
+    config::root_layout_skills(root, &mut cfg);
     let at = |name: &str| config::instance_rel(root, &dir, name);
     let toml = config_rel(root);
     // before subst, which would put a root-layout queue under the harness directory
@@ -271,8 +273,21 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         }
     }
 
+    // without a manifest claude names the plugin after its directory, and every skill invocation says harness:<id>
+    let plugin = format!("{dir}/{CLAUDE_PLUGIN}");
+    if skills_dir.starts_with(&plugin) || tool.is_some_and(|t| t.name == "claude") {
+        let manifest = json!({
+            "name": "harness",
+            "description": "The harness's role agents, vendored skills and hooks",
+        });
+        plan.push(write(
+            format!("{plugin}/.claude-plugin/plugin.json"),
+            pretty(&manifest),
+        ));
+    }
+
     if let Some(preset) = tool {
-        adapter(root, &mut plan, &mut report, preset, &sub)?;
+        adapter(root, &dir, &mut plan, &mut report, preset, &sub)?;
     }
 
     if own_repository(root, &dir) {
@@ -603,6 +618,7 @@ const HOOKS: &[(&str, &[&str])] = &[
 
 fn adapter(
     root: &Path,
+    dir: &str,
     plan: &mut Vec<Planned>,
     report: &mut InitReport,
     preset: &Preset,
@@ -612,7 +628,10 @@ fn adapter(
     if name == "claude" {
         // role prompts double as the Claude subagent definitions here
         for (role, text) in ROLES {
-            plan.push(write(format!(".claude/agents/{role}"), sub(text)));
+            plan.push(write(
+                format!("{dir}/{CLAUDE_PLUGIN}/agents/{role}"),
+                sub(text),
+            ));
         }
     }
 
@@ -623,8 +642,10 @@ fn adapter(
         return Ok(());
     };
 
+    let hooks_file = hooks_file.replace("{harness_dir}", dir);
+    let hooks_file = hooks_file.as_str();
     let ours = if name == "claude" {
-        claude_settings(sub)?
+        claude_hooks(sub)?
     } else {
         // non-claude vendors share this hook shape; only the event names differ, per preset
         hooks_value(preset)
@@ -638,10 +659,10 @@ fn adapter(
     Ok(())
 }
 
-fn claude_settings(sub: &dyn Fn(&str) -> String) -> Result<Value, InitError> {
+fn claude_hooks(sub: &dyn Fn(&str) -> String) -> Result<Value, InitError> {
     let mut value: Value =
-        serde_json::from_str(&sub(CLAUDE_SETTINGS)).map_err(|e| InitError::InvalidJson {
-            path: "adapters/claude/settings.json".to_string(),
+        serde_json::from_str(&sub(CLAUDE_HOOKS)).map_err(|e| InitError::InvalidJson {
+            path: "adapters/claude/hooks/hooks.json".to_string(),
             message: e.to_string(),
         })?;
     rewrite_commands(&mut value);

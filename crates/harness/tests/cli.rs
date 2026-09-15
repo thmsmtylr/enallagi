@@ -256,7 +256,9 @@ fn skills_check_refuses_what_sync_then_locks() {
     assert!(String::from_utf8_lossy(&out.stdout)
         .lines()
         .any(|l| l == "tdd  fetched"));
-    assert!(root.join(".claude/skills/tdd/SKILL.md").is_file());
+    assert!(root
+        .join(".enallagi/adapters/claude/skills/tdd/SKILL.md")
+        .is_file());
     assert!(root.join(".enallagi/harness.lock").is_file());
 
     let out = harness(&["skills", "check"]);
