@@ -11,6 +11,13 @@ pub enum WorktreeError {
     Detached,
     #[error("worktree: could not create {0}")]
     Create(PathBuf),
+    #[error("worktree: {repo} fast-forwarded to {branch}, a later merge was refused, and `git reset --keep {pre}` failed: {stderr}. Both lane worktrees are left")]
+    Rollback {
+        repo: PathBuf,
+        branch: String,
+        pre: String,
+        stderr: String,
+    },
     #[error(transparent)]
     Git(#[from] git::GitError),
 }
@@ -122,21 +129,32 @@ pub fn lane(
         return Ok(left(stuck.join("\n")));
     }
 
-    // ponytail: a merge refused after the ancestry check (a dirty parent tree) leaves the repositories before it merged; the reason names them
     let mut said = Vec::new();
-    for (i, (repo, _)) in pairs.iter().enumerate() {
+    let mut merged: Vec<(&PathBuf, String)> = Vec::new();
+    for (repo, _) in &pairs {
+        let pre = git::git(repo, &["rev-parse", "HEAD"])?;
         match git::git(repo, &["merge", "--ff-only", &branch]) {
-            Ok(out) => said.push(out),
-            Err(git::GitError::Failed { stderr, .. }) => {
-                let merged: String = pairs[..i]
-                    .iter()
-                    .map(|(done, _)| {
-                        format!("\n{} already fast-forwarded to {branch}", done.display())
-                    })
-                    .collect();
-                return Ok(left(format!("{stderr}{merged}")));
+            Ok(out) => {
+                said.push(out);
+                merged.push((repo, pre));
             }
-            Err(e) => return Err(e.into()),
+            Err(err) => {
+                // a merge git refuses after the ancestry check (a dirty parent tree) undoes the ones before it
+                for (done, pre) in merged {
+                    if let Err(e) = git::git(done, &["reset", "--keep", &pre]) {
+                        return Err(WorktreeError::Rollback {
+                            repo: done.clone(),
+                            branch,
+                            pre,
+                            stderr: e.to_string(),
+                        });
+                    }
+                }
+                match err {
+                    git::GitError::Failed { stderr, .. } => return Ok(left(stderr)),
+                    e => return Err(e.into()),
+                }
+            }
         }
     }
     for (repo, wt) in &pairs {
@@ -320,6 +338,28 @@ mod tests {
 
         assert!(!report.merged, "reason: {}", report.reason);
         assert_eq!(git::head(&state), pre_state);
+        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
+        assert!(!tasks.contains("status: done"), "{tasks}");
+        remove_left(&r, &report);
+    }
+
+    #[test]
+    fn a_product_merge_git_refuses_leaves_neither_repository_merged() {
+        let r = nested_repo();
+        let cfg = cfg(&r);
+        let state = r.root.join(".enallagi");
+        let (pre_root, pre_state) = (git::head(&r.root), git::head(&state));
+
+        let report = lane(&r.root, &cfg, &mut |wt| {
+            land(wt, "T-001", "one.txt");
+            r.write("one.txt", "an operator's own untracked edit");
+            Ok(())
+        })
+        .expect("lane");
+
+        assert!(!report.merged, "reason: {}", report.reason);
+        assert_eq!(git::head(&r.root), pre_root);
+        assert_eq!(git::head(&state), pre_state, "reason: {}", report.reason);
         let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
         assert!(!tasks.contains("status: done"), "{tasks}");
         remove_left(&r, &report);
