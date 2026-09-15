@@ -239,9 +239,9 @@ each carries the stage, task, gate or probe it names and its reason or result.
 | `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | one-line pointers to `AGENTS.md`, from `layout.pointer_files` |
 | `evals/README.md` | the eval runner's own documentation |
 
-`--adapter <preset>` adds the tool-specific parts: `.claude/agents/` and `.claude/settings.json`
-hook wiring for `claude`; for a preset whose `hooks_file` is set (`codex`, `gemini`, `copilot`,
-`cursor`, `qwen`), that file, merged with one that already exists; for any other preset, nothing.
+`--adapter <preset>` adds the tool-specific parts: `.claude/agents/` and `.claude/settings.json` (hooks,
+`Monitor` denied, commit and PR `attribution` empty) for `claude`; for a preset whose `hooks_file` is set
+(`codex`, `gemini`, `copilot`, `cursor`, `qwen`), that file, merged; for any other preset, nothing.
 `bun-turbo` is not an agent and not an `--adapter` value; see `adapters/README.md`.
 
 ## Evals
