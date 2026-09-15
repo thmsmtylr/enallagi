@@ -7,7 +7,7 @@ Statuses: `proposed` (the scout's, inert to the loop) · `ready` · `blocked` ·
 (the implementer's last act) · `done` (only the verifier's, and the launcher re-runs the gate
 behind it) · `needs-spec` (the contract does not answer a question the task hit).
 
-Finished blocks archive to DECISIONS.md — `harness run` moves them at the top of each
+Finished blocks archive to __HARNESS_DIR__/DECISIONS.md — `harness run` moves them at the top of each
 iteration, leaving a stub with the fields the loop still reads. Keep this file small.
 
 ## Block format

@@ -183,8 +183,17 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         Some(text) => config_from(text)?,
         None => config::load(root)?,
     };
-    let sub = |text: &str| config::subst(text, &cfg);
     let dir = cfg.layout.harness_dir.clone();
+    let at = |name: &str| config::instance_rel(root, &dir, name);
+    // before subst, which would put a root-layout queue under the harness directory
+    let sub = |text: &str| {
+        let text = ROOT_INSTANCE_FILES
+            .iter()
+            .fold(text.to_string(), |acc, name| {
+                acc.replace(&format!("__HARNESS_DIR__/{name}"), &at(name))
+            });
+        config::subst(&text, &cfg)
+    };
     let presets = agent::presets();
     let skills_dir = skills_root(&cfg, presets.get(&cfg.agent.preset));
 
@@ -199,7 +208,6 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         plan.push(write(rel(&path), sub(text)));
     }
 
-    let at = |name: &str| config::instance_rel(root, &dir, name);
     seed(
         root,
         &mut plan,

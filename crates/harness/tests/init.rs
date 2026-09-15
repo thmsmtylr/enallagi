@@ -547,6 +547,48 @@ fn root_layout() -> Repo {
     repo
 }
 
+fn instance_mentions(planned: &[(String, String)]) -> Vec<(String, String)> {
+    let mention =
+        regex::Regex::new(r"([A-Za-z0-9_./-]*)(?:TASKS|PROGRESS|DECISIONS|LEARNINGS)\.md")
+            .expect("regex");
+    let mut out = Vec::new();
+    for (path, text) in planned {
+        if path.ends_with(".toml") || path.ends_with(".json") {
+            continue;
+        }
+        for found in mention.captures_iter(text) {
+            out.push((path.clone(), found[0].to_string()));
+        }
+    }
+    assert!(!out.is_empty(), "no instance-file mention was rendered");
+    out
+}
+
+#[test]
+fn every_rendered_role_template_and_skill_names_instance_files_under_the_harness_directory() {
+    let repo = Repo::new();
+    let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
+    let off: Vec<_> = instance_mentions(&planned)
+        .into_iter()
+        .filter(|(_, m)| {
+            let name = m.rsplit('/').next().unwrap_or(m);
+            *m != format!(".enallagi/{name}")
+        })
+        .collect();
+    assert!(off.is_empty(), "{off:#?}");
+}
+
+#[test]
+fn a_root_layout_renders_instance_files_at_the_root() {
+    let repo = root_layout();
+    let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
+    let off: Vec<_> = instance_mentions(&planned)
+        .into_iter()
+        .filter(|(_, m)| m.contains('/'))
+        .collect();
+    assert!(off.is_empty(), "{off:#?}");
+}
+
 fn moved_to(rel: &str) -> String {
     format!(".enallagi/{}", rel.trim_start_matches(".harness/"))
 }

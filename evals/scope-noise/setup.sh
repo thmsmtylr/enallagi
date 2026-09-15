@@ -2,8 +2,8 @@
 # A proposed block whose scope names one file the fix writes and one it only reads. The rule decides
 # which of the two survives promotion; nothing else in the fixture distinguishes them.
 set -u
-grep -q 'evals/scope-noise' LEARNINGS.md && {
-  echo "  setup.sh: the seeded LEARNINGS.md already carries the rule, so the two arms would not differ" >&2
+grep -q 'evals/scope-noise' .enallagi/LEARNINGS.md && {
+  echo "  setup.sh: the seeded .enallagi/LEARNINGS.md already carries the rule, so the two arms would not differ" >&2
   exit 1
 }
 # the candidate rule, verbatim: it is not in this repo's LEARNINGS.md, which takes a dated line only
@@ -11,14 +11,14 @@ grep -q 'evals/scope-noise' LEARNINGS.md && {
 if [ -f .eval-ablated ]; then
   rm -f .eval-ablated
 else
-  cat >>LEARNINGS.md <<'RULE'
+  cat >>.enallagi/LEARNINGS.md <<'RULE'
 - [2026-09-10] A scope line that names a file the task never touches is noise the scope gate cannot tell from a forgotten edit
   → `scope:` names only the files the fix writes; a file the task merely reads is not scope. Four
   entries paid for it before this line (`grep -c 'sat on the scope line' PROGRESS.md` → 4), and
   T-005 got it right: `scope: test-hashes.json` alone, while its fix read and hashed a file the
   scope line never named. (evals/scope-noise)
 RULE
-  grep -q 'evals/scope-noise' LEARNINGS.md || {
+  grep -q 'evals/scope-noise' .enallagi/LEARNINGS.md || {
     echo "  setup.sh: the rule was not written, so the unablated arm would measure nothing" >&2
     exit 1
   }
@@ -32,7 +32,7 @@ finding=$(harness probe | grep '^FINDING hash-uncovered ')
 }
 {
   printf '\n## [T-901] %s\n' "${finding#FINDING hash-uncovered }"
-  printf 'scope: test-hashes.json, harness.toml\n'
+  printf 'scope: .enallagi/test-hashes.json, .enallagi/harness.toml\n'
   printf 'blockedBy: none\n'
   printf 'status: proposed\n'
   printf 'probe: hash-uncovered\n'
@@ -41,5 +41,5 @@ finding=$(harness probe | grep '^FINDING hash-uncovered ')
   printf 'command: `harness probe`\n'
   printf 'output: |\n  %s\n' "$finding"
   printf 'notes: proposed from the output above.\n'
-} >>TASKS.md
+} >>.enallagi/TASKS.md
 git add -A && git commit -qm 'eval: one proposal with a read-only file on its scope line' >/dev/null

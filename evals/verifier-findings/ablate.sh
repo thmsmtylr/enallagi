@@ -4,11 +4,11 @@
 set -u
 python3 - <<'PY'
 import io
-path = '.harness/roles/verifier.md'
+path = '.enallagi/roles/verifier.md'
 text = io.open(path, encoding='utf-8').read()
 subs = [
-    ('`Edit` is granted for exactly two purposes: writing your verdict and the resulting `status:` into that task\'s block in TASKS.md, and appending `status: proposed` blocks to TASKS.md for defects outside the criteria.',
-     '`Edit` is granted for exactly one purpose: writing your verdict and the resulting `status:` into that task\'s block in TASKS.md.'),
+    ('`Edit` is granted for exactly two purposes: writing your verdict and the resulting `status:` into that task\'s block in .enallagi/TASKS.md, and appending `status: proposed` blocks to .enallagi/TASKS.md for defects outside the criteria.',
+     '`Edit` is granted for exactly one purpose: writing your verdict and the resulting `status:` into that task\'s block in .enallagi/TASKS.md.'),
     ('bloat short of a rejection is a proposed block (below);', 'flag minor bloat in notes;'),
 ]
 for rule, was in subs:

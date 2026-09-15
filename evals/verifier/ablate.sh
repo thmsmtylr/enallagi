@@ -5,7 +5,7 @@
 set -u
 python3 - <<'PY'
 import io
-path = '.harness/roles/verifier.md'
+path = '.enallagi/roles/verifier.md'
 text = io.open(path, encoding='utf-8').read()
 rule = ('0. FIRST: `git status --porcelain`. Untracked or unstaged source means the implementation '
         'is NOT on the branch and a merge would take none of it. REJECT unless the code you are '

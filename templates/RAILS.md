@@ -41,23 +41,23 @@ names a test by `file::test name`, copied character for character from __SPEC__'
 | --- | --- | --- |
 | `tests-immutable` | Every file named in the exit criteria is immutable. The SHA-256 in `test-hashes.json` and the `PreToolUse` hook **detect** an edit and force it to land visibly; they do not prevent one: the check runs as the same principal as the lane, over data the lane can write. **The authority is the verifier**: a `test-hashes.json` key re-cut for a file not on the task's `scope:` line is a rejection. | the verifier · `test-hashes.json` (plus the `PreToolUse` hook, where your tool has hooks) |
 | `harness-immutable` | The build config, every preload, the check script **and `harness.toml` itself** are covered by the same hashes. The file that names the check is part of the gate. Freeze the **exam** as well as the tests: whatever files hold your approved corpus, your fixtures and your scoring rules belong here too, or a lane can retune what it is graded on. | the verifier · `test-hashes.json`, and `harness probe` → `hash-uncovered` for every file this row names |
-| `one-row` | A task is at most the exit-criteria rows it names under `rows:`. Split it if it is more. Write `PROGRESS.md` at the end of every iteration; re-read its tail, __SPEC__ and `git log --oneline -20` at the start of the next. | `harness run` |
+| `one-row` | A task is at most the exit-criteria rows it names under `rows:`. Split it if it is more. Write `__HARNESS_DIR__/PROGRESS.md` at the end of every iteration; re-read its tail, __SPEC__ and `git log --oneline -20` at the start of the next. | `harness run` |
 | `minutes-not-hours` | No task is more than about 30 minutes of human-equivalent work. Split it if it is. | judgment — the adjudicator, at promotion |
 | `blocked-is-allowed` | A task may stop with `BLOCKED` and a written reason, which is a success. A task may **never** be marked done without the exact command and its pasted output. | `harness run` → `gate_verdict` |
 | `no-clarification-left` | If any `[NEEDS CLARIFICATION]` marker exists in __SPEC__, the loop does not start. | `harness run` |
 | `harness-lane` | One round changes a product lever or the measure of that lever, never both. A diff touching the launcher, the hooks, the check script or `.check-baseline` belongs to a task that declared `rows: none — harness`. A `test-hashes.json` re-cut is **exempt** when every key it changed names a file the task's own `scope:` line covers (SPEC.md §0.2 `tests-immutable`). | `harness run` → `gate_scope` |
-| `friction` | Every iteration's PROGRESS.md entry ends with the round's question — what cost time that a rule or a check could prevent. The first occurrence is evidence and stays in PROGRESS.md; the **second** occurrence of the same thing is decided: a line in LEARNINGS.md through `harness eval --gate`, or a dated kill line in DECISIONS.md quoting the `--gate` run that refused the rule. | judgment — the verifier, for the line's presence · `harness probe` → `friction-repeat`, for the second occurrence |
-| `gated-rules` | A rule only enters LEARNINGS.md through `harness eval --gate <name>`, which requires its eval to fail without the rule, pass with it, and regress no eval that was passing. The file is capped: at the cap, adding a rule means removing one. | `harness probe` → `learning-ungated` · judgment — the verifier, that a new rule cites its `--gate` run |
+| `friction` | Every iteration's __HARNESS_DIR__/PROGRESS.md entry ends with the round's question — what cost time that a rule or a check could prevent. The first occurrence is evidence and stays in __HARNESS_DIR__/PROGRESS.md; the **second** occurrence of the same thing is decided: a line in __HARNESS_DIR__/LEARNINGS.md through `harness eval --gate`, or a dated kill line in __HARNESS_DIR__/DECISIONS.md quoting the `--gate` run that refused the rule. | judgment — the verifier, for the line's presence · `harness probe` → `friction-repeat`, for the second occurrence |
+| `gated-rules` | A rule only enters __HARNESS_DIR__/LEARNINGS.md through `harness eval --gate <name>`, which requires its eval to fail without the rule, pass with it, and regress no eval that was passing. The file is capped: at the cap, adding a rule means removing one. | `harness probe` → `learning-ungated` · judgment — the verifier, that a new rule cites its `--gate` run |
 | `verifier-not-implementer` | Final acceptance runs in a fresh session that sees only the diff and the exit criteria. It never sees the implementation conversation. | `harness run` · `__HARNESS_DIR__/roles/verifier.md` |
 
 ## Task protocol
 
-- Tasks live in TASKS.md: id, `scope:` globs, `blockedBy:`, `rows:`, objective acceptance criteria,
+- Tasks live in __HARNESS_DIR__/TASKS.md: id, `scope:` globs, `blockedBy:`, `rows:`, objective acceptance criteria,
   status of proposed, ready, blocked, review, done or needs-spec.
 - **The scout proposes and the adjudicator promotes or kills.** `proposed` is the scout's output and
   nobody else's — one block per `FINDING` line from `harness probe`, carrying `probe:`, the
   command and its output — and the adjudicator either writes runnable criteria and sets `ready`, or
-  kills it to `## Rejected findings` in DECISIONS.md. A `proposed` block is inert to the loop.
+  kills it to `## Rejected findings` in __HARNESS_DIR__/DECISIONS.md. A `proposed` block is inert to the loop.
 - `rows:` names the exit-criteria rows the task turns green, copied character for character. A task
   with no rows writes `rows: none` and says whether it is harness or measurement.
 - Take the first ready task whose blockers are done. Restate its acceptance criteria in one
@@ -65,10 +65,10 @@ names a test by `file::test name`, copied character for character from __SPEC__'
 - Implementer sets `review`, never `done`. Verifier promotes to `done` or rejects to `ready` with
   reproducible reasons, and the launcher then re-runs the gate itself. A lint failure alone is a
   rejection.
-- A task must be completable by an agent that has read only `__CONTEXT_FILE__`, __SPEC__, LEARNINGS.md and
+- A task must be completable by an agent that has read only `__CONTEXT_FILE__`, __SPEC__, __HARNESS_DIR__/LEARNINGS.md and
   its own task block. Criteria assuming conversational context are unrunnable.
 - `attended: true` marks a task needing a human credential. No launcher picks one up on auto-select.
-- **One checkout is one writer.** Never let two sessions edit TASKS.md in one working directory.
+- **One checkout is one writer.** Never let two sessions edit __HARNESS_DIR__/TASKS.md in one working directory.
 
 ## Commands
 
