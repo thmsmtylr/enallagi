@@ -1,5 +1,5 @@
 name = "claude"
-argv = ["claude", "-p", "{prompt}", "--output-format", "stream-json", "--verbose", "--max-turns", "{turns}", "--dangerously-skip-permissions"]
+argv = ["claude", "-p", "{prompt}", "--output-format", "stream-json", "--verbose", "--max-turns", "{turns}", "--append-system-prompt-file", "{context_file}", "--dangerously-skip-permissions"]
 turn_cap = "flag"
 model_flag = "--model"
 skills_dir = ".claude/skills"

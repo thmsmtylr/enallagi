@@ -702,7 +702,7 @@ impl<'a> Loop<'a> {
         }
 
         Ok(StageSpawn {
-            argv: resolved.argv,
+            argv: agent::fill_layout(&resolved.argv, &self.cfg.layout),
             env,
             cwd: self.root,
             timeout,

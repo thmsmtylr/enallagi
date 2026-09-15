@@ -79,10 +79,11 @@ fn init_exits_0_on_a_fresh_repo() {
     assert!(!repo.root.join(".harness").exists());
     assert!(report.wrote.contains(&".enallagi/harness.toml".to_string()));
     assert!(
-        report.excluded.contains(&"AGENTS.md".to_string()),
+        report.wrote.contains(&".enallagi/AGENTS.md".to_string()),
         "{:?}",
-        report.excluded
+        report.wrote
     );
+    assert!(!repo.root.join("AGENTS.md").exists());
     assert!(
         !report.track.contains(&".enallagi".to_string()),
         "the harness directory is its own repository: {:?}",
@@ -161,7 +162,7 @@ fn init_excludes_the_harness_directory_and_every_entry_point_in_one_marked_block
     let end = lines.iter().position(|l| *l == "# <<< harness").unwrap();
     let block = &lines[start + 1..end];
     assert!(block.contains(&"/.enallagi/"), "{exclude}");
-    for entry in ["AGENTS.md", "GEMINI.md", ".gemini/settings.json"] {
+    for entry in ["GEMINI.md", ".gemini/settings.json"] {
         assert!(
             report.wrote.contains(&entry.to_string()),
             "{:?}",
@@ -173,10 +174,25 @@ fn init_excludes_the_harness_directory_and_every_entry_point_in_one_marked_block
         );
     }
     assert!(
-        !report.track.contains(&"AGENTS.md".to_string()),
+        !report.track.contains(&"GEMINI.md".to_string()),
         "{:?}",
         report.track
     );
+}
+
+#[test]
+fn a_root_layout_with_no_harness_toml_seeds_the_context_file_at_the_root() {
+    let repo = Repo::new();
+    repo.write("TASKS.md", "# TASKS\n");
+    let report = install(&repo);
+    let cfg = harness::config::load(&repo.root).expect("config");
+    assert_eq!(cfg.layout.context_file, "AGENTS.md");
+    assert!(
+        report.wrote.contains(&"AGENTS.md".to_string()),
+        "{:?}",
+        report.wrote
+    );
+    assert!(!repo.root.join(".enallagi/AGENTS.md").exists());
 }
 
 #[test]
@@ -247,12 +263,12 @@ fn re_init_is_idempotent() {
 #[test]
 fn the_context_file_is_seeded_and_the_pointers_point_at_it() {
     let repo = Repo::new();
-    install(&repo);
-    assert!(!read(&repo, "AGENTS.md").is_empty());
+    with(&repo, &adapter("codex"));
+    assert!(!read(&repo, ".enallagi/AGENTS.md").is_empty());
     for pointer in ["CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md"] {
         assert!(
-            read(&repo, pointer).contains("AGENTS.md"),
-            "{pointer} does not point at AGENTS.md"
+            read(&repo, pointer).contains(".enallagi/AGENTS.md"),
+            "{pointer} does not point at .enallagi/AGENTS.md"
         );
     }
 }
@@ -261,7 +277,7 @@ fn the_context_file_is_seeded_and_the_pointers_point_at_it() {
 fn the_context_file_stays_short() {
     let repo = Repo::new();
     install(&repo);
-    let lines = read(&repo, "AGENTS.md").lines().count();
+    let lines = read(&repo, ".enallagi/AGENTS.md").lines().count();
     assert!(lines < 80, "AGENTS.md is {lines} lines");
 }
 
@@ -319,13 +335,13 @@ fn documents_with_content_are_kept() {
 fn the_context_file_is_resynced_to_the_configured_check() {
     let repo = Repo::new();
     install(&repo);
-    assert!(read(&repo, "AGENTS.md").contains("`bun run check`"));
+    assert!(read(&repo, ".enallagi/AGENTS.md").contains("`bun run check`"));
     repo.write(
         ".enallagi/harness.toml",
         "[check]\ncommand = \"make check\"\n",
     );
     install(&repo);
-    let context = read(&repo, "AGENTS.md");
+    let context = read(&repo, ".enallagi/AGENTS.md");
     assert!(context.contains("`make check`"), "{context:.400}");
     assert!(!context.contains("`bun run check`"));
 }
@@ -489,6 +505,71 @@ fn the_adapter_points_its_own_instruction_file_at_the_context_file() {
         "{:?}",
         report.wrote
     );
+}
+
+#[test]
+fn each_preset_gets_a_root_pointer_only_when_its_argv_cannot_name_the_context_file() {
+    let presets = harness::agent::presets();
+    let claude = &presets["claude"].argv;
+    let flag = claude
+        .iter()
+        .position(|w| w == "--append-system-prompt-file")
+        .expect("claude passes the context file");
+    assert_eq!(claude[flag + 1], "{context_file}");
+
+    for (name, preset) in &presets {
+        let repo = Repo::new();
+        let report = with(&repo, &adapter(name));
+        assert!(!read(&repo, ".enallagi/AGENTS.md").is_empty(), "{name}");
+        let named = preset.argv.iter().any(|w| w.contains("{context_file}"));
+        let mut entries = vec![
+            "AGENTS.md".to_string(),
+            "CLAUDE.md".to_string(),
+            "GEMINI.md".to_string(),
+            "QWEN.md".to_string(),
+        ];
+        entries.extend(preset.instruction_file.clone());
+        for entry in &entries {
+            // AGENTS.md is no pointer file; a flagless preset gets it only as its own instruction file
+            let pointer = !named
+                && (entry != "AGENTS.md"
+                    || preset.instruction_file.as_deref() == Some("AGENTS.md"));
+            if !pointer {
+                assert!(!repo.root.join(entry).exists(), "{name} wrote {entry}");
+                continue;
+            }
+            assert!(
+                read(&repo, entry).contains(".enallagi/AGENTS.md"),
+                "{name}: {entry} does not point at the context file"
+            );
+            assert!(
+                report.excluded.contains(entry),
+                "{name}: {entry} not excluded: {:?}",
+                report.excluded
+            );
+        }
+    }
+}
+
+#[test]
+fn a_tracked_instruction_file_is_never_written() {
+    let files = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "QWEN.md"];
+    for name in harness::agent::presets().keys() {
+        let repo = Repo::new();
+        for file in files {
+            repo.write(file, "");
+        }
+        repo.commit_all("empty instruction files");
+        let report = with(&repo, &adapter(name));
+        for file in files {
+            assert_eq!(read(&repo, file), "", "{name} wrote {file}");
+            assert!(
+                !report.wrote.contains(&file.to_string()),
+                "{name}: {:?}",
+                report.wrote
+            );
+        }
+    }
 }
 
 #[test]

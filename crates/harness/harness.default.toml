@@ -12,8 +12,7 @@ force = "bun run check -- --force"
 fail_name = '\(fail\) (.+?)(?: \[[0-9.]+m?s\])?$'
 
 [layout]
-# context_file is the file every role reads first; pointer_files are one-line pointers to it for tools that read their own.
-context_file = "AGENTS.md"
+# context_file is the file every role reads first, unset meaning AGENTS.md beside the queue; pointer_files are one-line pointers to it for tools that cannot take it on their command line.
 pointer_files = ["CLAUDE.md", "GEMINI.md", "QWEN.md", ".github/copilot-instructions.md"]
 
 # harness_dir holds the roles, hooks and scratch state; skills_dir is the agent's skills directory, unset meaning the preset's own.

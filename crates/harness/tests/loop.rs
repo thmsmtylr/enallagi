@@ -263,6 +263,25 @@ fn a_role_with_no_agent_command_falls_back_to_the_default() {
 }
 
 #[test]
+fn a_preset_argv_carries_the_harness_directory_and_the_context_file() {
+    let extra = "\n[agent.scout]\ncommand = [\"./src/fakeargs.sh\", \"{prompt}\", \"{harness_dir}\", \"{context_file}\"]\n";
+    let r = repo(&base_toml(extra), "");
+    script(
+        &r,
+        "src/fakeargs.sh",
+        &format!("printf '%s %s\\n' \"$2\" \"$3\" >>args.txt\n{QUIET}"),
+    );
+    r.commit_all("args");
+    let _ = try_go(&r, &opts(1));
+    let args = std::fs::read_to_string(r.root.join("args.txt")).expect("the scout ran");
+    assert_eq!(
+        args.lines().next(),
+        Some(".enallagi .enallagi/AGENTS.md"),
+        "{args}"
+    );
+}
+
+#[test]
 fn a_bare_clarification_marker_halts_the_loop() {
     let r = repo(&base_toml(""), TASKS);
     r.write("SPEC.md", "# spec\n\n[NEEDS CLARIFICATION] which store?\n");

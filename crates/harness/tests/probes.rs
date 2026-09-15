@@ -111,6 +111,20 @@ fn no_probe_errored() {
 }
 
 #[test]
+fn check_unnamed_reads_the_context_file_under_the_harness_directory() {
+    let (repo, cfg) = seeded();
+    assert_eq!(cfg.layout.context_file, ".enallagi/AGENTS.md");
+    assert!(!repo.root.join("AGENTS.md").exists());
+    assert_eq!(count(&run(&repo, &cfg), "check-unnamed"), Some(0));
+
+    fs::remove_file(repo.root.join(".enallagi/AGENTS.md")).expect("rm");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "check-unnamed");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, ".enallagi/AGENTS.md");
+}
+
+#[test]
 fn the_row_parser_reads_the_seeded_criteria_table() {
     let (repo, cfg) = seeded();
     assert_eq!(count(&run(&repo, &cfg), "spec-untested"), Some(1));

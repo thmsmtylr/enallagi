@@ -186,11 +186,21 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     let mut report = InitReport::default();
 
     let pending = seed_config(root, &mut plan, &mut report)?;
-    let cfg = match &pending {
+    let mut cfg = match &pending {
         Some(text) => config_from(text)?,
         None => config::load(root)?,
     };
     let dir = cfg.layout.harness_dir.clone();
+    // config_from resolves an unset context file in a scratch directory, which never has a root-layout queue
+    let unset = |text: &str| {
+        toml::from_str::<Value>(text)
+            .ok()
+            .and_then(|v| v.get("layout")?.get("context_file").cloned())
+            .is_none()
+    };
+    if pending.as_deref().is_some_and(unset) {
+        cfg.layout.context_file = config::instance_rel(root, &dir, "AGENTS.md");
+    }
     let at = |name: &str| config::instance_rel(root, &dir, name);
     let toml = config_rel(root);
     // before subst, which would put a root-layout queue under the harness directory
@@ -239,15 +249,30 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         seed(root, &mut plan, &mut report, &spec, sub(SPEC_SECTION));
     }
 
-    for pointer in &cfg.layout.pointer_files {
-        seed_pointer(root, &mut plan, &mut report, &cfg, pointer, &sub);
+    let tool = match &opts.adapter {
+        Some(name) => Some(
+            presets
+                .get(name)
+                .ok_or_else(|| InitError::UnknownAdapter(name.clone()))?,
+        ),
+        None => None,
+    };
+    let spawned = tool.cloned().or_else(|| {
+        agent::resolve(&cfg.agent, "default", &presets)
+            .ok()
+            .map(|r| r.preset)
+    });
+    // a tool that takes the context file on its command line needs no pointer to it at the root
+    if !spawned.is_some_and(|p| p.argv.iter().any(|w| w.contains("{context_file}"))) {
+        // written before hooks: a tool with no hooks file still reads its own instruction file
+        let own = tool.and_then(|t| t.instruction_file.as_ref());
+        for pointer in cfg.layout.pointer_files.iter().chain(own) {
+            seed_pointer(root, &mut plan, &mut report, &cfg, pointer, &sub);
+        }
     }
 
-    if let Some(name) = &opts.adapter {
-        let preset = presets
-            .get(name)
-            .ok_or_else(|| InitError::UnknownAdapter(name.clone()))?;
-        adapter(root, &mut plan, &mut report, &cfg, preset, &sub)?;
+    if let Some(preset) = tool {
+        adapter(root, &mut plan, &mut report, preset, &sub)?;
     }
 
     if own_repository(root, &dir) {
@@ -542,10 +567,14 @@ fn seed_pointer(
     sub: &dyn Fn(&str) -> String,
 ) {
     let context = &cfg.layout.context_file;
-    if pointer == context {
+    if pointer == context
+        || plan.iter().any(|p| p.path == pointer)
+        || report.kept.iter().any(|k| k == pointer)
+    {
         return;
     }
-    if !has_content(&root.join(pointer)) {
+    let tracked = git::git(root, &["ls-files", "--", pointer]).is_ok_and(|out| !out.is_empty());
+    if !tracked && !has_content(&root.join(pointer)) {
         plan.push(write(pointer.to_string(), sub(POINTER)));
         return;
     }
@@ -576,7 +605,6 @@ fn adapter(
     root: &Path,
     plan: &mut Vec<Planned>,
     report: &mut InitReport,
-    cfg: &Config,
     preset: &Preset,
     sub: &dyn Fn(&str) -> String,
 ) -> Result<(), InitError> {
@@ -585,14 +613,6 @@ fn adapter(
         // role prompts double as the Claude subagent definitions here
         for (role, text) in ROLES {
             plan.push(write(format!(".claude/agents/{role}"), sub(text)));
-        }
-    }
-
-    // written before hooks: a tool with no hooks file still reads its own instruction file
-    if let Some(file) = preset.instruction_file.as_deref() {
-        let planned = plan.iter().any(|p| p.path == file);
-        if file != cfg.layout.context_file && !planned {
-            seed(root, plan, report, file, sub(POINTER));
         }
     }
 

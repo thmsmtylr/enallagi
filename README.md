@@ -26,7 +26,7 @@ harness init --adapter claude   # optional: writes .claude/agents/ and the hook 
 ```
 
 Every file the harness owns lives in one directory, `.enallagi/` (`layout.harness_dir`); init writes
-outside it only `AGENTS.md`, `layout.pointer_files` and the `--adapter` tool's files. A root
+outside it only `layout.pointer_files`, for a preset with no `{context_file}` in its argv, and the `--adapter` tool's files. A root
 `TASKS.md` or a `.harness/` keeps its layout: `harness init` lists each file with its new path, and
 `--move` moves them and installs nothing. A fresh `.enallagi/` is its own git repository; it and each untracked file init writes
 outside it go in one `# >>> harness` block of `git rev-parse --git-path info/exclude`, never `.gitignore`; `--dry-run` writes nothing.
@@ -165,7 +165,7 @@ name, default `` \(fail\) (.+?)(?: \[[0-9.]+m?s\])?$ ``).
 | `harness_dir` | string | `.enallagi` |
 | `skills_dir` | string, optional | the preset's own |
 | `spec`, `rows_heading`, `rows_end_heading` | string | `SPEC.md`, `## 11. Exit criteria`, `## 12.` |
-| `context_file` | string | `AGENTS.md` |
+| `context_file` | string | `AGENTS.md` beside the queue: `.enallagi/AGENTS.md`, or the root one in a root layout |
 | `pointer_files` | string list | `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` |
 | `driver_command` | string | empty (off) |
 | `learnings_cap` | integer | `12` |
@@ -207,7 +207,7 @@ any `!`-negated), `stages` (stage names, in order) and `end_after_dry_rounds` (d
 fields the tool reports (`claude` reports cost, tokens and turns; `codex`, `amp` and `qwen` report
 tokens) and its `turn_cap`: `flag` fills `{turns}` into the command, `config` needs the cap set in
 the tool's own config, `time` fills `{timeout}` in place of a turn count, and `none` caps nothing,
-so the stage needs its own `timeout`.
+so the stage needs its own `timeout`; `{harness_dir}` and `{context_file}` fill from `[layout]`, and `claude` passes `--append-system-prompt-file {context_file}`.
 
 ## Skills
 
@@ -237,7 +237,7 @@ each carries the stage, task, gate or probe it names and its reason or result.
 | `.enallagi/RAILS.md`, `.enallagi/.gitignore` | the rails, each naming its enforcement, always resubstituted; the ignore file for the harness's own scratch state |
 | `<skills_dir>/running-the-loop/{SKILL.md,references/task-block.md}` | the harness's own usage skill, in the preset's skill directory (`.claude/skills/` by default) |
 | `.enallagi/{harness.toml,TASKS.md,PROGRESS.md,LEARNINGS.md,DECISIONS.md,.check-baseline,SPEC.md,evals/README.md}` | seeded once and never overwritten once present: the answers from the embedded defaults, the queue, the append-only record, the rules, the archive, the inherited red, the spec under the heading `layout.rows_heading` names, the eval runner's documentation |
-| `AGENTS.md`; `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | seeded once: the context file every role reads first; one-line pointers to it, from `layout.pointer_files` |
+| `.enallagi/AGENTS.md`; `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | seeded once: the context file every role reads first (`layout.context_file`); one-line pointers to it, from `layout.pointer_files` and the `--adapter` preset's `instruction_file`, written only for a preset with no `{context_file}` in its argv and never over a tracked file |
 
 `--adapter <preset>` adds the tool-specific parts: `.claude/agents/` and `.claude/settings.json` (hooks,
 `Monitor` denied, commit and PR `attribution` empty) for `claude`; for a preset whose `hooks_file` is set

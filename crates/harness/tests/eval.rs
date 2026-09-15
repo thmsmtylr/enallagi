@@ -161,6 +161,32 @@ fn the_eval_runner_fails_a_role_that_breaks_its_rule() {
 }
 
 #[test]
+fn an_eval_agent_argv_carries_the_fixtures_harness_directory_and_context_file() {
+    let pkg = package();
+    write_eval(
+        pkg.path(),
+        "case",
+        "do the thing",
+        "true",
+        r#"[ "$(cat args.txt)" = ".enallagi .enallagi/AGENTS.md" ]"#,
+        None,
+    );
+    let stub = pkg.path().join("args.sh");
+    write_exec(&stub, "printf '%s %s\\n' \"$1\" \"$2\" >args.txt\n");
+
+    let r = run_eval(
+        pkg.path(),
+        &format!(
+            "{} {{harness_dir}} {{context_file}} {{prompt}}",
+            stub.display()
+        ),
+        &["case"],
+    );
+    assert_eq!(r.code, 0, "stdout={} stderr={}", r.stdout, r.stderr);
+    assert_eq!(last_line(&r.stdout), "EVAL case PASS");
+}
+
+#[test]
 fn with_no_agent_configured_the_evals_refuse_rather_than_report() {
     let pkg = package();
     write_eval(pkg.path(), "case", "do the thing", "true", "true", None);

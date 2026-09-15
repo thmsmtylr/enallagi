@@ -376,11 +376,16 @@ pub fn load(root: &Path) -> Result<Config, ConfigError> {
             });
         }
     }
-    base.try_into()
+    let mut cfg: Config = base
+        .try_into()
         .map_err(|e: toml::de::Error| ConfigError::Parse {
             path: "harness.toml".to_string(),
             message: e.to_string(),
-        })
+        })?;
+    if cfg.layout.context_file.is_empty() {
+        cfg.layout.context_file = instance_rel(root, &cfg.layout.harness_dir, "AGENTS.md");
+    }
+    Ok(cfg)
 }
 
 fn parse_toml(text: &str, path: &str) -> Result<toml::Value, ConfigError> {
@@ -878,6 +883,7 @@ mod tests {
         paths.push(root.join(crate::gates::role_file(&cfg, "implementer")));
         paths.push(root.join(crate::probes::common::rails_file(&cfg)));
         paths.push(root.join(crate::skills::skills_dir(&cfg, None)));
+        paths.push(root.join(&cfg.layout.context_file));
         for path in paths {
             assert!(path.starts_with(root.join(dir)), "{}", path.display());
         }
@@ -895,6 +901,7 @@ mod tests {
             crate::skills::lock_path(root, ".enallagi"),
             instance_path(root, "", "harness.lock")
         );
+        assert_eq!(load(root).unwrap().layout.context_file, "AGENTS.md");
 
         std::fs::create_dir(root.join(".enallagi")).unwrap();
         std::fs::write(root.join(".enallagi/TASKS.md"), "").unwrap();
@@ -1074,6 +1081,10 @@ mod tests {
         let c = load(d.path()).unwrap();
         assert_eq!(c.layout.spec, "DESIGN.md");
         assert_eq!(c.layout.harness_dir, ".enallagi", "untouched keys survive");
+        assert_eq!(c.layout.context_file, ".enallagi/AGENTS.md");
+
+        write_config(d.path(), "[layout]\ncontext_file = 'DOCS.md'\n");
+        assert_eq!(load(d.path()).unwrap().layout.context_file, "DOCS.md");
         assert_eq!(c.stage.len(), 1);
         assert_eq!(c.stage[0].name, "only");
         assert_eq!(c.stage[0].turns, 40, "the per-stage default");

@@ -90,6 +90,10 @@ fn run_script(script: &Path, cwd: &Path, pkg: Option<&Path>) -> bool {
 }
 
 fn run_agent(argv: &[String], prompt: &str, cwd: &Path) -> bool {
+    let argv = match config::load(cwd) {
+        Ok(cfg) => agent::fill_layout(argv, &cfg.layout),
+        Err(_) => return false,
+    };
     let words: Vec<String> = argv
         .iter()
         .map(|w| w.replace("{prompt}", prompt).replace("{turns}", "40"))

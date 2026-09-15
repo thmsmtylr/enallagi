@@ -1,6 +1,6 @@
 //! Adapter presets: one static TOML file per supported coding agent, embedded into the binary and parsed on demand.
 
-use crate::config::AgentConfig;
+use crate::config::{AgentConfig, Layout};
 use crate::events::{Kind, Writer};
 use regex::Regex;
 use std::collections::BTreeMap;
@@ -177,6 +177,16 @@ pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resol
     }
     preset.argv.clone_from(&argv);
     Ok(Resolved { argv, preset })
+}
+
+// substituted before {prompt}, so a prompt that quotes either token reaches the agent verbatim
+pub fn fill_layout(argv: &[String], layout: &Layout) -> Vec<String> {
+    argv.iter()
+        .map(|word| {
+            word.replace("{harness_dir}", &layout.harness_dir)
+                .replace("{context_file}", &layout.context_file)
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
