@@ -19,14 +19,17 @@ sudo mv harness-aarch64-apple-darwin /usr/local/bin/harness
 Or from source: `cargo install --locked --git https://github.com/thmsmtylr/enallagi harness`. Then:
 
 ```bash
-harness init                    # writes harness.toml, seeds the documents from defaults
-$EDITOR harness.toml            # agent.preset, check.command, layout.spec
+harness init                    # writes .enallagi/harness.toml, seeds the documents from defaults
+$EDITOR .enallagi/harness.toml  # agent.preset, check.command, layout.spec
 harness init                    # re-run: substitutes the edited answers
 harness init --adapter claude   # optional: writes .claude/agents/ and the hook wiring
 ```
 
-`harness init` prints the exact `git add` line for everything it wrote; `verdict` counts an
-untracked path as work off the branch. `--dry-run` prints the plan without writing it.
+Every file the harness owns lives in one directory, `.enallagi/` (`layout.harness_dir`); init writes
+outside it only `AGENTS.md`, `layout.pointer_files` and the `--adapter` tool's files. A root
+`TASKS.md` or a `.harness/` keeps its layout: `harness init` lists each file with its new path, and
+`--move` moves them and installs nothing. `harness init` prints the `git add` line for what it wrote
+(`verdict` counts an untracked path as work off the branch); `--dry-run` writes nothing.
 
 ## What a run does
 
@@ -230,14 +233,11 @@ each carries the stage, task, gate or probe it names and its reason or result.
 
 | Path | What |
 | --- | --- |
-| `harness.toml` | seeded once from the embedded defaults; never overwritten once present |
 | `.enallagi/roles/{scout,adjudicator,implementer,verifier,researcher}.md` | the five role prompts, always resubstituted |
-| `.enallagi/RAILS.md` | the rails, each naming its enforcement, always resubstituted |
-| `.enallagi/.gitignore` | ignores the harness's own scratch state |
+| `.enallagi/RAILS.md`, `.enallagi/.gitignore` | the rails, each naming its enforcement, always resubstituted; the ignore file for the harness's own scratch state |
 | `<skills_dir>/running-the-loop/{SKILL.md,references/task-block.md}` | the harness's own usage skill, in the preset's skill directory (`.claude/skills/` by default) |
-| `TASKS.md`, `PROGRESS.md`, `LEARNINGS.md`, `DECISIONS.md`, `.check-baseline`, `AGENTS.md`, `SPEC.md` | seeded once: the queue, the append-only record, the rules, the archive, the inherited red, the context file every role reads first, the spec under the heading `layout.rows_heading` names |
-| `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | one-line pointers to `AGENTS.md`, from `layout.pointer_files` |
-| `evals/README.md` | the eval runner's own documentation |
+| `.enallagi/{harness.toml,TASKS.md,PROGRESS.md,LEARNINGS.md,DECISIONS.md,.check-baseline,SPEC.md,evals/README.md}` | seeded once and never overwritten once present: the answers from the embedded defaults, the queue, the append-only record, the rules, the archive, the inherited red, the spec under the heading `layout.rows_heading` names, the eval runner's documentation |
+| `AGENTS.md`; `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | seeded once: the context file every role reads first; one-line pointers to it, from `layout.pointer_files` |
 
 `--adapter <preset>` adds the tool-specific parts: `.claude/agents/` and `.claude/settings.json` (hooks,
 `Monitor` denied, commit and PR `attribution` empty) for `claude`; for a preset whose `hooks_file` is set

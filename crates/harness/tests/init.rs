@@ -74,11 +74,11 @@ fn walk(root: &Path) -> Vec<PathBuf> {
 fn init_exits_0_on_a_fresh_repo() {
     let repo = Repo::new();
     let report = install(&repo);
-    assert!(repo.root.join("harness.toml").is_file());
+    assert!(repo.root.join(".enallagi/harness.toml").is_file());
     assert!(repo.root.join(".enallagi/RAILS.md").is_file());
     assert!(!repo.root.join(".harness").exists());
-    assert!(report.wrote.contains(&"harness.toml".to_string()));
-    for path in ["harness.toml", ".enallagi", "TASKS.md", "evals"] {
+    assert!(report.wrote.contains(&".enallagi/harness.toml".to_string()));
+    for path in [".enallagi", "AGENTS.md"] {
         assert!(
             report.track.contains(&path.to_string()),
             "{:?}",
@@ -219,7 +219,10 @@ fn the_context_file_is_resynced_to_the_configured_check() {
     let repo = Repo::new();
     install(&repo);
     assert!(read(&repo, "AGENTS.md").contains("`bun run check`"));
-    repo.write("harness.toml", "[check]\ncommand = \"make check\"\n");
+    repo.write(
+        ".enallagi/harness.toml",
+        "[check]\ncommand = \"make check\"\n",
+    );
     install(&repo);
     let context = read(&repo, "AGENTS.md");
     assert!(context.contains("`make check`"), "{context:.400}");
@@ -251,7 +254,7 @@ fn an_installed_file_that_drifted_from_its_source_is_reported() {
     );
 
     // a document the project has edited is not drift: seed never overwrites one
-    repo.write("TASKS.md", "# my own queue\n");
+    repo.write(".enallagi/TASKS.md", "# my own queue\n");
     assert_eq!(stale(&repo).len(), 2);
 
     install(&repo);
@@ -266,7 +269,7 @@ fn init_migrates_harness_json_and_prints_each_renamed_key() {
         r#"{"check": "make check", "spec": "DESIGN.md", "harnessDir": ".enallagi"}"#,
     );
     let report = install(&repo);
-    assert!(read(&repo, "harness.toml").contains("make check"));
+    assert!(read(&repo, ".enallagi/harness.toml").contains("make check"));
     assert!(repo.root.join("harness.json.migrated").is_file());
     assert!(!repo.root.join("harness.json").exists());
     assert!(
@@ -283,7 +286,7 @@ fn init_migrates_harness_json_and_prints_each_renamed_key() {
         "{:?}",
         report.migrated_keys
     );
-    assert!(repo.root.join("DESIGN.md").is_file());
+    assert!(repo.root.join(".enallagi/DESIGN.md").is_file());
 }
 
 #[test]
@@ -493,4 +496,96 @@ fn the_seeded_documents_state_rules_and_do_not_argue() {
         }
     }
     assert!(offences.is_empty(), "{}", offences.join("\n"));
+}
+
+#[test]
+fn init_plans_every_instance_file_under_the_harness_directory() {
+    let repo = Repo::new();
+    let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
+    let entry_points = [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "GEMINI.md",
+        "QWEN.md",
+        ".github/copilot-instructions.md",
+        ".claude/settings.json",
+    ];
+    let paths: Vec<&str> = planned.iter().map(|(path, _)| path.as_str()).collect();
+    for path in &paths {
+        assert!(
+            path.starts_with(".enallagi/")
+                || entry_points.contains(path)
+                || path.starts_with(".claude/agents/")
+                || path.starts_with(".claude/skills/"),
+            "{path} is planned outside the harness directory"
+        );
+    }
+    for path in [
+        ".enallagi/harness.toml",
+        ".enallagi/TASKS.md",
+        ".enallagi/SPEC.md",
+        ".enallagi/evals/README.md",
+    ] {
+        assert!(paths.contains(&path), "{path} not planned: {paths:?}");
+    }
+}
+
+const ROOT_LAYOUT: &[(&str, &str)] = &[
+    ("TASKS.md", "# TASKS\n"),
+    ("PROGRESS.md", "# PROGRESS\n"),
+    ("SPEC.md", "# spec\n"),
+    ("harness.toml", "[check]\ncommand = \"true\"\n"),
+    (".harness/RAILS.md", "rails\n"),
+    (".harness/roles/scout.md", "scout\n"),
+];
+
+fn root_layout() -> Repo {
+    let repo = Repo::new();
+    for (rel, text) in ROOT_LAYOUT {
+        repo.write(rel, text);
+    }
+    repo
+}
+
+fn moved_to(rel: &str) -> String {
+    format!(".enallagi/{}", rel.trim_start_matches(".harness/"))
+}
+
+fn harness_init(repo: &Repo, args: &[&str]) -> String {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_harness"))
+        .arg("init")
+        .args(args)
+        .current_dir(&repo.root)
+        .output()
+        .expect("run harness init");
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+#[test]
+fn init_lists_each_root_and_legacy_instance_file_with_its_new_path_and_moves_nothing() {
+    let repo = root_layout();
+    let stdout = harness_init(&repo, &[]);
+    for (rel, _) in ROOT_LAYOUT {
+        let line = format!("{rel} -> {}", moved_to(rel));
+        assert!(stdout.contains(&line), "no `{line}` in:\n{stdout}");
+        assert!(repo.root.join(rel).is_file(), "{rel} was moved");
+    }
+    assert!(!repo.root.join(".enallagi").exists());
+}
+
+#[test]
+fn init_move_puts_every_listed_file_at_its_new_path_unchanged() {
+    let repo = root_layout();
+    let stdout = harness_init(&repo, &["--move"]);
+    for (rel, text) in ROOT_LAYOUT {
+        let new = moved_to(rel);
+        assert!(
+            stdout.contains(&format!("{rel} -> {new}")),
+            "{rel} not listed:\n{stdout}"
+        );
+        assert_eq!(read(&repo, &new), *text, "{new}");
+        assert!(!repo.root.join(rel).exists(), "{rel} remains");
+    }
+    assert!(!repo.root.join(".harness").exists());
 }

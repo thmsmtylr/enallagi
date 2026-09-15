@@ -158,7 +158,7 @@ fn the_launcher_parses_no_task_blocks_itself() {
 fn the_write_path_gate_installs_where_the_rules_are_written() {
     let repo = Repo::new();
     repo.init_harness("");
-    let readme = read(&repo.root.join("evals/README.md"));
+    let readme = read(&repo.root.join(".enallagi/evals/README.md"));
     assert!(readme.contains("harness eval --gate"), "{readme:.400}");
 
     // reachable, not merely documented: the gate must refuse this repo's own candidate rule

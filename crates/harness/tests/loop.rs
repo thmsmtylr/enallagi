@@ -1241,3 +1241,62 @@ fn a_harness_directory_layout_lands_a_task_through_one_stub_iteration() {
     assert!(r.root.join(".enallagi/harness.lock").is_file());
     assert!(harness::git::porcelain(&r.root).is_empty());
 }
+
+#[test]
+fn an_installed_repository_lands_a_task_and_changes_nothing_outside_the_harness_directory() {
+    let r = Repo::new();
+    harness::init::install(
+        &r.root,
+        &harness::init::InitOpts {
+            adapter: Some("claude".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("install");
+    script(&r, "src/fakecheck.sh", "exit 0\n");
+    script(&r, "src/fakeagent.sh", QUIET);
+    let implement = script(
+        &r,
+        "src/fakeimpl.sh",
+        &format!(
+            "echo work >src/thing.ts\n\
+             {bin} tasks set-status T-001 review 'stub implemented'\n\
+             echo 'iteration' >>.enallagi/PROGRESS.md\n\
+             git add -A >/dev/null 2>&1\n\
+             git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
+             {QUIET}",
+            bin = env!("CARGO_BIN_EXE_harness"),
+        ),
+    );
+    let verify = verifier(&r);
+    let toml = base_toml(&role_commands(&implement, &verify));
+    r.write(
+        ".enallagi/harness.toml",
+        &format!("{toml}{}", r.local_skills(&toml)),
+    );
+    r.write(".enallagi/TASKS.md", TASKS);
+    r.commit_all("installed");
+    let base = harness::git::git(&r.root, &["rev-parse", "HEAD"]).expect("HEAD");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(digest.landed, vec!["T-001".to_string()], "{events:#?}");
+    let changed =
+        harness::git::git(&r.root, &["diff", "--name-only", &base, "HEAD"]).expect("diff");
+    assert!(changed.lines().any(|p| p == "src/thing.ts"), "{changed}");
+    for path in changed.lines() {
+        assert!(
+            path.starts_with(".enallagi/") || path == "src/thing.ts",
+            "{path} changed outside the harness directory"
+        );
+    }
+    for name in [
+        "TASKS.md",
+        "PROGRESS.md",
+        "SPEC.md",
+        "harness.toml",
+        "harness.lock",
+    ] {
+        assert!(!r.root.join(name).exists(), "{name} is at the root");
+    }
+    assert!(harness::git::porcelain(&r.root).is_empty());
+}

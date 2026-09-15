@@ -88,6 +88,8 @@ pub struct InitReport {
     /// Everything else the operator has to read: advice on a kept file, and the
     /// adapters that write nothing.
     pub notes: Vec<String>,
+    /// `(old, new)` for every instance file outside the harness directory.
+    pub moves: Vec<(String, String)>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -111,6 +113,8 @@ pub enum InitError {
     InvalidJson { path: String, message: String },
     #[error("a token survived substitution, so harness.toml is missing a key: {}: {}", .0, .1.join(" "))]
     TokenSurvived(String, Vec<String>),
+    #[error("{0} already exists; move it aside, nothing is overwritten")]
+    MoveTarget(String),
     #[error("the leftover-token pattern does not compile ({0}); this is a defect in the binary")]
     BadPattern(String),
 }
@@ -128,6 +132,7 @@ pub fn planned_files(root: &Path, opts: &InitOpts) -> Result<Vec<(String, String
 
 pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
     let (plan, mut report) = prepare(root, opts)?;
+    report.moves = moves(root)?;
 
     // assert before the first write, so a missing token leaves no half-install
     let pattern = regex::Regex::new(TOKEN).map_err(|e| InitError::BadPattern(e.to_string()))?;
@@ -151,8 +156,8 @@ pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
     }
 
     // the old answers move aside only once the new file holds them, and only for the run that read them
-    let migrated = root.join("harness.json").is_file()
-        && report.wrote.iter().any(|path| path == "harness.toml");
+    let toml = config_rel(root);
+    let migrated = root.join("harness.json").is_file() && report.wrote.contains(&toml);
     if !opts.dry_run && migrated {
         let json = root.join("harness.json");
         fs::rename(&json, root.join("harness.json.migrated")).map_err(io(json.display()))?;
@@ -194,19 +199,20 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         plan.push(write(rel(&path), sub(text)));
     }
 
+    let at = |name: &str| config::instance_rel(root, &dir, name);
     seed(
         root,
         &mut plan,
         &mut report,
-        "evals/README.md",
+        &at("evals/README.md"),
         sub(EVALS_README),
     );
     for (name, text) in DOCS {
-        seed(root, &mut plan, &mut report, name, sub(text));
+        seed(root, &mut plan, &mut report, &at(name), sub(text));
     }
     seed_context(root, &mut plan, &mut report, &cfg, &sub);
 
-    let spec = cfg.layout.spec.clone();
+    let spec = at(&cfg.layout.spec);
     if has_content(&root.join(&spec)) {
         report.kept.push(spec.clone());
         report.notes.push(format!(
@@ -275,8 +281,100 @@ fn seed_config(
             .push("no harness.toml — seeding the defaults. Edit it, then re-run.".to_string());
         config::DEFAULT_TOML.to_string()
     };
-    plan.push(write("harness.toml".to_string(), text.clone()));
+    plan.push(write(config_rel(root), text.clone()));
     Ok(Some(text))
+}
+
+fn config_rel(root: &Path) -> String {
+    let path = config::config_path(root);
+    rel(path.strip_prefix(root).unwrap_or(&path))
+}
+
+const ROOT_INSTANCE_FILES: &[&str] = &[
+    "TASKS.md",
+    "PROGRESS.md",
+    "PROGRESS.archive.md",
+    "LEARNINGS.md",
+    "DECISIONS.md",
+    ".check-baseline",
+    "test-hashes.json",
+    "harness.lock",
+    "evals/README.md",
+];
+
+// a legacy directory is the one config::load substitutes when harness_dir is unset, so it differs from the default only then
+pub fn moves(root: &Path) -> Result<Vec<(String, String)>, InitError> {
+    let cfg = config::load(root)?;
+    let configured = fs::read_to_string(config::config_path(root))
+        .ok()
+        .and_then(|text| toml::from_str::<Value>(&text).ok())
+        .and_then(|v| Some(v.get("layout")?.get("harness_dir")?.as_str()?.to_string()));
+    let default = config_from("")?.layout.harness_dir;
+    let legacy = configured.is_none() && cfg.layout.harness_dir != default;
+    let dir = configured.unwrap_or(default);
+
+    let mut out = Vec::new();
+    if legacy {
+        let mut files = Vec::new();
+        files_under(root, &cfg.layout.harness_dir, &mut files);
+        files.sort();
+        for old in files {
+            let name = &old[cfg.layout.harness_dir.len() + 1..];
+            out.push((old.clone(), format!("{dir}/{name}")));
+        }
+    }
+    let root_toml = config::config_path(root) == root.join("harness.toml");
+    let names = ROOT_INSTANCE_FILES
+        .iter()
+        .copied()
+        .chain(["harness.toml", cfg.layout.spec.as_str()]);
+    for name in names {
+        let at_root = if name == "harness.toml" {
+            root_toml
+        } else {
+            config::instance_rel(root, &dir, name) == name
+        };
+        if at_root && root.join(name).is_file() {
+            out.push((name.to_string(), format!("{dir}/{name}")));
+        }
+    }
+    Ok(out)
+}
+
+fn files_under(root: &Path, dir: &str, out: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(root.join(dir)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = format!("{dir}/{}", entry.file_name().to_string_lossy());
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            files_under(root, &path, out);
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+// every destination is checked before the first rename, so a collision leaves the tree as it was
+pub fn relocate(root: &Path, moves: &[(String, String)]) -> Result<(), InitError> {
+    let mut seen = BTreeSet::new();
+    for (_, new) in moves {
+        if !seen.insert(new) || root.join(new).symlink_metadata().is_ok() {
+            return Err(InitError::MoveTarget(new.clone()));
+        }
+    }
+    for (old, new) in moves {
+        let (from, to) = (root.join(old), root.join(new));
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent).map_err(io(parent.display()))?;
+        }
+        fs::rename(&from, &to).map_err(io(from.display()))?;
+        let mut dir = from.parent();
+        while let Some(emptied) = dir.filter(|d| *d != root && fs::remove_dir(d).is_ok()) {
+            dir = emptied.parent();
+        }
+    }
+    Ok(())
 }
 
 // config::load reads a directory, so give the pending text a temporary one

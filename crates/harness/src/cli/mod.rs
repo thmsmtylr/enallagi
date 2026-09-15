@@ -36,6 +36,9 @@ pub enum Command {
         /// Print what would be written and write nothing
         #[arg(long)]
         dry_run: bool,
+        /// Move instance files at the repository root, or in a legacy .harness/, into the harness directory, and install nothing
+        #[arg(long = "move")]
+        move_files: bool,
     },
     /// Run the pipelines: a takeable task is implemented then verified; a task at review is verified; an empty queue runs the scout and adjudicator
     Run {
@@ -130,7 +133,15 @@ pub enum Command {
 
 pub fn run(cli: Cli) -> anyhow::Result<i32> {
     match cli.command {
-        Command::Init { adapter, dry_run } => init::run(&init::Args { adapter, dry_run }),
+        Command::Init {
+            adapter,
+            dry_run,
+            move_files,
+        } => init::run(&init::Args {
+            adapter,
+            dry_run,
+            move_files,
+        }),
         Command::Run {
             iterations,
             budget_usd,

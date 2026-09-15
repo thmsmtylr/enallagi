@@ -73,8 +73,8 @@ fn marker() -> String {
     format!("{}{}", "ponytail", ":")
 }
 
-fn append(repo: &Repo, rel: &str, text: &str) {
-    let path = repo.root.join(rel);
+fn append(repo: &Repo, name: &str, text: &str) {
+    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), name);
     let existing = fs::read_to_string(&path).unwrap_or_default();
     fs::write(&path, format!("{existing}{text}")).expect("append");
 }
@@ -270,9 +270,11 @@ fn and_two_frictions_that_merely_share_words_are_not_collapsed_into_it() {
     let out = render(&run(&repo, &cfg));
     assert_eq!(
         out.lines()
-            .filter(|l| l.starts_with("FINDING friction-repeat PROGRESS.md:")
-                && l.contains("recorded 2 times")
-                && l.contains("FIFTH sighting"))
+            .filter(
+                |l| l.starts_with("FINDING friction-repeat .enallagi/PROGRESS.md:")
+                    && l.contains("recorded 2 times")
+                    && l.contains("FIFTH sighting")
+            )
             .count(),
         1,
         "{out}"
@@ -476,13 +478,13 @@ fn a_row_with_a_slash_resolves_under_source_root_before_the_repo_root() {
         "[layout]\nsource_root = \"crate\"\ntest_file_suffix_re = '\\.rs'\ntest_decl_patterns = [\"fn {name}(\"]\n",
     );
     repo.write(
-        "SPEC.md",
+        ".enallagi/SPEC.md",
         "# SPEC\n\n## 11. Exit criteria\n\n| Criterion | Test |\n| --- | --- |\n| c | `tests/x.rs::t` |\n\n## 12. Notes\n",
     );
     let untested = |results: &[(String, ProbeResult)]| {
         render(results)
             .lines()
-            .filter(|l| l.starts_with("FINDING spec-untested SPEC.md:7 "))
+            .filter(|l| l.starts_with("FINDING spec-untested .enallagi/SPEC.md:7 "))
             .count()
     };
     assert_eq!(untested(&run(&repo, &cfg)), 1);
