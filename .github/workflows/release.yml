@@ -1,9 +1,10 @@
 # Cuts a GitHub release on a `v*` tag: the same four cross-compiled targets `cross-build` in
-# ci.yml proves compile, this time attached to a release along with a SHA256SUMS file.
+# ci.yml proves compile, this time attached to a release along with a SHA256SUMS file. A tag that
+# is not on main, or whose tree carries a dogfood instance, is refused before anything is built.
 #
 # Every `uses:` is pinned to a 40-character commit SHA with its tag in a trailing comment, the
-# same discipline ci.yml documents and `selftest.sh::every github action is pinned to a commit
-# sha` enforces. The SHAs were resolved 2026-09-08 with `gh api repos/<repo>/commits/<tag> --jq
+# same discipline ci.yml documents and `every_github_action_is_pinned_to_a_commit_sha`
+# (crates/harness/tests/floor.rs) enforces. The SHAs were resolved 2026-09-08 with `gh api repos/<repo>/commits/<tag> --jq
 # .sha`.
 name: release
 
@@ -27,12 +28,17 @@ jobs:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
+      - name: the tag is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: stable
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,x86_64-apple-darwin,aarch64-apple-darwin
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: the tag tracks no instance file
+        run: cargo test -p harness --test floor -- --include-ignored --exact main_tracks_no_instance_file
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: '0.13.0'

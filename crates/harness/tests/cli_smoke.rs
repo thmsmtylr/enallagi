@@ -108,3 +108,16 @@ fn events_on_an_empty_log_prints_nothing_and_exits_0() {
     assert_eq!(out.code, 0, "{}", out.stderr);
     assert_eq!(out.stdout, "");
 }
+
+#[test]
+fn version_names_the_crate_version() {
+    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .arg("--version")
+        .output()
+        .expect("run harness --version");
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        format!("harness {}", env!("CARGO_PKG_VERSION"))
+    );
+}

@@ -11,12 +11,12 @@ check command. Targets `x86_64` and `aarch64` on `linux-musl` and `apple-darwin`
 A tagged release publishes four static binaries and a `SHA256SUMS`:
 
 ```bash
-curl -LO https://github.com/<repo>/releases/latest/download/harness-aarch64-apple-darwin
+curl -LO https://github.com/thmsmtylr/enallagi/releases/latest/download/harness-aarch64-apple-darwin
 chmod +x harness-aarch64-apple-darwin
 sudo mv harness-aarch64-apple-darwin /usr/local/bin/harness
 ```
 
-Or from source: `cargo install --path crates/harness`. Then, in the repository to run it on:
+Or from source: `cargo install --locked --git https://github.com/thmsmtylr/enallagi harness`. Then:
 
 ```bash
 harness init                    # writes harness.toml, seeds the documents from defaults

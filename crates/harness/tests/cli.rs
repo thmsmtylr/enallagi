@@ -296,7 +296,11 @@ fn the_shipped_documents_describe_and_do_not_argue() {
     ];
     elsewhere.extend(cfg.layout.pointer_files.iter().cloned());
     for rel in &elsewhere {
-        for (i, line) in read(rel).lines().enumerate() {
+        // the installed copies exist only while a dogfood round is open
+        let Ok(text) = std::fs::read_to_string(root.join(rel)) else {
+            continue;
+        };
+        for (i, line) in text.lines().enumerate() {
             if ["34235", "2605.29668", "2602.11988", "agents.md"]
                 .iter()
                 .any(|cite| line.contains(cite))
@@ -318,10 +322,12 @@ fn the_shipped_documents_describe_and_do_not_argue() {
         check: Some(&green),
         driver: false,
     };
-    for (name, result) in harness::probes::run_all(&ctx, &["check-unnamed".to_string()]) {
-        match result {
-            harness::probes::ProbeResult::Count(found) if found.is_empty() => {}
-            other => offences.push(format!("{name}: {other:?}")),
+    if root.join(&cfg.layout.context_file).is_file() {
+        for (name, result) in harness::probes::run_all(&ctx, &["check-unnamed".to_string()]) {
+            match result {
+                harness::probes::ProbeResult::Count(found) if found.is_empty() => {}
+                other => offences.push(format!("{name}: {other:?}")),
+            }
         }
     }
     if !cfg.layout.docs.iter().any(|d| d == "test-hashes.json") {

@@ -1,6 +1,7 @@
 # `shell` lints the scripts that remain (driver.sh, docs/*.sh, adapters/bun-turbo/*.sh, evals/*.sh)
 # with bash -n, shellcheck at full severity, and `docs/bootstrap.sh --check` against the whole log.
-# `driver` runs the ignored test that drives the release binary through a real install. `skills`
+# `driver` runs the ignored test that drives the release binary through a real install. `package`
+# refuses a dogfood instance on main or in a pull request into it. `skills`
 # fetches every pinned skill from harness.lock and checks it against its pin. `rust` runs
 # fmt, clippy at -D warnings and the workspace test suite on both userlands. `cross-build` proves the
 # four release targets compile. Every `uses:` is pinned to a 40-character commit SHA with its tag in
@@ -65,6 +66,28 @@ jobs:
         env:
           HARNESS_DRIVER: '1'
         run: cargo test -p harness --test floor -- --include-ignored driver
+
+  # main is the published package. A dogfood instance, or a round with no strip commit, fails here on
+  # a push to main and on a pull request into it; dogfood/* branches carry the instance and skip.
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.base_ref == 'main'
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      # fetch-depth: 0 because the check reads the dogfood rounds out of the whole log
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: main tracks no instance file
+        run: cargo test -p harness --test floor -- --include-ignored --exact main_tracks_no_instance_file
 
   # The vendored skills are not in the tree: `sync` fetches them from harness.lock and `check`
   # refuses a pin whose vendored content no longer hashes to what the lock records, so a tag moved
