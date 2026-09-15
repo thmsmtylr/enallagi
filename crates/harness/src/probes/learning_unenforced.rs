@@ -17,10 +17,11 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let mut found = Vec::new();
-    for (at, text) in common::learning_entries(ctx.root)? {
+    let learnings = common::instance(ctx, "LEARNINGS.md");
+    for (at, text) in common::learning_entries(ctx)? {
         if !cites_something(&text)? {
             found.push(common::finding(
-                "LEARNINGS.md",
+                &learnings,
                 at,
                 format!(
                     "entry names no file, command or hook: {}",

@@ -75,7 +75,7 @@ fn a_declared_role_is_fetched_vendored_and_committed_before_its_stage() {
     assert_eq!(fs::read_to_string(&vendored).expect("vendored"), BODY);
 
     let tag_sha = harness::git::git(&upstream.root, &["rev-parse", "v1^{commit}"]).expect("sha");
-    let lock = skills::read_lock(&repo.root).expect("lock");
+    let lock = skills::read_lock(&repo.root, ".enallagi").expect("lock");
     assert!(lock.skill.is_empty());
     assert_eq!(lock.role.len(), 1);
     assert_eq!(lock.role[0].id, "implementer");
@@ -86,14 +86,14 @@ fn a_declared_role_is_fetched_vendored_and_committed_before_its_stage() {
     assert_eq!(lock.role[0].rev.as_deref(), Some("v1"));
     assert_eq!(lock.role[0].commit.as_deref(), Some(tag_sha.as_str()));
     assert_eq!(lock.role[0].sha256, sha256(BODY.as_bytes()));
-    let text = fs::read_to_string(repo.root.join("harness.lock")).expect("lock text");
+    let text = fs::read_to_string(repo.root.join(".enallagi/harness.lock")).expect("lock text");
     assert!(text.contains("[[role]]"), "{text}");
 
     let again =
         roles::resolve(&repo.root, &cfg, &names, &opts(&repo, false), &mut w).expect("again");
     assert_eq!(again[0].result, "cached");
     assert_eq!(
-        fs::read_to_string(repo.root.join("harness.lock")).expect("lock text"),
+        fs::read_to_string(repo.root.join(".enallagi/harness.lock")).expect("lock text"),
         text
     );
     let events = Log::open(&repo.root.join(".enallagi"))
@@ -190,7 +190,7 @@ fn an_undeclared_role_falls_back_to_the_installed_or_embedded_file() {
     run_once(&installed);
     let rendered = installed.root.join(".enallagi/run/roles/implementer.md");
     assert_eq!(fs::read_to_string(&rendered).expect("rendered"), BODY);
-    assert!(skills::read_lock(&installed.root)
+    assert!(skills::read_lock(&installed.root, ".enallagi")
         .expect("lock")
         .role
         .is_empty());
@@ -204,7 +204,7 @@ fn an_undeclared_role_falls_back_to_the_installed_or_embedded_file() {
         .root
         .join(".enallagi/roles/implementer.md")
         .exists());
-    assert!(skills::read_lock(&embedded.root)
+    assert!(skills::read_lock(&embedded.root, ".enallagi")
         .expect("lock")
         .role
         .is_empty());
@@ -214,7 +214,7 @@ fn an_undeclared_role_falls_back_to_the_installed_or_embedded_file() {
 fn the_immutable_hook_refuses_an_edit_to_a_vendored_role() {
     let repo = Repo::new();
     repo.write(
-        "harness.lock",
+        ".enallagi/harness.lock",
         "version = 1\n\n[[role]]\nid = \"implementer\"\nsource = \"path:vendor\"\nsha256 = \"ab\"\n",
     );
     let input = |path: &str| format!(r#"{{"tool_input":{{"file_path":"{path}"}}}}"#);

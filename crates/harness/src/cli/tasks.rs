@@ -167,9 +167,14 @@ fn fail(e: &QueueError) -> i32 {
 }
 
 fn file_arg(a: &[String], pos: usize, default: &str) -> PathBuf {
-    a.get(pos)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(default))
+    a.get(pos).map(PathBuf::from).unwrap_or_else(|| {
+        let root = Path::new(".");
+        // an unreadable config still finds a root-layout queue
+        let dir = crate::config::load(root)
+            .map(|cfg| cfg.layout.harness_dir)
+            .unwrap_or_default();
+        crate::config::instance_path(root, &dir, default)
+    })
 }
 
 fn read_text(path: &Path) -> Result<String, i32> {

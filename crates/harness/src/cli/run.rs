@@ -40,7 +40,11 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
 
     // exit code is read off the events, not threaded back through every return path
     let failed = Arc::new(AtomicBool::new(false));
-    let stop = root.join("STOP");
+    // a refused config is reported by pipeline::run; the root layout stands in until then
+    let dir = crate::config::load(&root)
+        .map(|cfg| cfg.layout.harness_dir)
+        .unwrap_or_default();
+    let stop = crate::config::instance_path(&root, &dir, "STOP");
     let outcome = if tui {
         let (tx, rx) = mpsc::channel::<Event>();
         let thread_root = root.clone();
@@ -57,7 +61,11 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 }),
             )
         });
-        let drawn = tui::run_live(rx, &root.join("TASKS.md"), &stop);
+        let drawn = tui::run_live(
+            rx,
+            &crate::config::instance_path(&root, &dir, "TASKS.md"),
+            &stop,
+        );
         if drawn.is_err() {
             let _ = std::fs::write(&stop, b"");
         }

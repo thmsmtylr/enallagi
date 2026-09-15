@@ -283,6 +283,14 @@ enum Flow {
 }
 
 impl<'a> Loop<'a> {
+    fn rel(&self, name: &str) -> String {
+        config::instance_rel(self.root, &self.cfg.layout.harness_dir, name)
+    }
+
+    fn file(&self, name: &str) -> PathBuf {
+        config::instance_path(self.root, &self.cfg.layout.harness_dir, name)
+    }
+
     fn go(&mut self) -> anyhow::Result<Digest> {
         self.needs_spec_at_start = self.ids_at("needs-spec");
         self.emit(Kind::RunStart {
@@ -291,7 +299,7 @@ impl<'a> Loop<'a> {
         });
 
         // a backticked mention is prose about the marker; only a bare one halts the run
-        if let Some(lines) = clarifications(self.root, &self.cfg.layout.spec) {
+        if let Some(lines) = clarifications(&self.file(&self.cfg.layout.spec)) {
             self.halt(
                 "clarification",
                 format!(
@@ -369,7 +377,7 @@ impl<'a> Loop<'a> {
         let rejections_before = self.rejections();
         let takeable = gates::takeable(self.root, self.cfg);
         let iter_base = git::head(self.root);
-        let progress_before = file_len(&self.root.join("PROGRESS.md"));
+        let progress_before = file_len(&self.file("PROGRESS.md"));
 
         // fires only after a discovery round already found nothing takeable; attended:true blocks alone are the ordinary human-wait state
         if takeable.is_none() && self.dry_rounds >= 1 {
@@ -488,7 +496,7 @@ impl<'a> Loop<'a> {
             .ok()
             .filter(|s| !s.is_empty())
             .or_else(|| git::head(self.root));
-        let stop_file = self.root.join("STOP");
+        let stop_file = self.file("STOP");
         let result = match agent::spawn(&spawn, &mut self.writer, &stop_file, &self.rate_limit) {
             Ok(result) => result,
             Err(err) => {
@@ -697,7 +705,7 @@ impl<'a> Loop<'a> {
         if vendored.is_empty() || !self.vendored_dirty(&vendored) {
             return Ok(());
         }
-        let mut paths = vec!["harness.lock".to_string()];
+        let mut paths = vec![self.rel("harness.lock")];
         for (_, path, _) in &vendored {
             if let Ok(rel) = path.strip_prefix(self.root) {
                 paths.push(rel.to_string_lossy().to_string());
@@ -720,9 +728,10 @@ impl<'a> Loop<'a> {
         if vendored.iter().any(|(_, _, result)| *result == "fetched") {
             return true;
         }
+        let lock = self.rel("harness.lock");
         git::porcelain(self.root).iter().any(|line| {
             let path = line.get(3..).unwrap_or("");
-            path == "harness.lock"
+            path == lock
                 || vendored.iter().any(|(_, dir, _)| {
                     dir.strip_prefix(self.root)
                         .map(|rel| path.starts_with(rel.to_string_lossy().as_ref()))
@@ -761,7 +770,7 @@ impl<'a> Loop<'a> {
         if self.stopped {
             return true;
         }
-        if self.root.join("STOP").is_file() {
+        if self.file("STOP").is_file() {
             self.halt("stop", "STOP file found, exiting.".to_string());
             return true;
         }
@@ -904,7 +913,7 @@ impl<'a> Loop<'a> {
         }
         // the entry is all the next iteration inherits, so the launcher writes the facts it has
         // rather than warning that a role left none -- a verify-only round has no other record
-        if file_len(&self.root.join("PROGRESS.md")) <= progress_before {
+        if file_len(&self.file("PROGRESS.md")) <= progress_before {
             self.progress_stub(task, pipeline, status.as_deref());
         }
     }
@@ -922,7 +931,7 @@ impl<'a> Loop<'a> {
             iter = self.writer.iter,
             stages = pipeline.stages.join(", "),
         );
-        let path = self.root.join("PROGRESS.md");
+        let path = self.file("PROGRESS.md");
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
         if let Err(err) = std::fs::write(&path, format!("{existing}{entry}")) {
             self.digest
@@ -932,7 +941,7 @@ impl<'a> Loop<'a> {
         }
         if let Err(err) = git::commit_paths(
             self.root,
-            &["PROGRESS.md"],
+            &[&self.rel("PROGRESS.md")],
             &format!("chore(progress): {task} iteration {}", self.writer.iter),
         ) {
             self.digest.warnings.push(format!(
@@ -943,7 +952,7 @@ impl<'a> Loop<'a> {
 
     fn unblock(&mut self) {
         let queue = Queue {
-            path: self.root.join("TASKS.md"),
+            path: self.file("TASKS.md"),
         };
         let text = match queue.read() {
             Ok(text) => text,
@@ -965,7 +974,7 @@ impl<'a> Loop<'a> {
     }
 
     fn blocks(&self) -> Vec<queue::Block> {
-        let path = self.root.join("TASKS.md");
+        let path = self.file("TASKS.md");
         std::fs::read_to_string(path)
             .ok()
             .and_then(|t| queue::parse(&t).ok())
@@ -991,7 +1000,7 @@ impl<'a> Loop<'a> {
     }
 
     fn rejections(&self) -> Vec<String> {
-        std::fs::read_to_string(self.root.join("DECISIONS.md"))
+        std::fs::read_to_string(self.file("DECISIONS.md"))
             .map(|t| queue::rejections(&t))
             .unwrap_or_default()
     }
@@ -1072,8 +1081,8 @@ fn round4(value: f64) -> f64 {
     (value * 10_000.0).round() / 10_000.0
 }
 
-fn clarifications(root: &Path, spec: &str) -> Option<Vec<String>> {
-    let text = std::fs::read_to_string(root.join(spec)).ok()?;
+fn clarifications(spec: &Path) -> Option<Vec<String>> {
+    let text = std::fs::read_to_string(spec).ok()?;
     let hits: Vec<String> = text
         .lines()
         .enumerate()
@@ -1092,9 +1101,13 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
         Predicate::QueueTakeable => gates::takeable(root, cfg).is_some(),
         // an unreadable or unparseable queue is not evidence of a task at review, so this fails closed like `takeable`
         Predicate::QueueReviewing => {
-            match std::fs::read_to_string(root.join("TASKS.md"))
-                .map_err(|e| e.to_string())
-                .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
+            match std::fs::read_to_string(config::instance_path(
+                root,
+                &cfg.layout.harness_dir,
+                "TASKS.md",
+            ))
+            .map_err(|e| e.to_string())
+            .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
             {
                 Ok(blocks) => !queue::ids_at(&blocks, "review").is_empty(),
                 Err(err) => {
@@ -1107,9 +1120,13 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
         }
         // an unreadable or unparseable queue is not evidence the queue is empty, so this fails closed like `takeable`
         Predicate::QueueEmpty => {
-            match std::fs::read_to_string(root.join("TASKS.md"))
-                .map_err(|e| e.to_string())
-                .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
+            match std::fs::read_to_string(config::instance_path(
+                root,
+                &cfg.layout.harness_dir,
+                "TASKS.md",
+            ))
+            .map_err(|e| e.to_string())
+            .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
             {
                 Ok(blocks) => blocks.is_empty(),
                 Err(err) => {
@@ -1121,10 +1138,14 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
             }
         }
         Predicate::TaskAttended => {
-            let blocks = std::fs::read_to_string(root.join("TASKS.md"))
-                .ok()
-                .and_then(|t| queue::parse(&t).ok())
-                .unwrap_or_default();
+            let blocks = std::fs::read_to_string(config::instance_path(
+                root,
+                &cfg.layout.harness_dir,
+                "TASKS.md",
+            ))
+            .ok()
+            .and_then(|t| queue::parse(&t).ok())
+            .unwrap_or_default();
             blocks
                 .iter()
                 .find(|b| queue::field(b, "status").as_deref() == Some("ready"))
@@ -1165,7 +1186,7 @@ const NEVER_RAN: &str = "the check could not be run:";
 fn config_sha256(root: &Path) -> String {
     let mut hasher = Sha256::new();
     hasher.update(config::DEFAULT_TOML.as_bytes());
-    if let Ok(text) = std::fs::read_to_string(root.join("harness.toml")) {
+    if let Ok(text) = std::fs::read_to_string(config::config_path(root)) {
         hasher.update(text.as_bytes());
     }
     hasher

@@ -557,6 +557,10 @@ mod tests {
         assert!(seconds_until_reset("resets 12:40am (Mars/Olympus)", now).is_none());
     }
 
+    fn stop_file(root: &std::path::Path) -> std::path::PathBuf {
+        crate::config::instance_path(root, ".enallagi", "STOP")
+    }
+
     fn spawner<'a>(argv: Vec<String>, root: &'a std::path::Path) -> StageSpawn<'a> {
         StageSpawn {
             argv,
@@ -583,7 +587,7 @@ mod tests {
         let res = spawn(
             &s,
             &mut w,
-            &r.root.join("STOP"),
+            &stop_file(&r.root),
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -612,7 +616,7 @@ mod tests {
         let res = spawn(
             &spawner(argv, &r.root),
             &mut w,
-            &r.root.join("STOP"),
+            &stop_file(&r.root),
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -629,7 +633,7 @@ mod tests {
         let res = spawn(
             &s,
             &mut w,
-            &r.root.join("STOP"),
+            &stop_file(&r.root),
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -640,13 +644,14 @@ mod tests {
     #[test]
     fn a_stop_file_during_the_limit_wait_stops_the_run() {
         let r = crate::fixture::Repo::new();
-        std::fs::write(r.root.join("STOP"), "").unwrap();
+        std::fs::create_dir_all(stop_file(&r.root).parent().unwrap()).unwrap();
+        std::fs::write(stop_file(&r.root), "").unwrap();
         let argv = r.stub_agent(&limit_notice("1M", "+1 minute"));
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let err = spawn(
             &spawner(argv, &r.root),
             &mut w,
-            &r.root.join("STOP"),
+            &stop_file(&r.root),
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap_err();
@@ -680,7 +685,7 @@ mod tests {
         let res = spawn(
             &spawner(argv, &r.root),
             &mut w,
-            &r.root.join("STOP"),
+            &stop_file(&r.root),
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap();
@@ -715,7 +720,7 @@ mod tests {
         let res = spawn(
             &s,
             &mut w,
-            &r.root.join("STOP"),
+            &stop_file(&r.root),
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -730,7 +735,7 @@ mod tests {
         let res = spawn(
             &spawner(argv, &r.root),
             &mut w,
-            &r.root.join("STOP"),
+            &stop_file(&r.root),
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap();

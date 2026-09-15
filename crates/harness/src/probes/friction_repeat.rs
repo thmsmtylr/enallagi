@@ -37,11 +37,10 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 
 // ponytail: each group compares only to its first member, so an A-B-C chain whose ends don't overlap stays two groups
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
+    let progress = common::instance(ctx, "PROGRESS.md");
+    let learnings = common::instance(ctx, "LEARNINGS.md");
     let mut groups: Vec<Group> = Vec::new();
-    for (index, line) in common::lines_of(ctx.root, "PROGRESS.md")?
-        .iter()
-        .enumerate()
-    {
+    for (index, line) in common::lines_of(ctx.root, &progress)?.iter().enumerate() {
         let Some(rest) = line.strip_prefix("friction:") else {
             continue;
         };
@@ -64,8 +63,8 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     }
 
     // ponytail: coverage is per-line word-set containment; a rule or kill line that paraphrases every word escapes it
-    let mut coverage: Vec<BTreeSet<String>> = if common::exists(ctx.root, "LEARNINGS.md") {
-        common::lines_of(ctx.root, "LEARNINGS.md")?
+    let mut coverage: Vec<BTreeSet<String>> = if common::exists(ctx.root, &learnings) {
+        common::lines_of(ctx.root, &learnings)?
             .iter()
             .filter(|l| l.starts_with("- "))
             .map(|l| words(l))
@@ -94,7 +93,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         .filter_map(|group| {
             let last = group.hits.last()?;
             Some(common::finding(
-                "PROGRESS.md",
+                &progress,
                 last.0,
                 format!(
                     "the same friction is recorded {} times and no LEARNINGS.md rule or dated kill line covers it: {}",

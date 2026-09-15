@@ -256,7 +256,7 @@ fn seed_config(
     plan: &mut Vec<Planned>,
     report: &mut InitReport,
 ) -> Result<Option<String>, InitError> {
-    if has_content(&root.join("harness.toml")) {
+    if has_content(&config::config_path(root)) {
         return Ok(None);
     }
     let json = root.join("harness.json");
@@ -282,7 +282,10 @@ fn seed_config(
 // config::load reads a directory, so give the pending text a temporary one
 fn config_from(text: &str) -> Result<Config, InitError> {
     let dir = tempfile::TempDir::new().map_err(io("a temporary directory"))?;
-    let path = dir.path().join("harness.toml");
+    let path = config::config_path(dir.path());
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(io(parent.display()))?;
+    }
     fs::write(&path, text).map_err(io(path.display()))?;
     Ok(config::load(dir.path())?)
 }

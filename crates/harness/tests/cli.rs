@@ -207,7 +207,7 @@ fn skills_sync_works_under_a_custom_preset_which_has_no_directory_of_its_own() {
         .expect("run harness skills sync");
     assert!(out.status.success(), "{out:?}");
     assert!(root.join(".enallagi/skills/tdd/SKILL.md").is_file());
-    assert!(root.join("harness.lock").is_file());
+    assert!(root.join(".enallagi/harness.lock").is_file());
 }
 
 #[test]
@@ -257,7 +257,7 @@ fn skills_check_refuses_what_sync_then_locks() {
         .lines()
         .any(|l| l == "tdd  fetched"));
     assert!(root.join(".claude/skills/tdd/SKILL.md").is_file());
-    assert!(root.join("harness.lock").is_file());
+    assert!(root.join(".enallagi/harness.lock").is_file());
 
     let out = harness(&["skills", "check"]);
     assert!(out.status.success(), "{out:?}");

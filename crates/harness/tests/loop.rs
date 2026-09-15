@@ -707,7 +707,7 @@ fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
     assert!(ls.contains("harness.lock"), "{ls}");
     assert!(ls.contains(".enallagi/skills/tdd/SKILL.md"), "{ls}");
     assert!(ls.contains(".enallagi/roles/implementer.md"), "{ls}");
-    let lock = harness::skills::read_lock(&r.root).expect("lock");
+    let lock = harness::skills::read_lock(&r.root, ".enallagi").expect("lock");
     assert_eq!(lock.role.len(), 1, "{lock:?}");
     assert_eq!(lock.role[0].id, "implementer");
 }
@@ -1169,4 +1169,75 @@ fn an_uncommitted_implementer_note_saying_minor_is_not_read_as_the_verdicts() {
         ),
     );
     a_clean_verdict_after_the_implementer(&r, &implement);
+}
+
+#[test]
+fn a_root_layout_repository_lands_a_task_through_one_stub_iteration() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let (digest, _) = go(&r, &opts(1));
+    assert_eq!(digest.landed, vec!["T-001".to_string()]);
+    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    assert!(tasks.contains("status: done"), "{tasks}");
+    assert!(!r.root.join(".enallagi/TASKS.md").exists());
+    assert!(harness::git::porcelain(&r.root).is_empty());
+}
+
+#[test]
+fn a_harness_directory_layout_lands_a_task_through_one_stub_iteration() {
+    let r = Repo::new();
+    r.write(
+        ".enallagi/.gitignore",
+        "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\n",
+    );
+    script(&r, "src/fakecheck.sh", "exit 0\n");
+    script(&r, "src/fakeagent.sh", QUIET);
+    r.write(".enallagi/TASKS.md", TASKS);
+    r.write(".enallagi/SPEC.md", "# spec\n");
+    r.write(".enallagi/PROGRESS.md", "# progress\n");
+    let implement = script(
+        &r,
+        "src/fakeimpl.sh",
+        &format!(
+            "echo work >src/thing.ts\n\
+             {bin} tasks set-status T-001 review 'stub implemented'\n\
+             echo 'iteration' >>.enallagi/PROGRESS.md\n\
+             git add -A >/dev/null 2>&1\n\
+             git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
+             {QUIET}",
+            bin = env!("CARGO_BIN_EXE_harness"),
+        ),
+    );
+    let verify = verifier(&r);
+    let toml = base_toml(&role_commands(&implement, &verify));
+    r.write(
+        ".enallagi/harness.toml",
+        &format!("{toml}{}", r.local_skills(&toml)),
+    );
+    r.commit_all("stubs");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(digest.landed, vec!["T-001".to_string()], "{events:#?}");
+    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
+    assert!(tasks.contains("status: done"), "{tasks}");
+    for name in [
+        "TASKS.md",
+        "PROGRESS.md",
+        "DECISIONS.md",
+        "SPEC.md",
+        "harness.toml",
+        "harness.lock",
+    ] {
+        assert!(
+            !r.root.join(name).exists(),
+            "{name} was written at the root"
+        );
+    }
+    assert!(r.root.join(".enallagi/harness.lock").is_file());
+    assert!(harness::git::porcelain(&r.root).is_empty());
 }

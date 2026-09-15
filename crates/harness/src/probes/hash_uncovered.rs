@@ -12,10 +12,11 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let rails = common::rails_file(ctx.cfg);
-    let keys: Option<Vec<String>> = if common::exists(ctx.root, HASHES) {
-        let text = common::read(ctx.root, HASHES)?;
+    let hashes = common::instance(ctx, HASHES);
+    let keys: Option<Vec<String>> = if common::exists(ctx.root, &hashes) {
+        let text = common::read(ctx.root, &hashes)?;
         let value: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| format!("{HASHES}: {e}"))?;
+            serde_json::from_str(&text).map_err(|e| format!("{hashes}: {e}"))?;
         Some(
             value
                 .as_object()
@@ -45,7 +46,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
                     &rails,
                     row.line,
                     format!(
-                        "{rail} names {token} and {HASHES} does not exist, so the rail covers nothing"
+                        "{rail} names {token} and {hashes} does not exist, so the rail covers nothing"
                     ),
                 )),
                 Some(keys) => {
@@ -56,7 +57,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
                         found.push(common::finding(
                             &rails,
                             row.line,
-                            format!("{rail} names {token} and {HASHES} has no key for it"),
+                            format!("{rail} names {token} and {hashes} has no key for it"),
                         ));
                     }
                 }

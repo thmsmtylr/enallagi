@@ -60,8 +60,8 @@ impl Default for Lock {
     }
 }
 
-pub fn lock_path(root: &Path) -> PathBuf {
-    root.join("harness.lock")
+pub fn lock_path(root: &Path, harness_dir: &str) -> PathBuf {
+    crate::config::instance_path(root, harness_dir, "harness.lock")
 }
 
 pub fn parse_lock(text: &str) -> Result<Lock, SkillError> {
@@ -69,8 +69,8 @@ pub fn parse_lock(text: &str) -> Result<Lock, SkillError> {
 }
 
 // a missing lock reads as empty, but an unparseable one is an error -- silently re-fetching over a corrupt pin defeats the pin
-pub fn read_lock(root: &Path) -> Result<Lock, SkillError> {
-    let text = match fs::read_to_string(lock_path(root)) {
+pub fn read_lock(root: &Path, harness_dir: &str) -> Result<Lock, SkillError> {
+    let text = match fs::read_to_string(lock_path(root, harness_dir)) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Lock::default()),
         Err(e) => return Err(e.into()),
@@ -78,12 +78,12 @@ pub fn read_lock(root: &Path) -> Result<Lock, SkillError> {
     parse_lock(&text)
 }
 
-pub fn write_lock(root: &Path, lock: &Lock) -> Result<(), SkillError> {
+pub fn write_lock(root: &Path, harness_dir: &str, lock: &Lock) -> Result<(), SkillError> {
     let mut lock = lock.clone();
     lock.skill.sort_by(|a, b| a.id.cmp(&b.id));
     lock.role.sort_by(|a, b| a.id.cmp(&b.id));
     let text = toml::to_string(&lock).map_err(|e| SkillError::Lock(e.to_string()))?;
-    fs::write(lock_path(root), text)?;
+    fs::write(lock_path(root, harness_dir), text)?;
     Ok(())
 }
 
@@ -173,7 +173,7 @@ pub fn resolve(
     events: &mut Writer,
 ) -> Result<Vec<ResolvedSkill>, SkillError> {
     let base = root.join(skills_dir(cfg, preset));
-    let mut lock = read_lock(root)?;
+    let mut lock = read_lock(root, &cfg.layout.harness_dir)?;
     let mut out = Vec::new();
     let mut dirty = false;
 
@@ -214,7 +214,7 @@ pub fn resolve(
     }
 
     if dirty {
-        write_lock(root, &lock)?;
+        write_lock(root, &cfg.layout.harness_dir, &lock)?;
     }
     Ok(out)
 }
@@ -571,12 +571,13 @@ mod tests {
             .join(".claude/skills/tdd/references/more.md")
             .is_file());
 
-        let lock = read_lock(&repo.root).expect("lock");
+        let lock = read_lock(&repo.root, &cfg.layout.harness_dir).expect("lock");
         assert_eq!(lock.version, 1);
         assert_eq!(lock.skill[0].id, "tdd");
         assert_eq!(lock.skill[0].sha256, sha256(BODY.as_bytes()));
         assert_eq!(lock.skill[0].commit, None);
-        let before = fs::read_to_string(lock_path(&repo.root)).expect("lock text");
+        let before =
+            fs::read_to_string(lock_path(&repo.root, &cfg.layout.harness_dir)).expect("lock text");
 
         let again = resolve(
             &repo.root,
@@ -589,7 +590,7 @@ mod tests {
         .expect("resolve again");
         assert_eq!(again[0].result, "cached");
         assert_eq!(
-            fs::read_to_string(lock_path(&repo.root)).expect("lock text"),
+            fs::read_to_string(lock_path(&repo.root, &cfg.layout.harness_dir)).expect("lock text"),
             before
         );
     }
@@ -628,7 +629,7 @@ mod tests {
             BODY
         );
         let tag_sha = crate::git::git(&upstream.root, &["rev-parse", "v1^{commit}"]).expect("sha");
-        let lock = read_lock(&repo.root).expect("lock");
+        let lock = read_lock(&repo.root, &cfg.layout.harness_dir).expect("lock");
         assert_eq!(lock.skill[0].commit.as_deref(), Some(tag_sha.as_str()));
         assert_eq!(lock.skill[0].rev.as_deref(), Some("v1"));
         let cached_clone = cache_path(&repo.root.join("cache"), &url, "v1");

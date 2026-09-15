@@ -45,7 +45,7 @@ fn harness_text(ctx: &ProbeCtx) -> Res<String> {
     }
     // enforcement is: the check runs it, the tool's settings wire it, or a hash covers it
     let wired = [
-        "test-hashes.json".to_string(),
+        common::instance(ctx, "test-hashes.json"),
         format!("{dir}/loop.sh"),
         format!("{dir}/tasks.py"),
     ];
