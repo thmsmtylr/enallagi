@@ -1,0 +1,1 @@
+Read AGENTS.md, SPEC.md and TASKS.md. Your role is defined in .harness/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons, and commit the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop.
