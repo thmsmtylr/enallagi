@@ -552,7 +552,17 @@ fn gate_scope_with_the_product_base_refuses_a_grown_baseline_in_a_nested_install
     let git = |dir: &std::path::Path, args: &[&str]| harness::git::git(dir, args).expect("git");
     let out = in_harness(&r.root, &["init"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    r.commit_all("install");
+    git(
+        &r.root,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "install",
+        ],
+    );
     let queued = git(&r.root, &["rev-parse", "HEAD"]);
     let state = r.root.join(".enallagi");
     let commit_state = |msg: &str| {

@@ -9,7 +9,19 @@ use std::fs;
 fn seeded_with(overrides: &str) -> (Repo, Config) {
     let repo = Repo::new();
     repo.init_harness(overrides);
-    repo.commit_all("harness");
+    harness::git::git(&repo.root, &["add", "-A"]).expect("add");
+    harness::git::git(
+        &repo.root,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "harness",
+        ],
+    )
+    .expect("commit");
     let cfg = config::load(&repo.root).expect("config");
     (repo, cfg)
 }

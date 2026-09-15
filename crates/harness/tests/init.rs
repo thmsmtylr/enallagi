@@ -79,9 +79,9 @@ fn init_exits_0_on_a_fresh_repo() {
     assert!(!repo.root.join(".harness").exists());
     assert!(report.wrote.contains(&".enallagi/harness.toml".to_string()));
     assert!(
-        report.track.contains(&"AGENTS.md".to_string()),
+        report.excluded.contains(&"AGENTS.md".to_string()),
         "{:?}",
-        report.track
+        report.excluded
     );
     assert!(
         !report.track.contains(&".enallagi".to_string()),
@@ -124,6 +124,58 @@ fn init_makes_the_harness_directory_a_repository_the_product_ignores() {
         exclude.lines().filter(|l| *l == "/.enallagi/").count(),
         1,
         "{exclude}"
+    );
+}
+
+#[test]
+fn init_with_each_preset_leaves_a_clean_fixture_clean_and_its_gitignore_unchanged() {
+    for name in harness::agent::presets().keys() {
+        let repo = Repo::new();
+        repo.write(".gitignore", "node_modules/\n");
+        repo.commit_all("ignore");
+        with(&repo, &adapter(name));
+        with(&repo, &adapter(name));
+        let git = |args: &[&str]| harness::git::git(&repo.root, args).expect("git");
+        assert_eq!(
+            git(&["status", "--porcelain", "--untracked-files=all"]),
+            "",
+            "{name}"
+        );
+        assert_eq!(git(&["diff", "--", ".gitignore"]), "", "{name}");
+    }
+}
+
+#[test]
+fn init_excludes_the_harness_directory_and_every_entry_point_in_one_marked_block() {
+    let repo = Repo::new();
+    let report = with(&repo, &adapter("gemini"));
+    with(&repo, &adapter("gemini"));
+    let exclude =
+        harness::git::git(&repo.root, &["rev-parse", "--git-path", "info/exclude"]).expect("path");
+    let exclude = read(&repo, &exclude);
+    let lines: Vec<&str> = exclude.lines().collect();
+    let open = lines.iter().filter(|l| **l == "# >>> harness").count();
+    let close = lines.iter().filter(|l| **l == "# <<< harness").count();
+    assert_eq!((open, close), (1, 1), "{exclude}");
+    let start = lines.iter().position(|l| *l == "# >>> harness").unwrap();
+    let end = lines.iter().position(|l| *l == "# <<< harness").unwrap();
+    let block = &lines[start + 1..end];
+    assert!(block.contains(&"/.enallagi/"), "{exclude}");
+    for entry in ["AGENTS.md", "GEMINI.md", ".gemini/settings.json"] {
+        assert!(
+            report.wrote.contains(&entry.to_string()),
+            "{:?}",
+            report.wrote
+        );
+        assert!(
+            block.contains(&format!("/{entry}").as_str()),
+            "no {entry} in {exclude}"
+        );
+    }
+    assert!(
+        !report.track.contains(&"AGENTS.md".to_string()),
+        "{:?}",
+        report.track
     );
 }
 
@@ -660,10 +712,10 @@ fn the_git_add_line_init_prints_on_a_fresh_install_exits_0() {
     let stdout = harness_init(&repo, &[]);
     let line = stdout
         .lines()
-        .find_map(|l| l.trim().strip_prefix("4. git add "))
+        .find_map(|l| l.trim().strip_prefix("4. git add"))
         .unwrap_or_else(|| panic!("no git add line in:\n{stdout}"));
     let paths: Vec<&str> = line.split_whitespace().collect();
-    assert!(paths.contains(&"AGENTS.md"), "{line}");
+    assert!(!paths.contains(&"AGENTS.md"), "{line}");
     let out = std::process::Command::new("git")
         .arg("add")
         .args(&paths)

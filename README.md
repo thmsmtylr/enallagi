@@ -28,8 +28,8 @@ harness init --adapter claude   # optional: writes .claude/agents/ and the hook 
 Every file the harness owns lives in one directory, `.enallagi/` (`layout.harness_dir`); init writes
 outside it only `AGENTS.md`, `layout.pointer_files` and the `--adapter` tool's files. A root
 `TASKS.md` or a `.harness/` keeps its layout: `harness init` lists each file with its new path, and
-`--move` moves them and installs nothing. A fresh `.enallagi/` is its own git repository, excluded
-from the product's; `harness init` prints the `git add` line for the rest; `--dry-run` writes nothing.
+`--move` moves them and installs nothing. A fresh `.enallagi/` is its own git repository; it and each untracked file init writes
+outside it go in one `# >>> harness` block of `git rev-parse --git-path info/exclude`, never `.gitignore`; `--dry-run` writes nothing.
 
 ## What a run does
 

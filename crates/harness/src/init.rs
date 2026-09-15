@@ -90,6 +90,8 @@ pub struct InitReport {
     pub notes: Vec<String>,
     /// `(old, new)` for every instance file outside the harness directory.
     pub moves: Vec<(String, String)>,
+    /// Paths outside the harness directory that the product does not track, hidden in its info/exclude.
+    pub excluded: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -157,7 +159,7 @@ pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
 
     let dir = config::load(root)?.layout.harness_dir;
     if !opts.dry_run && own_repository(root, &dir) {
-        state_repository(root, &dir)?;
+        state_repository(root, &dir, &report.excluded)?;
     }
 
     // the old answers move aside only once the new file holds them, and only for the run that read them
@@ -248,6 +250,9 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         adapter(root, &mut plan, &mut report, &cfg, preset, &sub)?;
     }
 
+    if own_repository(root, &dir) {
+        report.excluded = untracked_entry_points(root, &dir, &plan, &report.kept);
+    }
     let mut track = track_paths(&plan, &report);
     if own_repository(root, &dir) {
         track.retain(|top| *top != dir);
@@ -263,7 +268,35 @@ fn own_repository(root: &Path, dir: &str) -> bool {
         && git::git(root, &["ls-files", "--", dir]).is_ok_and(|out| out.is_empty())
 }
 
-fn state_repository(root: &Path, dir: &str) -> Result<(), InitError> {
+// a tracked file is never excluded: exclude does not hide it, and `git add` on an excluded path exits 1
+fn untracked_entry_points(
+    root: &Path,
+    dir: &str,
+    plan: &[Planned],
+    kept: &[String],
+) -> Vec<String> {
+    let outside: Vec<&str> = plan
+        .iter()
+        .map(|p| p.path.as_str())
+        .chain(kept.iter().map(String::as_str))
+        .filter(|path| !path.starts_with(&format!("{dir}/")))
+        .collect();
+    let mut args = vec!["ls-files", "--"];
+    args.extend(&outside);
+    let tracked = git::git(root, &args).unwrap_or_default();
+    let mut out: Vec<String> = Vec::new();
+    for path in outside {
+        if !tracked.lines().any(|t| t == path) && !out.iter().any(|seen| seen == path) {
+            out.push(path.to_string());
+        }
+    }
+    out
+}
+
+const EXCLUDE_OPEN: &str = "# >>> harness";
+const EXCLUDE_CLOSE: &str = "# <<< harness";
+
+fn state_repository(root: &Path, dir: &str, entries: &[String]) -> Result<(), InitError> {
     let git_err = |e: git::GitError| InitError::Io {
         path: dir.to_string(),
         source: std::io::Error::other(e.to_string()),
@@ -273,19 +306,31 @@ fn state_repository(root: &Path, dir: &str) -> Result<(), InitError> {
     }
     let exclude = git::git(root, &["rev-parse", "--git-path", "info/exclude"]).map_err(git_err)?;
     let exclude = root.join(exclude);
-    let line = format!("/{dir}/");
     let text = fs::read_to_string(&exclude).unwrap_or_default();
-    if !text.lines().any(|l| l == line) {
-        if let Some(parent) = exclude.parent() {
-            fs::create_dir_all(parent).map_err(io(parent.display()))?;
+    let bare = format!("/{dir}/");
+    let mut kept: Vec<&str> = Vec::new();
+    let mut inside = false;
+    for line in text.lines() {
+        match line {
+            EXCLUDE_OPEN => inside = true,
+            EXCLUDE_CLOSE => inside = false,
+            _ if inside || line == bare => {}
+            _ => kept.push(line),
         }
-        let sep = if text.is_empty() || text.ends_with('\n') {
-            ""
-        } else {
-            "\n"
-        };
-        fs::write(&exclude, format!("{text}{sep}{line}\n")).map_err(io(exclude.display()))?;
     }
+    // ponytail: entry paths are written unescaped, so a configured name holding `*`, `?`, `[` or `!` matches as a pattern
+    let block = std::iter::once(bare)
+        .chain(entries.iter().map(|e| format!("/{e}")))
+        .fold(String::new(), |acc, line| acc + &line + "\n");
+    let mut out = kept.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(&format!("{EXCLUDE_OPEN}\n{block}{EXCLUDE_CLOSE}\n"));
+    if let Some(parent) = exclude.parent() {
+        fs::create_dir_all(parent).map_err(io(parent.display()))?;
+    }
+    fs::write(&exclude, out).map_err(io(exclude.display()))?;
     Ok(())
 }
 
@@ -546,8 +591,8 @@ fn adapter(
     // written before hooks: a tool with no hooks file still reads its own instruction file
     if let Some(file) = preset.instruction_file.as_deref() {
         let planned = plan.iter().any(|p| p.path == file);
-        if file != cfg.layout.context_file && !planned && !has_content(&root.join(file)) {
-            plan.push(write(file.to_string(), sub(POINTER)));
+        if file != cfg.layout.context_file && !planned {
+            seed(root, plan, report, file, sub(POINTER));
         }
     }
 
@@ -731,6 +776,7 @@ fn track_paths(plan: &[Planned], report: &InitReport) -> Vec<String> {
         .iter()
         .map(|p| p.path.as_str())
         .chain(report.kept.iter().map(String::as_str))
+        .filter(|path| !report.excluded.iter().any(|e| e == path))
     {
         let top = path.split('/').next().unwrap_or(path).to_string();
         if !out.contains(&top) {
