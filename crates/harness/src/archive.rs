@@ -111,7 +111,8 @@ pub fn archive_done_with(
     // An uncommitted verdict folded into an archive commit loses its author and its message.
     let dir = &cfg.layout.harness_dir;
     let tasks = config::instance_rel(root, dir, "TASKS.md");
-    if !dry_run && !git::git_ok(root, &["diff", "--quiet", "--", &tasks]) {
+    let (repo, inner, _) = git::locate(root, dir, &tasks);
+    if !dry_run && !git::git_ok(&repo, &["diff", "--quiet", "--", &inner]) {
         return Err(ArchiveError::UncommittedTasks);
     }
 
@@ -126,24 +127,17 @@ pub fn archive_done_with(
         });
     }
 
-    let commit_files: Vec<String> = [
-        "TASKS.md",
-        "DECISIONS.md",
-        "PROGRESS.md",
-        "PROGRESS.archive.md",
-    ]
-    .into_iter()
-    .map(|name| config::instance_rel(root, dir, name))
-    .filter(|p| root.join(p).exists())
-    .collect();
-    let commit_files: Vec<&str> = commit_files.iter().map(String::as_str).collect();
-    if !commit_files.is_empty() {
-        git::commit_paths(
-            root,
-            &commit_files,
-            "chore(archive): finished blocks to DECISIONS.md, old entries to PROGRESS.archive.md",
-        )?;
-    }
+    git::commit_instance(
+        root,
+        dir,
+        &[
+            "TASKS.md",
+            "DECISIONS.md",
+            "PROGRESS.md",
+            "PROGRESS.archive.md",
+        ],
+        "chore(archive): finished blocks to DECISIONS.md, old entries to PROGRESS.archive.md",
+    )?;
 
     Ok(ArchiveReport {
         moved,
@@ -162,7 +156,13 @@ fn archive_tasks(root: &Path, dir: &str, dry_run: bool) -> Result<Vec<String>, A
     let moved: Vec<String>;
 
     {
-        let sha = git::git(root, &["rev-parse", "--short", "HEAD"])?;
+        let (repo, inner, nested) = git::locate(root, dir, &tasks);
+        let sha = git::git(&repo, &["rev-parse", "--short", "HEAD"])?;
+        let show = if nested {
+            format!("git -C {dir} show {sha}:{inner}")
+        } else {
+            format!("git show {sha}:{tasks}")
+        };
         let lines: Vec<&str> = src.split('\n').collect();
         let mut out: Vec<String> = Vec::new();
         let mut cursor = 0usize;
@@ -194,9 +194,7 @@ fn archive_tasks(root: &Path, dir: &str, dry_run: bool) -> Result<Vec<String>, A
             out.push(body[0].to_string());
             out.extend(keep);
             out.push("status: done".to_string());
-            out.push(format!(
-                "archived: DECISIONS.md — full block at `git show {sha}:{tasks}`"
-            ));
+            out.push(format!("archived: DECISIONS.md — full block at `{show}`"));
             out.push(String::new());
 
             let block_text = body.join("\n");

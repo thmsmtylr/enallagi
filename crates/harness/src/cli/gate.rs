@@ -32,6 +32,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             cfg: &cfg,
             task: Some(args.task.clone()),
             iter_base: Some(args.base.clone().unwrap_or_else(|| "HEAD~1".to_string())),
+            state_base: Some(args.base.clone().unwrap_or_else(|| "HEAD~1".to_string())),
             stage_output: String::new(),
             events: &mut events,
             dry_run: false,

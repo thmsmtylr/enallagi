@@ -16,7 +16,7 @@ Protocol:
 4. Green: implement the smallest change that passes. Do not refactor neighbouring code, do not add features not in the criteria, do not touch files outside `scope:`.
 5. Run `__CHECK__` yourself. Fix failures. Repeat until green — green means on delta against `.check-baseline`, never a line added to it.
 6. Update the task block: `status: review`, never `done` (that is the verifier's), and two or three lines in `notes:` on what you changed and what a reviewer should scrutinise.
-7. Commit: `feat(<scope>): T-### <summary>`.
+7. Commit the product paths on `scope:` only: `feat(<scope>): T-### <summary>`. Never stage __HARNESS_DIR__/TASKS.md, __HARNESS_DIR__/PROGRESS.md or any other instance file; the launcher commits them when the stage ends.
 
 Hard rules, each naming the rail it serves:
 - A schema change or an out-of-scope edit turns out to be needed: halt the task. Set `status: needs-spec` with the explanation in notes. Do not improvise around the contract (`contracts`, `one-scope`).

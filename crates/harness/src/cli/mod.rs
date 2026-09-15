@@ -1,3 +1,4 @@
+mod base;
 mod eval;
 mod events;
 mod gate;
@@ -70,6 +71,11 @@ pub enum Command {
     Probe {
         /// Probes to run; empty runs all of them
         names: Vec<String>,
+    },
+    /// Print the product commit a task was queued against, the base its diff is measured from
+    Base {
+        /// Task id whose base to print
+        task: String,
     },
     /// Run one gate against a task; exit 0 on pass, 2 on fail
     Gate {
@@ -161,6 +167,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         }),
         Command::Watch => watch::run(),
         Command::Probe { names } => probe::run(&probe::Args { names }),
+        Command::Base { task } => base::run(&base::Args { task }),
         Command::Gate { which, task, base } => gate::run(&gate::Args { which, task, base }),
         Command::Hook { name } => hook::run(&hook::Args { name }),
         Command::Skills { cmd, frozen } => skills::run(&skills::Args { cmd, frozen }),

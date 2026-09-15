@@ -455,3 +455,85 @@ fn tasks_archive_moves_a_done_block_and_names_it() {
         "nothing to archive"
     );
 }
+
+fn base_of(root: &std::path::Path, task: &str) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["base", task])
+        .current_dir(root)
+        .output()
+        .expect("run harness base")
+}
+
+#[test]
+fn base_prints_the_product_sha_the_state_commit_adding_the_heading_records() {
+    let r = harness::fixture::Repo::new();
+    let git = |dir: &std::path::Path, args: &[&str]| harness::git::git(dir, args).expect("git");
+    r.write(".git/info/exclude", ".enallagi/\n");
+    let queued = git(&r.root, &["rev-parse", "HEAD"]);
+    let state = r.root.join(".enallagi");
+    r.write(
+        ".enallagi/TASKS.md",
+        "# TASKS\n\n## [T-001] open\nscope: src/a.ts\nstatus: ready\n",
+    );
+    git(&state, &["init", "-q"]);
+    git(&state, &["config", "user.name", "t"]);
+    git(&state, &["config", "user.email", "t@t"]);
+    git(&state, &["add", "-A"]);
+    git(&state, &["commit", "-qm", &format!("queue at {queued}")]);
+
+    r.write("src/a.ts", "work\n");
+    r.commit_all("T-001 work");
+    let worked = git(&r.root, &["rev-parse", "HEAD"]);
+    r.write(
+        ".enallagi/TASKS.md",
+        "# TASKS\n\n## [T-001] open\nscope: src/a.ts\nstatus: review\nnotes: `git log -S '## [T-001]'`\n\n## [T-002] by hand\nstatus: ready\n",
+    );
+    git(&state, &["add", "-A"]);
+    git(
+        &state,
+        &["commit", "-qm", &format!("implement T-001 at {worked}")],
+    );
+
+    let out = base_of(&r.root, "T-001");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), queued);
+
+    r.write(
+        ".enallagi/TASKS.md",
+        "# TASKS\n\n## [T-001] open\nstatus: review\n\n## [T-002] by hand\nstatus: ready\n\n## [T-003] by hand\nstatus: ready\n",
+    );
+    git(&state, &["commit", "-qam", "queue: T-003"]);
+    let out = base_of(&r.root, "T-003");
+    assert_ne!(out.status.code(), Some(0), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("queue: T-003"),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn base_in_the_root_layout_prints_what_the_pickaxe_on_tasks_md_prints() {
+    let r = harness::fixture::Repo::new();
+    r.write("TASKS.md", "# TASKS\n\n## [T-001] open\nstatus: ready\n");
+    r.commit_all("queue: T-001");
+    r.write("src/a.ts", "work\n");
+    r.commit_all("T-001 work");
+
+    let pickaxe = harness::git::git(
+        &r.root,
+        &[
+            "log",
+            "-1",
+            "--format=%H",
+            "-S",
+            "## [T-001]",
+            "--",
+            "TASKS.md",
+        ],
+    )
+    .expect("pickaxe");
+    assert!(!pickaxe.is_empty());
+    let out = base_of(&r.root, "T-001");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), pickaxe);
+}

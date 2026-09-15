@@ -155,6 +155,11 @@ pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
         report.wrote.push(file.path.clone());
     }
 
+    let dir = config::load(root)?.layout.harness_dir;
+    if !opts.dry_run && own_repository(root, &dir) {
+        state_repository(root, &dir)?;
+    }
+
     // the old answers move aside only once the new file holds them, and only for the run that read them
     let toml = config_rel(root);
     let migrated = root.join("harness.json").is_file() && report.wrote.contains(&toml);
@@ -243,9 +248,45 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         adapter(root, &mut plan, &mut report, &cfg, preset, &sub)?;
     }
 
-    let track = track_paths(&plan, &report);
+    let mut track = track_paths(&plan, &report);
+    if own_repository(root, &dir) {
+        track.retain(|top| *top != dir);
+    }
     report.track = track;
     Ok((plan, report))
+}
+
+// a harness directory the product already tracks, or a root-layout queue, stays in the product's history
+fn own_repository(root: &Path, dir: &str) -> bool {
+    !dir.is_empty()
+        && config::instance_rel(root, dir, "TASKS.md") != "TASKS.md"
+        && git::git(root, &["ls-files", "--", dir]).is_ok_and(|out| out.is_empty())
+}
+
+fn state_repository(root: &Path, dir: &str) -> Result<(), InitError> {
+    let git_err = |e: git::GitError| InitError::Io {
+        path: dir.to_string(),
+        source: std::io::Error::other(e.to_string()),
+    };
+    if !root.join(dir).join(".git").exists() {
+        git::git(&root.join(dir), &["init", "-q"]).map_err(git_err)?;
+    }
+    let exclude = git::git(root, &["rev-parse", "--git-path", "info/exclude"]).map_err(git_err)?;
+    let exclude = root.join(exclude);
+    let line = format!("/{dir}/");
+    let text = fs::read_to_string(&exclude).unwrap_or_default();
+    if !text.lines().any(|l| l == line) {
+        if let Some(parent) = exclude.parent() {
+            fs::create_dir_all(parent).map_err(io(parent.display()))?;
+        }
+        let sep = if text.is_empty() || text.ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
+        fs::write(&exclude, format!("{text}{sep}{line}\n")).map_err(io(exclude.display()))?;
+    }
+    Ok(())
 }
 
 fn write(path: String, content: String) -> Planned {

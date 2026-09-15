@@ -28,8 +28,8 @@ harness init --adapter claude   # optional: writes .claude/agents/ and the hook 
 Every file the harness owns lives in one directory, `.enallagi/` (`layout.harness_dir`); init writes
 outside it only `AGENTS.md`, `layout.pointer_files` and the `--adapter` tool's files. A root
 `TASKS.md` or a `.harness/` keeps its layout: `harness init` lists each file with its new path, and
-`--move` moves them and installs nothing. `harness init` prints the `git add` line for what it wrote
-(`verdict` counts an untracked path as work off the branch); `--dry-run` writes nothing.
+`--move` moves them and installs nothing. A fresh `.enallagi/` is its own git repository, excluded
+from the product's; `harness init` prints the `git add` line for the rest; `--dry-run` writes nothing.
 
 ## What a run does
 
@@ -43,9 +43,9 @@ chosen by the queue's state:
 | `discover` | `!queue.takeable` | **scout** → **adjudicate** |
 
 Every stage is a separate process spawned from a role prompt under `.enallagi/roles/`, turn-capped
-per stage. `review` runs before `task`. `discover` ends the run after two consecutive rounds that
-leave nothing takeable. Every iteration leaves exactly one `PROGRESS.md` entry: the launcher writes
-one itself, and commits it, when no role did.
+per stage. `review` runs before `task`. `discover` ends the run after two dry rounds. Roles commit
+product files; the launcher commits the harness directory as `<stage> T-### at <product sha>`, read
+back by `harness base T-###` as a task's diff base, and writes a `PROGRESS.md` entry when no role did.
 
 A run halts on a `STOP` file in the repo root; on `BUDGET_SECONDS` / `BUDGET_USD` /
 `BUDGET_TOKENS` (or `--budget-seconds` / `--budget-usd` / `--budget-tokens`, which wins) at the

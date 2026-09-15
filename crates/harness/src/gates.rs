@@ -1,15 +1,15 @@
 //! The named checks the loop runs after a stage exits.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::config::Config;
 use crate::events::{Kind, Writer};
-use crate::git::{commit_paths, diff_names, git, head, porcelain};
+use crate::git::{self, diff_names, git, head, porcelain};
 use crate::queue::{self, Queue};
 use crate::skills::LockEntry;
 
-const BOOKKEEPING: &[&str] = &[
+pub(crate) const BOOKKEEPING: &[&str] = &[
     "TASKS.md",
     "PROGRESS.md",
     "PROGRESS.archive.md",
@@ -22,6 +22,8 @@ pub struct GateCtx<'a> {
     pub cfg: &'a Config,
     pub task: Option<String>,
     pub iter_base: Option<String>,
+    // the harness directory repository's base; the same as iter_base while instance files share the product's
+    pub state_base: Option<String>,
     pub stage_output: String,
     pub events: &'a mut Writer,
     pub dry_run: bool,
@@ -79,6 +81,32 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
 
 fn rel(ctx: &GateCtx, name: &str) -> String {
     crate::config::instance_rel(ctx.root, &ctx.cfg.layout.harness_dir, name)
+}
+
+// the repository an instance file's history is in, the path inside it, and that repository's base
+fn at_base(ctx: &GateCtx, path: &str) -> Option<(PathBuf, String, String)> {
+    let (repo, inner, nested) = git::locate(ctx.root, &ctx.cfg.layout.harness_dir, path);
+    let base = if nested {
+        &ctx.state_base
+    } else {
+        &ctx.iter_base
+    };
+    Some((repo, inner, base.clone().filter(|b| !b.is_empty())?))
+}
+
+fn show_at(ctx: &GateCtx, path: &str, rev: Option<&str>) -> Option<String> {
+    let (repo, inner, base) = at_base(ctx, path)?;
+    let rev = rev.unwrap_or(&base);
+    git(&repo, &["show", &format!("{rev}:{inner}")]).ok()
+}
+
+fn diff_since_base(ctx: &GateCtx, path: &str) -> Option<String> {
+    let (repo, inner, base) = at_base(ctx, path)?;
+    git(&repo, &["diff", &base, "HEAD", "--", &inner]).ok()
+}
+
+fn commit_instance(ctx: &GateCtx, names: &[&str], msg: &str) -> Result<bool, git::GitError> {
+    git::commit_instance(ctx.root, &ctx.cfg.layout.harness_dir, names, msg)
 }
 
 fn tasks_file(root: &Path, cfg: &Config) -> Queue {
@@ -139,7 +167,7 @@ fn force_back(
             .and_then(|text| q.write(&text));
         match written {
             Ok(()) => {
-                if let Err(err) = commit_paths(ctx.root, &[&rel(ctx, "TASKS.md")], commit_msg) {
+                if let Err(err) = commit_instance(ctx, &["TASKS.md"], commit_msg) {
                     ctx.warnings
                         .push(format!("{task}: the queue was not committed: {err}"));
                 }
@@ -217,15 +245,13 @@ fn commit_verdict(ctx: &mut GateCtx) -> GateOutcome {
         out.skip_rest = true;
         return out;
     }
-    let tasks = rel(ctx, "TASKS.md");
-    commit(ctx, &[&tasks], &format!("verify: {task} verdict"))
+    commit(ctx, &["TASKS.md"], &format!("verify: {task} verdict"))
 }
 
 // a finding left only in notes is archived with its block and never reaches the queue
 fn deferred_finding(ctx: &GateCtx, task: &str) -> Option<String> {
-    let base = ctx.iter_base.as_deref()?;
-    let tasks = rel(ctx, "TASKS.md");
-    let before = git(ctx.root, &["show", &format!("{base}:{tasks}")]).unwrap_or_default();
+    at_base(ctx, &rel(ctx, "TASKS.md"))?;
+    let before = show_at(ctx, &rel(ctx, "TASKS.md"), None).unwrap_or_default();
     let before = queue::parse(&before).unwrap_or_default();
     let now = queue::parse(&tasks_file(ctx.root, ctx.cfg).read().ok()?).ok()?;
     let proposed_before = queue::ids_at(&before, "proposed");
@@ -259,19 +285,18 @@ fn deferred_finding(ctx: &GateCtx, task: &str) -> Option<String> {
 
 fn commit_round(ctx: &mut GateCtx) -> GateOutcome {
     let iter = ctx.events.iter;
-    let (tasks, decisions) = (rel(ctx, "TASKS.md"), rel(ctx, "DECISIONS.md"));
     commit(
         ctx,
-        &[&tasks, &decisions],
+        &["TASKS.md", "DECISIONS.md"],
         &format!("queue: scout and adjudicator round (iteration {iter})"),
     )
 }
 
-fn commit(ctx: &mut GateCtx, paths: &[&str], msg: &str) -> GateOutcome {
+fn commit(ctx: &mut GateCtx, names: &[&str], msg: &str) -> GateOutcome {
     if ctx.dry_run {
         return pass(format!("dry run: would commit {msg}"));
     }
-    match commit_paths(ctx.root, paths, msg) {
+    match commit_instance(ctx, names, msg) {
         Ok(true) => pass(format!("committed {msg}")),
         Ok(false) => pass("nothing to commit"),
         Err(err) => fail(format!("the commit failed: {err}")),
@@ -361,15 +386,25 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let lock = rel(ctx, "harness.lock");
     let hashes = rel(ctx, "test-hashes.json");
     let bookkeeping: Vec<String> = BOOKKEEPING.iter().map(|name| rel(ctx, name)).collect();
-    let base_lock = lock_at(ctx.root, &lock, &base);
-    let head_lock = lock_at(ctx.root, &lock, "HEAD");
+    let base_lock = lock_at(ctx, &lock, None);
+    let head_lock = lock_at(ctx, &lock, Some("HEAD"));
     // ids the pipeline vendored fresh this iteration -- the task's scope: line never has to name them
     let added_skills = added_ids(&base_lock.skill, &head_lock.skill);
     let added_roles = added_ids(&base_lock.role, &head_lock.role);
 
     let mut out_of: Vec<String> = Vec::new();
     let mut harness_hit: Vec<String> = Vec::new();
-    for f in diff_names(ctx.root, &base) {
+    let mut changed = diff_names(ctx.root, &base);
+    let dir = &ctx.cfg.layout.harness_dir;
+    let state = git::state_root(ctx.root, dir);
+    if let Some(state_base) = ctx.state_base.as_deref().filter(|_| state != ctx.root) {
+        changed.extend(
+            diff_names(&state, state_base)
+                .into_iter()
+                .map(|f| format!("{dir}/{f}")),
+        );
+    }
+    for f in changed {
         if bookkeeping.contains(&f) || f == lock {
             continue;
         }
@@ -383,9 +418,9 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         // test-hashes.json is exempt when every re-cut key (present at base too, with a new value)
         // is in scope; a key ADDED fresh (absent at base) needs no scope: line to cover it
         if let Some(key_re) = (f == hashes).then_some(HASHES_KEY) {
-            let touched = recut_keys(ctx.root, &base, &f, key_re);
+            let touched = recut_keys(ctx, &f, key_re);
             if !touched.is_empty() {
-                let base_keys = keys_at(ctx.root, &base, &f, key_re);
+                let base_keys = keys_at(ctx, &f, key_re);
                 let recut: Vec<String> = touched
                     .into_iter()
                     .filter(|k| base_keys.contains(k))
@@ -439,15 +474,12 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         harness_hit.clear();
     }
     // the baseline only ever shrinks; a line ADDED is a red check made green by hand, whatever rows: says
-    let grew = git(
-        ctx.root,
-        &["diff", &base, "HEAD", "--", &rel(ctx, ".check-baseline")],
-    )
-    .map(|d| {
-        d.lines()
-            .any(|l| l.starts_with('+') && !l.starts_with("++") && !l.starts_with("+#"))
-    })
-    .unwrap_or(false);
+    let grew = diff_since_base(ctx, &rel(ctx, ".check-baseline"))
+        .map(|d| {
+            d.lines()
+                .any(|l| l.starts_with('+') && !l.starts_with("++") && !l.starts_with("+#"))
+        })
+        .unwrap_or(false);
 
     if out_of.is_empty() && harness_hit.is_empty() && !grew {
         return pass(format!("{task} stayed inside its scope."));
@@ -496,7 +528,7 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
         return pass("no base");
     };
     let tasks = rel(ctx, "TASKS.md");
-    let before = ids_in_rev(ctx.root, &tasks, &base);
+    let before = ids_in_rev(ctx, &tasks);
     if before.is_empty() {
         return pass("no ids at base");
     }
@@ -515,10 +547,16 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
     if lost.is_empty() {
         return pass("every id at the base is still in the queue or in DECISIONS.md");
     }
+    let (_, inner, nested) = git::locate(ctx.root, &ctx.cfg.layout.harness_dir, &tasks);
+    let show = if nested {
+        format!("git -C {} show", ctx.cfg.layout.harness_dir)
+    } else {
+        "git show".to_string()
+    };
+    let base = at_base(ctx, &tasks).map(|(_, _, b)| b).unwrap_or(base);
     let reason = format!(
-        "{} left TASKS.md without reaching DECISIONS.md; recover with `git show {}:{tasks}`",
+        "{} left TASKS.md without reaching DECISIONS.md; recover with `{show} {base}:{inner}`",
         lost.join(", "),
-        base
     );
     ctx.warnings.push(reason.clone());
     ctx.halts.push(reason.clone());
@@ -531,9 +569,8 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
 }
 
 // queue::ids_at is ids at a status; this is ids at a revision
-fn ids_in_rev(root: &Path, tasks: &str, rev: &str) -> Vec<String> {
-    git(root, &["show", &format!("{rev}:{tasks}")])
-        .ok()
+fn ids_in_rev(ctx: &GateCtx, tasks: &str) -> Vec<String> {
+    show_at(ctx, tasks, None)
         .and_then(|text| queue::parse(&text).ok())
         .map(|blocks| blocks.into_iter().map(|b| b.id).collect())
         .unwrap_or_default()
@@ -599,21 +636,17 @@ const HASHES_KEY: &str = r#"^[+-]\s*"([^"]+)"\s*:"#;
 
 // the lock as toml::from_str reads it at a given commit; a missing file (nothing vendored yet at
 // that commit) is an empty lock, not an error
-fn lock_at(root: &Path, lock: &str, rev: &str) -> crate::skills::Lock {
-    git(root, &["show", &format!("{rev}:{lock}")])
-        .ok()
+fn lock_at(ctx: &GateCtx, lock: &str, rev: Option<&str>) -> crate::skills::Lock {
+    show_at(ctx, lock, rev)
         .and_then(|text| crate::skills::parse_lock(&text).ok())
         .unwrap_or_default()
 }
 
 // same key regex as HASHES_KEY, applied to a revision's whole file rather than a diff, to
 // tell an added key (present in HEAD, absent at base) from a re-cut of one already at base
-fn keys_at(root: &Path, rev: &str, file: &str, diff_key_re: &str) -> Vec<String> {
+fn keys_at(ctx: &GateCtx, file: &str, diff_key_re: &str) -> Vec<String> {
     let plain = format!("^{}", &diff_key_re[5..]);
-    let (Ok(re), Ok(text)) = (
-        regex::Regex::new(&plain),
-        git(root, &["show", &format!("{rev}:{file}")]),
-    ) else {
+    let (Ok(re), Some(text)) = (regex::Regex::new(&plain), show_at(ctx, file, None)) else {
         return Vec::new();
     };
     let mut keys: Vec<String> = text
@@ -626,11 +659,8 @@ fn keys_at(root: &Path, rev: &str, file: &str, diff_key_re: &str) -> Vec<String>
     keys
 }
 
-fn recut_keys(root: &Path, base: &str, file: &str, key_re: &str) -> Vec<String> {
-    let (Ok(re), Ok(diff)) = (
-        regex::Regex::new(key_re),
-        git(root, &["diff", base, "HEAD", "--", file]),
-    ) else {
+fn recut_keys(ctx: &GateCtx, file: &str, key_re: &str) -> Vec<String> {
+    let (Ok(re), Some(diff)) = (regex::Regex::new(key_re), diff_since_base(ctx, file)) else {
         return Vec::new();
     };
     let mut keys: Vec<String> = diff
@@ -902,6 +932,7 @@ mod tests {
                 cfg: &self.cfg,
                 task: task.map(str::to_string),
                 iter_base: base.map(str::to_string),
+                state_base: base.map(str::to_string),
                 stage_output: self.stage_output.clone(),
                 events: &mut self.writer,
                 dry_run: false,

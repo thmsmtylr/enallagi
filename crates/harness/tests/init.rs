@@ -78,13 +78,62 @@ fn init_exits_0_on_a_fresh_repo() {
     assert!(repo.root.join(".enallagi/RAILS.md").is_file());
     assert!(!repo.root.join(".harness").exists());
     assert!(report.wrote.contains(&".enallagi/harness.toml".to_string()));
-    for path in [".enallagi", "AGENTS.md"] {
+    assert!(
+        report.track.contains(&"AGENTS.md".to_string()),
+        "{:?}",
+        report.track
+    );
+    assert!(
+        !report.track.contains(&".enallagi".to_string()),
+        "the harness directory is its own repository: {:?}",
+        report.track
+    );
+}
+
+#[test]
+fn init_makes_the_harness_directory_a_repository_the_product_ignores() {
+    let repo = Repo::new();
+    install(&repo);
+    let state = repo.root.join(".enallagi");
+    let git = |dir: &Path, args: &[&str]| harness::git::git(dir, args);
+    let top = git(&state, &["rev-parse", "--show-toplevel"]).expect("a repository");
+    assert_eq!(
+        fs::canonicalize(top).expect("top"),
+        fs::canonicalize(&state).expect("state")
+    );
+    for scratch in ["events.jsonl", "loop.pid", "run/roles/implementer.md"] {
         assert!(
-            report.track.contains(&path.to_string()),
-            "{:?}",
-            report.track
+            harness::git::git_ok(&state, &["check-ignore", "-q", scratch]),
+            "{scratch} is not ignored by the harness directory's repository"
         );
     }
+    let porcelain = git(
+        &repo.root,
+        &["status", "--porcelain", "--untracked-files=all"],
+    )
+    .expect("status");
+    assert!(
+        !porcelain.contains(".enallagi"),
+        "the product repository sees the harness directory: {porcelain}"
+    );
+
+    install(&repo);
+    let exclude = git(&repo.root, &["rev-parse", "--git-path", "info/exclude"]).expect("path");
+    let exclude = read(&repo, &exclude);
+    assert_eq!(
+        exclude.lines().filter(|l| *l == "/.enallagi/").count(),
+        1,
+        "{exclude}"
+    );
+}
+
+#[test]
+fn init_leaves_a_root_layout_queue_in_the_product_repository() {
+    let repo = Repo::new();
+    repo.write("TASKS.md", "# TASKS\n");
+    repo.commit_all("queue");
+    install(&repo);
+    assert!(!repo.root.join(".enallagi/.git").exists());
 }
 
 #[test]

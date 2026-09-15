@@ -1300,3 +1300,137 @@ fn an_installed_repository_lands_a_task_and_changes_nothing_outside_the_harness_
     }
     assert!(harness::git::porcelain(&r.root).is_empty());
 }
+
+fn in_dir(dir: &std::path::Path, args: &[&str]) -> String {
+    harness::git::git(dir, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+}
+
+// the harness directory is its own repository, ignored by the product's
+fn nested(check: &str, implement_extra: &str) -> Repo {
+    let r = Repo::new();
+    r.write(".git/info/exclude", ".enallagi/\n");
+    r.write(
+        ".enallagi/.gitignore",
+        "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\n",
+    );
+    script(&r, "src/fakecheck.sh", check);
+    script(&r, "src/fakeagent.sh", QUIET);
+    r.write(".enallagi/TASKS.md", TASKS);
+    r.write(".enallagi/SPEC.md", "# spec\n");
+    r.write(".enallagi/PROGRESS.md", "# progress\n");
+    r.write(".enallagi/.check-baseline", "# inherited red\n");
+    let implement = script(
+        &r,
+        "src/fakeimpl.sh",
+        &format!(
+            "echo work >src/thing.ts\n\
+             {bin} tasks set-status T-001 review 'stub implemented'\n\
+             echo 'iteration' >>.enallagi/PROGRESS.md\n\
+             {implement_extra}\
+             git add src/thing.ts >/dev/null 2>&1\n\
+             git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
+             {QUIET}",
+            bin = env!("CARGO_BIN_EXE_harness"),
+        ),
+    );
+    let verify = verifier(&r);
+    let toml = base_toml(&role_commands(&implement, &verify));
+    r.write(
+        ".enallagi/harness.toml",
+        &format!("{toml}{}", r.local_skills(&toml)),
+    );
+    r.commit_all("stubs");
+    let state = r.root.join(".enallagi");
+    in_dir(&state, &["init", "-q"]);
+    in_dir(&state, &["config", "user.name", "someone else"]);
+    in_dir(&state, &["config", "user.email", "else@else"]);
+    in_dir(&state, &["add", "-A"]);
+    in_dir(
+        &state,
+        &["-c", "commit.gpgsign=false", "commit", "-qm", "queue"],
+    );
+    r
+}
+
+fn nested_status(r: &Repo) -> Option<String> {
+    let text = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
+    let blocks = harness::queue::parse(&text).expect("parse");
+    let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
+    harness::queue::field(t001, "status")
+}
+
+#[test]
+fn a_nested_harness_repository_forces_a_done_the_check_does_not_support_back_to_ready() {
+    let r = nested("echo '(fail) alpha'\nexit 1\n", "");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert!(digest.landed.is_empty(), "{events:#?}");
+    assert_eq!(nested_status(&r).as_deref(), Some("ready"));
+    let state_log = in_dir(&r.root.join(".enallagi"), &["log", "--format=%s"]);
+    assert!(
+        state_log
+            .lines()
+            .any(|s| s.starts_with("chore(T-001): harness gate rejected a false VERIFIED at ")),
+        "{state_log}"
+    );
+    assert!(in_dir(&r.root.join(".enallagi"), &["status", "--porcelain"]).is_empty());
+}
+
+#[test]
+fn a_nested_harness_repository_refuses_a_check_baseline_that_grew() {
+    let r = nested("exit 0\n", "echo alpha >>.enallagi/.check-baseline\n");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert!(digest.landed.is_empty(), "{events:#?}");
+    assert_eq!(nested_status(&r).as_deref(), Some("ready"));
+    let refusal = events.iter().find_map(|e| match &e.kind {
+        Kind::Gate {
+            gate, pass, reason, ..
+        } if gate == "scope" && !*pass => Some(reason.clone()),
+        _ => None,
+    });
+    let reason = refusal.unwrap_or_else(|| panic!("scope passed: {events:#?}"));
+    assert!(
+        reason.contains("added a line to .check-baseline"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn a_landed_iteration_leaves_no_instance_path_in_the_product_history() {
+    let r = nested("exit 0\n", "");
+    let before = in_dir(&r.root, &["rev-parse", "HEAD"]);
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(digest.landed, vec!["T-001".to_string()], "{events:#?}");
+
+    let paths = in_dir(&r.root, &["log", "--name-only", "--format="]);
+    assert!(paths.lines().any(|p| p == "src/thing.ts"), "{paths}");
+    for path in paths.lines().filter(|p| !p.is_empty()) {
+        assert!(
+            !path.starts_with(".enallagi")
+                && ![
+                    "TASKS.md",
+                    "PROGRESS.md",
+                    "DECISIONS.md",
+                    ".check-baseline",
+                    "harness.lock"
+                ]
+                .contains(&path),
+            "{path} is an instance path in the product history"
+        );
+    }
+
+    let state = r.root.join(".enallagi");
+    let after = in_dir(&r.root, &["rev-parse", "HEAD"]);
+    assert_ne!(before, after);
+    let subjects = in_dir(&state, &["log", "--format=%s|%an|%ae|%b"]);
+    assert!(
+        subjects
+            .lines()
+            .any(|l| l == format!("implement T-001 at {after}|t|t@t|")),
+        "{subjects}"
+    );
+    assert!(in_dir(&state, &["status", "--porcelain"]).is_empty());
+    assert!(harness::git::porcelain(&r.root).is_empty());
+}
