@@ -1,0 +1,57 @@
+# Cuts a GitHub release on a `v*` tag: the same four cross-compiled targets `cross-build` in
+# ci.yml proves compile, this time attached to a release along with a SHA256SUMS file.
+#
+# Every `uses:` is pinned to a 40-character commit SHA with its tag in a trailing comment, the
+# same discipline ci.yml documents and `selftest.sh::every github action is pinned to a commit
+# sha` enforces. The SHAs were resolved 2026-09-08 with `gh api repos/<repo>/commits/<tag> --jq
+# .sha`.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,x86_64-apple-darwin,aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: '0.13.0'
+      - name: cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
+      - name: build the four release targets
+        run: |
+          mkdir -p dist
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin; do
+            cargo zigbuild --release --target "$target"
+            cp "target/$target/release/harness" "dist/harness-$target"
+          done
+      - name: SHA256SUMS
+        run: (cd dist && sha256sum harness-* > SHA256SUMS)
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: |
+            dist/harness-x86_64-unknown-linux-musl
+            dist/harness-aarch64-unknown-linux-musl
+            dist/harness-x86_64-apple-darwin
+            dist/harness-aarch64-apple-darwin
+            dist/SHA256SUMS

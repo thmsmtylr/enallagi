@@ -1,0 +1,8 @@
+name = "goose"
+argv = ["goose", "run", "-t", "{prompt}", "--output-format", "stream-json", "--max-turns", "{turns}"]
+turn_cap = "flag"
+model_flag = "--model"
+instruction_file = "AGENTS.md"
+
+[env]
+GOOSE_MODE = "auto"

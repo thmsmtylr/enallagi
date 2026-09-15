@@ -1,0 +1,664 @@
+use harness::fixture::Repo;
+use harness::init::{self, InitOpts};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("locate the repo root from CARGO_MANIFEST_DIR")
+}
+
+fn read(path: &Path) -> String {
+    fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+fn re(pattern: &str) -> regex::Regex {
+    regex::Regex::new(pattern).expect("compile pattern")
+}
+
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(next) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&next) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.file_name().is_some_and(|n| n == ".git") {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(rel) = path.strip_prefix(dir) {
+                out.push(rel.to_path_buf());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+// truncated at #[cfg(test)] so a fixture string in a test module isn't mistaken for real launcher code
+fn crate_sources() -> Vec<(PathBuf, String)> {
+    let src = repo_root().join("crates/harness/src");
+    walk(&src)
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+        .map(|rel| {
+            let text = read(&src.join(&rel));
+            let cut = text.find("#[cfg(test)]").unwrap_or(text.len());
+            (rel, text[..cut].to_string())
+        })
+        .collect()
+}
+
+// HARNESS_BIN points at the test binary so nothing here builds release or reads one off PATH
+fn script(program: &Path, cwd: &Path, args: &[&str]) -> (i32, String) {
+    let out = Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .env("HARNESS_BIN", env!("CARGO_BIN_EXE_harness"))
+        .output()
+        .unwrap_or_else(|e| panic!("run {}: {e}", program.display()));
+    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.code().unwrap_or(-1), text)
+}
+
+fn harness(cwd: &Path, args: &[&str]) -> (i32, String, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("run harness");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
+}
+
+fn history(subjects: &[&str]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let git = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .status()
+            .expect("spawn git");
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@t"]);
+    git(&["config", "user.name", "t"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    for subject in subjects {
+        fs::write(dir.path().join("f"), subject).expect("write");
+        git(&["add", "f"]);
+        git(&["commit", "-q", "-m", subject]);
+    }
+    dir
+}
+
+#[test]
+fn no_installed_script_hardcodes_a_vendor_path_or_process() {
+    // prose may name a vendor; only an executable path or process guard may not
+    let vendor = re(r"\.claude/(hooks|agents)|pgrep -f \.claude|spin [^|]*\bclaude\b");
+    assert!(
+        vendor.is_match(r#"pgrep -f .claude"#),
+        "the scan cannot report"
+    );
+
+    let repo = Repo::new();
+    init::install(
+        &repo.root,
+        &InitOpts {
+            adapter: Some("claude".to_string()),
+            ..InitOpts::default()
+        },
+    )
+    .expect("install");
+
+    let dir = repo.root.join(".harness");
+    for rel in walk(&dir) {
+        let Ok(text) = fs::read_to_string(dir.join(&rel)) else {
+            continue;
+        };
+        assert!(
+            !vendor.is_match(&text),
+            ".harness/{}: {:?}",
+            rel.display(),
+            vendor.find(&text).map(|m| m.as_str())
+        );
+    }
+}
+
+#[test]
+fn the_launcher_parses_no_task_blocks_itself() {
+    // only queue::match_heading may parse `## [` headings; a second parser here would drift from it
+    let heading = re(r"## \[");
+    assert!(
+        heading.is_match("## [T-001] a task"),
+        "the scan cannot report"
+    );
+
+    let holders: Vec<String> = crate_sources()
+        .into_iter()
+        .filter(|(_, text)| heading.is_match(text))
+        .map(|(rel, _)| rel.display().to_string())
+        .collect();
+    assert_eq!(holders, vec!["queue.rs".to_string()]);
+}
+
+#[test]
+fn the_write_path_gate_installs_where_the_rules_are_written() {
+    let repo = Repo::new();
+    repo.init_harness("");
+    let readme = read(&repo.root.join("evals/README.md"));
+    assert!(readme.contains("harness eval --gate"), "{readme:.400}");
+
+    // reachable, not merely documented: the gate must refuse this repo's own candidate rule
+    let (code, _, stderr) = harness(&repo.root, &["eval", "--gate", "a-candidate-rule"]);
+    assert_eq!(code, 2, "{stderr}");
+    assert!(stderr.contains("no ablate.sh"), "{stderr}");
+}
+
+#[test]
+fn the_driver_names_a_commit_on_the_round_that_no_task_claims() {
+    let driver = repo_root().join("driver.sh");
+
+    let fires = history(&[
+        "feat: T-001 the work",
+        "tidy the thing",
+        "verify: T-001 verdict",
+    ]);
+    let (code, out) = script(&driver, fires.path(), &["--unlabelled"]);
+    assert_eq!(code, 0, "{out}");
+    let findings: Vec<&str> = out.lines().filter(|l| l.starts_with("FINDING ")).collect();
+    assert_eq!(findings.len(), 1, "{out}");
+    assert!(findings[0].ends_with(" tidy the thing"), "{}", findings[0]);
+
+    let quiet = history(&["feat: T-001 the work", "verify: T-001 verdict"]);
+    let (code, out) = script(&driver, quiet.path(), &["--unlabelled"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out.lines().filter(|l| l.starts_with("FINDING ")).count(), 0);
+}
+
+const NO_REJECTION: [&str; 8] = [
+    "init",
+    "chore(dogfood): install the harness",
+    "feat(x): T-001 a thing",
+    "verify: T-001 VERIFIED",
+    "chore: strip the dogfood instance",
+    "chore(dogfood): install the harness",
+    "fix(y): T-002 another thing",
+    "chore: strip the round-2 dogfood instance",
+];
+
+#[test]
+fn a_history_with_no_rejection_fails_the_bootstrap_check() {
+    let bootstrap = repo_root().join("docs/bootstrap.sh");
+    let fixture = history(&NO_REJECTION);
+    let (code, out) = script(&bootstrap, fixture.path(), &["--check"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("no REJECTED commit anywhere"), "{out}");
+}
+
+#[test]
+fn the_bootstrap_record_is_derived_from_git() {
+    let bootstrap = repo_root().join("docs/bootstrap.sh");
+    let mut subjects: Vec<&str> = NO_REJECTION.to_vec();
+    subjects.extend([
+        "chore(dogfood): install the harness",
+        "verify: T-003 REJECTED — a skipped assertion printed ok",
+        "chore: strip the round-3 dogfood instance",
+    ]);
+    let fixture = history(&subjects);
+
+    let (code, out) = script(&bootstrap, fixture.path(), &[]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out.lines().filter(|l| l.starts_with("round ")).count(),
+        3,
+        "{out}"
+    );
+
+    let (code, out) = script(&bootstrap, fixture.path(), &["--check"]);
+    assert_eq!(code, 0, "{out}");
+
+    let (code, out) = script(&bootstrap, &repo_root(), &["--check"]);
+    assert_eq!(code, 0, "{out}");
+}
+
+#[test]
+fn docs_demo_drives_one_loop_iteration_end_to_end_and_deletes_what_it_made() {
+    let (code, out) = script(&repo_root().join("docs/demo.sh"), &repo_root(), &[]);
+    assert_eq!(code, 0, "{out}");
+
+    // exit code alone would pass on a demo that printed nothing; check the stage sequence too
+    let seen: Vec<&str> = out
+        .lines()
+        .filter_map(|l| {
+            if l.contains("stage.start") && l.contains("stage=implement") {
+                Some("implement")
+            } else if l.contains("stage.start") && l.contains("stage=verify") {
+                Some("verify")
+            } else if l.starts_with("T-001  status: ") {
+                Some(l.trim_end())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        vec!["implement", "verify", "T-001  status: done"],
+        "{out}"
+    );
+
+    let made = out
+        .lines()
+        .find_map(|l| l.strip_prefix("== install into a throwaway repo  ("))
+        .and_then(|l| l.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("the demo printed no directory:\n{out}"));
+    assert!(!Path::new(made).exists(), "{made} was left behind");
+}
+
+fn hash_mismatches(root: &Path) -> Vec<String> {
+    let path = root.join("test-hashes.json");
+    let Ok(text) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let covered: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(&text).expect("test-hashes.json is not a flat object");
+    covered
+        .into_iter()
+        .filter(|(key, want)| {
+            use sha2::Digest;
+            let Ok(bytes) = fs::read(root.join(key)) else {
+                return true;
+            };
+            let digest: String = sha2::Sha256::digest(&bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            digest != *want
+        })
+        .map(|(key, _)| key)
+        .collect()
+}
+
+#[test]
+fn every_file_test_hashes_covers_still_hashes_to_its_recorded_digest() {
+    let fixture = tempfile::tempdir().expect("tempdir");
+    fs::write(fixture.path().join("covered.txt"), "the real bytes").expect("write");
+    fs::write(
+        fixture.path().join("test-hashes.json"),
+        r#"{"covered.txt": "0000000000000000000000000000000000000000000000000000000000000000"}"#,
+    )
+    .expect("write");
+    assert_eq!(hash_mismatches(fixture.path()), vec!["covered.txt"]);
+
+    assert_eq!(hash_mismatches(&repo_root()), Vec::<String>::new());
+}
+
+fn job_block(workflow: &str, key: &str) -> String {
+    let start = format!("  {key}:");
+    let mut inside = false;
+    let mut out = String::new();
+    for line in workflow.lines() {
+        if line == start {
+            inside = true;
+            continue;
+        }
+        if inside {
+            // ends at the next job key or a top-level comment; comments inside a job are indented deeper
+            if re(r"^  [a-z#]").is_match(line) {
+                inside = false;
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn matrix_os(block: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut inside = false;
+    for line in block.lines() {
+        if re(r"^\s*os:").is_match(line) {
+            inside = true;
+            continue;
+        }
+        if inside {
+            match line.trim().strip_prefix("- ") {
+                Some(runner) => out.push(runner.trim().to_string()),
+                None => inside = false,
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+// `^[^#]*` excludes commented-out lines; skips `name:` so a step label isn't mistaken for an invocation
+fn invokes_floor(block: &str) -> bool {
+    block.lines().any(|l| {
+        let before_comment = l.split('#').next().unwrap_or("");
+        !before_comment.contains("name:")
+            && (before_comment.contains("./selftest.sh") || before_comment.contains("cargo test"))
+    })
+}
+
+fn switched_off(block: &str) -> usize {
+    let off = re(r"^\s*(-\s+)?(if|continue-on-error):");
+    block.lines().filter(|l| off.is_match(l)).count()
+}
+
+fn ci() -> String {
+    read(&repo_root().join(".github/workflows/ci.yml"))
+}
+
+#[test]
+fn ci_runs_the_floor_on_a_gnu_and_a_bsd_userland() {
+    let block = job_block(&ci(), "rust");
+    // macos-latest is BSD sed, ubuntu-latest is GNU sed; that difference has broken parsing before
+    assert_eq!(matrix_os(&block), vec!["macos-latest", "ubuntu-latest"]);
+    assert!(invokes_floor(&block), "{block}");
+    assert_eq!(switched_off(&block), 0, "{block}");
+    // whole-file, not job-scoped: HARNESS_EVALS set at workflow top level would be missed otherwise
+    assert!(!re(r"(?m)^[^#]*HARNESS_EVALS").is_match(&ci()));
+
+    // the driver job is the other half of the floor: it runs cargo test with HARNESS_DRIVER set
+    let driver_block = job_block(&ci(), "driver");
+    let driver_env = re(r#"(?m)^[^#]*HARNESS_DRIVER:\s*['"]?1['"]?"#);
+    assert!(invokes_floor(&driver_block), "{driver_block}");
+    assert!(driver_env.is_match(&driver_block), "{driver_block}");
+
+    assert_eq!(
+        matrix_os(&job_block(&ci(), "no-such-job")),
+        Vec::<String>::new()
+    );
+    assert!(!invokes_floor(&job_block(&ci(), "no-such-job")));
+
+    // ablation self-checks: a matrix with one OS must not read as both userlands, and an `if:`
+    // on the job must be caught by switched_off -- the same checks the neighbouring test makes.
+    let one_os = "jobs:\n  rust:\n    strategy:\n      matrix:\n        os:\n          - ubuntu-latest\n    steps:\n      - run: cargo test --workspace\n";
+    assert_ne!(
+        matrix_os(&job_block(one_os, "rust")),
+        vec!["macos-latest".to_string(), "ubuntu-latest".to_string()]
+    );
+
+    let switched = "jobs:\n  rust:\n    if: false\n    strategy:\n      matrix:\n        os:\n          - ubuntu-latest\n          - macos-latest\n    steps:\n      - run: cargo test --workspace\n";
+    assert_eq!(switched_off(&job_block(switched, "rust")), 1);
+}
+
+#[test]
+fn ci_runs_the_floor_with_the_driver_reaching_the_artifact() {
+    // read by VALUE not presence: `HARNESS_DRIVER: ''` is present but the feature is off
+    let set = re(r#"(?m)^[^#]*HARNESS_DRIVER:\s*['"]?[^\s'"]"#);
+    let block = job_block(&ci(), "driver");
+    assert!(!block.is_empty(), "no driver job in ci.yml");
+    assert!(set.is_match(&block), "{block}");
+    assert!(invokes_floor(&block), "{block}");
+    assert_eq!(switched_off(&block), 0, "{block}");
+
+    let no_job = "jobs:\n  floor:\n    steps:\n      - run: ./selftest.sh\n";
+    let no_var = "jobs:\n  driver:\n    steps:\n      - name: the floor, with the driver reaching the artifact\n        env:\n          HARNESS_DRIVER: ''\n        run: ./selftest.sh\n";
+    let switched = "jobs:\n  driver:\n    if: false\n    steps:\n      - env:\n          HARNESS_DRIVER: '1'\n        run: ./selftest.sh\n";
+    let soft = "jobs:\n  driver:\n    steps:\n      - env:\n          HARNESS_DRIVER: '1'\n        continue-on-error: true\n        run: ./selftest.sh\n";
+
+    let reading = |yml: &str| {
+        let b = job_block(yml, "driver");
+        (
+            !b.is_empty(),
+            set.is_match(&b),
+            invokes_floor(&b),
+            switched_off(&b),
+        )
+    };
+    assert_eq!(reading(no_job), (false, false, false, 0));
+    assert_eq!(reading(no_var), (true, false, true, 0));
+    assert_eq!(reading(switched), (true, true, true, 1));
+    assert_eq!(reading(soft), (true, true, true, 1));
+}
+
+// A fixture that inherits the shipped `[[skill]]` table clones github from a test: it passed on a
+// warm cache and raced itself in CI. Only harness.default.toml may name a remote source.
+#[test]
+fn no_test_fixture_declares_a_skill_the_suite_would_have_to_fetch() {
+    let root = repo_root();
+    let needle = concat!("source = \"", "github:");
+    let mut offences = Vec::new();
+    for dir in ["crates/harness/tests", "crates/harness/src"] {
+        let base = root.join(dir);
+        for rel in walk(&base) {
+            if rel.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = fs::read_to_string(base.join(&rel)).expect("read a source file");
+            for (i, line) in text.lines().enumerate() {
+                if line.contains(needle) {
+                    offences.push(format!("{dir}/{}:{}", rel.display(), i + 1));
+                }
+            }
+        }
+    }
+    assert!(offences.is_empty(), "{}", offences.join("\n"));
+}
+
+#[test]
+fn every_github_action_is_pinned_to_a_commit_sha() {
+    // a tag can move; only a full SHA pin is immutable, so every `uses:` must be SHA-pinned
+    let uses = re(r"(?m)^\s*(-\s+)?uses:");
+    let pinned = re(r"uses:\s*[^@\s]+@[0-9a-f]{40}\s+#\s*\S");
+    let unpinned = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter(|l| uses.is_match(l) && !pinned.is_match(l))
+            .map(|l| l.trim().to_string())
+            .collect()
+    };
+
+    let workflows = repo_root().join(".github/workflows");
+    let files = walk(&workflows);
+    assert!(!files.is_empty(), "no workflow files matched");
+    for rel in &files {
+        assert_eq!(
+            unpinned(&read(&workflows.join(rel))),
+            Vec::<String>::new(),
+            "{}",
+            rel.display()
+        );
+    }
+
+    let fixture = "\
+      - uses: actions/checkout@v7.0.1\n\
+      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc\n\
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1\n";
+    assert_eq!(unpinned(fixture).len(), 2, "{:?}", unpinned(fixture));
+}
+
+#[test]
+fn the_skill_hook_fires_on_a_headless_lane() {
+    // UserPromptSubmit, not SessionStart: SessionStart fires once and decays as context grows
+    let repo = Repo::new();
+    init::install(
+        &repo.root,
+        &InitOpts {
+            adapter: Some("claude".to_string()),
+            ..InitOpts::default()
+        },
+    )
+    .expect("install");
+
+    let settings: serde_json::Value =
+        serde_json::from_str(&read(&repo.root.join(".claude/settings.json"))).expect("settings");
+    let on_prompt = settings["hooks"]["UserPromptSubmit"].to_string();
+    assert!(on_prompt.contains("harness hook skills"), "{on_prompt}");
+
+    // count is asserted so an emptied skill list can't trivially pass this
+    let (code, stdout, stderr) = harness(&repo.root, &["hook", "skills"]);
+    assert_eq!(code, 0, "{stderr}");
+    let cfg = harness::config::load(&repo.root).expect("config");
+    assert_eq!(cfg.skill.len(), 7);
+    for skill in &cfg.skill {
+        assert!(
+            stdout.contains(&skill.id),
+            "{} absent from {stdout}",
+            skill.id
+        );
+    }
+}
+
+#[test]
+fn no_role_prompt_carries_an_incident_narrative() {
+    // role prompts are instructions, not post-mortems; dated incidents cost tokens on every stage
+    let narrative = re(
+        r"(?i)[0-9]{4}-[0-9]{2}-[0-9]{2}|TASKS\.md T-[0-9]|reproduced (on |by )?[0-9]{4}|agentskills\.io",
+    );
+    assert!(
+        narrative.is_match("reproduced on 2026-09-04"),
+        "the scan cannot report"
+    );
+
+    let roles = repo_root().join("roles");
+    for rel in walk(&roles) {
+        let text = read(&roles.join(&rel));
+        assert!(
+            !narrative.is_match(&text),
+            "roles/{}: {:?}",
+            rel.display(),
+            narrative.find(&text).map(|m| m.as_str())
+        );
+    }
+}
+
+#[test]
+fn no_shipped_file_carries_rhetorical_filler() {
+    let filler = re(
+        r"(?i)the whole point|that is the trick|is the whole |beautifully|elegantly|, it is one |extra steps|which is the point|the honest argument|is not a [a-z]+, it is",
+    );
+    assert!(
+        filler.is_match("which is the point"),
+        "the scan cannot report"
+    );
+
+    let root = repo_root();
+    for rel in [
+        "README.md",
+        "roles",
+        "templates",
+        "skills",
+        "docs/demo.sh",
+        "docs/bootstrap.sh",
+        "driver.sh",
+        "crates/harness/src",
+        "crates/harness/harness.default.toml",
+    ] {
+        let path = root.join(rel);
+        let files: Vec<PathBuf> = if path.is_dir() {
+            walk(&path).into_iter().map(|p| path.join(p)).collect()
+        } else {
+            vec![path]
+        };
+        for file in files {
+            let Ok(text) = fs::read_to_string(&file) else {
+                continue;
+            };
+            assert!(
+                !filler.is_match(&text),
+                "{}: {:?}",
+                file.display(),
+                filler.find(&text).map(|m| m.as_str())
+            );
+        }
+    }
+}
+
+#[test]
+fn the_shell_package_is_gone() {
+    let gone = [
+        "harness/",
+        "install.sh",
+        "selftest.sh",
+        "adapters/claude/skill-hook.sh",
+        "evals/run.sh",
+    ];
+    let out = Command::new("git")
+        .args(["ls-files"])
+        .current_dir(repo_root())
+        .output()
+        .expect("git ls-files");
+    assert!(out.status.success(), "{:?}", out);
+    let tracked = String::from_utf8_lossy(&out.stdout);
+    for path in gone {
+        assert!(
+            !tracked.lines().any(|l| l == path || l.starts_with(path)),
+            "{path} is still tracked"
+        );
+    }
+
+    let mentions: Vec<String> = crate_sources()
+        .into_iter()
+        .flat_map(|(rel, text)| {
+            text.lines()
+                .filter(|l| l.contains("install.sh") || l.contains("selftest.sh"))
+                .map(move |l| format!("{}: {}", rel.display(), l.trim()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(mentions, Vec::<String>::new());
+}
+
+#[test]
+#[ignore = "installs four repos and drives four iterations; run with --ignored"]
+fn the_package_driver_reports_shortfalls_as_finding_lines() {
+    // deliberately not asserting findings.len() > 0 -- that would require the harness to stay broken
+    let (code, out) = script(&repo_root().join("driver.sh"), &repo_root(), &[]);
+    assert_eq!(code, 0, "{out}");
+    let stray: Vec<&str> = out
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with("FINDING "))
+        .collect();
+    assert_eq!(stray, Vec::<&str>::new());
+
+    // every sha printed must resolve in this repo -- drive() works in a mktemp dir removed before it prints
+    let sha = re(r"^FINDING [^:]*: ([0-9a-f]+) ");
+    for line in out.lines() {
+        let Some(caps) = sha.captures(line) else {
+            continue;
+        };
+        let rev = format!("{}^{{commit}}", &caps[1]);
+        assert!(
+            harness::git::git_ok(&repo_root(), &["rev-parse", "-q", "--verify", &rev]),
+            "{line}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "spawns a real agent; run with HARNESS_EVALS and --ignored"]
+fn the_trimmed_role_prompts_still_pass_their_evals() {
+    let (code, stdout, stderr) = harness(&repo_root(), &["eval"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert_eq!(stdout.lines().filter(|l| l.ends_with(" PASS")).count(), 3);
+}
+
+#[test]
+fn the_licence_is_mit() {
+    let root = repo_root();
+    let licence = read(&root.join("LICENSE"));
+    assert!(
+        licence.starts_with("MIT License"),
+        "{}",
+        licence.lines().next().unwrap_or("")
+    );
+    let manifest = read(&root.join("crates/harness/Cargo.toml"));
+    assert!(manifest.contains("license = \"MIT\""), "{manifest}");
+}

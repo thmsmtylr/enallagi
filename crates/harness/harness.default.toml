@@ -1,0 +1,204 @@
+# Embedded defaults; harness.toml deep-merges over them, tables key by key and arrays whole.
+
+# preset names the agent's headless command (claude, codex, ... or custom with a command list); [agent.<role>] overrides it per role.
+[agent]
+preset = "claude"
+rate_limit_pattern = "hit your session limit"
+
+# command decides whether the tree is green; force is the same check uncached; fail_name's group 1 is the failing test's name.
+[check]
+command = "bun run check"
+force = "bun run check -- --force"
+fail_name = '\(fail\) (.+?)(?: \[[0-9.]+m?s\])?$'
+
+[layout]
+# context_file is the file every role reads first; pointer_files are one-line pointers to it for tools that read their own.
+context_file = "AGENTS.md"
+pointer_files = ["CLAUDE.md", "GEMINI.md", "QWEN.md", ".github/copilot-instructions.md"]
+
+# harness_dir holds the roles, hooks and scratch state; skills_dir is the agent's skills directory, unset meaning the preset's own.
+harness_dir = ".harness"
+skill_invocation = "invoke it via the Skill tool"
+
+# driver_command runs the built artifact in a throwaway directory and prints one `FINDING ` line per shortfall; empty is off, and HARNESS_DRIVER=1 is also required.
+driver_command = ""
+
+spec = "SPEC.md"
+rows_heading = "## 11. Exit criteria"
+rows_end_heading = "## 12."
+source_root = "src"
+contract_file = "src/schema.ts"
+test_file_suffix_re = '\.test\.ts'
+test_decl_patterns = ["test('{name}'", 'test("{name}"']
+source_ext = [".ts", ".tsx", ".js", ".mjs", ".cjs", ".sh", ".py"]
+
+harness_files = [
+  "package.json",
+  "turbo.json",
+  "check.ts",
+  "bunfig.toml",
+  "Makefile",
+  "pyproject.toml",
+]
+harness_globs = ["packages/*/package.json"]
+allowed_prefixes = [
+  "src/",
+  "packages/",
+  "evals/",
+  ".harness/",
+  ".claude/",
+  ".github/",
+  ".codex/",
+  ".gemini/",
+  ".cursor/",
+]
+docs = [
+  ".check-baseline",
+  "AGENTS.md",
+  "README.md",
+  "LICENSE",
+  "LICENCE",
+  "NOTICE",
+  "BLOCKED.md",
+  "CLAUDE.md",
+  "DECISIONS.md",
+  "GEMINI.md",
+  "LEARNINGS.md",
+  "PROGRESS.archive.md",
+  "PROGRESS.md",
+  "QWEN.md",
+  "REFERENCES.md",
+  "SPEC.md",
+  "TASKS.md",
+  "harness.default.toml",
+  "harness.toml",
+  "test-hashes.json",
+]
+harness_allow = [
+  "package.json",
+  "turbo.json",
+  "tsconfig.json",
+  "bunfig.toml",
+  "check.ts",
+  "bun.lock",
+  ".gitignore",
+  "Makefile",
+  "pyproject.toml",
+]
+machinery = [
+  ".DS_Store",
+  ".check",
+  ".turbo",
+  ".venv",
+  "STOP",
+  "__pycache__",
+  "build",
+  "dist",
+  "node_modules",
+  "out",
+  "target",
+]
+
+# learnings_cap is the most entries LEARNINGS.md may hold; at the cap, adding one means removing one.
+learnings_cap = 12
+
+# review runs before task: a task left at review is verified before a new one is taken.
+[[pipeline]]
+name = "review"
+when = "queue.reviewing"
+stages = ["verify"]
+
+[[pipeline]]
+name = "task"
+when = "queue.takeable"
+stages = ["implement", "verify"]
+
+[[pipeline]]
+name = "discover"
+when = "!queue.takeable"
+stages = ["scout", "adjudicate"]
+end_after_dry_rounds = 2
+
+[[stage]]
+name = "implement"
+role = "implementer"
+turns = 120
+post = ["queue-intact", "implementer-not-done"]
+
+[[stage]]
+name = "verify"
+role = "verifier"
+turns = 100
+post = ["commit-verdict", "queue-intact", "verdict", "scope"]
+
+[[stage]]
+name = "scout"
+role = "scout"
+turns = 30
+env = { HARNESS_DRIVER = "1" }
+
+[[stage]]
+name = "adjudicate"
+role = "adjudicator"
+turns = 40
+post = ["commit-round", "queue-intact", "adjudicator-halt", "dry-round"]
+
+# gate names the probe, rail or hook that fails without the skill, or the literal `none`; an id renamed here is renamed in roles/ too.
+
+[[skill]]
+id = "tdd"
+source = "github:obra/superpowers"
+path = "skills/test-driven-development"
+rev = "v6.3.0"
+gate = "spec-untested"
+why = "the failing test that encodes the acceptance criteria is written before the code"
+
+[[skill]]
+id = "ponytail"
+source = "github:DietrichGebert/ponytail"
+path = "skills/ponytail"
+rev = "v4.8.4"
+gate = "ponytail-ceiling"
+why = "the ladder is walked before any new code, and a shortcut taken anyway is marked"
+
+[[skill]]
+id = "debugging"
+source = "github:obra/superpowers"
+path = "skills/systematic-debugging"
+rev = "v6.3.0"
+gate = "anchored"
+why = "a finding carries the command that reproduces it rather than a theory about it"
+
+[[skill]]
+id = "review-received"
+source = "github:obra/superpowers"
+path = "skills/receiving-code-review"
+rev = "v6.3.0"
+gate = "rejection-repeat"
+why = "a rejected task answers every rejection point before it is re-implemented"
+
+[[skill]]
+id = "verify-before-done"
+source = "github:obra/superpowers"
+path = "skills/verification-before-completion"
+rev = "v6.3.0"
+gate = "blocked-is-allowed"
+why = "no completion claim without the exact command and its pasted output"
+
+[[skill]]
+id = "review-requested"
+source = "github:obra/superpowers"
+path = "skills/requesting-code-review"
+rev = "v6.3.0"
+gate = "verdict-flip"
+why = "the verifier works a checklist rather than reading the diff for whatever stands out"
+
+[[skill]]
+id = "brainstorming"
+source = "github:obra/superpowers"
+path = "skills/brainstorming"
+rev = "v6.3.0"
+gate = "queue-uncovered"
+why = "criteria are written before code, which here happens in the queue and not in a chat"
+
+# [[role]] takes name, source, path and rev as [[skill]] does; <path>/<name>.md vendors to <harness_dir>/roles/<name>.md and pins in harness.lock.

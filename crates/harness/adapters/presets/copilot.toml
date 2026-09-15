@@ -1,0 +1,11 @@
+name = "copilot"
+argv = ["copilot", "-p", "{prompt}", "--allow-all-tools", "--max-autopilot-continues", "{turns}"]
+turn_cap = "flag"
+model_flag = "--model"
+instruction_file = "AGENTS.md"
+hooks_file = ".github/hooks/harness.json"
+
+[hook_events]
+pre_tool_use = "preToolUse"
+stop = "agentStop"
+prompt_submit = "userPromptSubmitted"

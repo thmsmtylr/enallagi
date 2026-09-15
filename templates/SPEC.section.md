@@ -9,14 +9,13 @@ anything below it.
 
 Whatever this project rests on that could have moved since it was written — a protocol revision, an
 SDK constant, an API shape — is checked here **before any code is written**, and the loop stops if
-the check fails. A spec that assumes a version it has not confirmed produces software nobody can
-call. Record each result with the date you checked it.
+the check fails. Record each result with the date you checked it.
 
 ### 0.2 Rails the loop runs in
 
 | Rail | Rule | Why |
 | --- | --- | --- |
-| `tests-immutable` | Every file named in §11 is immutable. The check compares each against a committed SHA-256 in `test-hashes.json` and a `PreToolUse` hook refuses the edit in-session — those **detect and make visible**; they are not authority. The check runs as the same principal as the lane, over data the lane can write, with no secret, so any predicate it evaluates the lane can satisfy. **The authority is the verifier**, in a fresh session, reading `git diff $BASE -- '<test glob>'` and `test-hashes.json` together: a re-cut key that does not correspond to a file on the task's `scope:` line is a rejection. The hash still earns its place — it forces the tamper to touch a second file and land as a loud line in the diff the verifier reads. | Read-only test files are the measured mitigation with the least performance cost (ImpossibleBench, [arXiv:2510.20270](https://arxiv.org/html/2510.20270v1)). Prose does not work: METR measured "please do not reward hack" failing in **70–95%** of attempts ([METR, 5 Jun 2025](https://metr.org/blog/2025-06-05-recent-reward-hacking/)). |
+| `tests-immutable` | Every file named in §11 is immutable. The check compares each against a committed SHA-256 in `test-hashes.json` and a `PreToolUse` hook refuses the edit in-session — those **detect and make visible**; they are not authority. **The authority is the verifier**, in a fresh session, reading `git diff $BASE -- '<test glob>'` and `test-hashes.json` together: a re-cut key that does not correspond to a file on the task's `scope:` line is a rejection. | Read-only test files are the measured mitigation with the least performance cost (ImpossibleBench, [arXiv:2510.20270](https://arxiv.org/html/2510.20270v1)). Prose does not work: METR measured "please do not reward hack" failing in **70–95%** of attempts ([METR, 5 Jun 2025](https://metr.org/blog/2025-06-05-recent-reward-hacking/)). |
 | `harness-immutable` | The build config, every preload script, the package scripts, the check script **and the loop script itself** are covered by the same hashes. | The three hacks Anthropic found in its own production RL environments were `AlwaysEqual`, `sys.exit(0)` before assertions, and a `conftest.py` monkey-patch ([arXiv:2511.18397](https://arxiv.org/html/2511.18397v1)). Every runtime has analogues. |
 | `one-row` | One §11 row per iteration. Commit, then write what happened to `PROGRESS.md`. Re-read its tail, this file and `git log --oneline -20` at the start of every iteration. | Per-bug accuracy falls **58.9% → 36.5%** when an agent inherits its own prior state rather than a clean one (ChainSWE, via [arXiv:2607.27283](https://arxiv.org/html/2607.27283v1)); multi-turn degradation averages **39%** and "when LLMs take a wrong turn… they get lost and do not recover" ([Laban et al., arXiv:2505.06120](https://arxiv.org/abs/2505.06120)). |
 | `minutes-not-hours` | No row in §11 may be more than ~30 minutes of human-equivalent work. Split it if it is. | Agent success decays exponentially with task length at a constant hazard rate: **T₉₀ ≈ ⅐ T₅₀**, **T₉₉ ≈ 1/70 T₅₀** ([Ord, arXiv:2505.05115](https://arxiv.org/pdf/2505.05115)). At a 320-minute 50%-horizon ([METR TH1.1, 29 Jan 2026](https://metr.org/blog/2026-1-29-time-horizon-1-1/)), 90% reliability means ~45-minute units. |
@@ -26,9 +25,8 @@ call. Record each result with the date you checked it.
 
 ### 0.3 Forbidden by name
 
-The check greps for each of these and fails on a hit. They are not hypothetical; each was measured
-in a production or benchmark setting. Adapt the list to your runtime — the taxonomy is what ports,
-not the syntax.
+The check greps for each of these and fails on a hit. Adapt the list to your runtime — the taxonomy
+is what ports, not the syntax.
 
 - Editing any file listed in §11 or in §0.2 `harness-immutable`.
 - Process exit calls anywhere under the source or test tree.
@@ -56,14 +54,8 @@ trace      → parse §11 and the test output; assert every row maps to a test t
              ran, carries at least one assertion, and is not skipped or todo
 ```
 
-`trace` is a **step after the tests, not a test inside them**, because a suite cannot testify that
-it ran. Test names in §11 are constrained to `[A-Za-z0-9 _:-]` so that name-filtering, which usually
-takes a regex, cannot misfire.
-
-The `lint` structural gate is not decoration. Agent code shows structural erosion rising in **77%**
-of trajectories and verbosity in **75.5%**, at **2.3× the verbosity and 2.0× the erosion** of human
-repos, accumulating **5–6.6× faster per checkpoint** — all while passing the tests
-([SlopCodeBench, arXiv:2603.24755](https://arxiv.org/pdf/2603.24755)).
+`trace` is a **step after the tests, not a test inside them**. Test names in §11 are constrained to
+`[A-Za-z0-9 _:-]`.
 
 ---
 
@@ -71,7 +63,7 @@ repos, accumulating **5–6.6× faster per checkpoint** — all while passing th
 
 Every row is one behaviour, named by the test that proves it. The loop turns rows green one at a
 time and `trace` refuses a row whose test did not run. The heading above and its terminator are
-what `harness.json` points the probes at — rename it there if you rename it here.
+what `harness.toml` points the probes at — rename it there if you rename it here.
 
 | Behaviour | Test |
 | --- | --- |

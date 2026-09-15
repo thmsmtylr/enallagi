@@ -1,30 +1,45 @@
 #!/usr/bin/env bash
-# This package's own driver — the worked example of what `driverCommand` points at.
+# This package's own driver — the worked example of what `driver_command` points at.
 #
-# The twelve other probes read text. This one reaches the artifact: it installs the package into a
-# throwaway repository and drives one request through the installed loop, four times, each with a
+# The twelve other probes read text. This one reaches the artifact: it installs the harness into a
+# throwaway repository and drives one request through the installed binary, four times, each with a
 # lane that is sloppy in exactly one way. Then it reads the PERSISTENT EFFECT — the task's status,
-# the working tree, the digest, the log — and prints a `FINDING ` line for every sloppiness the
-# harness let through. Nothing it prints comes from what the loop SAID; a loop can describe the
-# correct verdict without reaching it.
+# the working tree, the event log — and prints a `FINDING ` line for every sloppiness the harness
+# let through. Nothing it prints comes from what the run SAID; a run can describe the correct
+# verdict without reaching it.
 #
 # `unlabelled` is not one of those four and is reached only as `--unlabelled`: it counts rather than
 # accuses, reading the `git log` of the repository it is run FROM for commits naming no task. It is
 # deliberately not driven. `drive()` works inside a `mktemp -d` that is `rm -rf`'d before the probe
 # prints, so a sha read out of there resolves nowhere, and the one unlabelled commit in that sandbox
 # is made by this file's own lane fixture — a finding manufactured by the instrument. It has no
-# round boundary either (`git log --format='%h %s' | grep -vc 'T-[0-9][0-9][0-9]'` → 57 of 171
-# commits in this repository at 5842a69, 2026-09-06), so the caller chooses the history.
+# round boundary either, so the caller chooses the history.
 #
-# Contract (the same one harness.json documents for any driver):
+# Contract (the same one harness.default.toml documents for any driver):
 #   exit 0  whenever it REACHED the artifact, whatever it found
 #   exit >0 only when it could not reach it — that is `PROBE driver ERROR`, and a scout proposes
 #           nothing from a probe that did not run
 #
 # Usage:  ./driver.sh            from anywhere
-#         driverCommand: "$HARNESS_ROOT/driver.sh"   in harness.json, with HARNESS_DRIVER=1
+#         driver_command = "$HARNESS_ROOT/driver.sh"   in harness.toml, with HARNESS_DRIVER=1
+#
+# HARNESS_BIN names the binary under test. It defaults to this checkout's release build, which is
+# built here when it is absent: the driver measures the artifact, so it must not measure a stale one
+# the caller happens to have on PATH.
 set -u
 PKG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HARNESS_BIN="${HARNESS_BIN:-$PKG/target/release/harness}"
+if [ ! -x "$HARNESS_BIN" ]; then
+  (cd "$PKG" && cargo build --release -q) || {
+    echo "driver: no $HARNESS_BIN and cargo build --release failed" >&2
+    exit 3
+  }
+fi
+[ -x "$HARNESS_BIN" ] || {
+  echo "driver: $HARNESS_BIN is not executable" >&2
+  exit 3
+}
+export HARNESS_BIN # the lane fixture runs `harness tasks set-status`
 
 # One throwaway repo, one installed harness, one iteration, one sloppy lane. Everything this
 # function prints is read back by the caller; nothing is judged in here.
@@ -34,10 +49,9 @@ drive() { # $1 = the lane's sloppiness
   (
     cd "$d" || exit 3
     git init -q && git config user.email driver@local && git config user.name driver
+    git config commit.gpgsign false
     mkdir -p src && echo 'export const x = 1' >src/schema.ts
     git add -A && git commit -qm 'chore: T-001 init' >/dev/null
-
-    "$PKG/install.sh" "$d" >/dev/null 2>&1 || exit 3
 
     cat >src/lane.sh <<'LANE'
 #!/usr/bin/env bash
@@ -46,7 +60,7 @@ case "$1" in
   *"roles/implementer.md"*)
     echo "the work" > src/allowed.ts
     [ "$MODE" = "out-of-scope" ] && echo "not mine" > src/sneaky.ts
-    sed -i.bak 's/^status: ready/status: review/' TASKS.md && rm -f TASKS.md.bak
+    "$HARNESS_BIN" tasks set-status T-001 review 'driver lane implemented' >/dev/null
     [ "$MODE" != "no-progress" ] && printf '\n## driver — T-001 — landed\nfriction: none\n' >> PROGRESS.md
     # this mode exists for exactly this: the work never lands on the branch.
     # `if`, never `[ ] && ...` as the last statement of a branch: a false test is the script's
@@ -54,37 +68,50 @@ case "$1" in
     if [ "$MODE" != "uncommitted" ]; then git add -A && git commit -qm "feat: T-001" >/dev/null; fi
     ;;
   *"roles/verifier.md"*)
-    sed -i.bak 's/^status: review/status: done/' TASKS.md && rm -f TASKS.md.bak ;;
+    "$HARNESS_BIN" tasks set-status T-001 done 'driver lane verified' >/dev/null ;;
 esac
+echo '{"total_cost_usd": 0.5}'
 LANE
     chmod +x src/lane.sh
 
-    MODE="$mode" python3 - <<'CFG'
-import json, os
-c = json.load(open('harness.json'))
-c['agentCommand'] = ['./src/lane.sh', '{prompt}', '{turns}']
-# a red floor is its own mode; every other mode gets a green one so the gate under test is the
-# one the mode is about
-c['check'] = c['checkForce'] = 'false' if os.environ['MODE'] == 'red-check' else 'true'
-json.dump(c, open('harness.json', 'w'), indent=2)
-CFG
-    "$PKG/install.sh" "$d" >/dev/null 2>&1 || exit 3
+    # a red floor is its own mode; every other mode gets a green one so the gate under test is the
+    # one the mode is about
+    check=true
+    [ "$mode" = "red-check" ] && check=false
+    cat >harness.toml <<TOML
+[agent]
+preset = "custom"
+command = ["./src/lane.sh", "{prompt}", "{turns}"]
 
-    python3 - <<'TASK'
-s = open('TASKS.md').read().replace('''## [T-001] <the first task>
-scope:
-blockedBy: none''', '''## [T-001] <the first task>
-scope: src/allowed.ts
-blockedBy: none''')
-open('TASKS.md', 'w').write(s)
-TASK
+[agent.usage]
+cost = "total_cost_usd"
+
+[check]
+command = "$check"
+TOML
+    # The role prompts name skills by `{{skill:id}}`; declare them from local directories so the
+    # resolve runs with nothing to fetch. CI forces --frozen, which refuses a stage whose skills are
+    # not already vendored and locked, so `skills sync` runs before the loop does.
+    for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming; do
+      mkdir -p "vendor/$id"
+      printf '# %s\n' "$id" >"vendor/$id/SKILL.md"
+      printf '\n[[skill]]\nid = "%s"\nsource = "path:vendor/%s"\npath = ""\ngate = "none"\nwhy = "the driver fixture"\n' \
+        "$id" "$id" >>harness.toml
+    done
+
+    "$HARNESS_BIN" init >/dev/null 2>&1 || exit 3
+    "$HARNESS_BIN" skills sync >/dev/null 2>&1 || exit 3
+
+    # The seeded T-001 ships with an empty scope: line. Give it one, so the scope gate has
+    # something to judge the lane's diff against.
+    sed -i.bak 's|^scope:$|scope: src/allowed.ts|' TASKS.md && rm -f TASKS.md.bak
     git add -A && git commit -qm 'chore: T-001 setup' >/dev/null
 
-    MODE="$mode" .harness/loop.sh 1 2>&1
-    # the persistent effect, read from the tree and not from anything the loop said
-    echo "EFFECT status=$(awk '/^## \[T-001\]/{f=1} f&&/^status:/{print $2; exit}' TASKS.md)"
+    MODE="$mode" "$HARNESS_BIN" run --iterations 1 --no-tui 2>&1
+    # the persistent effect, read from the tree and not from anything the run said
+    echo "EFFECT status=$("$HARNESS_BIN" tasks list | awk '/^T-001/{print $NF}')"
     echo "EFFECT dirty=$(git status --porcelain | grep -c . || true)"
-    echo "EFFECT stages=$(grep -c . .harness/run.log 2>/dev/null || true)"
+    echo "EFFECT stages=$("$HARNESS_BIN" events 2>/dev/null | grep -c 'stage\.end' || true)"
   )
   rc=$?
   rm -rf "$d"
@@ -117,10 +144,10 @@ for mode in uncommitted no-progress out-of-scope red-check; do
   status=$(status_of "$out")
   dirty=$(printf '%s\n' "$out" | sed -n 's/^EFFECT dirty=//p' | tail -1)
   stages=$(printf '%s\n' "$out" | sed -n 's/^EFFECT stages=//p' | tail -1)
-  # `status` is `ready` both when the gate held and when the loop never ran; the run log tells
-  # them apart. A mode in which no stage was spawned reached nothing, and is not a pass.
+  # `status` is `ready` both when the gate held and when the run never happened; the event log
+  # tells them apart. A mode in which no stage was spawned reached nothing, and is not a pass.
   [ "${stages:-0}" -gt 0 ] || {
-    echo "driver: mode $mode spawned no stage (run.log is empty), so no gate was reached" >&2
+    echo "driver: mode $mode spawned no stage (the event log has none), so no gate was reached" >&2
     printf '%s\n' "$out" | tail -5 >&2
     unreached=1
     continue
@@ -131,7 +158,7 @@ for mode in uncommitted no-progress out-of-scope red-check; do
     ;;
   no-progress)
     printf '%s\n' "$out" | grep -q 'wrote no PROGRESS.md entry' ||
-      echo "FINDING a lane wrote no PROGRESS.md entry and the digest did not say so. The next iteration inherits nothing and cannot tell that it is the second attempt."
+      echo "FINDING a lane wrote no PROGRESS.md entry and the run did not say so. The next iteration inherits nothing and cannot tell that it is the second attempt."
     ;;
   out-of-scope)
     [ "$status" = "done" ] && echo "FINDING a lane edited a file outside its scope: globs and the task still reached done. The one-scope rail is not enforced on this tree."

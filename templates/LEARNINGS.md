@@ -1,19 +1,13 @@
 # LEARNINGS
 
-<!-- One line per costly mistake: - [date] <what went wrong> → <rule instead> (evals/<name>) -->
-<!-- A dated entry names the eval that decided it was worth its place. Write the eval first, run -->
-<!-- `evals/run.sh --gate <name>`, and add the line only on ACCEPT: the eval has to fail without -->
-<!-- the rule and pass with it, and regress nothing that was passing. `[seed]` entries predate -->
-<!-- the gate. The file is capped (learningsCap): at the cap, adding a rule means removing one. -->
-<!-- Read at the start of every task. Rails are named in CLAUDE.md, never numbered. -->
-<!-- Every entry names a file, a command or a hook. One that names nothing is unenforceable, -->
-<!-- and probes.sh `learning-unenforced` will say so. -->
+<!-- One line per costly mistake: - [date] <what went wrong> → <rule instead> (evals/<name>). A dated line lands only on ACCEPT from `harness eval --gate <name>`; `[seed]` entries predate the gate. Read at the start of every task.
+     Capped (learningsCap): at the cap, adding a rule means removing one. Every entry names a file, a command or a hook, or `harness probe` `learning-unenforced` reports it. Rails are named in CLAUDE.md, never numbered. -->
 
 - [seed] **ZERO IS NOT PASS.** A build tool that ran no task, a hook that matched no file, a filter
   that selected no package and a glob that found nothing all exit 0. In every case the absence of a
   failure is indistinguishable from the absence of a check → a gate asserts what it EXECUTED, never
-  merely that nothing failed. `.claude/hooks/check-gate.sh` fails closed when it cannot name what
-  failed, for this reason.
+  merely that nothing failed. `src/hooks.rs`'s `harness hook verify-done` fails closed when it
+  cannot name what failed, for this reason.
 - [seed] A build cache hashes its declared inputs, so a document a test reads that is not declared
   gives a green nobody ran → a document a test reads is declared as a cache input in the same commit
   (`turbo.json` `globalDependencies`, or your tool's equivalent), and a number quoted to a human comes
@@ -22,7 +16,7 @@
   two blocks with the same id → work in a worktree, and never `git add -A` when a second session may
   hold the same file. Stage the paths the task named.
 - [seed] An implementation that is not committed is a lost iteration: a lane killed at a wait ceiling
-  leaves the work in the tree with the task still reading `ready` → `__HARNESS_DIR__/loop.sh` makes the commit
+  leaves the work in the tree with the task still reading `ready` → `harness run` makes the commit
   the last required step in its implement prompt, and warns when an iteration left `PROGRESS.md`
   unchanged (`git status --porcelain` after a lane is the check).
 - [seed] Never use a harness control token as an English word in an agent prompt. "STOP" as prose

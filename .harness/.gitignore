@@ -1,0 +1,7 @@
+events.jsonl
+*.log
+logs/
+worktrees/
+loop.pid
+run/
+__pycache__/

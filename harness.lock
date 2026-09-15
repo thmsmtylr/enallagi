@@ -1,0 +1,50 @@
+version = 1
+
+[[skill]]
+id = "brainstorming"
+source = "github:obra/superpowers"
+rev = "v6.3.0"
+commit = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
+sha256 = "74edf03ea6d24ef53db48677b93558d14a979bdf052ca3f57ecdca0c66791608"
+
+[[skill]]
+id = "debugging"
+source = "github:obra/superpowers"
+rev = "v6.3.0"
+commit = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
+sha256 = "808fc5717aa88ad65efff312b11c186294d3e6ee301afb584e2f86599b137787"
+
+[[skill]]
+id = "ponytail"
+source = "github:DietrichGebert/ponytail"
+rev = "v4.8.4"
+commit = "bc9ee949d5f439e8b9f3bb92c6d6d3d1e6ebd324"
+sha256 = "d1ffcddbc486ab787d5797441e8b6e4717da3249c6786b83fc2abd2f12803c29"
+
+[[skill]]
+id = "review-received"
+source = "github:obra/superpowers"
+rev = "v6.3.0"
+commit = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
+sha256 = "091df1629510af1b92fc4abd6f96732ebedb4cb2c0f3457e8f2740b0504a2438"
+
+[[skill]]
+id = "review-requested"
+source = "github:obra/superpowers"
+rev = "v6.3.0"
+commit = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
+sha256 = "d71cc01ba56d2325cf8af5f7c11837819b63ecd57de0bfdb812f7f3ff7751df8"
+
+[[skill]]
+id = "tdd"
+source = "github:obra/superpowers"
+rev = "v6.3.0"
+commit = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
+sha256 = "bf1b8216e523851a411e91d429a7c1c2a173e79d88957bc78e348218d50edd54"
+
+[[skill]]
+id = "verify-before-done"
+source = "github:obra/superpowers"
+rev = "v6.3.0"
+commit = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
+sha256 = "2befe7fc55bcadaa3d97dd9e8efeb633d2561c0ebe74c5a8b17c4d9e7e4520b3"

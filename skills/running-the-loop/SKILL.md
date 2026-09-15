@@ -17,14 +17,13 @@ entries and none of the handoff.
 Restate the task's acceptance criteria in one sentence before writing code. If you cannot, the task
 is `needs-spec` and the question goes in its `notes:`.
 
-## The four roles, and why they are separate
+## The four roles
 
-An agent that finds its own work and then grades it is not a loop. Each role has one job and one
-thing it may never do:
+Each role has one job and one thing it may never do:
 
 | Role | Does | May never |
 | --- | --- | --- |
-| scout | turns `FINDING` lines from `hooks/probes.sh` into `status: proposed` blocks | have a finding of its own, promote, or fix |
+| scout | turns `FINDING` lines from `harness probe` into `status: proposed` blocks | have a finding of its own, promote, or fix |
 | adjudicator | promotes a proposal to `ready` with runnable criteria, or kills it with the command that refutes it | write a proposal, or edit a file a block names |
 | implementer | one task, inside its `scope:` globs, test first | mark anything `done` |
 | verifier | fresh session, adversarial, promotes to `done` or rejects with reproducible reasons | fix code |
@@ -53,8 +52,9 @@ Stopping with `BLOCKED` and a written reason is a success, not a failure.
 
 Every iteration's `PROGRESS.md` entry ends with `friction:` — one thing that cost time and a rule or
 a check could prevent, or `none`. The first occurrence is evidence and stays there. The **second**
-occurrence of the same thing becomes a line in `LEARNINGS.md`, and `probes.sh` → `friction-repeat`
-keeps emitting it until it is. One rule per surprise rewrites the operating manual every week, which costs more than the friction it removes.
+occurrence of the same thing is decided: a line in `LEARNINGS.md`, which `harness eval --gate` must
+admit, or a dated kill line in `DECISIONS.md` quoting the `--gate` run that refused the rule.
+`harness probe` → `friction-repeat` keeps emitting it until one of the two is written.
 
 ## The rails
 
