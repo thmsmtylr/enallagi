@@ -58,13 +58,24 @@ pub fn is_dir(root: &Path, rel: &str) -> bool {
     root.join(rel).is_dir()
 }
 
+// a harness directory that is its own repository is outside the product's index; list what the launcher's `git add -A` there commits
 pub fn tracked(root: &Path) -> Res<Vec<String>> {
-    let out = git::git(root, &["ls-files"]).map_err(|e| e.to_string())?;
-    Ok(out
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(String::from)
-        .collect())
+    let list = |repo: &Path, args: &[&str], prefix: &str| -> Res<Vec<String>> {
+        let out = git::git(repo, args).map_err(|e| e.to_string())?;
+        Ok(out
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| format!("{prefix}{l}"))
+            .collect())
+    };
+    let mut paths = list(root, &["ls-files"], "")?;
+    let dir = crate::config::harness_dir(root);
+    let state = git::state_root(root, &dir);
+    if state != root {
+        let args = ["ls-files", "--cached", "--others", "--exclude-standard"];
+        paths.extend(list(&state, &args, &format!("{dir}/"))?);
+    }
+    Ok(paths)
 }
 
 pub fn walk(root: &Path) -> Vec<String> {
