@@ -51,7 +51,7 @@ case "$1" in
   *"roles/implementer.md"*)
     echo 'export const y = 2' > src/allowed.ts
     "$HARNESS_BIN" tasks set-status T-001 review 'the demo lane implemented it' >/dev/null
-    printf '\n## demo — T-001 — landed\nfriction: none\n' >> PROGRESS.md
+    printf '\n## demo — T-001 — landed\nfriction: none\n' >> .enallagi/PROGRESS.md
     git add -A && git commit -qm 'feat: T-001 the work' >/dev/null
     ;;
   *"roles/verifier.md"*)
@@ -98,7 +98,7 @@ printf 'installed %s files\n' "$(printf '%s\n' "$INSTALL" | grep -c '^  wrote: '
 
 # The seeded T-001 ships with an empty scope: line. Give it one, so the scope gate below has
 # something to judge the lane's diff against.
-sed -i.bak 's|^scope:$|scope: src/allowed.ts|' TASKS.md && rm -f TASKS.md.bak
+sed -i.bak 's|^scope:$|scope: src/allowed.ts|' .enallagi/TASKS.md && rm -f .enallagi/TASKS.md.bak
 git add -A && git commit -qm 'chore: T-001 setup' >/dev/null
 
 # `CI` forces --frozen, which refuses a stage whose skills are not already vendored and locked, so
@@ -116,4 +116,4 @@ step "one iteration: an implementer process, then a separate verifier process"
 step "what persisted, read back off the tree and not off anything an agent said"
 printf 'T-001  status: %s\n' "$("$HARNESS_BIN" tasks list | awk '/^T-001/{print $NF}')"
 git log --oneline --format='%s' | sed 's/^/commit  /' | head -3
-printf 'PROGRESS.md ends: %s\n' "$(grep '^## ' PROGRESS.md | tail -1)"
+printf 'PROGRESS.md ends: %s\n' "$(grep '^## ' .enallagi/PROGRESS.md | tail -1)"
