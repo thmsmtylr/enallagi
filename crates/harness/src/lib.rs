@@ -11,6 +11,7 @@ pub mod git;
 pub mod hooks;
 pub mod init;
 pub mod pipeline;
+pub mod pr;
 pub mod probes;
 pub mod queue;
 pub mod roles;

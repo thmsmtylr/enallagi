@@ -32,6 +32,8 @@ outside it only `layout.pointer_files`, for a preset with no `{context_file}` in
 outside it go in one `# >>> harness` block of `git rev-parse --git-path info/exclude`, never `.gitignore`; `--dry-run` writes nothing.
 External repository: bring (`init`), run, `harness eject`. Eject refuses while a lane worktree or a live loop exists, naming each;
 else removes `.enallagi/` (`--keep-record <dir>` moves it out), each still-untracked block path and the block; `--dry-run` lists them.
+One pull request per landed task: `harness pr T-###` refuses a task not `done`, or one whose `blockedBy:` task has commits on the round branch and no mention in origin's default branch's history, naming it.
+It replays the product commits whose subject names the task onto that branch in a worktree outside the checkout (`git apply --3way`; a conflict names the files and leaves no branch), runs `check.command` there, commits once as the configured git user with the task ids in the body and no trailers, and writes `.enallagi/pr/T-###.md` from the task block, the commits naming it and the verifier's last notes. `--push` pushes the branch and runs `gh pr create` when gh is installed; nothing merges. Queue-only and instance-only tasks get none; coupled tasks share one, `harness pr T-### T-###`.
 
 ## What a run does
 
@@ -50,8 +52,7 @@ product files; the launcher commits the harness directory as `<stage> T-### at <
 back by `harness base T-###` as a task's diff base, and writes a `PROGRESS.md` entry when no role did.
 
 A run halts on a `STOP` file in the repo root; on `BUDGET_SECONDS` / `BUDGET_USD` / `BUDGET_TOKENS` (or `--budget-seconds` /
-`--budget-usd` / `--budget-tokens`, which wins) at the next stage boundary, where the dollar and token budgets need an
-`[agent.usage]` the preset fills and halt when nothing was observed; on the adjudicator parking a fix at `needs-spec`; and on a
+`--budget-usd` / `--budget-tokens`, which wins) at the next stage boundary, where the dollar and token budgets need an `[agent.usage]` the preset fills and halt when nothing was observed; on the adjudicator parking a fix at `needs-spec`; and on a
 stage that could not start. `--dry-run` prints the plan and the probe output, spawns nothing and runs no gates. `--frozen` refuses
 to re-vendor a skill whose hash has moved. `harness run` draws a live view whenever stdout is a tty (`--no-tui` suppresses it) and
 `harness watch` attaches read-only to a running loop's event log: three panes (queue, stages, output), `Tab` cycles focus,
@@ -270,8 +271,7 @@ a `shell` job runs `bash -n`, `shellcheck` and `docs/bootstrap.sh --check` over 
 
 ## Not included
 
-Parallel lanes (`harness worktree [N]` isolates one, product and harness directory, both fast-forwarded back or neither).
-A held-out test suite. A driver for your own artifact (`driver.sh` is the worked example for this one). `test-hashes.json`
+Parallel lanes (`harness worktree [N]` isolates one, product and harness directory, both fast-forwarded back or neither). A held-out test suite. A driver for your own artifact (`driver.sh` is the worked example for this one). `test-hashes.json`
 (`hash-uncovered` reports its absence until you write it). Evals for the implementer and researcher
 roles. The vendored skills: `harness skills sync` fetches them from `harness.lock` after a clone.
 

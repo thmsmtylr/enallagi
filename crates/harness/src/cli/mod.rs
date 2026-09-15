@@ -5,6 +5,7 @@ mod events;
 mod gate;
 mod hook;
 mod init;
+mod pr;
 mod probe;
 mod run;
 mod skills;
@@ -81,6 +82,15 @@ pub enum Command {
     Probe {
         /// Probes to run; empty runs all of them
         names: Vec<String>,
+    },
+    /// Build a pull-request branch off the upstream default branch holding only the product commits whose subject names the tasks
+    Pr {
+        /// Done task ids; several build one branch, for tasks that cannot land apart
+        #[arg(required = true)]
+        tasks: Vec<String>,
+        /// Push the branch and open the pull request with gh when it is installed; never merges
+        #[arg(long)]
+        push: bool,
     },
     /// Print the product commit a task was queued against, the base its diff is measured from
     Base {
@@ -184,6 +194,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         }),
         Command::Watch => watch::run(),
         Command::Probe { names } => probe::run(&probe::Args { names }),
+        Command::Pr { tasks, push } => pr::run(&pr::Args { tasks, push }),
         Command::Base { task } => base::run(&base::Args { task }),
         Command::Gate { which, task, base } => gate::run(&gate::Args { which, task, base }),
         Command::Hook { name } => hook::run(&hook::Args { name }),
