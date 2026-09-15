@@ -18,6 +18,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(
     name = "harness",
+    version,
     about = "An autonomous task loop for a coding agent, installed into any git repository."
 )]
 pub struct Cli {
