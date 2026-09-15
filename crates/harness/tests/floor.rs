@@ -661,4 +661,18 @@ fn the_licence_is_mit() {
     );
     let manifest = read(&root.join("crates/harness/Cargo.toml"));
     assert!(manifest.contains("license = \"MIT\""), "{manifest}");
+
+    // the declared skills are other people's MIT work; NOTICE carries their notices, which is what
+    // MIT asks of anyone who ships or builds on a copy
+    let notice = read(&root.join("NOTICE"));
+    for (source, holder) in [
+        ("obra/superpowers", "Jesse Vincent"),
+        ("DietrichGebert/ponytail", "DietrichGebert"),
+    ] {
+        assert!(notice.contains(source), "NOTICE omits {source}");
+        assert!(
+            notice.contains(holder),
+            "NOTICE omits the {source} copyright holder"
+        );
+    }
 }

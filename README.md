@@ -277,4 +277,4 @@ roles. The vendored skills: `harness skills sync` fetches them from `harness.loc
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. See `LICENSE`; `NOTICE` credits the skills this harness declares and does not write.
