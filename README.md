@@ -30,6 +30,8 @@ outside it only `layout.pointer_files`, for a preset with no `{context_file}` in
 `TASKS.md` or a `.harness/` keeps its layout: `harness init` lists each file with its new path, and
 `--move` moves them and installs nothing. A fresh `.enallagi/` is its own git repository; it and each untracked file init writes
 outside it go in one `# >>> harness` block of `git rev-parse --git-path info/exclude`, never `.gitignore`; `--dry-run` writes nothing.
+External repository: bring (`init`), run, `harness eject`. Eject refuses while a lane worktree or a live loop exists, naming each;
+else removes `.enallagi/` (`--keep-record <dir>` moves it out), each still-untracked block path and the block; `--dry-run` lists them.
 
 ## What a run does
 
@@ -47,14 +49,12 @@ per stage. `review` runs before `task`. `discover` ends the run after two dry ro
 product files; the launcher commits the harness directory as `<stage> T-### at <product sha>`, read
 back by `harness base T-###` as a task's diff base, and writes a `PROGRESS.md` entry when no role did.
 
-A run halts on a `STOP` file in the repo root; on `BUDGET_SECONDS` / `BUDGET_USD` /
-`BUDGET_TOKENS` (or `--budget-seconds` / `--budget-usd` / `--budget-tokens`, which wins) at the
-next stage boundary, where the dollar and token budgets need an `[agent.usage]` the preset fills
-and halt when nothing was observed; on the adjudicator parking a fix at `needs-spec`; and on a
-stage that could not start. `--dry-run` prints the plan and the probe output, spawns nothing and
-runs no gates. `--frozen` refuses to re-vendor a skill whose hash has moved. `harness run` draws a
-live view whenever stdout is a tty (`--no-tui` suppresses it) and `harness watch` attaches
-read-only to a running loop's event log: three panes (queue, stages, output), `Tab` cycles focus,
+A run halts on a `STOP` file in the repo root; on `BUDGET_SECONDS` / `BUDGET_USD` / `BUDGET_TOKENS` (or `--budget-seconds` /
+`--budget-usd` / `--budget-tokens`, which wins) at the next stage boundary, where the dollar and token budgets need an
+`[agent.usage]` the preset fills and halt when nothing was observed; on the adjudicator parking a fix at `needs-spec`; and on a
+stage that could not start. `--dry-run` prints the plan and the probe output, spawns nothing and runs no gates. `--frozen` refuses
+to re-vendor a skill whose hash has moved. `harness run` draws a live view whenever stdout is a tty (`--no-tui` suppresses it) and
+`harness watch` attaches read-only to a running loop's event log: three panes (queue, stages, output), `Tab` cycles focus,
 `Up`/`Down` scroll the focused pane, `?` toggles help, `q` quits.
 
 ## What is enforced, and by what

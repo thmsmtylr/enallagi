@@ -1,4 +1,5 @@
 mod base;
+mod eject;
 mod eval;
 mod events;
 mod gate;
@@ -40,6 +41,15 @@ pub enum Command {
         /// Move instance files at the repository root, or in a legacy .harness/, into the harness directory, and install nothing
         #[arg(long = "move")]
         move_files: bool,
+    },
+    /// Remove the harness from this repository: the harness directory, the untracked entry points init wrote, and the exclude block
+    Eject {
+        /// Print what would be removed and remove nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// Move the harness directory to this path outside the repository instead of deleting it
+        #[arg(long)]
+        keep_record: Option<std::path::PathBuf>,
     },
     /// Run the pipelines: a takeable task is implemented then verified; a task at review is verified; an empty queue runs the scout and adjudicator
     Run {
@@ -147,6 +157,13 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             adapter,
             dry_run,
             move_files,
+        }),
+        Command::Eject {
+            dry_run,
+            keep_record,
+        } => eject::run(&eject::Args {
+            dry_run,
+            keep_record,
         }),
         Command::Run {
             iterations,
