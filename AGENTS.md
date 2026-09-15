@@ -38,7 +38,8 @@ decide most reviews:
 
 ## Style
 
-<!-- Yours. Keep it to what an agent would otherwise get wrong. -->
+- A commit message carries no co-author or session trailer. The author of a commit here is the
+  person who owns the repository.
 
 ---
 
