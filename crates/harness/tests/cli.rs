@@ -537,3 +537,59 @@ fn base_in_the_root_layout_prints_what_the_pickaxe_on_tasks_md_prints() {
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), pickaxe);
 }
+
+fn in_harness(root: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(args)
+        .current_dir(root)
+        .output()
+        .expect("run harness")
+}
+
+#[test]
+fn gate_scope_with_the_product_base_refuses_a_grown_baseline_in_a_nested_install() {
+    let r = harness::fixture::Repo::new();
+    let git = |dir: &std::path::Path, args: &[&str]| harness::git::git(dir, args).expect("git");
+    let out = in_harness(&r.root, &["init"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    r.commit_all("install");
+    let queued = git(&r.root, &["rev-parse", "HEAD"]);
+    let state = r.root.join(".enallagi");
+    let commit_state = |msg: &str| {
+        git(&state, &["add", "-A"]);
+        git(
+            &state,
+            &["-c", "commit.gpgsign=false", "commit", "-qm", msg],
+        );
+    };
+    let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
+    let block = "\n## [T-900] grow\nscope: a.txt\nstatus: review\n";
+    r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
+    commit_state(&format!("queue at {queued}"));
+
+    r.write("a.txt", "work\n");
+    r.commit_all("T-900 work");
+    let worked = git(&r.root, &["rev-parse", "HEAD"]);
+    let baseline = std::fs::read_to_string(state.join(".check-baseline")).unwrap_or_default();
+    r.write(".enallagi/.check-baseline", &format!("{baseline}alpha\n"));
+    let done = block.replace("status: review", "status: done");
+    r.write(".enallagi/TASKS.md", &format!("{tasks}{done}"));
+    commit_state(&format!("verify T-900 at {worked}"));
+
+    let base = base_of(&r.root, "T-900");
+    assert_eq!(String::from_utf8_lossy(&base.stdout).trim(), queued);
+    let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("added a line to .check-baseline"),
+        "{out:?}"
+    );
+
+    let unrecorded = git(&r.root, &["rev-parse", "HEAD~2"]);
+    let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &unrecorded]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("records product revision"),
+        "{out:?}"
+    );
+}

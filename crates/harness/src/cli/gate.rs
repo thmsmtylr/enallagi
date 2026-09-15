@@ -25,14 +25,25 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         GateWhich::Verdict => "verdict",
         GateWhich::Scope => "scope",
     };
+    let iter_base = args.base.clone().unwrap_or_else(|| "HEAD~1".to_string());
+    let state_base = match &args.base {
+        None => iter_base.clone(),
+        Some(base) => match crate::git::state_rev(&root, &cfg.layout.harness_dir, base) {
+            Ok(rev) => rev,
+            Err(err) => {
+                println!("{name}: {err}");
+                return Ok(2);
+            }
+        },
+    };
     let outcome = gates::run(
         name,
         &mut GateCtx {
             root: &root,
             cfg: &cfg,
             task: Some(args.task.clone()),
-            iter_base: Some(args.base.clone().unwrap_or_else(|| "HEAD~1".to_string())),
-            state_base: Some(args.base.clone().unwrap_or_else(|| "HEAD~1".to_string())),
+            iter_base: Some(iter_base),
+            state_base: Some(state_base),
             stage_output: String::new(),
             events: &mut events,
             dry_run: false,

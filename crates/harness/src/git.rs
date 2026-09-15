@@ -122,6 +122,34 @@ pub fn commit_instance(
     Ok(true)
 }
 
+// a product revision as the state repository's own: the first state commit recorded at it, or an Err, never a revision that repository lacks
+pub fn state_rev(root: &Path, harness_dir: &str, rev: &str) -> Result<String, String> {
+    let state = state_root(root, harness_dir);
+    if state == root {
+        return Ok(rev.to_string());
+    }
+    let sha = git(
+        root,
+        &["rev-parse", "--verify", &format!("{rev}^{{commit}}")],
+    )
+    .map_err(|e| e.to_string())?;
+    let found = git(
+        &state,
+        &[
+            "log",
+            "--reverse",
+            "--format=%H",
+            &format!("--grep= at {sha}$"),
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    found
+        .lines()
+        .next()
+        .map(String::from)
+        .ok_or_else(|| format!("no commit in {harness_dir} records product revision {rev} ({sha})"))
+}
+
 // the product sha to diff a task against; the root layout keeps the pickaxe the verifier ran before
 pub fn task_base(root: &Path, harness_dir: &str, task: &str) -> Result<String, String> {
     let tasks = crate::config::instance_rel(root, harness_dir, "TASKS.md");

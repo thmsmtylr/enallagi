@@ -655,6 +655,25 @@ fn harness_init(repo: &Repo, args: &[&str]) -> String {
 }
 
 #[test]
+fn the_git_add_line_init_prints_on_a_fresh_install_exits_0() {
+    let repo = Repo::new();
+    let stdout = harness_init(&repo, &[]);
+    let line = stdout
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("4. git add "))
+        .unwrap_or_else(|| panic!("no git add line in:\n{stdout}"));
+    let paths: Vec<&str> = line.split_whitespace().collect();
+    assert!(paths.contains(&"AGENTS.md"), "{line}");
+    let out = std::process::Command::new("git")
+        .arg("add")
+        .args(&paths)
+        .current_dir(&repo.root)
+        .output()
+        .expect("run git add");
+    assert!(out.status.success(), "git add {line}: {out:?}");
+}
+
+#[test]
 fn init_lists_each_root_and_legacy_instance_file_with_its_new_path_and_moves_nothing() {
     let repo = root_layout();
     let stdout = harness_init(&repo, &[]);
