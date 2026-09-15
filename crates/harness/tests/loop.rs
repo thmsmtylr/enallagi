@@ -1024,3 +1024,149 @@ fn the_run_archives_the_task_it_landed_in_its_last_iteration() {
         digest.warnings
     );
 }
+
+fn deferring_verifier(r: &Repo, proposed: &str) -> String {
+    verifier_noting(
+        r,
+        "VERIFIED. Minor, not a reason for rejection: the test never removes the entry it registers.",
+        proposed,
+    )
+}
+
+fn verifier_noting(r: &Repo, note: &str, proposed: &str) -> String {
+    script(
+        r,
+        "src/fakeverify.sh",
+        &format!(
+            "{bin} tasks set-status T-001 done ''\n\
+             printf 'notes: {note}\\n' >>TASKS.md\n\
+             printf '%s' '{proposed}' >>TASKS.md\n\
+             {QUIET}",
+            bin = env!("CARGO_BIN_EXE_harness"),
+        ),
+    )
+}
+
+fn t001_status(r: &Repo) -> Option<String> {
+    let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    let blocks = harness::queue::parse(&text).expect("parse");
+    let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
+    harness::queue::field(t001, "status")
+}
+
+#[test]
+fn a_verdict_that_defers_a_finding_in_notes_with_no_proposed_block_is_refused() {
+    let r = repo(&base_toml(""), REVIEW_TASK);
+    let verify = deferring_verifier(&r, "");
+    with_verifier(&r, &verify);
+    r.commit_all("stubs");
+
+    let (digest, events) = go(&r, &opts(1));
+    let refusal = events.iter().find_map(|e| match &e.kind {
+        Kind::Gate {
+            gate, pass, reason, ..
+        } if gate == "commit-verdict" && !*pass => Some(reason.clone()),
+        _ => None,
+    });
+    let reason = refusal.unwrap_or_else(|| panic!("commit-verdict passed: {events:#?}"));
+    assert!(reason.contains("minor"), "{reason}");
+    assert_eq!(t001_status(&r).as_deref(), Some("review"));
+    assert!(digest.landed.is_empty(), "{:?}", digest.landed);
+    assert!(
+        harness::git::porcelain(&r.root).is_empty(),
+        "the refused verdict is committed, not left in the tree"
+    );
+}
+
+#[test]
+fn and_the_same_verdict_with_the_finding_proposed_is_committed() {
+    let r = repo(&base_toml(""), REVIEW_TASK);
+    let verify = deferring_verifier(
+        &r,
+        "\n## [T-002] the test never removes the entry it registers\nscope: src/thing.test.ts\nstatus: proposed\n",
+    );
+    with_verifier(&r, &verify);
+    r.commit_all("stubs");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert!(
+        events.iter().any(|e| matches!(&e.kind,
+            Kind::Gate { gate, pass, .. } if gate == "commit-verdict" && *pass)),
+        "{events:#?}"
+    );
+    assert_eq!(digest.landed, vec!["T-001".to_string()]);
+}
+
+fn a_verdict_noting(note: &str) {
+    let r = repo(&base_toml(""), REVIEW_TASK);
+    let verify = verifier_noting(&r, note, "");
+    with_verifier(&r, &verify);
+    r.commit_all("stubs");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert!(
+        events.iter().any(|e| matches!(&e.kind,
+            Kind::Gate { gate, pass, .. } if gate == "commit-verdict" && *pass)),
+        "{note}: {events:#?}"
+    );
+    assert_eq!(digest.landed, vec!["T-001".to_string()], "{note}");
+}
+
+#[test]
+fn a_verdict_saying_no_minor_issues_is_committed() {
+    a_verdict_noting("VERIFIED. No minor issues.");
+}
+
+#[test]
+fn a_verdict_saying_nothing_minor_is_committed() {
+    a_verdict_noting("VERIFIED. Nothing minor to raise.");
+}
+
+#[test]
+fn a_verdict_saying_no_findings_minor_or_otherwise_is_committed() {
+    a_verdict_noting("VERIFIED. No findings, minor or otherwise.");
+}
+
+const IMPLEMENTER_NOTE: &str = "printf '  implementer: one minor edge left\\n' >>TASKS.md\n";
+
+fn a_clean_verdict_after_the_implementer(r: &Repo, implement: &str) {
+    let verify = verifier(r);
+    write_toml(r, &base_toml(&role_commands(implement, &verify)));
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let (digest, events) = go(r, &opts(1));
+    let refusal = events.iter().find_map(|e| match &e.kind {
+        Kind::Gate {
+            gate, pass, reason, ..
+        } if gate == "commit-verdict" && !*pass => Some(reason.clone()),
+        _ => None,
+    });
+    assert_eq!(refusal, None);
+    assert_eq!(digest.landed, vec!["T-001".to_string()]);
+}
+
+#[test]
+fn an_implementer_note_saying_minor_is_not_read_as_the_verdicts() {
+    let r = repo("", "");
+    let implement = implementer(&r, IMPLEMENTER_NOTE);
+    a_clean_verdict_after_the_implementer(&r, &implement);
+}
+
+#[test]
+fn an_uncommitted_implementer_note_saying_minor_is_not_read_as_the_verdicts() {
+    let r = repo("", "");
+    let implement = script(
+        &r,
+        "src/fakeimpl.sh",
+        &format!(
+            "echo work >src/thing.ts\n\
+             {bin} tasks set-status T-001 review 'stub implemented'\n\
+             git add -A >/dev/null 2>&1\n\
+             git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
+             {IMPLEMENTER_NOTE}{QUIET}",
+            bin = env!("CARGO_BIN_EXE_harness"),
+        ),
+    );
+    a_clean_verdict_after_the_implementer(&r, &implement);
+}

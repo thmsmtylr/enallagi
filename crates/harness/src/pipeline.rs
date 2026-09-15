@@ -483,6 +483,11 @@ impl<'a> Loop<'a> {
             task: task.clone(),
         });
 
+        // stash create snapshots the tree without touching it, so uncommitted edits from an earlier stage stay out of this one's diff
+        let stage_base = git::git(self.root, &["stash", "create"])
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| git::head(self.root));
         let stop_file = self.root.join("STOP");
         let result = match agent::spawn(&spawn, &mut self.writer, &stop_file, &self.rate_limit) {
             Ok(result) => result,
@@ -537,7 +542,7 @@ impl<'a> Loop<'a> {
             return Flow::Stop;
         }
 
-        self.gates(stage, task, iter_base, result.output)
+        self.gates(stage, task, iter_base, stage_base, result.output)
     }
 
     fn gates(
@@ -545,14 +550,21 @@ impl<'a> Loop<'a> {
         stage: &config::Stage,
         task: Option<String>,
         iter_base: Option<String>,
+        stage_base: Option<String>,
         output: String,
     ) -> Flow {
         for gate in &stage.post {
+            // commit-verdict judges only what the verifier wrote, not the implementer's notes from the same iteration
+            let base = if gate == "commit-verdict" {
+                &stage_base
+            } else {
+                &iter_base
+            };
             let mut ctx = GateCtx {
                 root: self.root,
                 cfg: self.cfg,
                 task: task.clone(),
-                iter_base: iter_base.clone(),
+                iter_base: base.clone(),
                 stage_output: output.clone(),
                 events: &mut self.writer,
                 dry_run: false,

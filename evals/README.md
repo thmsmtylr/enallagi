@@ -21,6 +21,9 @@ with the rule, fails with the rule ablated, and every other eval still passes.
 The agent comes from `EVAL_AGENT`, else `harness.toml`'s `[agent]`. With neither, `harness eval`
 refuses rather than reporting a result it did not measure.
 
+`verifier-findings` builds a JavaScript fixture and needs `bun` on `PATH`; without it its
+`setup.sh` exits non-zero and the eval reports `ERROR`, not a result.
+
 ## A REJECT
 
 Run against `claude -p` on 2026-09-02, `--gate verifier` rejected the rule it was holding:

@@ -117,16 +117,21 @@ fn force_back(
     ctx: &mut GateCtx,
     gate: &str,
     task: &str,
+    to: &str,
     reason: &str,
     commit_msg: &str,
     warning: &str,
 ) -> GateOutcome {
     ctx.warnings.push(warning.to_string());
+    let from = status_of(ctx.root, task)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "done".to_string());
     if !ctx.dry_run {
         let q = tasks_file(ctx.root);
         let written = q
             .read()
-            .and_then(|text| queue::set_status(&text, task, "ready", reason))
+            .and_then(|text| queue::set_status(&text, task, to, reason))
             .and_then(|text| q.write(&text));
         match written {
             Ok(()) => {
@@ -145,8 +150,8 @@ fn force_back(
     }
     ctx.events.emit(Kind::TaskStatus {
         task: task.to_string(),
-        from: "done".to_string(),
-        to: "ready".to_string(),
+        from,
+        to: to.to_string(),
         reason: reason.to_string(),
         by: gate.to_string(),
     });
@@ -176,6 +181,7 @@ fn implementer_not_done(ctx: &mut GateCtx) -> GateOutcome {
                 ctx,
                 "implementer-not-done",
                 &task,
+                "ready",
                 "the implementer set done; only the verifier may, and the launcher gates that",
                 &format!("chore({task}): the implementer marked its own task done"),
                 &format!("{task} was forced back to ready: the implementer marked it done itself."),
@@ -191,7 +197,58 @@ fn commit_verdict(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
     };
+    if let Some(phrase) = deferred_finding(ctx, &task) {
+        let reason = format!(
+            "the verdict's notes say \"{phrase}\" and it added no status: proposed block; write that finding as a proposed block with the command that shows it"
+        );
+        let mut out = force_back(
+            ctx,
+            "commit-verdict",
+            &task,
+            "review",
+            &reason,
+            &format!("verify: {task} verdict refused, a finding left in notes"),
+            &format!("{task} went back to review: its verdict deferred a finding (\"{phrase}\") without proposing it."),
+        );
+        out.skip_rest = true;
+        return out;
+    }
     commit(ctx, &["TASKS.md"], &format!("verify: {task} verdict"))
+}
+
+// a finding left only in notes is archived with its block and never reaches the queue
+fn deferred_finding(ctx: &GateCtx, task: &str) -> Option<String> {
+    let base = ctx.iter_base.as_deref()?;
+    let before = git(ctx.root, &["show", &format!("{base}:TASKS.md")]).unwrap_or_default();
+    let before = queue::parse(&before).unwrap_or_default();
+    let now = queue::parse(&tasks_file(ctx.root).read().ok()?).ok()?;
+    let proposed_before = queue::ids_at(&before, "proposed");
+    if queue::ids_at(&now, "proposed")
+        .iter()
+        .any(|id| !proposed_before.contains(id))
+    {
+        return None;
+    }
+    let old: Vec<&str> = before
+        .iter()
+        .filter(|b| b.id == task)
+        .flat_map(|b| b.body.iter().map(|(_, l)| l.as_str()))
+        .collect();
+    let re = regex::Regex::new(
+        r"(?i)\b(not a reason for rejection|not a rejection reason|minor|for later)\b",
+    )
+    .ok()?;
+    // "no minor issues" says there is nothing to propose
+    let negated =
+        regex::Regex::new(r"(?i)\b(no|nothing)\s+minor\b|\bminor\s+or\s+otherwise\b").ok()?;
+    now.iter()
+        .filter(|b| b.id == task)
+        .flat_map(|b| b.body.iter().map(|(_, l)| l.as_str()))
+        .filter(|l| !old.contains(l))
+        .find_map(|l| {
+            re.find(&negated.replace_all(l, ""))
+                .map(|m| m.as_str().to_lowercase())
+        })
 }
 
 fn commit_round(ctx: &mut GateCtx) -> GateOutcome {
@@ -238,6 +295,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
             ctx,
             "verdict",
             &task,
+            "ready",
             &reason,
             &format!(
                 "chore({task}): harness gate rejected a done verdict with work off the branch"
@@ -266,6 +324,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         ctx,
         "verdict",
         &task,
+        "ready",
         &reason,
         &format!("chore({task}): harness gate rejected a false VERIFIED"),
         &format!(
@@ -409,6 +468,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         ctx,
         "scope",
         &task,
+        "ready",
         &reason,
         &format!("chore({task}): harness scope gate rejected a done verdict"),
         &format!("{task} was forced back to ready by the scope gate: {why}."),
