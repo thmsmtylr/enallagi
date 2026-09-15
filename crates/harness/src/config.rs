@@ -308,6 +308,17 @@ fn unconfigured_harness_dir(root: &Path) -> Result<(String, bool), ConfigError> 
     Ok((default, false))
 }
 
+// a refused config falls back to the default directory, never the root, or the default layout's guards go dark
+pub fn harness_dir(root: &Path) -> String {
+    load(root)
+        .map(|cfg| cfg.layout.harness_dir)
+        .unwrap_or_else(|_| {
+            unconfigured_harness_dir(root)
+                .map(|(dir, _)| dir)
+                .unwrap_or_default()
+        })
+}
+
 pub fn config_path(root: &Path) -> PathBuf {
     let dir = unconfigured_harness_dir(root)
         .map(|(dir, _)| dir)

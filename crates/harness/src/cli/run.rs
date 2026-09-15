@@ -40,10 +40,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
 
     // exit code is read off the events, not threaded back through every return path
     let failed = Arc::new(AtomicBool::new(false));
-    // a refused config is reported by pipeline::run; the root layout stands in until then
-    let dir = crate::config::load(&root)
-        .map(|cfg| cfg.layout.harness_dir)
-        .unwrap_or_default();
+    let dir = crate::config::harness_dir(&root);
     let stop = crate::config::instance_path(&root, &dir, "STOP");
     let outcome = if tui {
         let (tx, rx) = mpsc::channel::<Event>();

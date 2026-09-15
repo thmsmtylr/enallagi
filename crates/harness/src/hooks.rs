@@ -14,13 +14,9 @@ pub fn immutable(root: &Path, input: &str) -> (i32, String) {
         return (0, String::new());
     };
 
-    // an unreadable config still guards the root layout's files
     let cfg = config::load(root).ok();
-    let dir = cfg
-        .as_ref()
-        .map(|c| c.layout.harness_dir.as_str())
-        .unwrap_or_default();
-    if let Some(hit) = hashed_hit(root, dir, &target) {
+    let dir = config::harness_dir(root);
+    if let Some(hit) = hashed_hit(root, &dir, &target) {
         return (
             2,
             format!(
@@ -395,6 +391,19 @@ mod tests {
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         let (code, msg) = immutable(&r.root, &input("src/a.ts"));
         assert_eq!(code, 2);
+        assert!(msg.contains("covered by test-hashes.json"), "{msg}");
+    }
+
+    #[test]
+    fn immutable_refuses_an_edit_to_a_hashed_file_when_the_config_is_refused() {
+        let r = Repo::new();
+        r.write(".enallagi/TASKS.md", "# TASKS\n");
+        r.write("src/a.ts", "export const a = 1\n");
+        r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
+        r.write(".enallagi/harness.toml", "[check]\ncomand = \"x\"\n");
+        assert!(config::load(&r.root).is_err());
+        let (code, msg) = immutable(&r.root, &input("src/a.ts"));
+        assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("covered by test-hashes.json"), "{msg}");
     }
 

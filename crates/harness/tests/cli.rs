@@ -383,6 +383,27 @@ fn the_shipped_documents_describe_and_do_not_argue() {
 }
 
 #[test]
+fn tasks_ready_finds_the_harness_directory_queue_when_the_config_is_refused() {
+    let r = harness::fixture::Repo::new();
+    r.write(
+        ".enallagi/TASKS.md",
+        "# TASKS\n\n## [T-001] open\nscope: src/a.ts\nstatus: ready\n",
+    );
+    r.write(".enallagi/harness.toml", "[check]\ncomand = \"x\"\n");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["tasks", "ready"])
+        .current_dir(&r.root)
+        .output()
+        .expect("run harness tasks ready");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "T-001",
+        "{out:?}"
+    );
+}
+
+#[test]
 fn tasks_archive_moves_a_done_block_and_names_it() {
     let r = harness::fixture::Repo::new();
     r.write(
