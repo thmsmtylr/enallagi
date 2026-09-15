@@ -18,7 +18,7 @@ harness eval --gate <name>   decide a candidate rule
 `--gate` is the write-path check on a new `__HARNESS_DIR__/LEARNINGS.md` rule. It accepts only when the eval passes
 with the rule, fails with the rule ablated, and every other eval still passes.
 
-The agent comes from `EVAL_AGENT`, else `harness.toml`'s `[agent]`. With neither, `harness eval`
+The agent comes from `EVAL_AGENT`, else `__HARNESS_DIR__/harness.toml`'s `[agent]`. With neither, `harness eval`
 refuses rather than reporting a result it did not measure.
 
 `verifier-findings` builds a JavaScript fixture and needs `bun` on `PATH`; without it its

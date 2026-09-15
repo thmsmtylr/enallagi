@@ -185,13 +185,15 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     };
     let dir = cfg.layout.harness_dir.clone();
     let at = |name: &str| config::instance_rel(root, &dir, name);
+    let toml = config_rel(root);
     // before subst, which would put a root-layout queue under the harness directory
     let sub = |text: &str| {
         let text = ROOT_INSTANCE_FILES
             .iter()
             .fold(text.to_string(), |acc, name| {
                 acc.replace(&format!("__HARNESS_DIR__/{name}"), &at(name))
-            });
+            })
+            .replace("__HARNESS_DIR__/harness.toml", &toml);
         config::subst(&text, &cfg)
     };
     let presets = agent::presets();

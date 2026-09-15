@@ -548,9 +548,10 @@ fn root_layout() -> Repo {
 }
 
 fn instance_mentions(planned: &[(String, String)]) -> Vec<(String, String)> {
-    let mention =
-        regex::Regex::new(r"([A-Za-z0-9_./-]*)(?:TASKS|PROGRESS|DECISIONS|LEARNINGS)\.md")
-            .expect("regex");
+    let mention = regex::Regex::new(
+        r"([A-Za-z0-9_./-]*)(?:(?:TASKS|PROGRESS|DECISIONS|LEARNINGS)\.md|harness\.toml)",
+    )
+    .expect("regex");
     let mut out = Vec::new();
     for (path, text) in planned {
         if path.ends_with(".toml") || path.ends_with(".json") {

@@ -118,6 +118,26 @@ fn the_eval_runner_passes_a_role_that_obeys_its_rule() {
 }
 
 #[test]
+fn an_eval_script_calls_the_harness_binary_that_installed_its_fixture() {
+    let pkg = package();
+    write_eval(
+        pkg.path(),
+        "case",
+        "do the thing",
+        "command -v harness >bin.txt",
+        &format!(
+            r#"[ "$(cat bin.txt)" -ef "{}" ]"#,
+            env!("CARGO_BIN_EXE_harness")
+        ),
+        None,
+    );
+
+    let r = run_eval(pkg.path(), "true", &["case"]);
+    assert_eq!(r.code, 0, "stdout={} stderr={}", r.stdout, r.stderr);
+    assert_eq!(last_line(&r.stdout), "EVAL case PASS");
+}
+
+#[test]
 fn the_eval_runner_fails_a_role_that_breaks_its_rule() {
     let pkg = package();
     write_eval(

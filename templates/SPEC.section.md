@@ -63,7 +63,7 @@ trace      → parse §11 and the test output; assert every row maps to a test t
 
 Every row is one behaviour, named by the test that proves it. The loop turns rows green one at a
 time and `trace` refuses a row whose test did not run. The heading above and its terminator are
-what `harness.toml` points the probes at — rename it there if you rename it here.
+what `__HARNESS_DIR__/harness.toml` points the probes at — rename it there if you rename it here.
 
 | Behaviour | Test |
 | --- | --- |

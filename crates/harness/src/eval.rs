@@ -72,6 +72,17 @@ fn resolve_agent(pkg: &Path) -> Option<Vec<String>> {
 fn run_script(script: &Path, cwd: &Path, pkg: Option<&Path>) -> bool {
     let mut cmd = Command::new("bash");
     cmd.arg(script).current_dir(cwd);
+    // the fixture was installed by this binary, so a script's `harness` must be this binary too, not an older one on PATH
+    if let Some(bin) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+    {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let dirs = std::iter::once(bin).chain(std::env::split_paths(&path));
+        if let Ok(joined) = std::env::join_paths(dirs) {
+            cmd.env("PATH", joined);
+        }
+    }
     if let Some(pkg) = pkg {
         cmd.env("EVAL_PKG", pkg);
     }
