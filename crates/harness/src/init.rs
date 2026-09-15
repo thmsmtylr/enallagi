@@ -547,6 +547,18 @@ fn merge_json(ours: &Value, theirs: &str, path: &str) -> Result<String, InitErro
             }
         }
     }
+
+    // lane commits carry no co-author trailer; attribution text a repo already set is kept
+    if let Some(ours) = ours.get("attribution").and_then(|a| a.as_object()) {
+        let theirs = merged_obj
+            .entry("attribution")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or_else(|| bad("attribution is not an object".to_string()))?;
+        for (key, value) in ours {
+            theirs.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
     Ok(pretty(&merged))
 }
 

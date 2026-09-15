@@ -341,6 +341,12 @@ fn the_claude_adapter_writes_agents_and_merges_settings() {
         text.contains("Bash(sudo:*)"),
         "a deny rule of theirs was dropped"
     );
+    assert!(
+        text.contains("\"Monitor\""),
+        "Monitor is not denied: {text}"
+    );
+    assert_eq!(settings["attribution"]["commit"], "", "{text}");
+    assert_eq!(settings["attribution"]["pr"], "", "{text}");
 
     let before = read(&repo, ".claude/settings.json");
     with(&repo, &adapter("claude"));
