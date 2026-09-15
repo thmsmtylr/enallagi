@@ -605,3 +605,64 @@ fn gate_scope_with_the_product_base_refuses_a_grown_baseline_in_a_nested_install
         "{out:?}"
     );
 }
+
+#[test]
+fn tasks_ready_reads_the_queue_in_harness_dir_before_the_configured_directory() {
+    let r = harness::fixture::Repo::new();
+    r.write(
+        ".enallagi/TASKS.md",
+        "# TASKS\n\n## [T-001] parent\nscope: src/a.ts\nstatus: ready\n",
+    );
+    r.write(
+        "lane/.enallagi/TASKS.md",
+        "# TASKS\n\n## [T-002] lane\nscope: src/a.ts\nstatus: ready\n",
+    );
+    let outside = tempfile::TempDir::new().expect("tempdir");
+    std::fs::write(
+        outside.path().join("TASKS.md"),
+        "# TASKS\n\n## [T-003] outside\nscope: src/a.ts\nstatus: ready\n",
+    )
+    .expect("write");
+
+    let ready = |dir: &std::path::Path| {
+        let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+            .args(["tasks", "ready"])
+            .env("HARNESS_DIR", dir)
+            .current_dir(&r.root)
+            .output()
+            .expect("run harness tasks ready");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert_eq!(ready(&r.root.join("lane/.enallagi")), "T-002");
+    assert_eq!(ready(outside.path()), "T-001");
+}
+
+#[test]
+fn the_immutable_hook_reads_test_hashes_in_harness_dir() {
+    let r = harness::fixture::Repo::new();
+    r.write(".enallagi/TASKS.md", "# TASKS\n");
+    r.write("lane/.enallagi/TASKS.md", "# TASKS\n");
+    r.write(
+        "lane/.enallagi/test-hashes.json",
+        r#"{"src/schema.ts":"deadbeef"}"#,
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_harness"))
+        .args(["hook", "immutable"])
+        .env("HARNESS_DIR", r.root.join("lane/.enallagi"))
+        .env_remove("CLAUDE_PROJECT_DIR")
+        .current_dir(&r.root)
+        .stdin(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run harness hook immutable");
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(br#"{"tool_input":{"file_path":"src/schema.ts"}}"#)
+        .expect("write stdin");
+    let out = child.wait_with_output().expect("wait");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+}

@@ -296,7 +296,19 @@ pub fn instance_path(root: &Path, harness_dir: &str, name: &str) -> PathBuf {
     root.join(instance_rel(root, harness_dir, name))
 }
 
+// honoured only inside the root, so a fixture or other repository a lane's child process opens never inherits it
+fn env_harness_dir(root: &Path) -> Option<String> {
+    let dir = std::env::var_os("HARNESS_DIR")?;
+    let root = std::fs::canonicalize(root).ok()?;
+    let dir = std::fs::canonicalize(root.join(dir)).ok()?;
+    let rel = dir.strip_prefix(&root).ok()?.to_str()?;
+    (!rel.is_empty()).then(|| rel.to_string())
+}
+
 fn unconfigured_harness_dir(root: &Path) -> Result<(String, bool), ConfigError> {
+    if let Some(dir) = env_harness_dir(root) {
+        return Ok((dir, false));
+    }
     let base = parse_toml(DEFAULT_TOML, "harness.default.toml")?;
     let default = base["layout"]["harness_dir"]
         .as_str()
@@ -360,6 +372,12 @@ pub fn load(root: &Path) -> Result<Config, ConfigError> {
             }
         }
         merge(&mut base, &user);
+    }
+    if let (Some(dir), Some(layout)) = (
+        env_harness_dir(root),
+        base.get_mut("layout").and_then(|l| l.as_table_mut()),
+    ) {
+        layout.insert("harness_dir".into(), dir.into());
     }
     if legacy && !dir_configured {
         if let Some(layout) = base.get_mut("layout").and_then(|l| l.as_table_mut()) {

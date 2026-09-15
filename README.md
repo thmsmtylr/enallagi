@@ -270,8 +270,8 @@ a `shell` job runs `bash -n`, `shellcheck` and `docs/bootstrap.sh --check` over 
 
 ## Not included
 
-Parallel lanes (`harness worktree [N]` isolates one, fast-forwarded back). A held-out test suite.
-A driver for your own artifact (`driver.sh` is the worked example for this one). `test-hashes.json`
+Parallel lanes (`harness worktree [N]` isolates one, product and harness directory, both fast-forwarded back or neither).
+A held-out test suite. A driver for your own artifact (`driver.sh` is the worked example for this one). `test-hashes.json`
 (`hash-uncovered` reports its absence until you write it). Evals for the implementer and researcher
 roles. The vendored skills: `harness skills sync` fetches them from `harness.lock` after a clone.
 

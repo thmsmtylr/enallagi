@@ -18,17 +18,24 @@ pub enum WorktreeError {
 pub struct LaneReport {
     pub merged: bool,
     pub left: Option<PathBuf>,
+    // the lane's worktree of the harness directory's own repository, inside `left` at the harness directory's path
+    pub state: Option<PathBuf>,
     pub reason: String,
     pub branch: String,
     // recorded but never used to decide whether the lane merges: only the worktree's committed state does that
     pub run_error: Option<String>,
 }
 
+// (parent repository, lane worktree) pairs, the state repository first: it sits inside the product worktree
+type Pairs = Vec<(PathBuf, PathBuf)>;
+
 fn create_worktree(
     root: &Path,
     cfg: &Config,
     base: &str,
-) -> Result<(String, PathBuf, String), WorktreeError> {
+) -> Result<(String, PathBuf, Pairs), WorktreeError> {
+    let harness_dir = &cfg.layout.harness_dir;
+    let state_root = git::state_root(root, harness_dir);
     let mut last_dir = PathBuf::new();
     for n in 0..=10u32 {
         let name = if n == 0 {
@@ -38,19 +45,40 @@ fn create_worktree(
         };
         let branch = format!("lane/{name}");
         let dir = root
-            .join(&cfg.layout.harness_dir)
+            .join(harness_dir)
             .join("worktrees")
             .join(format!("lane-{name}"));
-        let dir_str = dir.to_string_lossy().into_owned();
-        if git::git(root, &["worktree", "add", "-b", &branch, &dir_str]).is_ok() {
-            return Ok((branch, dir, dir_str));
+        let mut pairs = vec![(root.to_path_buf(), dir.clone())];
+        if state_root != root {
+            pairs.insert(0, (state_root.clone(), dir.join(harness_dir)));
+        }
+        let mut made: Vec<&(PathBuf, PathBuf)> = Vec::new();
+        for pair in pairs.iter().rev() {
+            let (repo, wt) = pair;
+            if !git::git_ok(
+                repo,
+                &["worktree", "add", "-b", &branch, &wt.to_string_lossy()],
+            ) {
+                break;
+            }
+            made.push(pair);
+        }
+        if made.len() == pairs.len() {
+            return Ok((branch, dir, pairs));
+        }
+        for (repo, wt) in made.into_iter().rev() {
+            let _ = git::git(
+                repo,
+                &["worktree", "remove", "--force", &wt.to_string_lossy()],
+            );
+            let _ = git::git(repo, &["branch", "-D", &branch]);
         }
         last_dir = dir;
     }
     Err(WorktreeError::Create(last_dir))
 }
 
-// what happens next is decided by the worktree's own committed state, never run's exit status
+// what happens next is decided by the worktrees' own committed state, never run's exit status
 pub fn lane(
     root: &Path,
     cfg: &Config,
@@ -63,42 +91,66 @@ pub fn lane(
 
     let ts = jiff::Timestamp::now().strftime("%Y%m%d-%H%M%S").to_string();
     let base = format!("{ts}-{}", std::process::id());
-    let (branch, dir, dir_str) = create_worktree(root, cfg, &base)?;
+    let (branch, dir, pairs) = create_worktree(root, cfg, &base)?;
+    let state = (pairs.len() > 1).then(|| pairs[0].1.clone());
 
     let run_error = run(&dir).err().map(|e| e.to_string());
+    let left = |reason: String| LaneReport {
+        merged: false,
+        left: Some(dir.clone()),
+        state: state.clone(),
+        reason,
+        branch: branch.clone(),
+        run_error: run_error.clone(),
+    };
 
     // Uncommitted work in the lane is the lane's to finish, not ours to throw away.
-    if !git::porcelain(&dir).is_empty() {
-        return Ok(LaneReport {
-            merged: false,
-            left: Some(dir),
-            reason: format!("{branch} has uncommitted work"),
-            branch,
-            run_error,
-        });
+    if let Some((_, wt)) = pairs.iter().find(|(_, wt)| !git::porcelain(wt).is_empty()) {
+        return Ok(left(format!(
+            "{branch} has uncommitted work in {}",
+            wt.display()
+        )));
     }
 
-    match git::git(root, &["merge", "--ff-only", &branch]) {
-        Ok(reason) => {
-            let _ = git::git(root, &["worktree", "remove", &dir_str]);
-            let _ = git::git(root, &["branch", "-d", &branch]);
-            Ok(LaneReport {
-                merged: true,
-                left: None,
-                reason,
-                branch,
-                run_error,
-            })
-        }
-        Err(git::GitError::Failed { stderr, .. }) => Ok(LaneReport {
-            merged: false,
-            left: Some(dir),
-            reason: stderr,
-            branch,
-            run_error,
-        }),
-        Err(e) => Err(e.into()),
+    // checked for every repository before any merge, so one that cannot fast-forward merges neither
+    let stuck: Vec<String> = pairs
+        .iter()
+        .filter(|(repo, _)| !git::git_ok(repo, &["merge-base", "--is-ancestor", "HEAD", &branch]))
+        .map(|(repo, _)| format!("{branch} cannot fast-forward into {}", repo.display()))
+        .collect();
+    if !stuck.is_empty() {
+        return Ok(left(stuck.join("\n")));
     }
+
+    // ponytail: a merge refused after the ancestry check (a dirty parent tree) leaves the repositories before it merged; the reason names them
+    let mut said = Vec::new();
+    for (i, (repo, _)) in pairs.iter().enumerate() {
+        match git::git(repo, &["merge", "--ff-only", &branch]) {
+            Ok(out) => said.push(out),
+            Err(git::GitError::Failed { stderr, .. }) => {
+                let merged: String = pairs[..i]
+                    .iter()
+                    .map(|(done, _)| {
+                        format!("\n{} already fast-forwarded to {branch}", done.display())
+                    })
+                    .collect();
+                return Ok(left(format!("{stderr}{merged}")));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    for (repo, wt) in &pairs {
+        let _ = git::git(repo, &["worktree", "remove", &wt.to_string_lossy()]);
+        let _ = git::git(repo, &["branch", "-d", &branch]);
+    }
+    Ok(LaneReport {
+        merged: true,
+        left: None,
+        state,
+        reason: said.join("\n"),
+        branch,
+        run_error,
+    })
 }
 
 #[cfg(test)]
@@ -125,6 +177,152 @@ mod tests {
             &["-c", "commit.gpgsign=false", "commit", "-q", "-m", msg],
         )
         .expect("commit");
+    }
+
+    fn commit_in(dir: &Path, msg: &str) {
+        git::git(dir, &["add", "-A"]).expect("add");
+        git::git(
+            dir,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "-q",
+                "-m",
+                msg,
+            ],
+        )
+        .expect("commit");
+    }
+
+    fn nested_repo() -> Repo {
+        let r = Repo::new();
+        crate::init::install(&r.root, &crate::init::InitOpts::default()).expect("install");
+        r.write(
+            ".enallagi/TASKS.md",
+            "# TASKS\n\n## [T-001] one\nscope: one.txt\nstatus: ready\n\n## [T-002] two\nscope: two.txt\nstatus: ready\n",
+        );
+        commit_in(&r.root, "install");
+        commit_in(&r.root.join(".enallagi"), "queue");
+        r
+    }
+
+    fn land(wt: &Path, id: &str, file: &str) {
+        std::fs::write(wt.join(file), id).expect("write");
+        commit_in(wt, &format!("{id} work"));
+        let state = wt.join(".enallagi");
+        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("the lane's TASKS.md");
+        let at = tasks.find(&format!("## [{id}]")).expect("the block");
+        let verdict = tasks[at..].replacen("status: ready", "status: done", 1);
+        std::fs::write(state.join("TASKS.md"), format!("{}{verdict}", &tasks[..at]))
+            .expect("write");
+        commit_in(&state, &format!("verify {id}"));
+        std::fs::write(state.join("events.jsonl"), "{}\n").expect("an ignored run log");
+    }
+
+    fn remove_left(r: &Repo, report: &LaneReport) {
+        let state = r.root.join(".enallagi");
+        if let Some(left) = &report.left {
+            let _ = git::git(
+                &state,
+                &[
+                    "worktree",
+                    "remove",
+                    "--force",
+                    &left.join(".enallagi").to_string_lossy(),
+                ],
+            );
+            let _ = git::git(
+                &r.root,
+                &["worktree", "remove", "--force", &left.to_string_lossy()],
+            );
+        }
+        let _ = git::git(&state, &["branch", "-D", &report.branch]);
+        let _ = git::git(&r.root, &["branch", "-D", &report.branch]);
+    }
+
+    #[test]
+    fn two_lanes_landing_different_tasks_both_merge_and_the_state_queue_holds_both_verdicts() {
+        let r = nested_repo();
+        let cfg = cfg(&r);
+        let state = r.root.join(".enallagi");
+
+        for (id, file) in [("T-001", "one.txt"), ("T-002", "two.txt")] {
+            let report = lane(&r.root, &cfg, &mut |wt| {
+                land(wt, id, file);
+                Ok(())
+            })
+            .expect("lane");
+            assert!(report.merged, "{id}: {}", report.reason);
+        }
+
+        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
+        assert!(
+            tasks.contains("## [T-001] one\nscope: one.txt\nstatus: done"),
+            "{tasks}"
+        );
+        assert!(
+            tasks.contains("## [T-002] two\nscope: two.txt\nstatus: done"),
+            "{tasks}"
+        );
+        assert!(r.root.join("one.txt").exists() && r.root.join("two.txt").exists());
+        for repo in [&r.root, &state] {
+            let branches = git::git(repo, &["branch", "--list", "lane/*"]).expect("branch list");
+            assert!(branches.trim().is_empty(), "{}: {branches}", repo.display());
+        }
+    }
+
+    #[test]
+    fn a_lane_whose_state_branch_cannot_fast_forward_merges_neither_branch() {
+        let r = nested_repo();
+        let cfg = cfg(&r);
+        let state = r.root.join(".enallagi");
+        let pre_head = git::head(&r.root);
+
+        let report = lane(&r.root, &cfg, &mut |wt| {
+            land(wt, "T-001", "one.txt");
+            std::fs::write(state.join("moved.txt"), "y").expect("write");
+            commit_in(&state, "a second writer moved the state");
+            Ok(())
+        })
+        .expect("lane");
+
+        assert!(!report.merged, "reason: {}", report.reason);
+        assert_eq!(git::head(&r.root), pre_head);
+        assert!(!r.root.join("one.txt").exists());
+        let left = report.left.clone().expect("left in place");
+        assert!(left.join("one.txt").exists());
+        let lane_tasks =
+            std::fs::read_to_string(left.join(".enallagi/TASKS.md")).expect("TASKS.md");
+        assert!(lane_tasks.contains("status: done"));
+        remove_left(&r, &report);
+    }
+
+    #[test]
+    fn a_lane_whose_product_branch_cannot_fast_forward_merges_neither_branch() {
+        let r = nested_repo();
+        let cfg = cfg(&r);
+        let state = r.root.join(".enallagi");
+        let pre_state = git::head(&state);
+
+        let report = lane(&r.root, &cfg, &mut |wt| {
+            land(wt, "T-001", "one.txt");
+            r.write("moved.txt", "y");
+            commit_in(&r.root, "a second writer moved the parent");
+            Ok(())
+        })
+        .expect("lane");
+
+        assert!(!report.merged, "reason: {}", report.reason);
+        assert_eq!(git::head(&state), pre_state);
+        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
+        assert!(!tasks.contains("status: done"), "{tasks}");
+        remove_left(&r, &report);
     }
 
     #[test]
