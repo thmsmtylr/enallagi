@@ -597,9 +597,23 @@ fn main_tracks_no_instance_file() {
         let planned = init::planned_files(&repo.root, &opts).expect("plan an install");
         instance.extend(planned.into_iter().map(|(path, _)| path));
     }
-    // seeded by init, but its source is this file
-    instance.remove("evals/README.md");
-    assert!(instance.contains("TASKS.md"), "{instance:?}");
+    // seeded by init, but its source is in the tree
+    instance.remove(".enallagi/evals/README.md");
+    // a root-layout install writes these names at the root, and main tracks none of them either
+    instance.extend(
+        [
+            "TASKS.md",
+            "PROGRESS.md",
+            "PROGRESS.archive.md",
+            "DECISIONS.md",
+            "LEARNINGS.md",
+            "SPEC.md",
+            ".check-baseline",
+            "harness.toml",
+        ]
+        .map(String::from),
+    );
+    assert!(instance.contains(".enallagi/TASKS.md"), "{instance:?}");
 
     let out = Command::new("git")
         .args(["ls-files"])
