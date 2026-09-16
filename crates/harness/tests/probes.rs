@@ -96,7 +96,7 @@ fn probes_exit_0_every_probe_ran() {
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     assert_eq!(errors(&results), Vec::<&str>::new());
-    assert_eq!(results.len(), 21, "{}", render(&results));
+    assert_eq!(results.len(), 22, "{}", render(&results));
 }
 
 #[test]
@@ -535,4 +535,149 @@ fn a_done_blocks_scope_is_history_and_an_open_blocks_scope_must_name_a_file() {
         "{}",
         found[0].message
     );
+}
+
+// the two subjects the criteria name, taken from this repository's own history
+const COMMENTARY_SUBJECT: &str = "fix(ci): four failures, four causes, none of them the same";
+const RECORD_SUBJECT: &str = "queue: T-036 ready, docs/demo.sh joins the scope";
+
+fn commit_subject(repo: &Repo, subject: &str) {
+    repo.write("src/moved.ts", subject);
+    repo.commit_all(subject);
+}
+
+fn plain_record(repo: &Repo, cfg: &Config) -> Vec<String> {
+    render(&run(repo, cfg))
+        .lines()
+        .filter(|l| l.starts_with("FINDING plain-record "))
+        .map(String::from)
+        .collect()
+}
+
+#[test]
+fn a_fresh_install_records_plainly() {
+    let (repo, cfg) = seeded();
+    let results = run(&repo, &cfg);
+    assert_eq!(
+        count(&results, "plain-record"),
+        Some(0),
+        "{}",
+        render(&results)
+    );
+}
+
+#[test]
+fn a_subject_counting_the_change_is_reported() {
+    let (repo, cfg) = seeded();
+    commit_subject(&repo, COMMENTARY_SUBJECT);
+    let found = plain_record(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("`four causes`"), "{}", found[0]);
+}
+
+#[test]
+fn a_subject_naming_what_changed_is_not() {
+    let (repo, cfg) = seeded();
+    commit_subject(&repo, RECORD_SUBJECT);
+    assert_eq!(plain_record(&repo, &cfg), Vec::<String>::new());
+}
+
+#[test]
+fn a_subject_with_an_em_dash_aside_fails() {
+    let (repo, cfg) = seeded();
+    commit_subject(
+        &repo,
+        "queue: T-014 to T-016 \u{2014} prose out of the shipped documents, and MIT",
+    );
+    let found = plain_record(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("em dash"), "{}", found[0]);
+}
+
+#[test]
+fn a_subject_saying_why_it_matters_fails() {
+    let (repo, cfg) = seeded();
+    commit_subject(
+        &repo,
+        "fix(tests): no fixture reaches the network, which is why CI raced itself",
+    );
+    let found = plain_record(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("which is why"), "{}", found[0]);
+}
+
+#[test]
+fn the_state_repository_log_is_read_too() {
+    let (repo, cfg) = seeded();
+    let state = repo.root.join(".enallagi");
+    assert!(
+        state.join(".git").exists(),
+        "the fixture is a nested install"
+    );
+    for (key, value) in [("user.email", "t@t"), ("user.name", "t")] {
+        harness::git::git(&state, &["config", key, value]).expect("identity");
+    }
+    harness::git::git(&state, &["add", "-A"]).expect("add");
+    harness::git::git(
+        &state,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            COMMENTARY_SUBJECT,
+        ],
+    )
+    .expect("commit");
+    let found = plain_record(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("`four causes`"), "{}", found[0]);
+}
+
+#[test]
+fn a_note_saying_what_the_work_meant_fails() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the fixture was moved, which is why the run went green.\n",
+    );
+    let found = plain_record(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains(".enallagi/TASKS.md:"), "{}", found[0]);
+}
+
+#[test]
+fn a_fenced_note_is_never_reported() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the run is below.\n\n```\nfour failures, four causes, none of them the same, which is why the check was red \u{2014} and it is green now.\n```\n",
+    );
+    assert_eq!(plain_record(&repo, &cfg), Vec::<String>::new());
+}
+
+#[test]
+fn a_pasted_command_in_a_note_is_exempt() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: `cargo test` prints `four failures, four causes, none of them the same`.\n",
+    );
+    assert_eq!(plain_record(&repo, &cfg), Vec::<String>::new());
+}
+
+#[test]
+fn a_printed_em_dash_aside_is_reported() {
+    let (repo, cfg) = seeded();
+    repo.write(
+        "src/report.ts",
+        "console.log(\"EVAL ERROR (the fixture could not be built \u{2014} nothing was measured)\")\n",
+    );
+    repo.commit_all("report");
+    let found = plain_record(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("src/report.ts:1"), "{}", found[0]);
 }

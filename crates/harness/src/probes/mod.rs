@@ -12,6 +12,7 @@ mod install_stale;
 mod learning_unenforced;
 mod learning_ungated;
 mod litter;
+mod plain_record;
 mod ponytail_ceiling;
 mod queue_hygiene;
 mod queue_uncovered;
@@ -67,6 +68,7 @@ pub const NAMES: &[&str] = &[
     "friction-repeat",
     "check-red",
     "litter",
+    "plain-record",
     "install-stale",
     "verdict-flip",
     "rejection-repeat",
@@ -78,7 +80,7 @@ pub const NAMES: &[&str] = &[
 
 type ProbeFn = fn(&ProbeCtx) -> ProbeResult;
 
-fn registry() -> [(&'static str, ProbeFn); 21] {
+fn registry() -> [(&'static str, ProbeFn); 22] {
     [
         ("spec-untested", spec_untested::probe),
         ("queue-uncovered", queue_uncovered::probe),
@@ -94,6 +96,7 @@ fn registry() -> [(&'static str, ProbeFn); 21] {
         ("friction-repeat", friction_repeat::probe),
         ("check-red", check_red::probe),
         ("litter", litter::probe),
+        ("plain-record", plain_record::probe),
         ("install-stale", install_stale::probe),
         ("verdict-flip", telemetry_probe::verdict_flip),
         ("rejection-repeat", telemetry_probe::rejection_repeat),
