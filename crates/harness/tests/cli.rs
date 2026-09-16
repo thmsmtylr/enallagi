@@ -567,6 +567,9 @@ fn gate_scope_with_the_product_base_refuses_a_grown_baseline_in_a_nested_install
     );
     let queued = git(&r.root, &["rev-parse", "HEAD"]);
     let state = r.root.join(".enallagi");
+    // CI runners have no global git identity, so the nested repository needs its own
+    git(&state, &["config", "user.name", "t"]);
+    git(&state, &["config", "user.email", "t@t"]);
     let commit_state = |msg: &str| {
         git(&state, &["add", "-A"]);
         git(
