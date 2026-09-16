@@ -16,6 +16,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         .unwrap_or_else(|_| "HEAD".to_string());
 
     let report = worktree::lane(root, &cfg, &mut |wt| {
+        eprintln!("worktree: cd {} && enallagi watch", wt.display());
         let status = Command::new(std::env::current_exe()?)
             .args(["run", "--iterations", &n.to_string(), "--no-tui"])
             .env("ENALLAGI_DIR", wt.join(&cfg.layout.harness_dir))
