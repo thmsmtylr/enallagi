@@ -200,7 +200,7 @@ fn pr_refuses_a_task_that_is_not_done() {
 }
 
 #[test]
-fn the_task_branch_holds_the_done_tasks_change_and_not_the_rejected_one() {
+fn the_task_branch_holds_only_the_done_change() {
     let (f, shas) = landed("grep -q 'two two' src/thing.txt\n");
     let (code, out) = f.harness(&["pr", "T-001"]);
     assert_eq!(code, 0, "{out}");
@@ -258,7 +258,7 @@ fn the_task_branch_holds_the_done_tasks_change_and_not_the_rejected_one() {
 }
 
 #[test]
-fn pr_refuses_while_a_blockers_change_is_not_on_the_upstream_default_branch() {
+fn pr_refuses_a_blocker_not_yet_upstream() {
     let (f, _) = landed("exit 0\n");
     let tasks = format!(
         "{DONE_AND_REJECTED}\n## [T-003] the thing says twelve at the end\nscope: src/other.txt\nblockedBy: T-001\nstatus: done\n"
@@ -309,7 +309,7 @@ fn pr_refuses_while_a_blockers_change_is_not_on_the_upstream_default_branch() {
 }
 
 #[test]
-fn a_conflicting_diff_exits_non_zero_naming_the_files_and_leaves_no_branch() {
+fn a_conflicting_diff_names_the_files_and_stops() {
     let (f, _) = landed("exit 0\n");
     git(&f.root, &["checkout", "-q", "main"]);
     commit(
@@ -333,7 +333,7 @@ fn a_conflicting_diff_exits_non_zero_naming_the_files_and_leaves_no_branch() {
 }
 
 #[test]
-fn a_red_check_in_the_worktree_exits_non_zero_with_its_output_and_pushes_nothing() {
+fn a_red_check_pushes_nothing() {
     let (f, _) = landed("echo 'the check saw FIVE missing'\nexit 3\n");
     let (code, out) = f.harness(&["pr", "T-001", "--push"]);
     assert_ne!(code, 0, "{out}");
@@ -343,7 +343,7 @@ fn a_red_check_in_the_worktree_exits_non_zero_with_its_output_and_pushes_nothing
 }
 
 #[test]
-fn push_pushes_the_branch_and_opens_the_pull_request_with_gh() {
+fn push_pushes_the_branch_and_opens_the_pr() {
     let (f, _) = landed("exit 0\n");
     let log = f.tools.join("gh.log");
     exec(

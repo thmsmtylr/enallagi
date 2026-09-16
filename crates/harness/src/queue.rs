@@ -380,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ready_task_whose_blocker_is_not_done_is_not_selected() {
+    fn a_task_with_an_open_blocker_is_skipped() {
         let blocks = parse(FIXTURE).unwrap();
         assert_ne!(ready_unattended(&blocks).as_deref(), Some("T-002"));
     }
@@ -438,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn unblock_never_releases_a_task_whose_blocker_is_not_done() {
+    fn unblock_keeps_an_open_blocker_blocked() {
         let released = unblock(FIXTURE).unwrap();
         let blocks = parse(&released).unwrap();
         let t007 = blocks.iter().find(|b| b.id == "T-007").unwrap();
@@ -498,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unterminated_fence_is_refused_not_silently_swallowed() {
+    fn an_unterminated_fence_is_refused() {
         let text = FIXTURE.replace("## [T-004]", "```\n## [T-004]");
         assert!(matches!(
             parse(&text),

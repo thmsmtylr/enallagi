@@ -516,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn a_preset_without_a_turn_flag_loses_the_turns_word_and_its_flag() {
+    fn a_preset_without_a_turn_flag_drops_both() {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = crate::config::load(dir.path()).unwrap().agent;
         cfg.preset = "gemini".into();

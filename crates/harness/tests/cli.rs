@@ -139,7 +139,7 @@ fn events_in(dir: &std::path::Path) -> std::process::Output {
 }
 
 #[test]
-fn a_legacy_harness_directory_is_read_with_a_warning_naming_the_move() {
+fn a_legacy_directory_is_read_with_a_warning() {
     let dir = tempfile::tempdir().unwrap();
     let line = r#"{"ts":"2026-09-07T00:00:00Z","run":"r","iter":0,"seq":1,"kind":"halt","halt":"a","reason":"legacy"}"#;
     std::fs::create_dir_all(dir.path().join(".harness")).unwrap();
@@ -158,7 +158,7 @@ fn a_legacy_harness_directory_is_read_with_a_warning_naming_the_move() {
 }
 
 #[test]
-fn the_enallagi_directory_is_read_without_a_warning_when_both_exist() {
+fn the_new_directory_wins_without_a_warning() {
     let dir = tempfile::tempdir().unwrap();
     let line = r#"{"ts":"2026-09-07T00:00:00Z","run":"r","iter":0,"seq":1,"kind":"halt","halt":"a","reason":"current"}"#;
     std::fs::create_dir_all(dir.path().join(".harness")).unwrap();
@@ -177,7 +177,7 @@ fn the_enallagi_directory_is_read_without_a_warning_when_both_exist() {
 }
 
 #[test]
-fn skills_sync_works_under_a_custom_preset_which_has_no_directory_of_its_own() {
+fn skills_sync_works_under_a_custom_preset() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let mut toml = String::from(
@@ -385,7 +385,7 @@ fn the_shipped_documents_describe_and_do_not_argue() {
 }
 
 #[test]
-fn tasks_ready_finds_the_harness_directory_queue_when_the_config_is_refused() {
+fn tasks_ready_finds_the_queue_config_refused() {
     let r = harness::fixture::Repo::new();
     r.write(
         ".enallagi/TASKS.md",
@@ -467,7 +467,7 @@ fn base_of(root: &std::path::Path, task: &str) -> std::process::Output {
 }
 
 #[test]
-fn base_prints_the_product_sha_the_state_commit_adding_the_heading_records() {
+fn base_prints_the_state_commits_product_sha() {
     let r = harness::fixture::Repo::new();
     let git = |dir: &std::path::Path, args: &[&str]| harness::git::git(dir, args).expect("git");
     r.write(".git/info/exclude", ".enallagi/\n");
@@ -514,7 +514,7 @@ fn base_prints_the_product_sha_the_state_commit_adding_the_heading_records() {
 }
 
 #[test]
-fn base_in_the_root_layout_prints_what_the_pickaxe_on_tasks_md_prints() {
+fn base_in_the_root_layout_matches_the_pickaxe() {
     let r = harness::fixture::Repo::new();
     r.write("TASKS.md", "# TASKS\n\n## [T-001] open\nstatus: ready\n");
     r.commit_all("queue: T-001");
@@ -549,7 +549,7 @@ fn in_harness(root: &std::path::Path, args: &[&str]) -> std::process::Output {
 }
 
 #[test]
-fn gate_scope_with_the_product_base_refuses_a_grown_baseline_in_a_nested_install() {
+fn gate_scope_refuses_a_grown_nested_baseline() {
     let r = harness::fixture::Repo::new();
     let git = |dir: &std::path::Path, args: &[&str]| harness::git::git(dir, args).expect("git");
     let out = in_harness(&r.root, &["init"]);
@@ -610,7 +610,7 @@ fn gate_scope_with_the_product_base_refuses_a_grown_baseline_in_a_nested_install
 }
 
 #[test]
-fn tasks_ready_reads_the_queue_in_harness_dir_before_the_configured_directory() {
+fn tasks_ready_prefers_the_harness_dir_queue() {
     let r = harness::fixture::Repo::new();
     r.write(
         ".enallagi/TASKS.md",
@@ -641,7 +641,7 @@ fn tasks_ready_reads_the_queue_in_harness_dir_before_the_configured_directory() 
 }
 
 #[test]
-fn the_immutable_hook_reads_test_hashes_in_harness_dir() {
+fn the_immutable_hook_reads_nested_hashes() {
     let r = harness::fixture::Repo::new();
     r.write(".enallagi/TASKS.md", "# TASKS\n");
     r.write("lane/.enallagi/TASKS.md", "# TASKS\n");

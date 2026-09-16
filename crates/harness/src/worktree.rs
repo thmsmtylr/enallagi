@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn two_lanes_landing_different_tasks_both_merge_and_the_state_queue_holds_both_verdicts() {
+    fn two_lanes_merge_and_both_verdicts_land() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -296,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lane_whose_state_branch_cannot_fast_forward_merges_neither_branch() {
+    fn a_stuck_state_branch_merges_neither() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -322,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lane_whose_product_branch_cannot_fast_forward_merges_neither_branch() {
+    fn a_stuck_product_branch_merges_neither() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -344,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn a_product_merge_git_refuses_leaves_neither_repository_merged() {
+    fn a_refused_product_merge_rolls_back() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -366,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn a_worktree_lane_leaves_the_parent_checkout_untouched() {
+    fn a_lane_leaves_the_parent_untouched() {
         let r = repo_with_harness_dir();
         let cfg = cfg(&r);
         let pre_head = git::head(&r.root);
@@ -443,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lane_that_cannot_fast_forward_is_left_for_a_human_and_its_work_is_still_there() {
+    fn a_stuck_lane_is_left_with_its_work() {
         let r = repo_with_harness_dir();
         let cfg = cfg(&r);
         let pre_head = git::head(&r.root);
@@ -474,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_that_errors_still_merges_and_the_error_is_kept() {
+    fn a_run_that_errors_still_merges() {
         let r = repo_with_harness_dir();
         let cfg = cfg(&r);
 

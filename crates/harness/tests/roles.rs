@@ -47,7 +47,7 @@ fn declare(repo: &Repo, source: &str, rev: Option<&str>) -> config::Config {
 }
 
 #[test]
-fn a_declared_role_is_fetched_vendored_and_committed_before_its_stage() {
+fn a_declared_role_lands_before_its_stage() {
     let upstream = Repo::new();
     upstream.write("roles/implementer.md", BODY);
     upstream.commit_all("role");
@@ -110,7 +110,7 @@ fn a_declared_role_is_fetched_vendored_and_committed_before_its_stage() {
 }
 
 #[test]
-fn a_role_whose_vendored_file_drifted_is_refused_under_frozen() {
+fn a_drifted_role_is_refused_under_frozen() {
     let repo = Repo::new();
     repo.write("vendor/roles/implementer.md", BODY);
     let cfg = declare(&repo, "path:vendor", None);
@@ -183,7 +183,7 @@ fn run_once(repo: &Repo) {
 }
 
 #[test]
-fn an_undeclared_role_falls_back_to_the_installed_or_embedded_file() {
+fn an_undeclared_role_falls_back() {
     let installed = pipeline_repo();
     installed.write(".enallagi/roles/implementer.md", BODY);
     installed.commit_all("installed role");
@@ -211,7 +211,7 @@ fn an_undeclared_role_falls_back_to_the_installed_or_embedded_file() {
 }
 
 #[test]
-fn the_immutable_hook_refuses_an_edit_to_a_vendored_role() {
+fn immutable_refuses_an_edit_to_a_role() {
     let repo = Repo::new();
     repo.write(
         ".enallagi/harness.lock",

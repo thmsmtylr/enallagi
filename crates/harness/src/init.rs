@@ -850,7 +850,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_resync_that_cannot_read_the_default_rewrites_nothing() {
+    fn an_unreadable_default_rewrites_nothing() {
         let cfg = config_from("[check]\ncommand = \"make check\"\n").expect("config");
         let text = "- Verify, and this is what done means: `bun run check`\n";
         assert_eq!(resync(text, None, &cfg.check), None);

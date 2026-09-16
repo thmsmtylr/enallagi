@@ -78,7 +78,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_lane_left_unmerged_names_both_directories_and_both_merge_commands() {
+    fn an_unmerged_lane_names_both_repositories() {
         let report = worktree::LaneReport {
             merged: false,
             left: Some("/r/.enallagi/worktrees/lane-x".into()),

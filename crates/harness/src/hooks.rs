@@ -395,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn immutable_refuses_an_edit_to_a_hashed_file_when_the_config_is_refused() {
+    fn immutable_refuses_an_edit_config_refused() {
         let r = Repo::new();
         r.write(".enallagi/TASKS.md", "# TASKS\n");
         r.write("src/a.ts", "export const a = 1\n");
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn immutable_refuses_a_symlinked_alias_of_a_hashed_file() {
+    fn immutable_refuses_a_symlinked_alias() {
         let r = Repo::new();
         r.write("src/a.ts", "export const a = 1\n");
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn immutable_refuses_a_symlinked_directory_containing_a_locked_skill() {
+    fn immutable_refuses_a_symlinked_skill_dir() {
         let r = Repo::new();
         r.write(".enallagi/adapters/claude/skills/tdd/SKILL.md", "# tdd\n");
         r.write(
@@ -472,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn immutable_normalizes_a_nonexistent_target_under_an_existing_directory() {
+    fn immutable_normalizes_a_missing_target() {
         let r = Repo::new();
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         let (code, msg) = immutable(&r.root, &input("src/does-not-exist-yet.ts"));
@@ -480,7 +480,7 @@ mod tests {
     }
 
     #[test]
-    fn immutable_refuses_a_workspace_package_json_when_scripts_are_hashed() {
+    fn immutable_refuses_a_workspace_manifest() {
         let r = Repo::new();
         r.write(
             "package.json",
@@ -504,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn a_write_from_a_session_that_is_not_the_live_lane_is_refused() {
+    fn a_write_from_another_session_is_refused() {
         let r = Repo::new();
         r.write(
             "TASKS.md",
@@ -533,7 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pid_file_left_by_a_loop_that_is_gone_is_not_a_live_loop() {
+    fn a_stale_pid_file_is_not_a_live_loop() {
         let r = Repo::new();
         let child = StdCommand::new("sleep")
             .arg("30")
@@ -594,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn skills_contract_prints_nothing_for_no_declared_skills() {
+    fn skills_contract_is_empty_without_skills() {
         let r = Repo::new();
         let (code, msg) = skills_contract(&r.root);
         assert_eq!(code, 0);

@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_with_no_finished_stage_shows_zero_spend_not_negative_zero() {
+    fn an_unfinished_run_shows_zero_spend() {
         let mut model = fixture_model();
         model
             .events
@@ -431,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_run_renders_the_leave_prompt_and_keeps_halts_and_warnings() {
+    fn a_finished_run_renders_the_leave_prompt() {
         let mut model = fixture_model();
         model.finished = true;
         let backend = TestBackend::new(120, 40);
@@ -503,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn panic_hook_restores_before_forwarding_to_the_previous_hook() {
+    fn panic_hook_restores_before_forwarding() {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Mutex;
 

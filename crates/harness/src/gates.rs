@@ -1123,7 +1123,7 @@ mod tests {
     }
 
     #[test]
-    fn a_task_id_that_left_the_queue_without_reaching_decisions_halts_the_run() {
+    fn a_task_id_lost_from_the_queue_halts() {
         let mut env = Env::new("exit 0\n");
         env.repo.write(
             "TASKS.md",
@@ -1147,7 +1147,7 @@ mod tests {
     }
 
     #[test]
-    fn and_the_same_id_archived_to_decisions_is_not_a_loss() {
+    fn an_archived_id_is_not_a_loss() {
         let mut env = Env::new("exit 0\n");
         env.repo.write(
             "TASKS.md",
@@ -1226,7 +1226,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_rejects_a_baseline_that_grew_even_under_a_harness_task() {
+    fn scope_rejects_a_grown_baseline() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", ".check-baseline", "none — harness");
         env.repo.write(".check-baseline", "alpha\n");
@@ -1250,7 +1250,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_exempts_a_hash_recut_for_a_file_on_the_scope_line() {
+    fn scope_exempts_an_in_scope_hash_recut() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo
@@ -1296,7 +1296,7 @@ mod tests {
     }
 
     #[test]
-    fn an_implementer_stopping_short_of_review_skips_the_rest() {
+    fn stopping_short_of_review_skips_the_rest() {
         for status in ["blocked", "needs-spec", "deferred", "ready"] {
             let mut env = Env::new("exit 0\n");
             env.queue(status, "src/a.ts", "§11 row 1");
@@ -1445,7 +1445,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_exempts_a_freshly_vendored_role_outside_scope() {
+    fn scope_exempts_a_vendored_role() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/**", "§11 row 1");
         env.repo.commit_all("verdict");
@@ -1481,7 +1481,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_exempts_a_freshly_added_lock_key_outside_scope() {
+    fn scope_exempts_a_new_lock_key() {
         let mut env = Env::new("exit 0\n");
         env.queue(
             "done",
@@ -1577,7 +1577,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_rejects_an_unrelated_file_dropped_under_the_skills_dir() {
+    fn scope_rejects_a_stray_file_in_skills() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/**", "§11 row 1");
         env.repo.commit_all("verdict");
@@ -1600,7 +1600,7 @@ mod tests {
     }
 
     #[test]
-    fn skills_dir_falls_back_from_layout_to_preset_to_harness_dir() {
+    fn skills_dir_falls_back_layout_preset_dir() {
         let mut cfg = Config::default();
         cfg.layout.harness_dir = ".enallagi".to_string();
         assert_eq!(skills_dir_for(&cfg), ".enallagi/skills");

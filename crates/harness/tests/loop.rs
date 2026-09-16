@@ -235,19 +235,19 @@ fn a_dry_iteration_plans_implement_and_verify() {
 }
 
 #[test]
-fn the_launcher_spawns_the_configured_agent_not_a_hardcoded_one() {
+fn the_launcher_spawns_the_configured_agent() {
     let r = repo(&base_toml(""), TASKS);
     assert!(plan_of(&r).contains("via ./src/fakeagent.sh"));
 }
 
 #[test]
-fn the_implement_stage_points_the_agent_at_its_role_file() {
+fn the_implement_stage_names_its_role_file() {
     let r = repo(&base_toml(""), TASKS);
     assert!(plan_of(&r).contains(".enallagi/run/roles/implementer.md"));
 }
 
 #[test]
-fn a_role_with_its_own_agent_command_is_spawned_with_it() {
+fn a_roles_own_agent_command_is_used() {
     let extra =
         "\n[agent.verifier]\ncommand = [\"./src/fakeverifier.sh\", \"{prompt}\", \"{turns}\"]\n";
     let r = repo(&base_toml(extra), TASKS);
@@ -255,7 +255,7 @@ fn a_role_with_its_own_agent_command_is_spawned_with_it() {
 }
 
 #[test]
-fn a_role_with_no_agent_command_falls_back_to_the_default() {
+fn a_role_with_no_agent_falls_back() {
     let extra =
         "\n[agent.verifier]\ncommand = [\"./src/fakeverifier.sh\", \"{prompt}\", \"{turns}\"]\n";
     let r = repo(&base_toml(extra), TASKS);
@@ -263,7 +263,7 @@ fn a_role_with_no_agent_command_falls_back_to_the_default() {
 }
 
 #[test]
-fn a_preset_argv_carries_the_harness_directory_and_the_context_file() {
+fn a_preset_argv_carries_dir_and_context() {
     let extra = "\n[agent.scout]\ncommand = [\"./src/fakeargs.sh\", \"{prompt}\", \"{harness_dir}\", \"{context_file}\"]\n";
     let r = repo(&base_toml(extra), "");
     script(
@@ -298,7 +298,7 @@ fn a_bare_clarification_marker_halts_the_loop() {
 }
 
 #[test]
-fn a_backticked_marker_in_the_template_does_not_halt_it() {
+fn a_backticked_marker_does_not_halt() {
     let r = repo(&base_toml(""), TASKS);
     r.write(
         "SPEC.md",
@@ -316,7 +316,7 @@ fn a_backticked_marker_in_the_template_does_not_halt_it() {
 }
 
 #[test]
-fn every_spawned_stage_appends_one_record_to_the_run_log() {
+fn every_stage_appends_a_run_log_record() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -329,7 +329,7 @@ fn every_spawned_stage_appends_one_record_to_the_run_log() {
 }
 
 #[test]
-fn and_the_record_carries_the_role_the_seconds_and_the_reported_cost() {
+fn the_record_carries_role_seconds_cost() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -362,7 +362,7 @@ fn and_the_record_carries_the_role_the_seconds_and_the_reported_cost() {
 }
 
 #[test]
-fn the_loop_stops_before_a_stage_that_would_exceed_the_budget() {
+fn the_loop_stops_before_the_budget() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -413,7 +413,7 @@ fn a_config_naming_an_unknown_gate_is_refused() {
 }
 
 #[test]
-fn a_stage_on_a_preset_with_no_turn_cap_and_no_timeout_is_refused() {
+fn an_uncapped_untimed_stage_is_refused() {
     let toml = base_toml("").replace(
         "preset = \"custom\"\ncommand = [\"./src/fakeagent.sh\", \"{prompt}\", \"{turns}\"]",
         "preset = \"aider\"",
@@ -425,7 +425,7 @@ fn a_stage_on_a_preset_with_no_turn_cap_and_no_timeout_is_refused() {
 }
 
 #[test]
-fn a_stage_refuses_to_start_on_an_unresolved_skill_under_frozen() {
+fn an_unresolved_skill_refuses_a_stage() {
     let r = repo(&base_toml(""), TASKS);
     r.write(
         ".enallagi/roles/implementer.md",
@@ -457,7 +457,7 @@ fn a_command_stage_runs_with_the_harness_environment() {
 }
 
 #[test]
-fn queue_empty_fails_closed_on_an_unparseable_tasks_file() {
+fn queue_empty_fails_closed_on_a_bad_queue() {
     let toml = r#"
 [agent]
 preset = "custom"
@@ -547,7 +547,7 @@ fn two_dry_rounds_end_the_run() {
 }
 
 #[test]
-fn harness_run_without_a_tty_prints_one_line_per_event_and_exits_0() {
+fn run_without_a_tty_prints_one_line_per_event() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -556,7 +556,7 @@ fn harness_run_without_a_tty_prints_one_line_per_event_and_exits_0() {
     r.commit_all("stubs");
 
     // this asserts what a tty-less run prints; CI would make the run --frozen and refuse the
-    // fixture's unvendored skills, which is `a_stage_refuses_to_start_on_an_unresolved_skill_under_frozen`
+    // fixture's unvendored skills, which is `an_unresolved_skill_refuses_a_stage`
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_harness"))
         .args(["run", "--no-tui", "--iterations", "1"])
         .current_dir(&r.root)
@@ -597,7 +597,7 @@ why = "the failing test is written first"
 "#;
 
 #[test]
-fn rendering_a_role_never_eats_the_source_it_rendered_from() {
+fn rendering_a_role_keeps_its_source() {
     let toml = base_toml(SKILL).replace(
         "stages = [\"implement\", \"verify\"]",
         "stages = [\"implement\"]",
@@ -654,7 +654,7 @@ path = \"roles\"
 // task back to ready even though the implementer and verifier committed everything in their scope.
 // a declared role rides the same commit, and the scope gate exempts it like a fresh skill.
 #[test]
-fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
+fn a_fetched_skill_commits_before_its_stage() {
     let toml = base_toml(SKILL_DECL);
     let r = repo(&toml, SKILL_TASKS);
     r.write("vendor/tdd/SKILL.md", "# tdd\n\nWrite the test first.\n");
@@ -732,7 +732,7 @@ fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
 }
 
 #[test]
-fn a_red_check_that_names_nothing_is_a_finding_not_an_error() {
+fn an_unnamed_red_check_is_a_finding() {
     let r = repo(&base_toml(""), "");
     script(&r, "src/fakecheck.sh", "echo boom\nexit 1\n");
     r.write("TASKS.md", "# queue\n");
@@ -744,7 +744,7 @@ fn a_red_check_that_names_nothing_is_a_finding_not_an_error() {
 }
 
 #[test]
-fn a_block_left_proposed_whose_fix_names_the_contract_halts() {
+fn a_proposed_fix_naming_the_contract_halts() {
     let r = repo("", "");
     let adjudicate = script(
         &r,
@@ -770,7 +770,7 @@ fn a_block_left_proposed_whose_fix_names_the_contract_halts() {
 }
 
 #[test]
-fn a_stages_output_reaches_the_sink_while_the_stage_is_still_running() {
+fn stage_output_streams_to_the_sink() {
     let toml = base_toml("").replace(
         "stages = [\"implement\", \"verify\"]",
         "stages = [\"implement\"]",
@@ -813,7 +813,7 @@ fn a_stages_output_reaches_the_sink_while_the_stage_is_still_running() {
 }
 
 #[test]
-fn the_implementer_marking_its_own_task_done_skips_the_verify_stage() {
+fn an_implementer_done_skips_verify() {
     let r = repo("", "");
     let implement = implementer(
         &r,
@@ -842,7 +842,7 @@ fn the_implementer_marking_its_own_task_done_skips_the_verify_stage() {
 }
 
 #[test]
-fn an_implementer_that_stops_short_of_review_skips_the_verify_stage() {
+fn stopping_short_of_review_skips_verify() {
     let r = repo("", "");
     let implement = implementer(
         &r,
@@ -885,7 +885,7 @@ fn with_verifier(r: &Repo, verify: &str) {
 }
 
 #[test]
-fn a_task_stranded_at_review_gets_its_verify_stage_on_the_next_run() {
+fn a_stranded_review_verifies_next_run() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = verifier(&r);
     with_verifier(&r, &verify);
@@ -925,7 +925,7 @@ fn entries(r: &Repo) -> usize {
 }
 
 #[test]
-fn a_verify_only_iteration_leaves_one_progress_entry_written_by_the_launcher() {
+fn a_verify_only_iteration_leaves_one_entry() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = verifier(&r);
     with_verifier(&r, &verify);
@@ -956,7 +956,7 @@ fn a_verify_only_iteration_leaves_one_progress_entry_written_by_the_launcher() {
 }
 
 #[test]
-fn and_an_iteration_whose_implementer_wrote_one_gets_no_second_entry() {
+fn an_implementer_entry_gets_no_second() {
     let r = repo("", "");
     let implement = implementer(&r, "echo '## stub entry' >>PROGRESS.md\n");
     let verify = verifier(&r);
@@ -982,7 +982,7 @@ fn and_an_iteration_whose_implementer_wrote_one_gets_no_second_entry() {
 }
 
 #[test]
-fn a_task_at_review_wins_over_one_ready_for_the_pipeline_choice() {
+fn review_wins_over_ready() {
     let r = repo(&base_toml(""), REVIEW_AND_READY_TASKS);
     let verify = verifier(&r);
     with_verifier(&r, &verify);
@@ -1015,7 +1015,7 @@ fn a_task_at_review_wins_over_one_ready_for_the_pipeline_choice() {
 }
 
 #[test]
-fn the_run_archives_the_task_it_landed_in_its_last_iteration() {
+fn the_run_archives_the_task_it_landed() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = verifier(&r);
     with_verifier(&r, &verify);
@@ -1074,7 +1074,7 @@ fn t001_status(r: &Repo) -> Option<String> {
 }
 
 #[test]
-fn a_verdict_that_defers_a_finding_in_notes_with_no_proposed_block_is_refused() {
+fn a_deferred_finding_with_no_block_is_refused() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = deferring_verifier(&r, "");
     with_verifier(&r, &verify);
@@ -1098,7 +1098,7 @@ fn a_verdict_that_defers_a_finding_in_notes_with_no_proposed_block_is_refused() 
 }
 
 #[test]
-fn and_the_same_verdict_with_the_finding_proposed_is_committed() {
+fn the_same_verdict_proposed_is_committed() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = deferring_verifier(
         &r,
@@ -1142,7 +1142,7 @@ fn a_verdict_saying_nothing_minor_is_committed() {
 }
 
 #[test]
-fn a_verdict_saying_no_findings_minor_or_otherwise_is_committed() {
+fn a_verdict_of_no_findings_is_committed() {
     a_verdict_noting("VERIFIED. No findings, minor or otherwise.");
 }
 
@@ -1166,14 +1166,14 @@ fn a_clean_verdict_after_the_implementer(r: &Repo, implement: &str) {
 }
 
 #[test]
-fn an_implementer_note_saying_minor_is_not_read_as_the_verdicts() {
+fn an_implementer_minor_is_not_the_verdict() {
     let r = repo("", "");
     let implement = implementer(&r, IMPLEMENTER_NOTE);
     a_clean_verdict_after_the_implementer(&r, &implement);
 }
 
 #[test]
-fn an_uncommitted_implementer_note_saying_minor_is_not_read_as_the_verdicts() {
+fn an_uncommitted_minor_is_not_the_verdict() {
     let r = repo("", "");
     let implement = script(
         &r,
@@ -1191,7 +1191,7 @@ fn an_uncommitted_implementer_note_saying_minor_is_not_read_as_the_verdicts() {
 }
 
 #[test]
-fn a_root_layout_repository_lands_a_task_through_one_stub_iteration() {
+fn a_root_layout_lands_a_stub_task() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -1208,7 +1208,7 @@ fn a_root_layout_repository_lands_a_task_through_one_stub_iteration() {
 }
 
 #[test]
-fn a_harness_directory_layout_lands_a_task_through_one_stub_iteration() {
+fn a_nested_layout_lands_a_stub_task() {
     let r = Repo::new();
     r.write(
         ".enallagi/.gitignore",
@@ -1262,7 +1262,7 @@ fn a_harness_directory_layout_lands_a_task_through_one_stub_iteration() {
 }
 
 #[test]
-fn an_installed_repository_lands_a_task_and_changes_nothing_outside_the_harness_directory() {
+fn an_install_lands_a_task_and_touches_nothing_else() {
     let r = Repo::new();
     harness::init::install(
         &r.root,
@@ -1321,7 +1321,7 @@ fn an_installed_repository_lands_a_task_and_changes_nothing_outside_the_harness_
 }
 
 #[test]
-fn a_nested_claude_install_lands_a_task_and_writes_nothing_under_dot_claude() {
+fn a_claude_install_writes_nothing_under_dot_claude() {
     let r = Repo::new();
     harness::init::install(
         &r.root,
@@ -1428,7 +1428,7 @@ fn nested_status(r: &Repo) -> Option<String> {
 }
 
 #[test]
-fn a_nested_harness_repository_forces_a_done_the_check_does_not_support_back_to_ready() {
+fn an_unsupported_done_is_forced_back_to_ready() {
     let r = nested("echo '(fail) alpha'\nexit 1\n", "");
 
     let (digest, events) = go(&r, &opts(1));
@@ -1445,7 +1445,7 @@ fn a_nested_harness_repository_forces_a_done_the_check_does_not_support_back_to_
 }
 
 #[test]
-fn a_nested_harness_repository_refuses_a_check_baseline_that_grew() {
+fn a_nested_install_refuses_a_grown_baseline() {
     let r = nested("exit 0\n", "echo alpha >>.enallagi/.check-baseline\n");
 
     let (digest, events) = go(&r, &opts(1));
@@ -1465,7 +1465,7 @@ fn a_nested_harness_repository_refuses_a_check_baseline_that_grew() {
 }
 
 #[test]
-fn a_landed_iteration_leaves_no_instance_path_in_the_product_history() {
+fn a_landed_iteration_leaves_no_instance_path() {
     let r = nested("exit 0\n", "");
     let before = in_dir(&r.root, &["rev-parse", "HEAD"]);
 

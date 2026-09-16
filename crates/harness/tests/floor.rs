@@ -105,7 +105,7 @@ fn history(subjects: &[&str]) -> tempfile::TempDir {
 }
 
 #[test]
-fn no_installed_script_hardcodes_a_vendor_path_or_process() {
+fn no_script_hardcodes_a_vendor_path() {
     // prose may name a vendor; only an executable path or process guard may not
     let vendor = re(r"\.claude/(hooks|agents)|pgrep -f \.claude|spin [^|]*\bclaude\b");
     assert!(
@@ -155,7 +155,7 @@ fn the_launcher_parses_no_task_blocks_itself() {
 }
 
 #[test]
-fn the_write_path_gate_installs_where_the_rules_are_written() {
+fn the_write_path_gate_installs_with_the_rules() {
     let repo = Repo::new();
     repo.init_harness("");
     let readme = read(&repo.root.join(".enallagi/evals/README.md"));
@@ -168,7 +168,7 @@ fn the_write_path_gate_installs_where_the_rules_are_written() {
 }
 
 #[test]
-fn the_driver_names_a_commit_on_the_round_that_no_task_claims() {
+fn the_driver_names_an_unclaimed_commit() {
     let driver = repo_root().join("driver.sh");
 
     let fires = history(&[
@@ -200,7 +200,7 @@ const NO_REJECTION: [&str; 8] = [
 ];
 
 #[test]
-fn a_history_with_no_rejection_fails_the_bootstrap_check() {
+fn a_history_with_no_rejection_fails() {
     let bootstrap = repo_root().join("docs/bootstrap.sh");
     let fixture = history(&NO_REJECTION);
     let (code, out) = script(&bootstrap, fixture.path(), &["--check"]);
@@ -235,7 +235,7 @@ fn the_bootstrap_record_is_derived_from_git() {
 }
 
 #[test]
-fn docs_demo_drives_one_loop_iteration_end_to_end_and_deletes_what_it_made() {
+fn docs_demo_drives_one_iteration_and_cleans_up() {
     let (code, out) = script(&repo_root().join("docs/demo.sh"), &repo_root(), &[]);
     assert_eq!(code, 0, "{out}");
 
@@ -293,7 +293,7 @@ fn hash_mismatches(root: &Path) -> Vec<String> {
 }
 
 #[test]
-fn every_file_test_hashes_covers_still_hashes_to_its_recorded_digest() {
+fn every_hashed_file_matches_its_digest() {
     let fixture = tempfile::tempdir().expect("tempdir");
     fs::write(fixture.path().join("covered.txt"), "the real bytes").expect("write");
     fs::write(
@@ -400,7 +400,7 @@ fn ci_runs_the_floor_on_a_gnu_and_a_bsd_userland() {
 }
 
 #[test]
-fn ci_runs_the_floor_with_the_driver_reaching_the_artifact() {
+fn ci_runs_the_driver_against_the_artifact() {
     // read by VALUE not presence: `HARNESS_DRIVER: ''` is present but the feature is off
     let set = re(r#"(?m)^[^#]*HARNESS_DRIVER:\s*['"]?[^\s'"]"#);
     let block = job_block(&ci(), "driver");
@@ -432,7 +432,7 @@ fn ci_runs_the_floor_with_the_driver_reaching_the_artifact() {
 // A fixture that inherits the shipped `[[skill]]` table clones github from a test: it passed on a
 // warm cache and raced itself in CI. Only harness.default.toml may name a remote source.
 #[test]
-fn no_test_fixture_declares_a_skill_the_suite_would_have_to_fetch() {
+fn no_fixture_declares_a_fetched_skill() {
     let root = repo_root();
     let needle = concat!("source = \"", "github:");
     let mut offences = Vec::new();
@@ -583,6 +583,39 @@ fn no_shipped_file_carries_rhetorical_filler() {
     }
 }
 
+#[test]
+fn no_identifier_runs_past_fifty_characters() {
+    const CAP: usize = 50;
+    let decl = re(r"\b(?:fn|struct|enum|trait|union|mod|const|static|type)\s+([A-Za-z_]\w*)");
+    let field = re(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?([a-z_]\w*)[ \t]*:");
+    assert!(decl.is_match("fn a() {}"), "the scan cannot report");
+    assert!(
+        field.is_match("    name: String,"),
+        "the scan cannot report"
+    );
+
+    let crates = repo_root().join("crates");
+    let mut long = Vec::new();
+    for rel in walk(&crates) {
+        if rel.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        let text = read(&crates.join(&rel));
+        for name in [&decl, &field]
+            .iter()
+            .flat_map(|p| p.captures_iter(&text))
+            .map(|c| c[1].to_string())
+        {
+            if name.len() > CAP {
+                long.push(format!("{}: {name} ({})", rel.display(), name.len()));
+            }
+        }
+    }
+    long.sort();
+    long.dedup();
+    assert!(long.is_empty(), "{} over {CAP}: {long:#?}", long.len());
+}
+
 // main ships the package; what `harness init` writes lives only on dogfood/* branches
 #[test]
 #[ignore = "main only: ci.yml runs it on main and on pull requests into main"]
@@ -673,7 +706,7 @@ fn the_shell_package_is_gone() {
 
 #[test]
 #[ignore = "installs four repos and drives four iterations; run with --ignored"]
-fn the_package_driver_reports_shortfalls_as_finding_lines() {
+fn the_driver_reports_shortfalls_as_findings() {
     // deliberately not asserting findings.len() > 0 -- that would require the harness to stay broken
     let (code, out) = script(&repo_root().join("driver.sh"), &repo_root(), &[]);
     assert_eq!(code, 0, "{out}");

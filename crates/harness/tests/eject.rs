@@ -167,7 +167,7 @@ fn removed(out: &str, verb: &str) -> Vec<String> {
 }
 
 #[test]
-fn a_repository_the_harness_ran_in_and_was_ejected_from_looks_as_it_did_before() {
+fn an_ejected_repository_looks_untouched() {
     let r = Repo::new();
     let tools = tempfile::tempdir().expect("tools");
     let (status, index, excluded) = snapshot(&r.root);
@@ -218,7 +218,7 @@ fn a_repository_the_harness_ran_in_and_was_ejected_from_looks_as_it_did_before()
 }
 
 #[test]
-fn eject_removes_an_untracked_entry_point_and_keeps_one_the_product_now_tracks() {
+fn eject_removes_only_untracked_entry_points() {
     let r = Repo::new();
     let (code, out) = harness(&r.root, &["init", "--adapter", "gemini"]);
     assert_eq!(code, 0, "{out}");
@@ -247,7 +247,7 @@ impl Drop for Reaper {
 }
 
 #[test]
-fn eject_refuses_while_a_lane_worktree_exists_or_a_loop_is_live_naming_each() {
+fn eject_refuses_a_live_lane_or_loop() {
     let r = Repo::new();
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
@@ -282,7 +282,7 @@ fn eject_refuses_while_a_lane_worktree_exists_or_a_loop_is_live_naming_each() {
 }
 
 #[test]
-fn eject_refuses_when_the_live_loop_is_an_ancestor_of_the_eject_process() {
+fn eject_refuses_its_own_ancestor_loop() {
     let r = Repo::new();
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
@@ -308,7 +308,7 @@ fn eject_refuses_when_the_live_loop_is_an_ancestor_of_the_eject_process() {
 }
 
 #[test]
-fn eject_keep_record_moves_the_harness_directory_outside_the_repository() {
+fn eject_keep_record_moves_the_directory_out() {
     let r = Repo::new();
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");

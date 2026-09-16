@@ -895,7 +895,7 @@ mod tests {
     ];
 
     #[test]
-    fn every_instance_file_resolves_under_the_harness_directory() {
+    fn every_instance_file_is_under_the_dir() {
         let d = tempfile::tempdir().unwrap();
         let root = d.path();
         let cfg = load(root).unwrap();
@@ -917,7 +917,7 @@ mod tests {
     }
 
     #[test]
-    fn a_root_tasks_file_keeps_every_instance_file_at_the_root() {
+    fn a_root_queue_keeps_the_root_layout() {
         let d = tempfile::tempdir().unwrap();
         let root = d.path();
         std::fs::write(instance_path(root, "", "TASKS.md"), "# TASKS\n").unwrap();
@@ -940,7 +940,7 @@ mod tests {
     }
 
     #[test]
-    fn a_root_harness_toml_is_read_when_the_harness_directory_has_none() {
+    fn a_root_config_is_read_when_the_dir_has_none() {
         let d = tempfile::tempdir().unwrap();
         let root = d.path();
         std::fs::write(
@@ -1003,7 +1003,7 @@ mod tests {
     }
 
     #[test]
-    fn a_typoed_probe_name_is_refused_before_any_stage_runs() {
+    fn a_typoed_probe_name_is_refused() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
         c.pipeline[0].when = "probe.typoed".into();
         let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
@@ -1029,7 +1029,7 @@ mod tests {
     }
 
     #[test]
-    fn a_skill_id_or_path_that_escapes_its_directory_is_refused() {
+    fn an_escaping_skill_id_or_path_is_refused() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
         c.skill[0].id = "..".into();
         c.skill[1].path = "../x".into();
@@ -1118,7 +1118,7 @@ mod tests {
     }
 
     #[test]
-    fn a_repository_with_only_the_legacy_harness_directory_keeps_it() {
+    fn a_lone_legacy_directory_is_kept() {
         let d = tempfile::tempdir().unwrap();
         std::fs::create_dir(d.path().join(".harness")).unwrap();
         assert_eq!(load(d.path()).unwrap().layout.harness_dir, ".harness");
@@ -1413,7 +1413,7 @@ mod tests {
     }
 
     #[test]
-    fn a_role_declaration_is_refused_when_malformed_or_unused() {
+    fn a_malformed_or_unused_role_is_refused() {
         let d = tempfile::tempdir().unwrap();
         write_config(
             d.path(),
@@ -1439,7 +1439,7 @@ mod tests {
 
     // the vendored file does not exist before the first fetch, so a declared role can't be a missing one
     #[test]
-    fn a_declared_role_is_not_missing_before_it_is_fetched() {
+    fn an_unfetched_declared_role_is_not_missing() {
         let d = tempfile::tempdir().unwrap();
         write_config(
             d.path(),

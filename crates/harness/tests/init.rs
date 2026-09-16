@@ -92,7 +92,7 @@ fn init_exits_0_on_a_fresh_repo() {
 }
 
 #[test]
-fn init_makes_the_harness_directory_a_repository_the_product_ignores() {
+fn init_makes_the_dir_an_ignored_repository() {
     let repo = Repo::new();
     install(&repo);
     let state = repo.root.join(".enallagi");
@@ -129,7 +129,7 @@ fn init_makes_the_harness_directory_a_repository_the_product_ignores() {
 }
 
 #[test]
-fn init_with_each_preset_leaves_a_clean_fixture_clean_and_its_gitignore_unchanged() {
+fn init_leaves_a_clean_fixture_clean() {
     for name in harness::agent::presets().keys() {
         let repo = Repo::new();
         repo.write(".gitignore", "node_modules/\n");
@@ -147,7 +147,7 @@ fn init_with_each_preset_leaves_a_clean_fixture_clean_and_its_gitignore_unchange
 }
 
 #[test]
-fn init_excludes_the_harness_directory_and_every_entry_point_in_one_marked_block() {
+fn init_excludes_the_dir_in_one_block() {
     let repo = Repo::new();
     let report = with(&repo, &adapter("gemini"));
     with(&repo, &adapter("gemini"));
@@ -181,7 +181,7 @@ fn init_excludes_the_harness_directory_and_every_entry_point_in_one_marked_block
 }
 
 #[test]
-fn a_root_layout_with_no_harness_toml_seeds_the_context_file_at_the_root() {
+fn a_root_layout_seeds_the_context_file() {
     let repo = Repo::new();
     repo.write("TASKS.md", "# TASKS\n");
     let report = install(&repo);
@@ -196,7 +196,7 @@ fn a_root_layout_with_no_harness_toml_seeds_the_context_file_at_the_root() {
 }
 
 #[test]
-fn init_leaves_a_root_layout_queue_in_the_product_repository() {
+fn init_leaves_a_root_queue_in_the_product() {
     let repo = Repo::new();
     repo.write("TASKS.md", "# TASKS\n");
     repo.commit_all("queue");
@@ -261,7 +261,7 @@ fn re_init_is_idempotent() {
 }
 
 #[test]
-fn the_context_file_is_seeded_and_the_pointers_point_at_it() {
+fn the_context_file_is_seeded_and_pointed_at() {
     let repo = Repo::new();
     with(&repo, &adapter("codex"));
     assert!(!read(&repo, ".enallagi/AGENTS.md").is_empty());
@@ -335,7 +335,7 @@ fn documents_with_content_are_kept() {
 }
 
 #[test]
-fn the_context_file_is_resynced_to_the_configured_check() {
+fn the_context_file_resyncs_the_check() {
     let repo = Repo::new();
     install(&repo);
     assert!(read(&repo, ".enallagi/AGENTS.md").contains("`bun run check`"));
@@ -350,7 +350,7 @@ fn the_context_file_is_resynced_to_the_configured_check() {
 }
 
 #[test]
-fn an_installed_file_that_drifted_from_its_source_is_reported() {
+fn a_drifted_install_is_reported() {
     let repo = Repo::new();
     install(&repo);
     // zero on a freshly installed tree, or this is a permanent finding nobody reads
@@ -382,7 +382,7 @@ fn an_installed_file_that_drifted_from_its_source_is_reported() {
 }
 
 #[test]
-fn init_migrates_harness_json_and_prints_each_renamed_key() {
+fn init_migrates_harness_json_keys() {
     let repo = Repo::new();
     repo.write(
         "harness.json",
@@ -410,7 +410,7 @@ fn init_migrates_harness_json_and_prints_each_renamed_key() {
 }
 
 #[test]
-fn the_claude_adapter_writes_a_plugin_under_the_harness_directory() {
+fn the_claude_adapter_writes_a_plugin() {
     let repo = Repo::new();
     let theirs = "{ \"model\": \"opus\" }\n";
     repo.write(".claude/settings.json", theirs);
@@ -479,7 +479,7 @@ fn the_claude_adapter_writes_a_plugin_under_the_harness_directory() {
 }
 
 #[test]
-fn the_claude_preset_loads_the_plugin_and_names_its_skills_by_the_plugin() {
+fn the_claude_preset_loads_the_plugin() {
     let claude = &harness::agent::presets()["claude"];
     let flag = claude
         .argv
@@ -515,7 +515,7 @@ fn the_claude_preset_loads_the_plugin_and_names_its_skills_by_the_plugin() {
 }
 
 #[test]
-fn a_default_claude_install_names_its_skills_plugin_harness() {
+fn the_default_skills_plugin_is_harness() {
     let repo = Repo::new();
     install(&repo);
     let manifest: serde_json::Value = serde_json::from_str(&read(
@@ -527,7 +527,7 @@ fn a_default_claude_install_names_its_skills_plugin_harness() {
 }
 
 #[test]
-fn a_root_layout_keeps_the_claude_skills_under_dot_claude() {
+fn a_root_layout_keeps_dot_claude_skills() {
     let repo = root_layout();
     let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
     let paths: Vec<&str> = planned.iter().map(|(path, _)| path.as_str()).collect();
@@ -566,7 +566,7 @@ fn the_codex_adapter_writes_hooks_json() {
 }
 
 #[test]
-fn the_adapter_points_its_own_instruction_file_at_the_context_file() {
+fn the_adapter_points_at_the_context_file() {
     let repo = Repo::new();
     let report = with(&repo, &adapter("qwen"));
     assert!(read(&repo, "QWEN.md").contains("AGENTS.md"));
@@ -583,7 +583,7 @@ fn the_adapter_points_its_own_instruction_file_at_the_context_file() {
 }
 
 #[test]
-fn each_preset_gets_a_root_pointer_only_when_its_argv_cannot_name_the_context_file() {
+fn a_root_pointer_only_without_an_argv_token() {
     let presets = harness::agent::presets();
     let claude = &presets["claude"].argv;
     let flag = claude
@@ -662,7 +662,7 @@ fn a_settings_file_that_is_not_json_is_refused() {
 }
 
 #[test]
-fn a_preset_with_no_hooks_file_still_points_its_instruction_file_at_the_context_file() {
+fn a_preset_with_no_hooks_still_points() {
     let repo = Repo::new();
     let report = with(&repo, &adapter("omp"));
     assert!(read(&repo, ".omp/AGENTS.md").contains("AGENTS.md"));
@@ -699,7 +699,7 @@ fn an_unknown_adapter_is_refused() {
 }
 
 #[test]
-fn dry_run_writes_nothing_and_says_what_it_would_write() {
+fn dry_run_writes_nothing_and_says_so() {
     let repo = Repo::new();
     let before = walk(&repo.root);
     let report = with(
@@ -757,7 +757,7 @@ fn the_seeded_documents_state_rules_and_do_not_argue() {
 }
 
 #[test]
-fn init_plans_every_instance_file_under_the_harness_directory() {
+fn init_plans_every_instance_file() {
     let repo = Repo::new();
     let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
     let entry_points = [
@@ -820,7 +820,7 @@ fn instance_mentions(planned: &[(String, String)]) -> Vec<(String, String)> {
 }
 
 #[test]
-fn every_rendered_role_template_and_skill_names_instance_files_under_the_harness_directory() {
+fn rendered_files_name_the_harness_dir() {
     let repo = Repo::new();
     let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
     let off: Vec<_> = instance_mentions(&planned)
@@ -860,7 +860,7 @@ fn harness_init(repo: &Repo, args: &[&str]) -> String {
 }
 
 #[test]
-fn the_git_add_line_init_prints_on_a_fresh_install_exits_0() {
+fn the_printed_git_add_line_exits_0() {
     let repo = Repo::new();
     let stdout = harness_init(&repo, &[]);
     let line = stdout
@@ -879,7 +879,7 @@ fn the_git_add_line_init_prints_on_a_fresh_install_exits_0() {
 }
 
 #[test]
-fn init_lists_each_root_and_legacy_instance_file_with_its_new_path_and_moves_nothing() {
+fn init_lists_new_paths_and_moves_nothing() {
     let repo = root_layout();
     let stdout = harness_init(&repo, &[]);
     for (rel, _) in ROOT_LAYOUT {
@@ -891,7 +891,7 @@ fn init_lists_each_root_and_legacy_instance_file_with_its_new_path_and_moves_not
 }
 
 #[test]
-fn init_move_puts_every_listed_file_at_its_new_path_unchanged() {
+fn init_move_puts_files_at_their_new_paths() {
     let repo = root_layout();
     let stdout = harness_init(&repo, &["--move"]);
     for (rel, text) in ROOT_LAYOUT {
