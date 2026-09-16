@@ -11,6 +11,10 @@ pub enum WorktreeError {
     Detached,
     #[error("worktree: could not create {0}")]
     Create(PathBuf),
+    #[error(
+        "worktree: {repo} has uncommitted work; commit it before a lane branches from it: {files}"
+    )]
+    Dirty { repo: PathBuf, files: String },
     #[error("worktree: {repo} fast-forwarded to {branch}, a later merge was refused, and `git reset --keep {pre}` failed: {stderr}. Both lane worktrees are left")]
     Rollback {
         repo: PathBuf,
@@ -94,6 +98,22 @@ pub fn lane(
     let parent_branch = git::git(root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     if parent_branch == "HEAD" {
         return Err(WorktreeError::Detached);
+    }
+
+    // a lane branches from the parent's HEAD, so work uncommitted there is work it never sees
+    let state_root = git::state_root(root, &cfg.layout.harness_dir);
+    let mut parents = vec![root.to_path_buf()];
+    if state_root != root {
+        parents.insert(0, state_root);
+    }
+    for repo in parents {
+        let files = git::porcelain(&repo);
+        if !files.is_empty() {
+            return Err(WorktreeError::Dirty {
+                repo,
+                files: files.join(", "),
+            });
+        }
     }
 
     let ts = jiff::Timestamp::now().strftime("%Y%m%d-%H%M%S").to_string();
@@ -311,6 +331,12 @@ mod tests {
         .expect("lane");
 
         assert!(!report.merged, "reason: {}", report.reason);
+        assert!(report.reason.contains(&report.branch), "{}", report.reason);
+        assert!(
+            report.reason.contains(&state.display().to_string()),
+            "{}",
+            report.reason
+        );
         assert_eq!(git::head(&r.root), pre_head);
         assert!(!r.root.join("one.txt").exists());
         let left = report.left.clone().expect("left in place");
@@ -340,6 +366,83 @@ mod tests {
         assert_eq!(git::head(&state), pre_state);
         let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
         assert!(!tasks.contains("status: done"), "{tasks}");
+        remove_left(&r, &report);
+    }
+
+    #[test]
+    fn a_dirty_product_parent_refuses_the_lane() {
+        let r = nested_repo();
+        let cfg = cfg(&r);
+        r.write("scratch.txt", "an operator's uncommitted work");
+
+        let mut ran = false;
+        let err = lane(&r.root, &cfg, &mut |_wt| {
+            ran = true;
+            Ok(())
+        })
+        .err()
+        .expect("refused");
+
+        assert!(!ran, "the lane ran against a dirty parent");
+        let msg = err.to_string();
+        assert!(msg.contains("scratch.txt"), "{msg}");
+        assert!(msg.contains(&r.root.display().to_string()), "{msg}");
+        let listed = git::git(&r.root, &["worktree", "list"]).expect("worktree list");
+        assert!(!listed.contains("/worktrees/lane-"), "{listed}");
+    }
+
+    #[test]
+    fn a_dirty_state_parent_refuses_the_lane() {
+        let r = nested_repo();
+        let cfg = cfg(&r);
+        let state = r.root.join(".enallagi");
+        std::fs::write(
+            state.join("TASKS.md"),
+            "# TASKS\n\nan uncommitted queue edit\n",
+        )
+        .expect("write");
+
+        let mut ran = false;
+        let err = lane(&r.root, &cfg, &mut |_wt| {
+            ran = true;
+            Ok(())
+        })
+        .err()
+        .expect("refused");
+
+        assert!(!ran, "the lane ran against a dirty state repository");
+        let msg = err.to_string();
+        assert!(msg.contains("TASKS.md"), "{msg}");
+        assert!(msg.contains(&state.display().to_string()), "{msg}");
+        let listed = git::git(&state, &["worktree", "list"]).expect("worktree list");
+        assert!(!listed.contains("/worktrees/lane-"), "{listed}");
+    }
+
+    #[test]
+    fn a_locked_parent_index_leaves_both_worktrees() {
+        let r = nested_repo();
+        let cfg = cfg(&r);
+        let state = r.root.join(".enallagi");
+        let lock = r.root.join(".git/index.lock");
+        let (pre_root, pre_state) = (git::head(&r.root), git::head(&state));
+
+        let report = lane(&r.root, &cfg, &mut |wt| {
+            land(wt, "T-001", "one.txt");
+            // another process holding the parent index is what the merge hits
+            std::fs::write(&lock, "").expect("write the lock");
+            Ok(())
+        })
+        .expect("lane");
+        std::fs::remove_file(&lock).expect("release the lock");
+
+        assert!(!report.merged, "reason: {}", report.reason);
+        assert!(report.reason.contains("index.lock"), "{}", report.reason);
+        assert_eq!(git::head(&r.root), pre_root);
+        assert_eq!(git::head(&state), pre_state, "reason: {}", report.reason);
+        let left = report.left.clone().expect("left in place");
+        assert!(left.exists(), "{}", left.display());
+        let left_state = report.state.clone().expect("the state worktree");
+        assert!(left_state.exists(), "{}", left_state.display());
         remove_left(&r, &report);
     }
 
