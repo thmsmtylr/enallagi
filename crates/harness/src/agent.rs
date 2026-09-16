@@ -810,7 +810,9 @@ mod tests {
         let r = crate::fixture::Repo::new();
         std::fs::create_dir_all(stop_file(&r.root).parent().unwrap()).unwrap();
         std::fs::write(stop_file(&r.root), "").unwrap();
-        let argv = r.stub_agent(&limit_notice("1M", "+1 minute"));
+        // an hour, not a minute: a loaded machine can spend the minute inside run_once, and a reset
+        // already past rolls to tomorrow, exceeds MAX_WAIT, and is discarded before any wait happens
+        let argv = r.stub_agent(&limit_notice("1H", "+1 hour"));
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let err = spawn(
             &spawner(argv, &r.root),
