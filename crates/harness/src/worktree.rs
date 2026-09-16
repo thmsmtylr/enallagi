@@ -436,7 +436,17 @@ mod tests {
         std::fs::remove_file(&lock).expect("release the lock");
 
         assert!(!report.merged, "reason: {}", report.reason);
-        assert!(report.reason.contains("index.lock"), "{}", report.reason);
+        // both repositories have an index.lock, so the parent product path is what pins the case
+        let named = r
+            .root
+            .canonicalize()
+            .expect("canonicalize")
+            .join(".git/index.lock");
+        assert!(
+            report.reason.contains(&named.display().to_string()),
+            "{}",
+            report.reason
+        );
         assert_eq!(git::head(&r.root), pre_root);
         assert_eq!(git::head(&state), pre_state, "reason: {}", report.reason);
         let left = report.left.clone().expect("left in place");
