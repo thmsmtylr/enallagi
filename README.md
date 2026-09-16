@@ -267,7 +267,7 @@ HARNESS_DRIVER=1 cargo test -p harness --test floor -- --include-ignored driver
 
 CI runs `cargo fmt`, `cargo clippy -D warnings` and `cargo test --workspace` on `ubuntu-latest` and `macos-latest`;
 a `shell` job runs `bash -n`, `shellcheck` and `docs/bootstrap.sh --check` over `driver.sh`, `docs/*.sh`,
-`adapters/bun-turbo/*.sh` and `evals/*.sh`; a `driver` job runs the ignored test above against the release binary.
+`adapters/bun-turbo/*.sh` and `evals/*.sh`; a `driver` job runs the ignored test above against the release binary. Releasing: the procedure is stated in [`.github/workflows/release.yml`](.github/workflows/release.yml), and each release's changes are in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Not included
 

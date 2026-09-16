@@ -786,3 +786,131 @@ fn the_licence_is_mit() {
         );
     }
 }
+
+fn release_yml() -> String {
+    read(&repo_root().join(".github/workflows/release.yml"))
+}
+
+fn crate_version_in(manifest: &str) -> String {
+    re(r#"(?m)^version = "([^"]+)""#)
+        .captures(manifest)
+        .map(|c| c[1].to_string())
+        .expect("a version line in the manifest")
+}
+
+// a tag is the release; one that does not name the crate version ships a binary printing a version
+// its own release page does not carry
+fn tag_mismatch(tag: &str, version: &str) -> Option<String> {
+    match tag.strip_prefix('v') {
+        Some(rest) if rest == version => None,
+        _ => Some(format!("tag {tag} against crate version {version}")),
+    }
+}
+
+#[test]
+fn the_release_procedure_is_stated_in_one_file() {
+    let procedure = release_yml();
+    for step in [
+        "crates/harness/Cargo.toml",
+        "CHANGELOG.md",
+        "git tag -a v",
+        "git push origin v",
+    ] {
+        assert!(
+            procedure.contains(step),
+            "release.yml states no {step} step"
+        );
+    }
+
+    let readme = read(&repo_root().join("README.md"));
+    assert!(
+        readme.contains(".github/workflows/release.yml"),
+        "README links no release procedure"
+    );
+    let commands = re(r"(?m)^[^#]*git (tag|push origin v)");
+    assert!(
+        commands.is_match("git tag -a v1.0.0"),
+        "the scan cannot report"
+    );
+    assert!(
+        !commands.is_match(&readme),
+        "{:?}",
+        commands.find(&readme).map(|m| m.as_str())
+    );
+}
+
+#[test]
+fn the_changelog_lists_unreleased_and_the_tag() {
+    let text = read(&repo_root().join("CHANGELOG.md"));
+    let headings: Vec<&str> = text.lines().filter(|l| l.starts_with("## ")).collect();
+    assert_eq!(
+        headings.first().copied(),
+        Some("## Unreleased"),
+        "{headings:?}"
+    );
+    assert!(
+        headings.iter().any(|h| h.starts_with("## v0.1.0")),
+        "{headings:?}"
+    );
+
+    let entries: Vec<&str> = text
+        .lines()
+        .skip_while(|l| *l != "## Unreleased")
+        .skip(1)
+        .take_while(|l| !l.starts_with("## "))
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    assert!(!entries.is_empty(), "{text}");
+    for line in &entries {
+        assert!(line.starts_with("- "), "{line}");
+    }
+}
+
+#[test]
+fn a_tag_that_disagrees_with_the_version_fails() {
+    assert_eq!(tag_mismatch("v0.1.0", "0.1.0"), None);
+    let reported = tag_mismatch("v0.2.0", "0.1.0").expect("a mismatch is reported");
+    assert!(
+        reported.contains("v0.2.0") && reported.contains("0.1.0"),
+        "{reported}"
+    );
+    assert!(tag_mismatch("0.1.0", "0.1.0").is_some());
+    assert!(tag_mismatch("v0.1.0-rc1", "0.1.0").is_some());
+}
+
+#[test]
+fn the_binary_prints_the_crate_version() {
+    let root = repo_root();
+    let version = crate_version_in(&read(&root.join("crates/harness/Cargo.toml")));
+    let (code, stdout, stderr) = harness(&root, &["--version"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert_eq!(stdout.trim(), format!("enallagi {version}"));
+    assert_eq!(
+        crate_version_in("[package]\nversion = \"9.9.9\"\n"),
+        "9.9.9"
+    );
+}
+
+#[test]
+fn the_release_job_checks_the_tag_version() {
+    let block = job_block(&release_yml(), "release");
+    let check = block
+        .find("--exact the_tag_equals_the_crate_version")
+        .unwrap_or_else(|| panic!("no tag-version step:\n{block}"));
+    let build = block
+        .find("cargo zigbuild")
+        .unwrap_or_else(|| panic!("no build step:\n{block}"));
+    assert!(check < build, "{block}");
+    assert_eq!(switched_off(&block), 0, "{block}");
+}
+
+// GITHUB_REF_NAME is unset outside the release job, and a check that cannot read what it compares
+// fails rather than passes
+#[test]
+#[ignore = "release only: release.yml runs it on a tag push"]
+fn the_tag_equals_the_crate_version() {
+    let tag = std::env::var("GITHUB_REF_NAME").unwrap_or_default();
+    assert!(!tag.is_empty(), "GITHUB_REF_NAME is unset");
+    let version = crate_version_in(&read(&repo_root().join("crates/harness/Cargo.toml")));
+    assert_eq!(tag_mismatch(&tag, &version), None);
+}
