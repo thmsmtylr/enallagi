@@ -609,6 +609,84 @@ fn gate_scope_refuses_a_grown_nested_baseline() {
     );
 }
 
+// a nested install with T-900 verified done and `demo` locked at the base; `at_base` writes the
+// vendored skill before the base commit, so the vendor commit rewrites it instead of adding it
+fn vendored_demo(at_base: bool) -> (enallagi::fixture::Repo, String) {
+    let r = enallagi::fixture::Repo::new();
+    let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
+    let out = in_harness(&r.root, &["init"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    git(
+        &r.root,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "install",
+        ],
+    );
+    let queued = git(&r.root, &["rev-parse", "HEAD"]);
+    let state = r.root.join(".enallagi");
+    // CI runners have no global git identity, so the nested repository needs its own
+    git(&state, &["config", "user.name", "t"]);
+    git(&state, &["config", "user.email", "t@t"]);
+    let commit_state = |msg: &str| {
+        git(&state, &["add", "-A"]);
+        git(
+            &state,
+            &["-c", "commit.gpgsign=false", "commit", "-qm", msg],
+        );
+    };
+    let skill = ".enallagi/adapters/claude/skills/demo/SKILL.md";
+    let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
+    let block = "\n## [T-900] vendor\nscope: a.txt\nrows: none — harness\nstatus: review\n";
+    r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
+    r.write(
+        ".enallagi/harness.lock",
+        "version = 1\n\n[[skill]]\nid = \"demo\"\nsource = \"path:vendor/demo\"\nsha256 = \"aaa\"\n",
+    );
+    if at_base {
+        r.write(skill, "# demo\n");
+    }
+    commit_state(&format!("queue at {queued}"));
+
+    r.write(skill, "# demo, re-vendored\n");
+    commit_state("chore(vendor): demo");
+
+    r.write("a.txt", "work\n");
+    r.commit_all("T-900 work");
+    let worked = git(&r.root, &["rev-parse", "HEAD"]);
+    let done = block.replace("status: review", "status: done");
+    r.write(".enallagi/TASKS.md", &format!("{tasks}{done}"));
+    commit_state(&format!("verify T-900 at {worked}"));
+    (r, queued)
+}
+
+#[test]
+fn gate_scope_exempts_a_revendored_locked_skill() {
+    let (r, queued) = vendored_demo(false);
+    let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("T-900 stayed inside its scope."),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn gate_scope_rejects_a_rewritten_vendored_skill() {
+    let (r, queued) = vendored_demo(true);
+    let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout)
+            .contains(".enallagi/adapters/claude/skills/demo/SKILL.md"),
+        "{out:?}"
+    );
+}
+
 #[test]
 fn tasks_ready_prefers_the_harness_dir_queue() {
     let r = enallagi::fixture::Repo::new();

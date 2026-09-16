@@ -5,7 +5,7 @@ use std::process::Command;
 
 use crate::config::Config;
 use crate::events::{Kind, Writer};
-use crate::git::{self, diff_names, git, head, porcelain};
+use crate::git::{self, git, head, porcelain};
 use crate::queue::{self, Queue};
 use crate::skills::LockEntry;
 
@@ -366,6 +366,39 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
     )
 }
 
+fn diff_range(root: &Path, base: &str, filter: &str) -> Vec<String> {
+    let flag = format!("--diff-filter={filter}");
+    let mut args = vec!["diff", "--name-only"];
+    if !filter.is_empty() {
+        args.push(&flag);
+    }
+    args.extend([base, "HEAD"]);
+    git(root, &args)
+        .map(|s| {
+            s.lines()
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// the iteration's files: the product repository's, and in a nested install the harness
+// directory's under its own prefix. filter is a git --diff-filter value, empty for every change
+fn range_files(ctx: &GateCtx, base: &str, filter: &str) -> Vec<String> {
+    let dir = &ctx.cfg.layout.harness_dir;
+    let state = git::state_root(ctx.root, dir);
+    let mut files = diff_range(ctx.root, base, filter);
+    if let Some(state_base) = ctx.state_base.as_deref().filter(|_| state != ctx.root) {
+        files.extend(
+            diff_range(&state, state_base, filter)
+                .into_iter()
+                .map(|f| format!("{dir}/{f}")),
+        );
+    }
+    files
+}
+
 // diffs the iteration's own commits against the task's scope: globs; also routes the three loops via rows: none — harness
 fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
@@ -392,18 +425,17 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let added_skills = added_ids(&base_lock.skill, &head_lock.skill);
     let added_roles = added_ids(&base_lock.role, &head_lock.role);
 
+    // a locked id re-vendored leaves harness.lock byte-identical, so added_skills never names it
+    let locked_skills: Vec<String> = head_lock
+        .skill
+        .iter()
+        .map(|e| format!("{skills_dir}/{}/", e.id))
+        .collect();
+
     let mut out_of: Vec<String> = Vec::new();
     let mut harness_hit: Vec<String> = Vec::new();
-    let mut changed = diff_names(ctx.root, &base);
-    let dir = &ctx.cfg.layout.harness_dir;
-    let state = git::state_root(ctx.root, dir);
-    if let Some(state_base) = ctx.state_base.as_deref().filter(|_| state != ctx.root) {
-        changed.extend(
-            diff_names(&state, state_base)
-                .into_iter()
-                .map(|f| format!("{dir}/{f}")),
-        );
-    }
+    let changed = range_files(ctx, &base, "");
+    let added = range_files(ctx, &base, "A");
     for f in changed {
         if bookkeeping.contains(&f) || f == lock {
             continue;
@@ -413,6 +445,11 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
             .any(|id| f.starts_with(&format!("{skills_dir}/{id}/")))
             || added_roles.iter().any(|id| f == role_file(ctx.cfg, id))
         {
+            continue;
+        }
+        // a file the range ADDS under a locked id is that id's re-vendoring; one it rewrites is a
+        // hand edit, which the scope: line still has to name
+        if added.contains(&f) && locked_skills.iter().any(|d| f.starts_with(d)) {
             continue;
         }
         // test-hashes.json is exempt when every re-cut key (present at base too, with a new value)
@@ -1572,6 +1609,49 @@ mod tests {
         assert!(!out.pass);
         assert!(
             out.reason.contains("harness.lock (tdd-old)"),
+            "{}",
+            out.reason
+        );
+    }
+
+    #[test]
+    fn scope_exempts_a_revendored_locked_skill() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", "src/**", "§11 row 1");
+        env.repo
+            .write("harness.lock", &lock_toml(&[("demo", "aaa")]));
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        // the id is already locked, so the re-vendoring leaves harness.lock byte-identical
+        env.repo
+            .write(".enallagi/adapters/claude/skills/demo/SKILL.md", "# demo\n");
+        env.repo.commit_all("chore(vendor): demo");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
+    fn scope_rejects_a_rewritten_vendored_skill() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", "src/**", "§11 row 1");
+        env.repo
+            .write("harness.lock", &lock_toml(&[("demo", "aaa")]));
+        env.repo
+            .write(".enallagi/adapters/claude/skills/demo/SKILL.md", "# demo\n");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write(
+            ".enallagi/adapters/claude/skills/demo/SKILL.md",
+            "# demo, by hand\n",
+        );
+        env.repo.commit_all("hand edit under the skills dir");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(
+            out.reason
+                .contains(".enallagi/adapters/claude/skills/demo/SKILL.md"),
             "{}",
             out.reason
         );
