@@ -282,6 +282,12 @@ const GRACE: Duration = Duration::from_secs(10);
 // a stale reset rolls to the same time tomorrow, so a further-out one isn't worth a day-long sleep
 const MAX_WAIT: u64 = 6 * 3600;
 
+// a tool result carries a file the agent read, so a repository quoting the limit notice is not one
+fn echoes_a_tool_result(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .is_ok_and(|v| v.get("type").and_then(|t| t.as_str()) == Some("user"))
+}
+
 // retried at most twice: an agent that prints the limit notice forever would hold the run forever
 pub fn spawn(
     s: &StageSpawn,
@@ -304,7 +310,12 @@ pub fn spawn(
         if attempt >= 2 {
             return Ok(result);
         }
-        let Some(matched) = result.output.lines().find(|l| rate_limit.is_match(l)) else {
+        let Some(matched) = result
+            .output
+            .lines()
+            .filter(|l| !echoes_a_tool_result(l))
+            .find(|l| rate_limit.is_match(l))
+        else {
             return Ok(result);
         };
         let Some(sleep_seconds) =
@@ -756,6 +767,36 @@ mod tests {
             })
             .collect();
         assert_eq!(limits, vec![0, 1]);
+    }
+
+    #[test]
+    fn a_limit_notice_inside_a_tool_result_is_not_a_limit() {
+        let r = crate::fixture::Repo::new();
+        let runs = r.root.join("runs");
+        // the shape claude prints when the agent reads a file that quotes the notice
+        let echoed = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"assert!(seconds_until_reset(\"You've hit your session limit · resets 12:40am (Australia/Melbourne)\").is_some());"}]}}"#;
+        let argv = r.stub_agent(&format!(
+            "echo x >> {}; printf '%s\\n' '{echoed}'",
+            runs.display()
+        ));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
+        let res = spawn(
+            &spawner(argv, &r.root),
+            &mut w,
+            &stop_file(&r.root),
+            &Regex::new("hit your session limit").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(res.exit, 0);
+        assert_eq!(std::fs::read_to_string(&runs).unwrap().lines().count(), 1);
+        assert!(
+            !w.log
+                .read()
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e.kind, Kind::Limit { .. })),
+            "a tool result quoting the notice must not sleep the stage"
+        );
     }
 
     #[test]
