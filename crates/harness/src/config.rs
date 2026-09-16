@@ -1,13 +1,16 @@
 //! The answers substituted into roles, gates and probes.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub use crate::agent::UsagePaths;
 use crate::agent::{Presets, TurnCap};
 
 pub const DEFAULT_TOML: &str = include_str!("../harness.default.toml");
+
+// read when layout.harness_dir is unset and the default directory is absent, so installs made before the rename keep running
+const LEGACY_HARNESS_DIR: &str = ".harness";
 
 pub const ROLE_NAMES: &[&str] = &[
     "scout",
@@ -278,12 +281,86 @@ pub fn parse_when(s: &str) -> Result<Predicate, ConfigError> {
     }
 }
 
+// the one place an instance file's path is decided; a root TASKS.md with none in the harness directory keeps the root layout
+pub fn instance_rel(root: &Path, harness_dir: &str, name: &str) -> String {
+    let legacy =
+        !root.join(harness_dir).join("TASKS.md").is_file() && root.join("TASKS.md").is_file();
+    if harness_dir.is_empty() || legacy {
+        name.to_string()
+    } else {
+        format!("{harness_dir}/{name}")
+    }
+}
+
+pub fn instance_path(root: &Path, harness_dir: &str, name: &str) -> PathBuf {
+    root.join(instance_rel(root, harness_dir, name))
+}
+
+// honoured only inside the root, so a fixture or other repository a lane's child process opens never inherits it
+fn env_harness_dir(root: &Path) -> Option<String> {
+    let dir = std::env::var_os("HARNESS_DIR")?;
+    let root = std::fs::canonicalize(root).ok()?;
+    let dir = std::fs::canonicalize(root.join(dir)).ok()?;
+    let rel = dir.strip_prefix(&root).ok()?.to_str()?;
+    (!rel.is_empty()).then(|| rel.to_string())
+}
+
+fn unconfigured_harness_dir(root: &Path) -> Result<(String, bool), ConfigError> {
+    if let Some(dir) = env_harness_dir(root) {
+        return Ok((dir, false));
+    }
+    let base = parse_toml(DEFAULT_TOML, "harness.default.toml")?;
+    let default = base["layout"]["harness_dir"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    if !root.join(&default).exists() && root.join(LEGACY_HARNESS_DIR).is_dir() {
+        return Ok((LEGACY_HARNESS_DIR.to_string(), true));
+    }
+    Ok((default, false))
+}
+
+// a refused config falls back to the default directory, never the root, or the default layout's guards go dark
+pub fn harness_dir(root: &Path) -> String {
+    load(root)
+        .map(|cfg| cfg.layout.harness_dir)
+        .unwrap_or_else(|_| {
+            unconfigured_harness_dir(root)
+                .map(|(dir, _)| dir)
+                .unwrap_or_default()
+        })
+}
+
+pub fn config_path(root: &Path) -> PathBuf {
+    let dir = unconfigured_harness_dir(root)
+        .map(|(dir, _)| dir)
+        .unwrap_or_default();
+    let path = instance_path(root, &dir, "harness.toml");
+    let at_root = instance_path(root, "", "harness.toml");
+    if path.is_file() || !at_root.is_file() {
+        return path;
+    }
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        eprintln!(
+            "harness: reading harness.toml at the repository root; `harness init --move` moves it to {dir}/"
+        )
+    });
+    at_root
+}
+
 pub fn load(root: &Path) -> Result<Config, ConfigError> {
     let mut base: toml::Value = parse_toml(DEFAULT_TOML, "harness.default.toml")?;
-    let path = root.join("harness.toml");
+    let (dir, legacy) = unconfigured_harness_dir(root)?;
+    let path = config_path(root);
+    let mut dir_configured = false;
     if path.is_file() {
         let text = std::fs::read_to_string(&path)?;
         let user: toml::Value = parse_toml(&text, "harness.toml")?;
+        dir_configured = user
+            .get("layout")
+            .and_then(|l| l.get("harness_dir"))
+            .is_some();
         // check.force follows check.command, so overriding the check without pinning force can't leave the old tool behind
         let user_check = user.get("check");
         if let (Some(command), None) = (
@@ -296,11 +373,46 @@ pub fn load(root: &Path) -> Result<Config, ConfigError> {
         }
         merge(&mut base, &user);
     }
-    base.try_into()
+    if let (Some(dir), Some(layout)) = (
+        env_harness_dir(root),
+        base.get_mut("layout").and_then(|l| l.as_table_mut()),
+    ) {
+        layout.insert("harness_dir".into(), dir.into());
+    }
+    if legacy && !dir_configured {
+        if let Some(layout) = base.get_mut("layout").and_then(|l| l.as_table_mut()) {
+            let default = layout["harness_dir"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            layout.insert("harness_dir".into(), dir.into());
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                eprintln!(
+                    "harness: using the legacy {LEGACY_HARNESS_DIR}/ directory; `harness init --move` moves it to {default}/"
+                )
+            });
+        }
+    }
+    let mut cfg: Config = base
+        .try_into()
         .map_err(|e: toml::de::Error| ConfigError::Parse {
             path: "harness.toml".to_string(),
             message: e.to_string(),
-        })
+        })?;
+    if cfg.layout.context_file.is_empty() {
+        cfg.layout.context_file = instance_rel(root, &cfg.layout.harness_dir, "AGENTS.md");
+    }
+    root_layout_skills(root, &mut cfg);
+    Ok(cfg)
+}
+
+// the claude plugin lives in the harness directory; a root-layout install keeps the skills where claude reads them natively
+pub fn root_layout_skills(root: &Path, cfg: &mut Config) {
+    let root_layout = instance_rel(root, &cfg.layout.harness_dir, "TASKS.md") == "TASKS.md";
+    if root_layout && cfg.layout.skills_dir.is_none() && cfg.agent.preset == "claude" {
+        cfg.layout.skills_dir = Some(".claude/skills".to_string());
+    }
 }
 
 fn parse_toml(text: &str, path: &str) -> Result<toml::Value, ConfigError> {
@@ -763,6 +875,91 @@ fn toml_string(s: &str) -> String {
 mod tests {
     use super::*;
 
+    fn write_config(root: &Path, text: &str) {
+        let path = config_path(root);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    const INSTANCE_FILES: [&str; 10] = [
+        "TASKS.md",
+        "PROGRESS.md",
+        "PROGRESS.archive.md",
+        "LEARNINGS.md",
+        "DECISIONS.md",
+        ".check-baseline",
+        "test-hashes.json",
+        "harness.toml",
+        "evals/README.md",
+        "STOP",
+    ];
+
+    #[test]
+    fn every_instance_file_resolves_under_the_harness_directory() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        let cfg = load(root).unwrap();
+        let dir = &cfg.layout.harness_dir;
+        let mut paths: Vec<PathBuf> = INSTANCE_FILES
+            .iter()
+            .chain([&cfg.layout.spec.as_str()])
+            .map(|name| instance_path(root, dir, name))
+            .collect();
+        paths.push(config_path(root));
+        paths.push(crate::skills::lock_path(root, dir));
+        paths.push(root.join(crate::gates::role_file(&cfg, "implementer")));
+        paths.push(root.join(crate::probes::common::rails_file(&cfg)));
+        paths.push(root.join(crate::skills::skills_dir(&cfg, None)));
+        paths.push(root.join(&cfg.layout.context_file));
+        for path in paths {
+            assert!(path.starts_with(root.join(dir)), "{}", path.display());
+        }
+    }
+
+    #[test]
+    fn a_root_tasks_file_keeps_every_instance_file_at_the_root() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        std::fs::write(instance_path(root, "", "TASKS.md"), "# TASKS\n").unwrap();
+        for name in INSTANCE_FILES.iter().chain([&"SPEC.md"]) {
+            assert_eq!(instance_path(root, ".enallagi", name), root.join(name));
+        }
+        assert_eq!(
+            crate::skills::lock_path(root, ".enallagi"),
+            instance_path(root, "", "harness.lock")
+        );
+        assert_eq!(load(root).unwrap().layout.context_file, "AGENTS.md");
+
+        std::fs::create_dir(root.join(".enallagi")).unwrap();
+        std::fs::write(root.join(".enallagi/TASKS.md"), "").unwrap();
+        assert_eq!(
+            instance_rel(root, ".enallagi", "PROGRESS.md"),
+            ".enallagi/PROGRESS.md",
+            "a queue in the harness directory wins over a root one"
+        );
+    }
+
+    #[test]
+    fn a_root_harness_toml_is_read_when_the_harness_directory_has_none() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        std::fs::write(
+            instance_path(root, "", "harness.toml"),
+            "[check]\ncommand='make'\n",
+        )
+        .unwrap();
+        assert_eq!(load(root).unwrap().check.command, "make");
+
+        std::fs::create_dir(root.join(".enallagi")).unwrap();
+        std::fs::write(
+            instance_path(root, ".enallagi", "harness.toml"),
+            "[check]\ncommand='just'\n",
+        )
+        .unwrap();
+        assert_eq!(config_path(root), root.join(".enallagi/harness.toml"));
+        assert_eq!(load(root).unwrap().check.command, "just");
+    }
+
     #[test]
     fn defaults_load_when_no_file() {
         let d = tempfile::tempdir().unwrap();
@@ -775,11 +972,7 @@ mod tests {
     #[test]
     fn user_file_overrides_defaults() {
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(
-            d.path().join("harness.toml"),
-            "[check]\ncommand='make'\nfail_name='x'\n",
-        )
-        .unwrap();
+        write_config(d.path(), "[check]\ncommand='make'\nfail_name='x'\n");
         let c = load(d.path()).unwrap();
         assert_eq!(c.check.command, "make");
         assert_eq!(c.check.force, "make");
@@ -876,7 +1069,7 @@ mod tests {
         let c = load(tempfile::tempdir().unwrap().path()).unwrap();
         assert_eq!(
             subst("run __CHECK__ in __HARNESS_DIR__", &c),
-            "run bun run check in .harness"
+            "run bun run check in .enallagi"
         );
     }
 
@@ -908,27 +1101,48 @@ mod tests {
     #[test]
     fn tables_merge_and_arrays_replace() {
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(
-            d.path().join("harness.toml"),
+        write_config(
+            d.path(),
             "[layout]\nspec = 'DESIGN.md'\n\n[[stage]]\nname = 'only'\ncommand = 'true'\n",
-        )
-        .unwrap();
+        );
         let c = load(d.path()).unwrap();
         assert_eq!(c.layout.spec, "DESIGN.md");
-        assert_eq!(c.layout.harness_dir, ".harness", "untouched keys survive");
+        assert_eq!(c.layout.harness_dir, ".enallagi", "untouched keys survive");
+        assert_eq!(c.layout.context_file, ".enallagi/AGENTS.md");
+
+        write_config(d.path(), "[layout]\ncontext_file = 'DOCS.md'\n");
+        assert_eq!(load(d.path()).unwrap().layout.context_file, "DOCS.md");
         assert_eq!(c.stage.len(), 1);
         assert_eq!(c.stage[0].name, "only");
         assert_eq!(c.stage[0].turns, 40, "the per-stage default");
     }
 
     #[test]
+    fn a_repository_with_only_the_legacy_harness_directory_keeps_it() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join(".harness")).unwrap();
+        assert_eq!(load(d.path()).unwrap().layout.harness_dir, ".harness");
+
+        write_config(d.path(), "[layout]\nharness_dir = 'state'\n");
+        assert_eq!(
+            load(d.path()).unwrap().layout.harness_dir,
+            "state",
+            "a configured directory is never overridden"
+        );
+    }
+
+    #[test]
+    fn the_enallagi_directory_wins_when_both_exist() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join(".harness")).unwrap();
+        std::fs::create_dir(d.path().join(".enallagi")).unwrap();
+        assert_eq!(load(d.path()).unwrap().layout.harness_dir, ".enallagi");
+    }
+
+    #[test]
     fn pinned_force_is_not_overwritten_by_command() {
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(
-            d.path().join("harness.toml"),
-            "[check]\ncommand='make'\nforce='make -B'\n",
-        )
-        .unwrap();
+        write_config(d.path(), "[check]\ncommand='make'\nforce='make -B'\n");
         assert_eq!(load(d.path()).unwrap().check.force, "make -B");
     }
 
@@ -1098,7 +1312,7 @@ mod tests {
             .any(|r| r == "rowCountFile -> dropped, no longer used"));
 
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(d.path().join("harness.toml"), &text).unwrap();
+        write_config(d.path(), &text);
         let c = load(d.path()).unwrap();
         assert_eq!(c.agent.preset, "custom");
         assert_eq!(c.agent.command.as_ref().unwrap()[0], "claude");
@@ -1129,7 +1343,7 @@ mod tests {
         assert!(text.contains("[agent.verifier]"), "the spec form: {text}");
         assert!(!text.contains("[agent.roles."), "{text}");
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(d.path().join("harness.toml"), &text).unwrap();
+        write_config(d.path(), &text);
         let c = load(d.path()).unwrap();
         assert_eq!(c.agent.command.as_ref().unwrap()[0], "a");
         assert_eq!(c.agent.roles["verifier"].command.as_ref().unwrap()[0], "b");
@@ -1138,12 +1352,11 @@ mod tests {
     #[test]
     fn a_role_table_is_a_plain_agent_subtable() {
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(
-            d.path().join("harness.toml"),
+        write_config(
+            d.path(),
             "[agent]\npreset = 'goose'\n\n[agent.usage]\ncost = 'c'\n\n\
              [agent.verifier]\npreset = 'gemini'\nmodel = 'g'\n",
-        )
-        .unwrap();
+        );
         let c = load(d.path()).unwrap();
         assert_eq!(c.agent.preset, "goose");
         assert_eq!(c.agent.rate_limit_pattern, "hit your session limit");
@@ -1157,11 +1370,7 @@ mod tests {
     #[test]
     fn a_misspelled_role_table_is_refused() {
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(
-            d.path().join("harness.toml"),
-            "[agent.verifer]\npreset = 'codex'\n",
-        )
-        .unwrap();
+        write_config(d.path(), "[agent.verifer]\npreset = 'codex'\n");
         let c = load(d.path()).unwrap();
         let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
         assert!(
@@ -1183,7 +1392,7 @@ mod tests {
             "[agent.verifier]\npresett = 'codex'\n", // inside a role table
             "[[pipeline]]\nname = 'x'\nwen = 'y'\n", // misspelled
         ] {
-            std::fs::write(d.path().join("harness.toml"), text).unwrap();
+            write_config(d.path(), text);
             assert!(load(d.path()).is_err(), "should be refused: {text}");
         }
     }
@@ -1206,13 +1415,12 @@ mod tests {
     #[test]
     fn a_role_declaration_is_refused_when_malformed_or_unused() {
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(
-            d.path().join("harness.toml"),
+        write_config(
+            d.path(),
             "[[role]]\nname = 'Implementer'\nsource = 'path:x'\npath = '../r'\n\n\
              [[role]]\nname = 'ghost'\nsource = 'path:x'\n\n\
              [[role]]\nname = 'ghost'\nsource = 'path:x'\n",
-        )
-        .unwrap();
+        );
         let c = load(d.path()).unwrap();
         assert_eq!(c.role.len(), 3);
         assert_eq!(c.role[1].path, ".", "the default path is the source root");
@@ -1233,11 +1441,10 @@ mod tests {
     #[test]
     fn a_declared_role_is_not_missing_before_it_is_fetched() {
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(
-            d.path().join("harness.toml"),
+        write_config(
+            d.path(),
             "[[role]]\nname = 'implementer'\nsource = 'path:x'\n",
-        )
-        .unwrap();
+        );
         let c = load(d.path()).unwrap();
         let files = |role: &str| (role != "implementer").then(String::new);
         assert!(validate(&c, &crate::agent::presets(), &files).is_ok());

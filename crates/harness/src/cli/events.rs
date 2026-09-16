@@ -30,7 +30,9 @@ pub(crate) fn keep(e: &Event, opts: &Filter) -> bool {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let log = Log::open(Path::new(".harness"));
+    let log = Log::open(Path::new(
+        &crate::config::load(Path::new("."))?.layout.harness_dir,
+    ));
     let (pairs, _skipped) = match log.read_lines() {
         Ok(pairs) => pairs,
         Err(err) => {

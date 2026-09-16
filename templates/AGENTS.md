@@ -12,9 +12,9 @@
 
 ## How work moves
 
-`__SPEC__` is what we build. **TASKS.md** is the queue, **PROGRESS.md** the loop's record one
-iteration at a time, **LEARNINGS.md** the mistakes already paid for, **DECISIONS.md** the archive.
-Read LEARNINGS.md at the start of every task.
+`__SPEC__` is what we build. **__HARNESS_DIR__/TASKS.md** is the queue, **__HARNESS_DIR__/PROGRESS.md** the loop's record one
+iteration at a time, **__HARNESS_DIR__/LEARNINGS.md** the mistakes already paid for, **__HARNESS_DIR__/DECISIONS.md** the archive.
+Read __HARNESS_DIR__/LEARNINGS.md at the start of every task.
 
 A task is `proposed` → `ready` → `review` → `done`. The scout proposes only from a `FINDING` line,
 the adjudicator promotes or kills, the implementer sets `review` and never `done`, the verifier

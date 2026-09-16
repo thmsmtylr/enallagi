@@ -18,6 +18,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     let report = worktree::lane(root, &cfg, &mut |wt| {
         let status = Command::new(std::env::current_exe()?)
             .args(["run", "--iterations", &n.to_string(), "--no-tui"])
+            .env("HARNESS_DIR", wt.join(&cfg.layout.harness_dir))
             .current_dir(wt)
             .status()?;
         if !status.success() {
@@ -41,15 +42,59 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         return Ok(0);
     }
 
-    let dir = report
-        .left
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
-    let said: String = report.reason.lines().map(|l| format!("  {l}\n")).collect();
     eprintln!(
-        "worktree: {branch} did not fast-forward into {parent_branch}. git said:\n{said}Nothing was merged and nothing was removed. A merge here is a decision, not a step:\n  cd {dir}                       # the lane's work, intact\n  git -C {root} merge {branch}       # if you want the merge commit\n  git -C {root} worktree remove {dir} && git -C {root} branch -D {branch}   # if you do not want the work",
-        branch = report.branch,
-        root = root.display(),
+        "{}",
+        left_message(root, &cfg.layout.harness_dir, &parent_branch, &report)
     );
     Ok(1)
+}
+
+fn left_message(
+    root: &Path,
+    harness_dir: &str,
+    parent_branch: &str,
+    report: &worktree::LaneReport,
+) -> String {
+    let branch = &report.branch;
+    let mut repos = vec![(root.to_path_buf(), report.left.clone().unwrap_or_default())];
+    if let Some(state) = &report.state {
+        repos.insert(0, (root.join(harness_dir), state.clone()));
+    }
+    let said: String = report.reason.lines().map(|l| format!("  {l}\n")).collect();
+    let mut msg = format!(
+        "worktree: {branch} did not fast-forward into {parent_branch}. git said:\n{said}Nothing was merged and nothing was removed. A merge here is a decision, not a step:"
+    );
+    for (repo, dir) in &repos {
+        let (repo, dir) = (repo.display(), dir.display());
+        msg.push_str(&format!(
+            "\n  cd {dir}                       # the lane's work, intact\n  git -C {repo} merge {branch}       # if you want the merge commit\n  git -C {repo} worktree remove {dir} && git -C {repo} branch -D {branch}   # if you do not want the work"
+        ));
+    }
+    msg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_lane_left_unmerged_names_both_directories_and_both_merge_commands() {
+        let report = worktree::LaneReport {
+            merged: false,
+            left: Some("/r/.enallagi/worktrees/lane-x".into()),
+            state: Some("/r/.enallagi/worktrees/lane-x/.enallagi".into()),
+            reason: "lane/x cannot fast-forward into /r/.enallagi".to_string(),
+            branch: "lane/x".to_string(),
+            run_error: None,
+        };
+        let msg = left_message(Path::new("/r"), ".enallagi", "main", &report);
+        for want in [
+            "cd /r/.enallagi/worktrees/lane-x ",
+            "cd /r/.enallagi/worktrees/lane-x/.enallagi ",
+            "git -C /r merge lane/x",
+            "git -C /r/.enallagi merge lane/x",
+        ] {
+            assert!(msg.contains(want), "missing `{want}` in:\n{msg}");
+        }
+    }
 }

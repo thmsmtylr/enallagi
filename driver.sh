@@ -61,7 +61,7 @@ case "$1" in
     echo "the work" > src/allowed.ts
     [ "$MODE" = "out-of-scope" ] && echo "not mine" > src/sneaky.ts
     "$HARNESS_BIN" tasks set-status T-001 review 'driver lane implemented' >/dev/null
-    [ "$MODE" != "no-progress" ] && printf '\n## driver — T-001 — landed\nfriction: none\n' >> PROGRESS.md
+    [ "$MODE" != "no-progress" ] && printf '\n## driver — T-001 — landed\nfriction: none\n' >> .enallagi/PROGRESS.md
     # this mode exists for exactly this: the work never lands on the branch.
     # `if`, never `[ ] && ...` as the last statement of a branch: a false test is the script's
     # exit status, the launcher reads a non-zero lane as a halt, and the verify stage never runs.
@@ -78,7 +78,8 @@ LANE
     # one the mode is about
     check=true
     [ "$mode" = "red-check" ] && check=false
-    cat >harness.toml <<TOML
+    mkdir -p .enallagi
+    cat >.enallagi/harness.toml <<TOML
 [agent]
 preset = "custom"
 command = ["./src/lane.sh", "{prompt}", "{turns}"]
@@ -96,7 +97,7 @@ TOML
       mkdir -p "vendor/$id"
       printf '# %s\n' "$id" >"vendor/$id/SKILL.md"
       printf '\n[[skill]]\nid = "%s"\nsource = "path:vendor/%s"\npath = ""\ngate = "none"\nwhy = "the driver fixture"\n' \
-        "$id" "$id" >>harness.toml
+        "$id" "$id" >>.enallagi/harness.toml
     done
 
     "$HARNESS_BIN" init >/dev/null 2>&1 || exit 3
@@ -104,7 +105,7 @@ TOML
 
     # The seeded T-001 ships with an empty scope: line. Give it one, so the scope gate has
     # something to judge the lane's diff against.
-    sed -i.bak 's|^scope:$|scope: src/allowed.ts|' TASKS.md && rm -f TASKS.md.bak
+    sed -i.bak 's|^scope:$|scope: src/allowed.ts|' .enallagi/TASKS.md && rm -f .enallagi/TASKS.md.bak
     git add -A && git commit -qm 'chore: T-001 setup' >/dev/null
 
     MODE="$mode" "$HARNESS_BIN" run --iterations 1 --no-tui 2>&1

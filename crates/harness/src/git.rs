@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, thiserror::Error)]
@@ -64,6 +64,135 @@ pub fn commit_paths(root: &Path, paths: &[&str], msg: &str) -> Result<bool, GitE
         &["-c", "commit.gpgsign=false", "commit", "-q", "-m", msg],
     )?;
     Ok(true)
+}
+
+// the harness directory's own repository once it has one; until then instance files share the product's
+pub fn state_root(root: &Path, harness_dir: &str) -> PathBuf {
+    let dir = root.join(harness_dir);
+    if !harness_dir.is_empty() && dir.join(".git").exists() {
+        dir
+    } else {
+        root.to_path_buf()
+    }
+}
+
+// a path relative to the product root, as it is named inside the repository that holds it
+pub fn locate(root: &Path, harness_dir: &str, path: &str) -> (PathBuf, String, bool) {
+    let state = state_root(root, harness_dir);
+    match path.strip_prefix(&format!("{harness_dir}/")) {
+        Some(inner) if state != root => (state, inner.to_string(), true),
+        _ => (root.to_path_buf(), path.to_string(), false),
+    }
+}
+
+// the subject names the product HEAD the state was committed against, which is what `harness base` reads back
+pub fn commit_instance(
+    root: &Path,
+    harness_dir: &str,
+    names: &[&str],
+    msg: &str,
+) -> Result<bool, GitError> {
+    let state = state_root(root, harness_dir);
+    if state == root && names.is_empty() {
+        return Ok(false);
+    }
+    let sha = git(root, &["rev-parse", "HEAD"])?;
+    let msg = format!("{msg} at {sha}");
+    if state == root {
+        let paths: Vec<String> = names
+            .iter()
+            .map(|name| crate::config::instance_rel(root, harness_dir, name))
+            .collect();
+        let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+        return commit_paths(root, &paths, &msg);
+    }
+    git(&state, &["add", "-A"])?;
+    if git_ok(&state, &["diff", "--cached", "--quiet"]) {
+        return Ok(false);
+    }
+    let mut args: Vec<String> = Vec::new();
+    for key in ["user.name", "user.email"] {
+        if let Ok(value) = git(root, &["config", key]) {
+            args.extend(["-c".to_string(), format!("{key}={value}")]);
+        }
+    }
+    args.extend(["-c", "commit.gpgsign=false", "commit", "-q", "-m", &msg].map(String::from));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    git(&state, &args)?;
+    Ok(true)
+}
+
+// a product revision as the state repository's own: the first state commit recorded at it, or an Err, never a revision that repository lacks
+pub fn state_rev(root: &Path, harness_dir: &str, rev: &str) -> Result<String, String> {
+    let state = state_root(root, harness_dir);
+    if state == root {
+        return Ok(rev.to_string());
+    }
+    let sha = git(
+        root,
+        &["rev-parse", "--verify", &format!("{rev}^{{commit}}")],
+    )
+    .map_err(|e| e.to_string())?;
+    let found = git(
+        &state,
+        &[
+            "log",
+            "--reverse",
+            "--format=%H",
+            &format!("--grep= at {sha}$"),
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    found
+        .lines()
+        .next()
+        .map(String::from)
+        .ok_or_else(|| format!("no commit in {harness_dir} records product revision {rev} ({sha})"))
+}
+
+// the product sha to diff a task against; the root layout keeps the pickaxe the verifier ran before
+pub fn task_base(root: &Path, harness_dir: &str, task: &str) -> Result<String, String> {
+    let tasks = crate::config::instance_rel(root, harness_dir, "TASKS.md");
+    let (repo, inner, nested) = locate(root, harness_dir, &tasks);
+    let block = crate::queue::Block {
+        id: task.to_string(),
+        title: String::new(),
+        line: 0,
+        body: Vec::new(),
+    };
+    let heading = crate::queue::block_text(&block).trim_end().to_string();
+    if !nested {
+        return git(
+            &repo,
+            &["log", "-1", "--format=%H", "-S", &heading, "--", &inner],
+        )
+        .map_err(|e| e.to_string());
+    }
+    let heading = format!("^{}", regex::escape(&heading));
+    let subjects = git(
+        &repo,
+        &[
+            "log",
+            "--reverse",
+            "--format=%s",
+            "--pickaxe-regex",
+            "-S",
+            &heading,
+            "--",
+            &inner,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    let Some(first) = subjects.lines().next() else {
+        return Ok(String::new());
+    };
+    first
+        .rsplit_once(" at ")
+        .map(|(_, sha)| sha.to_string())
+        .filter(|sha| sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()))
+        .ok_or_else(|| {
+            format!("the state commit that added {task}, \"{first}\", records no product sha")
+        })
 }
 
 #[cfg(test)]

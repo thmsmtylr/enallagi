@@ -9,7 +9,7 @@ import json, re, subprocess, sys
 def value(key):
     # [check] read line by line: python 3.9 has no tomllib
     section = None
-    for line in open('harness.toml', encoding='utf-8'):
+    for line in open('.enallagi/harness.toml', encoding='utf-8'):
         line = line.strip()
         if line.startswith('['):
             section = line
@@ -19,7 +19,7 @@ def value(key):
     return None
 command, pattern = value('command'), value('fail_name')
 if not command or not pattern:
-    sys.exit('  harness.toml [check] has no command or no fail_name')
+    sys.exit('  .enallagi/harness.toml [check] has no command or no fail_name')
 out = subprocess.run(['sh', '-c', command], capture_output=True, text=True)
 if out.returncode == 0:
     sys.exit('  the check stayed green with tests/zz_broken.sh failing, so it runs something else: %s' % command)

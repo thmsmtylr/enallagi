@@ -7,7 +7,8 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let mut found = Vec::new();
-    for block in common::task_blocks(ctx.root)? {
+    let tasks = common::instance(ctx, "TASKS.md");
+    for block in common::task_blocks(ctx)? {
         let Some((line, status)) = common::field(&block, "status") else {
             continue;
         };
@@ -21,14 +22,14 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             .join("\n");
         if notes.contains("REJECTED") && status != "ready" {
             found.push(common::finding(
-                "TASKS.md",
+                &tasks,
                 line,
                 format!("{} notes carry REJECTED while status is {status}", block.id),
             ));
         }
         if status == "needs-spec" {
             found.push(common::finding(
-                "TASKS.md",
+                &tasks,
                 line,
                 format!("{} is parked at needs-spec", block.id),
             ));

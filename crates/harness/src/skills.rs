@@ -60,8 +60,8 @@ impl Default for Lock {
     }
 }
 
-pub fn lock_path(root: &Path) -> PathBuf {
-    root.join("harness.lock")
+pub fn lock_path(root: &Path, harness_dir: &str) -> PathBuf {
+    crate::config::instance_path(root, harness_dir, "harness.lock")
 }
 
 pub fn parse_lock(text: &str) -> Result<Lock, SkillError> {
@@ -69,8 +69,8 @@ pub fn parse_lock(text: &str) -> Result<Lock, SkillError> {
 }
 
 // a missing lock reads as empty, but an unparseable one is an error -- silently re-fetching over a corrupt pin defeats the pin
-pub fn read_lock(root: &Path) -> Result<Lock, SkillError> {
-    let text = match fs::read_to_string(lock_path(root)) {
+pub fn read_lock(root: &Path, harness_dir: &str) -> Result<Lock, SkillError> {
+    let text = match fs::read_to_string(lock_path(root, harness_dir)) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Lock::default()),
         Err(e) => return Err(e.into()),
@@ -78,12 +78,12 @@ pub fn read_lock(root: &Path) -> Result<Lock, SkillError> {
     parse_lock(&text)
 }
 
-pub fn write_lock(root: &Path, lock: &Lock) -> Result<(), SkillError> {
+pub fn write_lock(root: &Path, harness_dir: &str, lock: &Lock) -> Result<(), SkillError> {
     let mut lock = lock.clone();
     lock.skill.sort_by(|a, b| a.id.cmp(&b.id));
     lock.role.sort_by(|a, b| a.id.cmp(&b.id));
     let text = toml::to_string(&lock).map_err(|e| SkillError::Lock(e.to_string()))?;
-    fs::write(lock_path(root), text)?;
+    fs::write(lock_path(root, harness_dir), text)?;
     Ok(())
 }
 
@@ -122,7 +122,7 @@ pub fn skills_dir(cfg: &Config, preset: Option<&Preset>) -> PathBuf {
         return PathBuf::from(dir);
     }
     if let Some(dir) = preset.and_then(|p| p.skills_dir.as_deref()) {
-        return PathBuf::from(dir);
+        return PathBuf::from(dir.replace("{harness_dir}", &cfg.layout.harness_dir));
     }
     Path::new(&cfg.layout.harness_dir).join("skills")
 }
@@ -173,7 +173,7 @@ pub fn resolve(
     events: &mut Writer,
 ) -> Result<Vec<ResolvedSkill>, SkillError> {
     let base = root.join(skills_dir(cfg, preset));
-    let mut lock = read_lock(root)?;
+    let mut lock = read_lock(root, &cfg.layout.harness_dir)?;
     let mut out = Vec::new();
     let mut dirty = false;
 
@@ -214,7 +214,7 @@ pub fn resolve(
     }
 
     if dirty {
-        write_lock(root, &lock)?;
+        write_lock(root, &cfg.layout.harness_dir, &lock)?;
     }
     Ok(out)
 }
@@ -467,10 +467,17 @@ pub fn render(
     cfg: &Config,
 ) -> String {
     let inline = preset.skills_dir.is_none();
-    let invocation = preset
+    let mut invocation = preset
         .invocation
         .as_deref()
-        .unwrap_or(&cfg.layout.skill_invocation);
+        .unwrap_or(&cfg.layout.skill_invocation)
+        .to_string();
+    // a configured skills directory is outside the preset's plugin, so its skills carry no plugin prefix
+    if cfg.layout.skills_dir.is_some() {
+        if let Ok(prefix) = regex::Regex::new(r"[\w-]+:<id>") {
+            invocation = prefix.replace_all(&invocation, "<id>").into_owned();
+        }
+    }
 
     let mut out = role_text.to_string();
     let mut sections = String::new();
@@ -499,12 +506,12 @@ mod tests {
     use crate::fixture::Repo;
 
     fn writer(root: &Path) -> Writer {
-        Writer::new(Log::open(&root.join(".harness")))
+        Writer::new(Log::open(&root.join(".enallagi")))
     }
 
     fn config(source: &str, path: &str, rev: Option<&str>) -> Config {
         let mut cfg = Config::default();
-        cfg.layout.harness_dir = ".harness".into();
+        cfg.layout.harness_dir = ".enallagi".into();
         cfg.layout.skill_invocation = "invoke it via the Skill tool".into();
         cfg.skill = vec![SkillDecl {
             id: "tdd".into(),
@@ -564,19 +571,22 @@ mod tests {
         )
         .expect("resolve");
         assert_eq!(got[0].result, "fetched");
-        let vendored = repo.root.join(".claude/skills/tdd/SKILL.md");
+        let vendored = repo
+            .root
+            .join(".enallagi/adapters/claude/skills/tdd/SKILL.md");
         assert_eq!(fs::read_to_string(&vendored).expect("vendored"), BODY);
         assert!(repo
             .root
-            .join(".claude/skills/tdd/references/more.md")
+            .join(".enallagi/adapters/claude/skills/tdd/references/more.md")
             .is_file());
 
-        let lock = read_lock(&repo.root).expect("lock");
+        let lock = read_lock(&repo.root, &cfg.layout.harness_dir).expect("lock");
         assert_eq!(lock.version, 1);
         assert_eq!(lock.skill[0].id, "tdd");
         assert_eq!(lock.skill[0].sha256, sha256(BODY.as_bytes()));
         assert_eq!(lock.skill[0].commit, None);
-        let before = fs::read_to_string(lock_path(&repo.root)).expect("lock text");
+        let before =
+            fs::read_to_string(lock_path(&repo.root, &cfg.layout.harness_dir)).expect("lock text");
 
         let again = resolve(
             &repo.root,
@@ -589,7 +599,7 @@ mod tests {
         .expect("resolve again");
         assert_eq!(again[0].result, "cached");
         assert_eq!(
-            fs::read_to_string(lock_path(&repo.root)).expect("lock text"),
+            fs::read_to_string(lock_path(&repo.root, &cfg.layout.harness_dir)).expect("lock text"),
             before
         );
     }
@@ -624,11 +634,15 @@ mod tests {
 
         assert_eq!(got[0].result, "fetched");
         assert_eq!(
-            fs::read_to_string(repo.root.join(".claude/skills/tdd/SKILL.md")).expect("vendored"),
+            fs::read_to_string(
+                repo.root
+                    .join(".enallagi/adapters/claude/skills/tdd/SKILL.md")
+            )
+            .expect("vendored"),
             BODY
         );
         let tag_sha = crate::git::git(&upstream.root, &["rev-parse", "v1^{commit}"]).expect("sha");
-        let lock = read_lock(&repo.root).expect("lock");
+        let lock = read_lock(&repo.root, &cfg.layout.harness_dir).expect("lock");
         assert_eq!(lock.skill[0].commit.as_deref(), Some(tag_sha.as_str()));
         assert_eq!(lock.skill[0].rev.as_deref(), Some("v1"));
         let cached_clone = cache_path(&repo.root.join("cache"), &url, "v1");
@@ -658,7 +672,9 @@ mod tests {
         )
         .expect("first resolve");
 
-        let vendored = repo.root.join(".claude/skills/tdd/SKILL.md");
+        let vendored = repo
+            .root
+            .join(".enallagi/adapters/claude/skills/tdd/SKILL.md");
         fs::write(&vendored, "tampered\n").expect("tamper");
 
         let err = resolve(
@@ -671,7 +687,7 @@ mod tests {
         )
         .expect_err("frozen refuses");
         assert!(matches!(&err, SkillError::Unresolved { id, .. } if id == "tdd"));
-        let events = Log::open(&repo.root.join(".harness"))
+        let events = Log::open(&repo.root.join(".enallagi"))
             .read()
             .expect("events");
         assert!(events.iter().any(|e| matches!(
@@ -708,7 +724,7 @@ mod tests {
             &mut w,
         )
         .expect("resolve");
-        assert!(repo.root.join(".harness/skills/tdd/SKILL.md").is_file());
+        assert!(repo.root.join(".enallagi/skills/tdd/SKILL.md").is_file());
 
         let out = render("first {{skill:tdd}} then work.", &got, &aider, &cfg);
         assert!(out.starts_with(
@@ -724,7 +740,10 @@ mod tests {
         let cfg = config(&format!("path:{rel}"), "", None);
         let mut w = writer(&repo.root);
         for (name, expected) in [
-            ("claude", "`tdd` (invoke it via the Skill tool)"),
+            (
+                "claude",
+                "`tdd` (invoke it via the Skill tool as `harness:tdd`)",
+            ),
             ("pi", "`tdd` (invoke it as /skill:tdd)"),
         ] {
             let p = preset(name);
@@ -740,6 +759,29 @@ mod tests {
             let out = render("use {{skill:tdd}}.", &got, &p, &cfg);
             assert_eq!(out, format!("use {expected}."));
         }
+    }
+
+    #[test]
+    fn a_configured_skills_dir_names_the_skill_without_the_plugin() {
+        let repo = Repo::new();
+        let rel = source_dir(&repo, "vendor/tdd");
+        let mut cfg = config(&format!("path:{rel}"), "", None);
+        cfg.layout.skills_dir = Some(".claude/skills".into());
+        let p = preset("claude");
+        let got = resolve(
+            &repo.root,
+            &cfg,
+            Some(&p),
+            &["tdd".to_string()],
+            &opts(&repo, false),
+            &mut writer(&repo.root),
+        )
+        .expect("resolve");
+        assert!(repo.root.join(".claude/skills/tdd/SKILL.md").is_file());
+        assert_eq!(
+            render("use {{skill:tdd}}.", &got, &p, &cfg),
+            "use `tdd` (invoke it via the Skill tool as `tdd`)."
+        );
     }
 
     #[test]
@@ -841,8 +883,11 @@ mod tests {
         .expect("resolve");
 
         let body = |id: &str| {
-            fs::read_to_string(repo.root.join(format!(".claude/skills/{id}/SKILL.md")))
-                .expect("vendored")
+            fs::read_to_string(
+                repo.root
+                    .join(format!(".enallagi/adapters/claude/skills/{id}/SKILL.md")),
+            )
+            .expect("vendored")
         };
         assert_eq!(body("one"), "A body\n");
         assert_eq!(body("two"), "B body\n");
@@ -873,7 +918,11 @@ mod tests {
         .expect("resolve");
 
         assert_eq!(
-            fs::read_to_string(repo.root.join(".claude/skills/tdd/SKILL.md")).expect("vendored"),
+            fs::read_to_string(
+                repo.root
+                    .join(".enallagi/adapters/claude/skills/tdd/SKILL.md")
+            )
+            .expect("vendored"),
             BODY
         );
         assert!(!tmp.exists(), "the .tmp clone must not survive");

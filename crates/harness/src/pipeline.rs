@@ -28,9 +28,9 @@ const SCOUT: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is define
 
 const ADJUDICATOR: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/run/roles/adjudicator.md: read that file first and follow it exactly. Act on every block with 'status: proposed' in TASKS.md, in file order. Promote it to 'status: ready' with a scope and criteria an agent that has read only __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or __CONTEXT_FILE__ is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop.";
 
-const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __HARNESS_DIR__/run/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason -- and include it in that commit. An implementation left uncommitted is a lost iteration.";
+const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __HARNESS_DIR__/run/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the product paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason. Never stage or commit TASKS.md, PROGRESS.md or any other file under __HARNESS_DIR__: this loop commits them when your stage ends. An implementation left uncommitted is a lost iteration.";
 
-const VERIFIER: &str = "Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Your role is defined in __HARNESS_DIR__/run/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons, and commit the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop.";
+const VERIFIER: &str = "Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Your role is defined in __HARNESS_DIR__/run/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons; this loop commits the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop.";
 
 const GENERIC: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/run/roles/__ROLE__.md: read that file first and follow it exactly. Then stop.";
 
@@ -283,6 +283,14 @@ enum Flow {
 }
 
 impl<'a> Loop<'a> {
+    fn rel(&self, name: &str) -> String {
+        config::instance_rel(self.root, &self.cfg.layout.harness_dir, name)
+    }
+
+    fn file(&self, name: &str) -> PathBuf {
+        config::instance_path(self.root, &self.cfg.layout.harness_dir, name)
+    }
+
     fn go(&mut self) -> anyhow::Result<Digest> {
         self.needs_spec_at_start = self.ids_at("needs-spec");
         self.emit(Kind::RunStart {
@@ -291,7 +299,7 @@ impl<'a> Loop<'a> {
         });
 
         // a backticked mention is prose about the marker; only a bare one halts the run
-        if let Some(lines) = clarifications(self.root, &self.cfg.layout.spec) {
+        if let Some(lines) = clarifications(&self.file(&self.cfg.layout.spec)) {
             self.halt(
                 "clarification",
                 format!(
@@ -362,6 +370,8 @@ impl<'a> Loop<'a> {
             return false;
         }
 
+        // a block a human queued by hand is recorded against the product HEAD it was written at
+        self.commit_state("queue");
         self.unblock();
         self.archive();
 
@@ -369,7 +379,8 @@ impl<'a> Loop<'a> {
         let rejections_before = self.rejections();
         let takeable = gates::takeable(self.root, self.cfg);
         let iter_base = git::head(self.root);
-        let progress_before = file_len(&self.root.join("PROGRESS.md"));
+        let state_base = git::head(&self.state_root());
+        let progress_before = file_len(&self.file("PROGRESS.md"));
 
         // fires only after a discovery round already found nothing takeable; attended:true blocks alone are the ordinary human-wait state
         if takeable.is_none() && self.dry_rounds >= 1 {
@@ -405,7 +416,8 @@ impl<'a> Loop<'a> {
             let Some(stage) = self.cfg.stage.iter().find(|s| &s.name == name).cloned() else {
                 continue;
             };
-            match self.stage(&stage, task.clone(), iter_base.clone()) {
+            let bases = (iter_base.clone(), state_base.clone());
+            match self.stage(&stage, task.clone(), bases) {
                 Flow::Go => {}
                 // no stage after this one runs, but the round's own outcome is still recorded, and
                 // the boundary the skipped stages would have checked is owed here instead
@@ -438,11 +450,28 @@ impl<'a> Loop<'a> {
         pipeline.end_after_dry_rounds == 0 || self.dry_rounds < pipeline.end_after_dry_rounds
     }
 
+    fn state_root(&self) -> PathBuf {
+        git::state_root(self.root, &self.cfg.layout.harness_dir)
+    }
+
+    fn commit_state(&mut self, msg: &str) {
+        if let Err(err) = git::commit_instance(
+            self.root,
+            &self.cfg.layout.harness_dir,
+            gates::BOOKKEEPING,
+            msg,
+        ) {
+            self.digest
+                .warnings
+                .push(format!("the harness directory was not committed: {err}"));
+        }
+    }
+
     fn stage(
         &mut self,
         stage: &config::Stage,
         task: Option<String>,
-        iter_base: Option<String>,
+        iter_bases: (Option<String>, Option<String>),
     ) -> Flow {
         if self.boundary(false) {
             return Flow::Stop;
@@ -484,11 +513,14 @@ impl<'a> Loop<'a> {
         });
 
         // stash create snapshots the tree without touching it, so uncommitted edits from an earlier stage stay out of this one's diff
-        let stage_base = git::git(self.root, &["stash", "create"])
-            .ok()
-            .filter(|s| !s.is_empty())
-            .or_else(|| git::head(self.root));
-        let stop_file = self.root.join("STOP");
+        let snapshot = |repo: &Path| {
+            git::git(repo, &["stash", "create"])
+                .ok()
+                .filter(|s| !s.is_empty())
+                .or_else(|| git::head(repo))
+        };
+        let stage_bases = (snapshot(self.root), snapshot(&self.state_root()));
+        let stop_file = self.file("STOP");
         let result = match agent::spawn(&spawn, &mut self.writer, &stop_file, &self.rate_limit) {
             Ok(result) => result,
             Err(err) => {
@@ -531,7 +563,7 @@ impl<'a> Loop<'a> {
             turns: result.usage.turns,
         });
 
-        if result.exit != 0 {
+        let flow = if result.exit != 0 {
             self.halt(
                 "stage",
                 format!(
@@ -539,32 +571,36 @@ impl<'a> Loop<'a> {
                     stage.name, result.exit
                 ),
             );
-            return Flow::Stop;
-        }
-
-        self.gates(stage, task, iter_base, stage_base, result.output)
+            Flow::Stop
+        } else {
+            self.gates(stage, task.clone(), iter_bases, stage_bases, result.output)
+        };
+        let msg = format!("{} {}", stage.name, task.unwrap_or_default());
+        self.commit_state(msg.trim_end());
+        flow
     }
 
     fn gates(
         &mut self,
         stage: &config::Stage,
         task: Option<String>,
-        iter_base: Option<String>,
-        stage_base: Option<String>,
+        iter_bases: (Option<String>, Option<String>),
+        stage_bases: (Option<String>, Option<String>),
         output: String,
     ) -> Flow {
         for gate in &stage.post {
             // commit-verdict judges only what the verifier wrote, not the implementer's notes from the same iteration
-            let base = if gate == "commit-verdict" {
-                &stage_base
+            let (base, state_base) = if gate == "commit-verdict" {
+                &stage_bases
             } else {
-                &iter_base
+                &iter_bases
             };
             let mut ctx = GateCtx {
                 root: self.root,
                 cfg: self.cfg,
                 task: task.clone(),
                 iter_base: base.clone(),
+                state_base: state_base.clone(),
                 stage_output: output.clone(),
                 events: &mut self.writer,
                 dry_run: false,
@@ -666,7 +702,7 @@ impl<'a> Loop<'a> {
         }
 
         Ok(StageSpawn {
-            argv: resolved.argv,
+            argv: agent::fill_layout(&resolved.argv, &self.cfg.layout),
             env,
             cwd: self.root,
             timeout,
@@ -697,21 +733,21 @@ impl<'a> Loop<'a> {
         if vendored.is_empty() || !self.vendored_dirty(&vendored) {
             return Ok(());
         }
-        let mut paths = vec!["harness.lock".to_string()];
+        let dir = &self.cfg.layout.harness_dir;
+        let mut paths = vec![self.rel("harness.lock")];
         for (_, path, _) in &vendored {
             if let Ok(rel) = path.strip_prefix(self.root) {
                 paths.push(rel.to_string_lossy().to_string());
             }
         }
+        paths.retain(|p| !git::locate(self.root, dir, p).2);
         let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
         let ids: Vec<&str> = vendored.iter().map(|(id, _, _)| *id).collect();
-        git::commit_paths(
-            self.root,
-            &refs,
-            &format!("chore(vendor): {}", ids.join(" ")),
-        )
-        .map(|_| ())
-        .map_err(|err| format!("vendored skills could not be committed: {err}"))
+        let msg = format!("chore(vendor): {}", ids.join(" "));
+        git::commit_paths(self.root, &refs, &msg)
+            .and_then(|_| git::commit_instance(self.root, dir, &[], &msg))
+            .map(|_| ())
+            .map_err(|err| format!("vendored skills could not be committed: {err}"))
     }
 
     // "fetched" is the ordinary signal; the porcelain fallback also catches a vendored path left
@@ -720,9 +756,10 @@ impl<'a> Loop<'a> {
         if vendored.iter().any(|(_, _, result)| *result == "fetched") {
             return true;
         }
+        let lock = self.rel("harness.lock");
         git::porcelain(self.root).iter().any(|line| {
             let path = line.get(3..).unwrap_or("");
-            path == "harness.lock"
+            path == lock
                 || vendored.iter().any(|(_, dir, _)| {
                     dir.strip_prefix(self.root)
                         .map(|rel| path.starts_with(rel.to_string_lossy().as_ref()))
@@ -761,7 +798,7 @@ impl<'a> Loop<'a> {
         if self.stopped {
             return true;
         }
-        if self.root.join("STOP").is_file() {
+        if self.file("STOP").is_file() {
             self.halt("stop", "STOP file found, exiting.".to_string());
             return true;
         }
@@ -904,7 +941,7 @@ impl<'a> Loop<'a> {
         }
         // the entry is all the next iteration inherits, so the launcher writes the facts it has
         // rather than warning that a role left none -- a verify-only round has no other record
-        if file_len(&self.root.join("PROGRESS.md")) <= progress_before {
+        if file_len(&self.file("PROGRESS.md")) <= progress_before {
             self.progress_stub(task, pipeline, status.as_deref());
         }
     }
@@ -922,7 +959,7 @@ impl<'a> Loop<'a> {
             iter = self.writer.iter,
             stages = pipeline.stages.join(", "),
         );
-        let path = self.root.join("PROGRESS.md");
+        let path = self.file("PROGRESS.md");
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
         if let Err(err) = std::fs::write(&path, format!("{existing}{entry}")) {
             self.digest
@@ -930,8 +967,9 @@ impl<'a> Loop<'a> {
                 .push(format!("PROGRESS.md: {task} got no entry: {err}"));
             return;
         }
-        if let Err(err) = git::commit_paths(
+        if let Err(err) = git::commit_instance(
             self.root,
+            &self.cfg.layout.harness_dir,
             &["PROGRESS.md"],
             &format!("chore(progress): {task} iteration {}", self.writer.iter),
         ) {
@@ -943,7 +981,7 @@ impl<'a> Loop<'a> {
 
     fn unblock(&mut self) {
         let queue = Queue {
-            path: self.root.join("TASKS.md"),
+            path: self.file("TASKS.md"),
         };
         let text = match queue.read() {
             Ok(text) => text,
@@ -965,7 +1003,7 @@ impl<'a> Loop<'a> {
     }
 
     fn blocks(&self) -> Vec<queue::Block> {
-        let path = self.root.join("TASKS.md");
+        let path = self.file("TASKS.md");
         std::fs::read_to_string(path)
             .ok()
             .and_then(|t| queue::parse(&t).ok())
@@ -991,7 +1029,7 @@ impl<'a> Loop<'a> {
     }
 
     fn rejections(&self) -> Vec<String> {
-        std::fs::read_to_string(self.root.join("DECISIONS.md"))
+        std::fs::read_to_string(self.file("DECISIONS.md"))
             .map(|t| queue::rejections(&t))
             .unwrap_or_default()
     }
@@ -1072,8 +1110,8 @@ fn round4(value: f64) -> f64 {
     (value * 10_000.0).round() / 10_000.0
 }
 
-fn clarifications(root: &Path, spec: &str) -> Option<Vec<String>> {
-    let text = std::fs::read_to_string(root.join(spec)).ok()?;
+fn clarifications(spec: &Path) -> Option<Vec<String>> {
+    let text = std::fs::read_to_string(spec).ok()?;
     let hits: Vec<String> = text
         .lines()
         .enumerate()
@@ -1092,9 +1130,13 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
         Predicate::QueueTakeable => gates::takeable(root, cfg).is_some(),
         // an unreadable or unparseable queue is not evidence of a task at review, so this fails closed like `takeable`
         Predicate::QueueReviewing => {
-            match std::fs::read_to_string(root.join("TASKS.md"))
-                .map_err(|e| e.to_string())
-                .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
+            match std::fs::read_to_string(config::instance_path(
+                root,
+                &cfg.layout.harness_dir,
+                "TASKS.md",
+            ))
+            .map_err(|e| e.to_string())
+            .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
             {
                 Ok(blocks) => !queue::ids_at(&blocks, "review").is_empty(),
                 Err(err) => {
@@ -1107,9 +1149,13 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
         }
         // an unreadable or unparseable queue is not evidence the queue is empty, so this fails closed like `takeable`
         Predicate::QueueEmpty => {
-            match std::fs::read_to_string(root.join("TASKS.md"))
-                .map_err(|e| e.to_string())
-                .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
+            match std::fs::read_to_string(config::instance_path(
+                root,
+                &cfg.layout.harness_dir,
+                "TASKS.md",
+            ))
+            .map_err(|e| e.to_string())
+            .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
             {
                 Ok(blocks) => blocks.is_empty(),
                 Err(err) => {
@@ -1121,10 +1167,14 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
             }
         }
         Predicate::TaskAttended => {
-            let blocks = std::fs::read_to_string(root.join("TASKS.md"))
-                .ok()
-                .and_then(|t| queue::parse(&t).ok())
-                .unwrap_or_default();
+            let blocks = std::fs::read_to_string(config::instance_path(
+                root,
+                &cfg.layout.harness_dir,
+                "TASKS.md",
+            ))
+            .ok()
+            .and_then(|t| queue::parse(&t).ok())
+            .unwrap_or_default();
             blocks
                 .iter()
                 .find(|b| queue::field(b, "status").as_deref() == Some("ready"))
@@ -1165,7 +1215,7 @@ const NEVER_RAN: &str = "the check could not be run:";
 fn config_sha256(root: &Path) -> String {
     let mut hasher = Sha256::new();
     hasher.update(config::DEFAULT_TOML.as_bytes());
-    if let Ok(text) = std::fs::read_to_string(root.join("harness.toml")) {
+    if let Ok(text) = std::fs::read_to_string(config::config_path(root)) {
         hasher.update(text.as_bytes());
     }
     hasher

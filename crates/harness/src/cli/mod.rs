@@ -1,8 +1,11 @@
+mod base;
+mod eject;
 mod eval;
 mod events;
 mod gate;
 mod hook;
 mod init;
+mod pr;
 mod probe;
 mod run;
 mod skills;
@@ -36,6 +39,18 @@ pub enum Command {
         /// Print what would be written and write nothing
         #[arg(long)]
         dry_run: bool,
+        /// Move instance files at the repository root, or in a legacy .harness/, into the harness directory, and install nothing
+        #[arg(long = "move")]
+        move_files: bool,
+    },
+    /// Remove the harness from this repository: the harness directory, the untracked entry points init wrote, and the exclude block
+    Eject {
+        /// Print what would be removed and remove nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// Move the harness directory to this path outside the repository instead of deleting it
+        #[arg(long)]
+        keep_record: Option<std::path::PathBuf>,
     },
     /// Run the pipelines: a takeable task is implemented then verified; a task at review is verified; an empty queue runs the scout and adjudicator
     Run {
@@ -67,6 +82,20 @@ pub enum Command {
     Probe {
         /// Probes to run; empty runs all of them
         names: Vec<String>,
+    },
+    /// Build a pull-request branch off the upstream default branch holding only the product commits whose subject names the tasks
+    Pr {
+        /// Done task ids; several build one branch, for tasks that cannot land apart
+        #[arg(required = true)]
+        tasks: Vec<String>,
+        /// Push the branch and open the pull request with gh when it is installed; never merges
+        #[arg(long)]
+        push: bool,
+    },
+    /// Print the product commit a task was queued against, the base its diff is measured from
+    Base {
+        /// Task id whose base to print
+        task: String,
     },
     /// Run one gate against a task; exit 0 on pass, 2 on fail
     Gate {
@@ -130,7 +159,22 @@ pub enum Command {
 
 pub fn run(cli: Cli) -> anyhow::Result<i32> {
     match cli.command {
-        Command::Init { adapter, dry_run } => init::run(&init::Args { adapter, dry_run }),
+        Command::Init {
+            adapter,
+            dry_run,
+            move_files,
+        } => init::run(&init::Args {
+            adapter,
+            dry_run,
+            move_files,
+        }),
+        Command::Eject {
+            dry_run,
+            keep_record,
+        } => eject::run(&eject::Args {
+            dry_run,
+            keep_record,
+        }),
         Command::Run {
             iterations,
             budget_usd,
@@ -150,6 +194,8 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         }),
         Command::Watch => watch::run(),
         Command::Probe { names } => probe::run(&probe::Args { names }),
+        Command::Pr { tasks, push } => pr::run(&pr::Args { tasks, push }),
+        Command::Base { task } => base::run(&base::Args { task }),
         Command::Gate { which, task, base } => gate::run(&gate::Args { which, task, base }),
         Command::Hook { name } => hook::run(&hook::Args { name }),
         Command::Skills { cmd, frozen } => skills::run(&skills::Args { cmd, frozen }),

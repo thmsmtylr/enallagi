@@ -2,18 +2,18 @@
 # A ready task that swaps the check for one whose failures the seeded `fail_name` cannot capture.
 # The task never names `fail_name`; the rule is the only line that does, so the arms differ in it alone.
 set -u
-grep -q 'evals/unnamed-red' LEARNINGS.md && {
-  echo "  setup.sh: the seeded LEARNINGS.md already carries the rule, so the two arms would not differ" >&2
+grep -q 'evals/unnamed-red' .enallagi/LEARNINGS.md && {
+  echo "  setup.sh: the seeded .enallagi/LEARNINGS.md already carries the rule, so the two arms would not differ" >&2
   exit 1
 }
 # the candidate rule, verbatim: LEARNINGS.md takes a dated line only on ACCEPT
 if [ -f .eval-ablated ]; then
   rm -f .eval-ablated
 else
-  cat >>LEARNINGS.md <<'RULE'
+  cat >>.enallagi/LEARNINGS.md <<'RULE'
 - [2026-09-10] A red the gate cannot name is unanswerable: `fail_name` in `harness.toml` matched `test … FAILED`, which `cargo test -q` never prints (it prints `<name> --- FAILED`), so the verdict reason named no test and two lanes re-ran the check blind instead of answering the rejection → a change to `[check] command` changes `fail_name` in the same commit, and the check is run red once to see `fail_name`'s group 1 capture the failing test's name from the output it actually prints (evals/unnamed-red)
 RULE
-  grep -q 'evals/unnamed-red' LEARNINGS.md || {
+  grep -q 'evals/unnamed-red' .enallagi/LEARNINGS.md || {
     echo "  setup.sh: the rule was not written, so the unablated arm would measure nothing" >&2
     exit 1
   }
@@ -35,7 +35,7 @@ echo "grep -q \"'hello'\" src/greeting.ts" >tests/greeting.sh
 
 python3 - <<'PY'
 # assert the fixture was BUILT: a replace that matches nothing leaves the placeholder task (LEARNINGS.md, zero-as-pass)
-src = open('TASKS.md', encoding='utf-8').read()
+src = open('.enallagi/TASKS.md', encoding='utf-8').read()
 was = '''## [T-001] <the first task>
 scope:
 blockedBy: none
@@ -45,13 +45,13 @@ criteria:
   - <what has to become true, and how you would see it>
 notes:'''
 assert src.count(was) == 1, 'the seeded T-001 block is not what this fixture expects'
-open('TASKS.md', 'w', encoding='utf-8').write(src.replace(was, '''## [T-001] the check is `sh check.sh`
-scope: harness.toml, AGENTS.md
+open('.enallagi/TASKS.md', 'w', encoding='utf-8').write(src.replace(was, '''## [T-001] the check is `sh check.sh`
+scope: .enallagi/harness.toml, AGENTS.md
 blockedBy: none
 status: ready
 rows: none — harness
 criteria:
-  - `harness.toml`'s `[check]` runs `sh check.sh` as both `command` and `force`, and AGENTS.md's Commands section names it
+  - `.enallagi/harness.toml`'s `[check]` runs `sh check.sh` as both `command` and `force`, and AGENTS.md's Commands section names it
   - `sh check.sh` exits 0
 notes:'''))
 PY

@@ -40,7 +40,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     let ids: Vec<String> = cfg.skill.iter().map(|s| s.id.clone()).collect();
 
     if let SkillsCmd::List = args.cmd {
-        let lock = skills::read_lock(&root)?;
+        let lock = skills::read_lock(&root, &cfg.layout.harness_dir)?;
         for decl in &cfg.skill {
             let source = match &decl.rev {
                 Some(rev) => format!("{}@{rev}", decl.source),

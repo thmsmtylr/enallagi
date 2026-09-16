@@ -63,7 +63,7 @@ Against the playbook's six stages:
 | 2 Design | **out of scope.** `SPEC.md` is written by a human and accepted by a human. |
 | 3 Build | built: roles, `one-scope`, task-block criteria as the committed plan, hooks as guardrails |
 | 4 Test | built: delta against `.check-baseline`, the ablation gate |
-| 5 Deploy | **partial.** The CI matrix exists; the PR review loop and the release gate do not |
+| 5 Deploy | **partial.** The CI matrix exists, and `harness pr` builds one pull-request branch per landed task; the PR review loop and the release gate do not |
 | 6 Maintain | built: twenty-one probes, deterministic, no model in the detection path |
 
 ## Where it goes

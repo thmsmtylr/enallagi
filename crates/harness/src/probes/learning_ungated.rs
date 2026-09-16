@@ -13,7 +13,8 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let dated = common::re(DATED)?;
     let names = common::re(r"evals/([\w.-]+)")?;
     let cap = ctx.cfg.layout.learnings_cap;
-    let entries = common::learning_entries(ctx.root)?;
+    let entries = common::learning_entries(ctx)?;
+    let learnings = common::instance(ctx, "LEARNINGS.md");
     let mut found = Vec::new();
 
     for (at, text) in &entries {
@@ -26,7 +27,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             .collect();
         if named.is_empty() {
             found.push(common::finding(
-                "LEARNINGS.md",
+                &learnings,
                 *at,
                 format!(
                     "dated rule names no eval, so nothing decided it was worth its place: {}",
@@ -38,7 +39,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         for name in named {
             if !common::is_dir(ctx.root, &format!("evals/{name}")) {
                 found.push(common::finding(
-                    "LEARNINGS.md",
+                    &learnings,
                     *at,
                     format!("names evals/{name}, which does not exist"),
                 ));
@@ -47,7 +48,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     }
     if entries.len() > cap {
         found.push(common::finding(
-            "LEARNINGS.md",
+            &learnings,
             0,
             format!(
                 "the rule library holds {} entries against a cap of {cap}. Every entry is read at the start of every task; adding one means removing one",

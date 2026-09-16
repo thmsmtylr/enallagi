@@ -123,14 +123,14 @@ fn no_installed_script_hardcodes_a_vendor_path_or_process() {
     )
     .expect("install");
 
-    let dir = repo.root.join(".harness");
+    let dir = repo.root.join(".enallagi");
     for rel in walk(&dir) {
         let Ok(text) = fs::read_to_string(dir.join(&rel)) else {
             continue;
         };
         assert!(
             !vendor.is_match(&text),
-            ".harness/{}: {:?}",
+            ".enallagi/{}: {:?}",
             rel.display(),
             vendor.find(&text).map(|m| m.as_str())
         );
@@ -158,7 +158,7 @@ fn the_launcher_parses_no_task_blocks_itself() {
 fn the_write_path_gate_installs_where_the_rules_are_written() {
     let repo = Repo::new();
     repo.init_harness("");
-    let readme = read(&repo.root.join("evals/README.md"));
+    let readme = read(&repo.root.join(".enallagi/evals/README.md"));
     assert!(readme.contains("harness eval --gate"), "{readme:.400}");
 
     // reachable, not merely documented: the gate must refuse this repo's own candidate rule
@@ -497,9 +497,11 @@ fn the_skill_hook_fires_on_a_headless_lane() {
     )
     .expect("install");
 
-    let settings: serde_json::Value =
-        serde_json::from_str(&read(&repo.root.join(".claude/settings.json"))).expect("settings");
-    let on_prompt = settings["hooks"]["UserPromptSubmit"].to_string();
+    let hooks: serde_json::Value = serde_json::from_str(&read(
+        &repo.root.join(".enallagi/adapters/claude/hooks/hooks.json"),
+    ))
+    .expect("hooks");
+    let on_prompt = hooks["hooks"]["UserPromptSubmit"].to_string();
     assert!(on_prompt.contains("harness hook skills"), "{on_prompt}");
 
     // count is asserted so an emptied skill list can't trivially pass this
@@ -595,9 +597,23 @@ fn main_tracks_no_instance_file() {
         let planned = init::planned_files(&repo.root, &opts).expect("plan an install");
         instance.extend(planned.into_iter().map(|(path, _)| path));
     }
-    // seeded by init, but its source is this file
-    instance.remove("evals/README.md");
-    assert!(instance.contains("TASKS.md"), "{instance:?}");
+    // seeded by init, but its source is in the tree
+    instance.remove(".enallagi/evals/README.md");
+    // a root-layout install writes these names at the root, and main tracks none of them either
+    instance.extend(
+        [
+            "TASKS.md",
+            "PROGRESS.md",
+            "PROGRESS.archive.md",
+            "DECISIONS.md",
+            "LEARNINGS.md",
+            "SPEC.md",
+            ".check-baseline",
+            "harness.toml",
+        ]
+        .map(String::from),
+    );
+    assert!(instance.contains(".enallagi/TASKS.md"), "{instance:?}");
 
     let out = Command::new("git")
         .args(["ls-files"])

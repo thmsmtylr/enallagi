@@ -19,14 +19,21 @@ sudo mv harness-aarch64-apple-darwin /usr/local/bin/harness
 Or from source: `cargo install --locked --git https://github.com/thmsmtylr/enallagi harness`. Then:
 
 ```bash
-harness init                    # writes harness.toml, seeds the documents from defaults
-$EDITOR harness.toml            # agent.preset, check.command, layout.spec
+harness init                    # writes .enallagi/harness.toml, seeds the documents from defaults
+$EDITOR .enallagi/harness.toml  # agent.preset, check.command, layout.spec
 harness init                    # re-run: substitutes the edited answers
-harness init --adapter claude   # optional: writes .claude/agents/ and the hook wiring
+harness init --adapter claude   # optional: the claude plugin's agents and hooks, in .enallagi/adapters/claude/
 ```
 
-`harness init` prints the exact `git add` line for everything it wrote; `verdict` counts an
-untracked path as work off the branch. `--dry-run` prints the plan without writing it.
+Every file the harness owns lives in one directory, `.enallagi/` (`layout.harness_dir`); init writes
+outside it only `layout.pointer_files`, for a preset with no `{context_file}` in its argv, and the `--adapter` tool's files. A root
+`TASKS.md` or a `.harness/` keeps its layout: `harness init` lists each file with its new path, and
+`--move` moves them and installs nothing. A fresh `.enallagi/` is its own git repository; it and each untracked file init writes
+outside it go in one `# >>> harness` block of `git rev-parse --git-path info/exclude`, never `.gitignore`; `--dry-run` writes nothing.
+External repository: bring (`init`), run, `harness eject`. Eject refuses while a lane worktree or a live loop exists, naming each;
+else removes `.enallagi/` (`--keep-record <dir>` moves it out), each still-untracked block path and the block; `--dry-run` lists them.
+One pull request per landed task: `harness pr T-###` refuses a task not `done`, or one whose `blockedBy:` task has commits on the round branch and no mention in origin's default branch's history, naming it.
+It replays the product commits whose subject names the task onto that branch in a worktree outside the checkout (`git apply --3way`; a conflict names the files and leaves no branch), runs `check.command` there, commits once as the configured git user with the task ids in the body and no trailers, and writes `.enallagi/pr/T-###.md` from the task block, the commits naming it and the verifier's last notes. `--push` pushes the branch and runs `gh pr create` when gh is installed; nothing merges. Queue-only and instance-only tasks get none; coupled tasks share one, `harness pr T-### T-###`.
 
 ## What a run does
 
@@ -39,19 +46,16 @@ chosen by the queue's state:
 | `task` | `queue.takeable` | **implement** → **verify** |
 | `discover` | `!queue.takeable` | **scout** → **adjudicate** |
 
-Every stage is a separate process spawned from a role prompt under `.harness/roles/`, turn-capped
-per stage. `review` runs before `task`. `discover` ends the run after two consecutive rounds that
-leave nothing takeable. Every iteration leaves exactly one `PROGRESS.md` entry: the launcher writes
-one itself, and commits it, when no role did.
+Every stage is a separate process spawned from a role prompt under `.enallagi/roles/`, turn-capped
+per stage. `review` runs before `task`. `discover` ends the run after two dry rounds. Roles commit
+product files; the launcher commits the harness directory as `<stage> T-### at <product sha>`, read
+back by `harness base T-###` as a task's diff base, and writes a `PROGRESS.md` entry when no role did.
 
-A run halts on a `STOP` file in the repo root; on `BUDGET_SECONDS` / `BUDGET_USD` /
-`BUDGET_TOKENS` (or `--budget-seconds` / `--budget-usd` / `--budget-tokens`, which wins) at the
-next stage boundary, where the dollar and token budgets need an `[agent.usage]` the preset fills
-and halt when nothing was observed; on the adjudicator parking a fix at `needs-spec`; and on a
-stage that could not start. `--dry-run` prints the plan and the probe output, spawns nothing and
-runs no gates. `--frozen` refuses to re-vendor a skill whose hash has moved. `harness run` draws a
-live view whenever stdout is a tty (`--no-tui` suppresses it) and `harness watch` attaches
-read-only to a running loop's event log: three panes (queue, stages, output), `Tab` cycles focus,
+A run halts on a `STOP` file in the repo root; on `BUDGET_SECONDS` / `BUDGET_USD` / `BUDGET_TOKENS` (or `--budget-seconds` /
+`--budget-usd` / `--budget-tokens`, which wins) at the next stage boundary, where the dollar and token budgets need an `[agent.usage]` the preset fills and halt when nothing was observed; on the adjudicator parking a fix at `needs-spec`; and on a
+stage that could not start. `--dry-run` prints the plan and the probe output, spawns nothing and runs no gates. `--frozen` refuses
+to re-vendor a skill whose hash has moved. `harness run` draws a live view whenever stdout is a tty (`--no-tui` suppresses it) and
+`harness watch` attaches read-only to a running loop's event log: three panes (queue, stages, output), `Tab` cycles focus,
 `Up`/`Down` scroll the focused pane, `?` toggles help, `q` quits.
 
 ## What is enforced, and by what
@@ -77,7 +81,7 @@ the tool has one, reading its input from stdin.
 | `verify-done` | stop | reports the check's own state before the agent claims done |
 | `skills` | prompt-submit | prints every declared skill's id, why it is relied on, and its gate |
 
-The full rail list, including the judgment calls no mechanism checks, is `.harness/RAILS.md`.
+The full rail list, including the judgment calls no mechanism checks, is `.enallagi/RAILS.md`.
 
 ## The queue
 
@@ -138,7 +142,7 @@ per shortfall. A probe that cannot run prints `PROBE <name> ERROR`, never a coun
 | `limit-repeat` | two rate limits on stages back-to-back in the run's own sequence |
 | `driver` | off unless `driver_command` is set and `HARNESS_DRIVER=1`; whatever the built artifact reports |
 
-The last five read `.harness/events.jsonl` and report `OFF` until it exists.
+The last five read `.enallagi/events.jsonl` and report `OFF` until it exists.
 
 ## harness.toml
 
@@ -159,10 +163,10 @@ name, default `` \(fail\) (.+?)(?: \[[0-9.]+m?s\])?$ ``).
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `harness_dir` | string | `.harness` |
+| `harness_dir` | string | `.enallagi` |
 | `skills_dir` | string, optional | the preset's own |
 | `spec`, `rows_heading`, `rows_end_heading` | string | `SPEC.md`, `## 11. Exit criteria`, `## 12.` |
-| `context_file` | string | `AGENTS.md` |
+| `context_file` | string | `AGENTS.md` beside the queue: `.enallagi/AGENTS.md`, or the root one in a root layout |
 | `pointer_files` | string list | `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` |
 | `driver_command` | string | empty (off) |
 | `learnings_cap` | integer | `12` |
@@ -204,7 +208,7 @@ any `!`-negated), `stages` (stage names, in order) and `end_after_dry_rounds` (d
 fields the tool reports (`claude` reports cost, tokens and turns; `codex`, `amp` and `qwen` report
 tokens) and its `turn_cap`: `flag` fills `{turns}` into the command, `config` needs the cap set in
 the tool's own config, `time` fills `{timeout}` in place of a turn count, and `none` caps nothing,
-so the stage needs its own `timeout`.
+so the stage needs its own `timeout`; `{harness_dir}` and `{context_file}` fill from `[layout]`, and `claude` passes `--append-system-prompt-file {context_file}`.
 
 ## Skills
 
@@ -218,7 +222,7 @@ by the pipeline before its stage, and refused by `harness hook immutable`.
 
 ## Events
 
-`harness events [--role <r>] [--task <t>] [--since <ts>] [--json]` reads `.harness/events.jsonl`,
+`harness events [--role <r>] [--task <t>] [--since <ts>] [--json]` reads `.enallagi/events.jsonl`,
 one JSON object per line, written by every `harness run`. The kinds are `run.start`, `run.end`,
 `stage.start`, `stage.output`, `stage.end` (with `seconds`, `exit`, `cost`, `input_tokens`,
 `output_tokens`, `turns`), `gate`, `task.status`, `halt`, `limit`, `skill.resolved` and `probe`;
@@ -226,22 +230,19 @@ each carries the stage, task, gate or probe it names and its reason or result.
 
 ## Files
 
-`harness init` writes, relative to the repo root (`.harness` is `layout.harness_dir`):
+`harness init` writes, relative to the repo root (`.enallagi` is `layout.harness_dir`):
 
 | Path | What |
 | --- | --- |
-| `harness.toml` | seeded once from the embedded defaults; never overwritten once present |
-| `.harness/roles/{scout,adjudicator,implementer,verifier,researcher}.md` | the five role prompts, always resubstituted |
-| `.harness/RAILS.md` | the rails, each naming its enforcement, always resubstituted |
-| `.harness/.gitignore` | ignores the harness's own scratch state |
-| `<skills_dir>/running-the-loop/{SKILL.md,references/task-block.md}` | the harness's own usage skill, in the preset's skill directory (`.claude/skills/` by default) |
-| `TASKS.md`, `PROGRESS.md`, `LEARNINGS.md`, `DECISIONS.md`, `.check-baseline`, `AGENTS.md`, `SPEC.md` | seeded once: the queue, the append-only record, the rules, the archive, the inherited red, the context file every role reads first, the spec under the heading `layout.rows_heading` names |
-| `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | one-line pointers to `AGENTS.md`, from `layout.pointer_files` |
-| `evals/README.md` | the eval runner's own documentation |
+| `.enallagi/roles/{scout,adjudicator,implementer,verifier,researcher}.md` | the five role prompts, always resubstituted |
+| `.enallagi/RAILS.md`, `.enallagi/.gitignore` | the rails, each naming its enforcement, always resubstituted; the ignore file for the harness's own scratch state |
+| `<skills_dir>/running-the-loop/{SKILL.md,references/task-block.md}` | the harness's own usage skill, in the preset's skill directory (`.enallagi/adapters/claude/skills/` for `claude`, named `harness:<id>`; `.claude/skills/` in a root-`TASKS.md` layout) |
+| `.enallagi/{harness.toml,TASKS.md,PROGRESS.md,LEARNINGS.md,DECISIONS.md,.check-baseline,SPEC.md,evals/README.md}` | seeded once and never overwritten once present: the answers from the embedded defaults, the queue, the append-only record, the rules, the archive, the inherited red, the spec under the heading `layout.rows_heading` names, the eval runner's documentation |
+| `.enallagi/AGENTS.md`; `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | seeded once: the context file every role reads first (`layout.context_file`); one-line pointers to it, from `layout.pointer_files` and the `--adapter` preset's `instruction_file`, written only for a preset with no `{context_file}` in its argv and never over a tracked file |
 
-`--adapter <preset>` adds the tool-specific parts: `.claude/agents/` and `.claude/settings.json` (hooks,
-`Monitor` denied, commit and PR `attribution` empty) for `claude`; for a preset whose `hooks_file` is set
-(`codex`, `gemini`, `copilot`, `cursor`, `qwen`), that file, merged; for any other preset, nothing.
+`--adapter <preset>` adds the tool-specific parts: for `claude`, the plugin's `agents/` and `hooks/hooks.json`, which every lane
+loads with `--plugin-dir` (deny rules on `--settings`) and an interactive session with `claude --plugin-dir .enallagi/adapters/claude`;
+for a preset whose `hooks_file` is set (`codex`, `gemini`, `copilot`, `cursor`, `qwen`), that file, merged with one that already exists; for any other preset, nothing.
 `bun-turbo` is not an agent and not an `--adapter` value; see `adapters/README.md`.
 
 ## Evals
@@ -270,8 +271,7 @@ a `shell` job runs `bash -n`, `shellcheck` and `docs/bootstrap.sh --check` over 
 
 ## Not included
 
-Parallel lanes (`harness worktree [N]` isolates one, fast-forwarded back). A held-out test suite.
-A driver for your own artifact (`driver.sh` is the worked example for this one). `test-hashes.json`
+Parallel lanes (`harness worktree [N]` isolates one, product and harness directory, both fast-forwarded back or neither). A held-out test suite. A driver for your own artifact (`driver.sh` is the worked example for this one). `test-hashes.json`
 (`hash-uncovered` reports its absence until you write it). Evals for the implementer and researcher
 roles. The vendored skills: `harness skills sync` fetches them from `harness.lock` after a clone.
 

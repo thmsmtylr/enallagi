@@ -14,7 +14,9 @@ pub fn immutable(root: &Path, input: &str) -> (i32, String) {
         return (0, String::new());
     };
 
-    if let Some(hit) = hashed_hit(root, &target) {
+    let cfg = config::load(root).ok();
+    let dir = config::harness_dir(root);
+    if let Some(hit) = hashed_hit(root, &dir, &target) {
         return (
             2,
             format!(
@@ -24,7 +26,7 @@ pub fn immutable(root: &Path, input: &str) -> (i32, String) {
             ),
         );
     }
-    if let Some(hit) = locked_hit(root, &target) {
+    if let Some(hit) = cfg.and_then(|cfg| locked_hit(root, &cfg, &target)) {
         return (
             2,
             format!(
@@ -88,11 +90,12 @@ fn lexical_normalize(p: &Path) -> PathBuf {
     out
 }
 
-fn hashed_hit(root: &Path, target: &Path) -> Option<String> {
-    let hashes_path = root.join("test-hashes.json");
-    if normalize(root, "test-hashes.json") == *target {
+fn hashed_hit(root: &Path, harness_dir: &str, target: &Path) -> Option<String> {
+    let hashes = config::instance_rel(root, harness_dir, "test-hashes.json");
+    let hashes_path = root.join(&hashes);
+    if normalize(root, &hashes) == *target {
         if hashes_path.is_file() {
-            return Some("test-hashes.json (the reference itself)".to_string());
+            return Some(format!("{hashes} (the reference itself)"));
         }
         return None;
     }
@@ -167,23 +170,24 @@ fn glob_package_jsons(root: &Path, pattern: &str) -> Vec<PathBuf> {
     current
 }
 
-fn locked_hit(root: &Path, target: &Path) -> Option<String> {
-    let lock_path = root.join("harness.lock");
-    if normalize(root, "harness.lock") == *target {
+fn locked_hit(root: &Path, cfg: &config::Config, target: &Path) -> Option<String> {
+    let dir = &cfg.layout.harness_dir;
+    let lock = config::instance_rel(root, dir, "harness.lock");
+    let lock_path = root.join(&lock);
+    if normalize(root, &lock) == *target {
         if lock_path.is_file() {
-            return Some("harness.lock (the reference itself)".to_string());
+            return Some(format!("{lock} (the reference itself)"));
         }
         return None;
     }
     if !lock_path.is_file() {
         return None;
     }
-    let lock = skills::read_lock(root).ok()?;
+    let lock = skills::read_lock(root, dir).ok()?;
     if lock.skill.is_empty() && lock.role.is_empty() {
         return None;
     }
-    let cfg = config::load(root).ok()?;
-    let skills_dir = gates::skills_dir_for(&cfg);
+    let skills_dir = gates::skills_dir_for(cfg);
     let rel = target.strip_prefix(root).unwrap_or(target);
     for entry in &lock.skill {
         let dir = normalize(root, &format!("{skills_dir}/{}", entry.id));
@@ -192,7 +196,7 @@ fn locked_hit(root: &Path, target: &Path) -> Option<String> {
         }
     }
     for entry in &lock.role {
-        let file = normalize(root, &gates::role_file(&cfg, &entry.id));
+        let file = normalize(root, &gates::role_file(cfg, &entry.id));
         if *target == file {
             return Some(format!("{} (locked role `{}`)", rel.display(), entry.id));
         }
@@ -209,7 +213,7 @@ pub fn one_writer(root: &Path, _input: &str) -> (i32, String) {
     }
 
     let text = queue::Queue {
-        path: root.join("TASKS.md"),
+        path: config::instance_path(root, &cfg.layout.harness_dir, "TASKS.md"),
     }
     .read()
     .unwrap_or_default();
@@ -384,17 +388,30 @@ mod tests {
     fn immutable_refuses_an_edit_to_a_hashed_file() {
         let r = Repo::new();
         r.write("src/a.ts", "export const a = 1\n");
-        r.write("test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
+        r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         let (code, msg) = immutable(&r.root, &input("src/a.ts"));
         assert_eq!(code, 2);
         assert!(msg.contains("covered by test-hashes.json"), "{msg}");
     }
 
     #[test]
+    fn immutable_refuses_an_edit_to_a_hashed_file_when_the_config_is_refused() {
+        let r = Repo::new();
+        r.write(".enallagi/TASKS.md", "# TASKS\n");
+        r.write("src/a.ts", "export const a = 1\n");
+        r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
+        r.write(".enallagi/harness.toml", "[check]\ncomand = \"x\"\n");
+        assert!(config::load(&r.root).is_err());
+        let (code, msg) = immutable(&r.root, &input("src/a.ts"));
+        assert_eq!(code, 2, "{msg}");
+        assert!(msg.contains("covered by test-hashes.json"), "{msg}");
+    }
+
+    #[test]
     fn immutable_refuses_the_reference_itself() {
         let r = Repo::new();
-        r.write("test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
-        let (code, msg) = immutable(&r.root, &input("test-hashes.json"));
+        r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
+        let (code, msg) = immutable(&r.root, &input(".enallagi/test-hashes.json"));
         assert_eq!(code, 2);
         assert!(msg.contains("the reference itself"), "{msg}");
     }
@@ -403,10 +420,13 @@ mod tests {
     fn immutable_refuses_a_locked_skill_file() {
         let r = Repo::new();
         r.write(
-            "harness.lock",
+            ".enallagi/harness.lock",
             "version = 1\n\n[[skill]]\nid = \"tdd\"\nsource = \"path:skills/tdd\"\nsha256 = \"ab\"\n",
         );
-        let (code, msg) = immutable(&r.root, &input(".claude/skills/tdd/SKILL.md"));
+        let (code, msg) = immutable(
+            &r.root,
+            &input(".enallagi/adapters/claude/skills/tdd/SKILL.md"),
+        );
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("harness.lock"), "{msg}");
     }
@@ -414,7 +434,7 @@ mod tests {
     #[test]
     fn immutable_allows_an_uncovered_file() {
         let r = Repo::new();
-        r.write("test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
+        r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         let (code, msg) = immutable(&r.root, &input("src/b.ts"));
         assert_eq!(code, 0, "{msg}");
     }
@@ -424,7 +444,7 @@ mod tests {
     fn immutable_refuses_a_symlinked_alias_of_a_hashed_file() {
         let r = Repo::new();
         r.write("src/a.ts", "export const a = 1\n");
-        r.write("test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
+        r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         std::os::unix::fs::symlink(r.root.join("src/a.ts"), r.root.join("src/b.ts"))
             .expect("symlink");
         let (code, msg) = immutable(&r.root, &input("src/b.ts"));
@@ -436,13 +456,16 @@ mod tests {
     #[cfg(unix)]
     fn immutable_refuses_a_symlinked_directory_containing_a_locked_skill() {
         let r = Repo::new();
-        r.write(".claude/skills/tdd/SKILL.md", "# tdd\n");
+        r.write(".enallagi/adapters/claude/skills/tdd/SKILL.md", "# tdd\n");
         r.write(
-            "harness.lock",
+            ".enallagi/harness.lock",
             "version = 1\n\n[[skill]]\nid = \"tdd\"\nsource = \"path:skills/tdd\"\nsha256 = \"ab\"\n",
         );
-        std::os::unix::fs::symlink(r.root.join(".claude/skills/tdd"), r.root.join("alias"))
-            .expect("symlink");
+        std::os::unix::fs::symlink(
+            r.root.join(".enallagi/adapters/claude/skills/tdd"),
+            r.root.join("alias"),
+        )
+        .expect("symlink");
         let (code, msg) = immutable(&r.root, &input("alias/SKILL.md"));
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("harness.lock"), "{msg}");
@@ -451,7 +474,7 @@ mod tests {
     #[test]
     fn immutable_normalizes_a_nonexistent_target_under_an_existing_directory() {
         let r = Repo::new();
-        r.write("test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
+        r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         let (code, msg) = immutable(&r.root, &input("src/does-not-exist-yet.ts"));
         assert_eq!(code, 0, "{msg}");
     }
@@ -464,7 +487,10 @@ mod tests {
             r#"{"name":"root","workspaces":["packages/*"]}"#,
         );
         r.write("packages/foo/package.json", r#"{"name":"foo"}"#);
-        r.write("test-hashes.json", r#"{"package.json#scripts":"deadbeef"}"#);
+        r.write(
+            ".enallagi/test-hashes.json",
+            r#"{"package.json#scripts":"deadbeef"}"#,
+        );
         let (code, msg) = immutable(&r.root, &input("packages/foo/package.json"));
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("package.json#scripts"), "{msg}");
@@ -489,7 +515,7 @@ mod tests {
             .arg("30")
             .spawn()
             .expect("spawn sleep");
-        r.write(".harness/loop.pid", &child.id().to_string());
+        r.write(".enallagi/loop.pid", &child.id().to_string());
         let _reaper = Reaper(child);
 
         let (code, msg) = one_writer(&r.root, &input("TASKS.md"));
@@ -501,7 +527,7 @@ mod tests {
     #[test]
     fn a_write_from_under_the_loop_itself_is_allowed() {
         let r = Repo::new();
-        r.write(".harness/loop.pid", &std::process::id().to_string());
+        r.write(".enallagi/loop.pid", &std::process::id().to_string());
         let (code, msg) = one_writer(&r.root, &input("TASKS.md"));
         assert_eq!(code, 0, "{msg}");
     }
@@ -515,7 +541,7 @@ mod tests {
             .expect("spawn sleep");
         let pid = child.id();
         drop(Reaper(child)); // kills and waits immediately: the pid file must name a dead loop
-        r.write(".harness/loop.pid", &pid.to_string());
+        r.write(".enallagi/loop.pid", &pid.to_string());
 
         let (code, msg) = one_writer(&r.root, &input("TASKS.md"));
         assert_eq!(code, 0, "{msg}");

@@ -1,11 +1,11 @@
 name = "claude"
-argv = ["claude", "-p", "{prompt}", "--output-format", "stream-json", "--verbose", "--max-turns", "{turns}", "--dangerously-skip-permissions"]
+argv = ["claude", "-p", "{prompt}", "--output-format", "stream-json", "--verbose", "--max-turns", "{turns}", "--append-system-prompt-file", "{context_file}", "--plugin-dir", "{harness_dir}/adapters/claude", "--settings", '{"attribution":{"commit":"","pr":""},"permissions":{"deny":["Monitor","Bash(git push:*)","Bash(git reset --hard:*)","Bash(git clean:*)","Bash(rm -rf:*)","Read(./.env)","Read(./.env.local)","Read(./**/.env)","Read(./**/.env.local)"]}}', "--dangerously-skip-permissions"]
 turn_cap = "flag"
 model_flag = "--model"
-skills_dir = ".claude/skills"
-invocation = "invoke it via the Skill tool"
+skills_dir = "{harness_dir}/adapters/claude/skills"
+invocation = "invoke it via the Skill tool as `harness:<id>`"
 instruction_file = "CLAUDE.md"
-hooks_file = ".claude/settings.json"
+hooks_file = "{harness_dir}/adapters/claude/hooks/hooks.json"
 
 [usage]
 cost = "total_cost_usd"

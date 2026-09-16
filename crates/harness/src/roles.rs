@@ -25,7 +25,7 @@ pub fn resolve(
     events: &mut Writer,
 ) -> Result<Vec<ResolvedRole>, SkillError> {
     let base = root.join(&cfg.layout.harness_dir).join("roles");
-    let mut lock = read_lock(root)?;
+    let mut lock = read_lock(root, &cfg.layout.harness_dir)?;
     let mut out = Vec::new();
     let mut dirty = false;
 
@@ -65,7 +65,7 @@ pub fn resolve(
     }
 
     if dirty {
-        write_lock(root, &lock)?;
+        write_lock(root, &cfg.layout.harness_dir, &lock)?;
     }
     Ok(out)
 }

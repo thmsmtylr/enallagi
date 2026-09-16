@@ -32,6 +32,10 @@ pub fn re(pattern: &str) -> Res<Regex> {
     Regex::new(pattern).map_err(|e| e.to_string())
 }
 
+pub fn instance(ctx: &ProbeCtx, name: &str) -> String {
+    crate::config::instance_rel(ctx.root, &ctx.cfg.layout.harness_dir, name)
+}
+
 pub fn read(root: &Path, rel: &str) -> Res<String> {
     std::fs::read(root.join(rel))
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
@@ -54,13 +58,24 @@ pub fn is_dir(root: &Path, rel: &str) -> bool {
     root.join(rel).is_dir()
 }
 
+// a harness directory that is its own repository is outside the product's index; list what the launcher's `git add -A` there commits
 pub fn tracked(root: &Path) -> Res<Vec<String>> {
-    let out = git::git(root, &["ls-files"]).map_err(|e| e.to_string())?;
-    Ok(out
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(String::from)
-        .collect())
+    let list = |repo: &Path, args: &[&str], prefix: &str| -> Res<Vec<String>> {
+        let out = git::git(repo, args).map_err(|e| e.to_string())?;
+        Ok(out
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| format!("{prefix}{l}"))
+            .collect())
+    };
+    let mut paths = list(root, &["ls-files"], "")?;
+    let dir = crate::config::harness_dir(root);
+    let state = git::state_root(root, &dir);
+    if state != root {
+        let args = ["ls-files", "--cached", "--others", "--exclude-standard"];
+        paths.extend(list(&state, &args, &format!("{dir}/"))?);
+    }
+    Ok(paths)
 }
 
 pub fn walk(root: &Path) -> Vec<String> {
@@ -144,7 +159,7 @@ const SEPARATOR: &str = r"^\|[\s:|-]+\|\s*$";
 // must slice and read cells the same way the floor's own row parser does, or the two disagree
 pub fn spec_rows(ctx: &ProbeCtx) -> Res<Vec<SpecRow>> {
     let cfg: &Config = ctx.cfg;
-    let spec = &cfg.layout.spec;
+    let spec = &instance(ctx, &cfg.layout.spec);
     let text = read(ctx.root, spec)?;
     let heading = &cfg.layout.rows_heading;
     let start = text
@@ -247,10 +262,13 @@ pub fn rail_rows(ctx: &ProbeCtx) -> Res<Vec<RailRow>> {
     Ok(rows)
 }
 
-pub fn learning_entries(root: &Path) -> Res<Vec<(usize, String)>> {
+pub fn learning_entries(ctx: &ProbeCtx) -> Res<Vec<(usize, String)>> {
     let mut entries: Vec<(usize, String)> = Vec::new();
     let mut open_at: Option<usize> = None;
-    for (index, line) in lines_of(root, "LEARNINGS.md")?.iter().enumerate() {
+    for (index, line) in lines_of(ctx.root, &instance(ctx, "LEARNINGS.md"))?
+        .iter()
+        .enumerate()
+    {
         if line.starts_with("- ") {
             entries.push((index + 1, line.clone()));
             open_at = Some(entries.len() - 1);
@@ -274,11 +292,14 @@ pub struct TaskBlock {
     pub body: Vec<(usize, String)>,
 }
 
-pub fn task_blocks(root: &Path) -> Res<Vec<TaskBlock>> {
+pub fn task_blocks(ctx: &ProbeCtx) -> Res<Vec<TaskBlock>> {
     let heading = re(r"^## \[(T-\d+)\]")?;
     let mut blocks: Vec<TaskBlock> = Vec::new();
     let mut open = false;
-    for (index, line) in lines_of(root, "TASKS.md")?.iter().enumerate() {
+    for (index, line) in lines_of(ctx.root, &instance(ctx, "TASKS.md"))?
+        .iter()
+        .enumerate()
+    {
         if let Some(m) = heading.captures(line) {
             let id = m.get(1).map(|g| g.as_str()).unwrap_or_default().to_string();
             blocks.push(TaskBlock {

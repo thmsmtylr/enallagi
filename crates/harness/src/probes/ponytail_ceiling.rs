@@ -9,13 +9,14 @@ const REJECTED: &str = "## Rejected findings";
 
 // lines, not their task ids: an id is spent once but the same finding recurs under a new one
 pub fn kill_lines(ctx: &ProbeCtx) -> Res<Vec<String>> {
-    if !common::exists(ctx.root, "DECISIONS.md") {
+    let decisions = common::instance(ctx, "DECISIONS.md");
+    if !common::exists(ctx.root, &decisions) {
         return Ok(vec![]);
     }
     let dated = common::re(DATED)?;
     let mut inside = false;
     let mut found = Vec::new();
-    for line in common::lines_of(ctx.root, "DECISIONS.md")? {
+    for line in common::lines_of(ctx.root, &decisions)? {
         if line.starts_with("## ") {
             inside = line.trim() == REJECTED;
         } else if inside && dated.is_match(&line) {

@@ -9,7 +9,19 @@ use std::fs;
 fn seeded_with(overrides: &str) -> (Repo, Config) {
     let repo = Repo::new();
     repo.init_harness(overrides);
-    repo.commit_all("harness");
+    harness::git::git(&repo.root, &["add", "-A"]).expect("add");
+    harness::git::git(
+        &repo.root,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "harness",
+        ],
+    )
+    .expect("commit");
     let cfg = config::load(&repo.root).expect("config");
     (repo, cfg)
 }
@@ -73,8 +85,8 @@ fn marker() -> String {
     format!("{}{}", "ponytail", ":")
 }
 
-fn append(repo: &Repo, rel: &str, text: &str) {
-    let path = repo.root.join(rel);
+fn append(repo: &Repo, name: &str, text: &str) {
+    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), name);
     let existing = fs::read_to_string(&path).unwrap_or_default();
     fs::write(&path, format!("{existing}{text}")).expect("append");
 }
@@ -96,6 +108,20 @@ fn no_probe_errored() {
         0,
         "{out}"
     );
+}
+
+#[test]
+fn check_unnamed_reads_the_context_file_under_the_harness_directory() {
+    let (repo, cfg) = seeded();
+    assert_eq!(cfg.layout.context_file, ".enallagi/AGENTS.md");
+    assert!(!repo.root.join("AGENTS.md").exists());
+    assert_eq!(count(&run(&repo, &cfg), "check-unnamed"), Some(0));
+
+    fs::remove_file(repo.root.join(".enallagi/AGENTS.md")).expect("rm");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "check-unnamed");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, ".enallagi/AGENTS.md");
 }
 
 #[test]
@@ -236,7 +262,7 @@ friction: FIFTH sighting of a check firing on the prose that documents it - and 
 next: nothing
 
 ## fixture — a different friction that shares an opening
-friction: none new. One thing worth the next lane's time, not a rule: `.harness/hooks/probes.sh`
+friction: none new. One thing worth the next lane's time, not a rule: `.enallagi/hooks/probes.sh`
 next: nothing
 
 ## fixture — and another, sharing the same opening
@@ -270,9 +296,11 @@ fn and_two_frictions_that_merely_share_words_are_not_collapsed_into_it() {
     let out = render(&run(&repo, &cfg));
     assert_eq!(
         out.lines()
-            .filter(|l| l.starts_with("FINDING friction-repeat PROGRESS.md:")
-                && l.contains("recorded 2 times")
-                && l.contains("FIFTH sighting"))
+            .filter(
+                |l| l.starts_with("FINDING friction-repeat .enallagi/PROGRESS.md:")
+                    && l.contains("recorded 2 times")
+                    && l.contains("FIFTH sighting")
+            )
             .count(),
         1,
         "{out}"
@@ -476,13 +504,13 @@ fn a_row_with_a_slash_resolves_under_source_root_before_the_repo_root() {
         "[layout]\nsource_root = \"crate\"\ntest_file_suffix_re = '\\.rs'\ntest_decl_patterns = [\"fn {name}(\"]\n",
     );
     repo.write(
-        "SPEC.md",
+        ".enallagi/SPEC.md",
         "# SPEC\n\n## 11. Exit criteria\n\n| Criterion | Test |\n| --- | --- |\n| c | `tests/x.rs::t` |\n\n## 12. Notes\n",
     );
     let untested = |results: &[(String, ProbeResult)]| {
         render(results)
             .lines()
-            .filter(|l| l.starts_with("FINDING spec-untested SPEC.md:7 "))
+            .filter(|l| l.starts_with("FINDING spec-untested .enallagi/SPEC.md:7 "))
             .count()
     };
     assert_eq!(untested(&run(&repo, &cfg)), 1);

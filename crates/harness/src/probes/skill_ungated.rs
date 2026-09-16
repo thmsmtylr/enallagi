@@ -6,16 +6,17 @@ use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult, NAMES};
 use crate::config::GATE_NAMES;
 
-const CONFIG: &str = "harness.toml";
-
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
     common::result(find(ctx))
 }
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
+    let config_path = crate::config::config_path(ctx.root);
+    let config = config_path.strip_prefix(ctx.root).unwrap_or(&config_path);
+    let config = config.to_string_lossy();
     if ctx.cfg.skill.is_empty() {
         return Ok(vec![common::finding(
-            CONFIG,
+            &*config,
             0,
             "declares no skills, so nothing records what the role prompts rely on or what fails without each one",
         )]);
@@ -38,7 +39,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         };
         if gate == "none" {
             found.push(common::finding(
-                CONFIG,
+                &*config,
                 0,
                 format!(
                     "{} is declared with gate: none -- nothing fails without it, so relying on it is a hope",
@@ -51,7 +52,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         let word = common::re(&format!(r"\b{}\b", regex::escape(gate)))?;
         if !word.is_match(&known) {
             found.push(common::finding(
-                CONFIG,
+                &*config,
                 0,
                 format!(
                     "{} names gate {gate}, which neither the built-in gate and probe names nor {rails} defines",

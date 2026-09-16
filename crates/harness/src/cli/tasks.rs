@@ -167,9 +167,10 @@ fn fail(e: &QueueError) -> i32 {
 }
 
 fn file_arg(a: &[String], pos: usize, default: &str) -> PathBuf {
-    a.get(pos)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(default))
+    a.get(pos).map(PathBuf::from).unwrap_or_else(|| {
+        let root = Path::new(".");
+        crate::config::instance_path(root, &crate::config::harness_dir(root), default)
+    })
 }
 
 fn read_text(path: &Path) -> Result<String, i32> {

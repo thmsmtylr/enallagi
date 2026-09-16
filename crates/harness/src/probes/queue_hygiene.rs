@@ -9,7 +9,8 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 }
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
-    let blocks = common::task_blocks(ctx.root)?;
+    let blocks = common::task_blocks(ctx)?;
+    let tasks = common::instance(ctx, "TASKS.md");
     let ids: BTreeSet<&str> = blocks.iter().map(|b| b.id.as_str()).collect();
     let task_id = common::re(r"T-\d+")?;
     let mut seen: BTreeSet<&str> = BTreeSet::new();
@@ -19,7 +20,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     for block in &blocks {
         if seen.contains(block.id.as_str()) {
             found.push(common::finding(
-                "TASKS.md",
+                &tasks,
                 block.line,
                 format!("a second block is numbered {}", block.id),
             ));
@@ -29,7 +30,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         let status = common::field(block, "status").map(|(_, v)| v);
         if status.is_none() {
             found.push(common::finding(
-                "TASKS.md",
+                &tasks,
                 block.line,
                 format!("{} has no status line", block.id),
             ));
@@ -39,7 +40,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             for m in task_id.find_iter(&blocked) {
                 if !ids.contains(m.as_str()) {
                     found.push(common::finding(
-                        "TASKS.md",
+                        &tasks,
                         blocked_at,
                         format!(
                             "{} is blocked by {}, which no block defines",
@@ -69,7 +70,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             let paths = tree.get_or_insert_with(|| common::walk(ctx.root));
             if common::matches(paths, pattern)?.is_empty() {
                 found.push(common::finding(
-                    "TASKS.md",
+                    &tasks,
                     scope_at,
                     format!(
                         "{} is open and its scope {pattern} matches no file",

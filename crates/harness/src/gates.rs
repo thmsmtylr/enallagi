@@ -1,15 +1,15 @@
 //! The named checks the loop runs after a stage exits.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::config::Config;
 use crate::events::{Kind, Writer};
-use crate::git::{commit_paths, diff_names, git, head, porcelain};
+use crate::git::{self, diff_names, git, head, porcelain};
 use crate::queue::{self, Queue};
 use crate::skills::LockEntry;
 
-const BOOKKEEPING: &[&str] = &[
+pub(crate) const BOOKKEEPING: &[&str] = &[
     "TASKS.md",
     "PROGRESS.md",
     "PROGRESS.archive.md",
@@ -22,6 +22,8 @@ pub struct GateCtx<'a> {
     pub cfg: &'a Config,
     pub task: Option<String>,
     pub iter_base: Option<String>,
+    // the harness directory repository's base; the same as iter_base while instance files share the product's
+    pub state_base: Option<String>,
     pub stage_output: String,
     pub events: &'a mut Writer,
     pub dry_run: bool,
@@ -77,14 +79,44 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
     outcome
 }
 
-fn tasks_file(root: &Path) -> Queue {
+fn rel(ctx: &GateCtx, name: &str) -> String {
+    crate::config::instance_rel(ctx.root, &ctx.cfg.layout.harness_dir, name)
+}
+
+// the repository an instance file's history is in, the path inside it, and that repository's base
+fn at_base(ctx: &GateCtx, path: &str) -> Option<(PathBuf, String, String)> {
+    let (repo, inner, nested) = git::locate(ctx.root, &ctx.cfg.layout.harness_dir, path);
+    let base = if nested {
+        &ctx.state_base
+    } else {
+        &ctx.iter_base
+    };
+    Some((repo, inner, base.clone().filter(|b| !b.is_empty())?))
+}
+
+fn show_at(ctx: &GateCtx, path: &str, rev: Option<&str>) -> Option<String> {
+    let (repo, inner, base) = at_base(ctx, path)?;
+    let rev = rev.unwrap_or(&base);
+    git(&repo, &["show", &format!("{rev}:{inner}")]).ok()
+}
+
+fn diff_since_base(ctx: &GateCtx, path: &str) -> Option<String> {
+    let (repo, inner, base) = at_base(ctx, path)?;
+    git(&repo, &["diff", &base, "HEAD", "--", &inner]).ok()
+}
+
+fn commit_instance(ctx: &GateCtx, names: &[&str], msg: &str) -> Result<bool, git::GitError> {
+    git::commit_instance(ctx.root, &ctx.cfg.layout.harness_dir, names, msg)
+}
+
+fn tasks_file(root: &Path, cfg: &Config) -> Queue {
     Queue {
-        path: root.join("TASKS.md"),
+        path: crate::config::instance_path(root, &cfg.layout.harness_dir, "TASKS.md"),
     }
 }
 
-fn status_of(root: &Path, task: &str) -> Result<Option<String>, queue::QueueError> {
-    let text = tasks_file(root).read()?;
+fn status_of(ctx: &GateCtx, task: &str) -> Result<Option<String>, queue::QueueError> {
+    let text = tasks_file(ctx.root, ctx.cfg).read()?;
     let blocks = queue::parse(&text)?;
     Ok(blocks
         .iter()
@@ -92,8 +124,8 @@ fn status_of(root: &Path, task: &str) -> Result<Option<String>, queue::QueueErro
         .and_then(|b| queue::field(b, "status")))
 }
 
-fn field_of(root: &Path, task: &str, key: &str) -> String {
-    let Ok(text) = tasks_file(root).read() else {
+fn field_of(ctx: &GateCtx, task: &str, key: &str) -> String {
+    let Ok(text) = tasks_file(ctx.root, ctx.cfg).read() else {
         return String::new();
     };
     let Ok(blocks) = queue::parse(&text) else {
@@ -123,19 +155,19 @@ fn force_back(
     warning: &str,
 ) -> GateOutcome {
     ctx.warnings.push(warning.to_string());
-    let from = status_of(ctx.root, task)
+    let from = status_of(ctx, task)
         .ok()
         .flatten()
         .unwrap_or_else(|| "done".to_string());
     if !ctx.dry_run {
-        let q = tasks_file(ctx.root);
+        let q = tasks_file(ctx.root, ctx.cfg);
         let written = q
             .read()
             .and_then(|text| queue::set_status(&text, task, to, reason))
             .and_then(|text| q.write(&text));
         match written {
             Ok(()) => {
-                if let Err(err) = commit_paths(ctx.root, &["TASKS.md"], commit_msg) {
+                if let Err(err) = commit_instance(ctx, &["TASKS.md"], commit_msg) {
                     ctx.warnings
                         .push(format!("{task}: the queue was not committed: {err}"));
                 }
@@ -164,7 +196,7 @@ fn implementer_not_done(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
     };
-    match status_of(ctx.root, &task) {
+    match status_of(ctx, &task) {
         Err(_) => unreadable(ctx, &task),
         Ok(status) if status.as_deref() == Some("review") => {
             pass("the implementer left it at review")
@@ -218,10 +250,10 @@ fn commit_verdict(ctx: &mut GateCtx) -> GateOutcome {
 
 // a finding left only in notes is archived with its block and never reaches the queue
 fn deferred_finding(ctx: &GateCtx, task: &str) -> Option<String> {
-    let base = ctx.iter_base.as_deref()?;
-    let before = git(ctx.root, &["show", &format!("{base}:TASKS.md")]).unwrap_or_default();
+    at_base(ctx, &rel(ctx, "TASKS.md"))?;
+    let before = show_at(ctx, &rel(ctx, "TASKS.md"), None).unwrap_or_default();
     let before = queue::parse(&before).unwrap_or_default();
-    let now = queue::parse(&tasks_file(ctx.root).read().ok()?).ok()?;
+    let now = queue::parse(&tasks_file(ctx.root, ctx.cfg).read().ok()?).ok()?;
     let proposed_before = queue::ids_at(&before, "proposed");
     if queue::ids_at(&now, "proposed")
         .iter()
@@ -260,11 +292,11 @@ fn commit_round(ctx: &mut GateCtx) -> GateOutcome {
     )
 }
 
-fn commit(ctx: &mut GateCtx, paths: &[&str], msg: &str) -> GateOutcome {
+fn commit(ctx: &mut GateCtx, names: &[&str], msg: &str) -> GateOutcome {
     if ctx.dry_run {
         return pass(format!("dry run: would commit {msg}"));
     }
-    match commit_paths(ctx.root, paths, msg) {
+    match commit_instance(ctx, names, msg) {
         Ok(true) => pass(format!("committed {msg}")),
         Ok(false) => pass("nothing to commit"),
         Err(err) => fail(format!("the commit failed: {err}")),
@@ -276,16 +308,17 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
     };
-    match status_of(ctx.root, &task) {
+    match status_of(ctx, &task) {
         Err(_) => return unreadable(ctx, &task),
         Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
         Ok(_) => {}
     }
 
     // STOP is the harness's own marker, never a lane's work, so it's excluded from the uncommitted count
+    let stop = format!(" {}", rel(ctx, "STOP"));
     let left = porcelain(ctx.root)
         .into_iter()
-        .filter(|l| !l.ends_with(" STOP"))
+        .filter(|l| !l.ends_with(&stop))
         .count();
     if left > 0 {
         let reason = format!(
@@ -338,7 +371,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
     };
-    match status_of(ctx.root, &task) {
+    match status_of(ctx, &task) {
         Err(_) => return unreadable(ctx, &task),
         Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
         Ok(_) => {}
@@ -348,18 +381,31 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         return pass("no base");
     }
 
-    let pats = scope_globs(&field_of(ctx.root, &task, "scope"));
+    let pats = scope_globs(&field_of(ctx, &task, "scope"));
     let skills_dir = skills_dir_for(ctx.cfg);
-    let base_lock = lock_at(ctx.root, &base);
-    let head_lock = lock_at(ctx.root, "HEAD");
+    let lock = rel(ctx, "harness.lock");
+    let hashes = rel(ctx, "test-hashes.json");
+    let bookkeeping: Vec<String> = BOOKKEEPING.iter().map(|name| rel(ctx, name)).collect();
+    let base_lock = lock_at(ctx, &lock, None);
+    let head_lock = lock_at(ctx, &lock, Some("HEAD"));
     // ids the pipeline vendored fresh this iteration -- the task's scope: line never has to name them
     let added_skills = added_ids(&base_lock.skill, &head_lock.skill);
     let added_roles = added_ids(&base_lock.role, &head_lock.role);
 
     let mut out_of: Vec<String> = Vec::new();
     let mut harness_hit: Vec<String> = Vec::new();
-    for f in diff_names(ctx.root, &base) {
-        if BOOKKEEPING.contains(&f.as_str()) || f == "harness.lock" {
+    let mut changed = diff_names(ctx.root, &base);
+    let dir = &ctx.cfg.layout.harness_dir;
+    let state = git::state_root(ctx.root, dir);
+    if let Some(state_base) = ctx.state_base.as_deref().filter(|_| state != ctx.root) {
+        changed.extend(
+            diff_names(&state, state_base)
+                .into_iter()
+                .map(|f| format!("{dir}/{f}")),
+        );
+    }
+    for f in changed {
+        if bookkeeping.contains(&f) || f == lock {
             continue;
         }
         if added_skills
@@ -371,10 +417,10 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         }
         // test-hashes.json is exempt when every re-cut key (present at base too, with a new value)
         // is in scope; a key ADDED fresh (absent at base) needs no scope: line to cover it
-        if let Some(key_re) = recut_keys_pattern(&f) {
-            let touched = recut_keys(ctx.root, &base, &f, key_re);
+        if let Some(key_re) = (f == hashes).then_some(HASHES_KEY) {
+            let touched = recut_keys(ctx, &f, key_re);
             if !touched.is_empty() {
-                let base_keys = keys_at(ctx.root, &base, &f, key_re);
+                let base_keys = keys_at(ctx, &f, key_re);
                 let recut: Vec<String> = touched
                     .into_iter()
                     .filter(|k| base_keys.contains(k))
@@ -417,18 +463,18 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         .collect();
     for (path, id) in recut {
         if !in_scope(&path, &pats) {
-            let named = format!("harness.lock ({id})");
+            let named = format!("{lock} ({id})");
             harness_hit.push(named.clone());
             out_of.push(named);
         }
     }
 
-    let rows = field_of(ctx.root, &task, "rows");
+    let rows = field_of(ctx, &task, "rows");
     if rows.contains("none") && rows.contains("harness") {
         harness_hit.clear();
     }
     // the baseline only ever shrinks; a line ADDED is a red check made green by hand, whatever rows: says
-    let grew = git(ctx.root, &["diff", &base, "HEAD", "--", ".check-baseline"])
+    let grew = diff_since_base(ctx, &rel(ctx, ".check-baseline"))
         .map(|d| {
             d.lines()
                 .any(|l| l.starts_with('+') && !l.starts_with("++") && !l.starts_with("+#"))
@@ -481,17 +527,19 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
     let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
         return pass("no base");
     };
-    let before = ids_in_rev(ctx.root, &base);
+    let tasks = rel(ctx, "TASKS.md");
+    let before = ids_in_rev(ctx, &tasks);
     if before.is_empty() {
         return pass("no ids at base");
     }
-    let Ok(text) = tasks_file(ctx.root).read() else {
+    let Ok(text) = tasks_file(ctx.root, ctx.cfg).read() else {
         return pass("TASKS.md unreadable; queue-hygiene owns that");
     };
     let Ok(now) = queue::parse(&text) else {
         return pass("TASKS.md unparseable; queue-hygiene owns that");
     };
-    let archived = std::fs::read_to_string(ctx.root.join("DECISIONS.md")).unwrap_or_default();
+    let archived =
+        std::fs::read_to_string(ctx.root.join(rel(ctx, "DECISIONS.md"))).unwrap_or_default();
     let lost: Vec<String> = before
         .into_iter()
         .filter(|id| !now.iter().any(|b| &b.id == id) && !archived.contains(&format!("[{id}]")))
@@ -499,10 +547,16 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
     if lost.is_empty() {
         return pass("every id at the base is still in the queue or in DECISIONS.md");
     }
+    let (_, inner, nested) = git::locate(ctx.root, &ctx.cfg.layout.harness_dir, &tasks);
+    let show = if nested {
+        format!("git -C {} show", ctx.cfg.layout.harness_dir)
+    } else {
+        "git show".to_string()
+    };
+    let base = at_base(ctx, &tasks).map(|(_, _, b)| b).unwrap_or(base);
     let reason = format!(
-        "{} left TASKS.md without reaching DECISIONS.md; recover with `git show {}:TASKS.md`",
+        "{} left TASKS.md without reaching DECISIONS.md; recover with `{show} {base}:{inner}`",
         lost.join(", "),
-        base
     );
     ctx.warnings.push(reason.clone());
     ctx.halts.push(reason.clone());
@@ -515,9 +569,8 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
 }
 
 // queue::ids_at is ids at a status; this is ids at a revision
-fn ids_in_rev(root: &Path, rev: &str) -> Vec<String> {
-    git(root, &["show", &format!("{rev}:TASKS.md")])
-        .ok()
+fn ids_in_rev(ctx: &GateCtx, tasks: &str) -> Vec<String> {
+    show_at(ctx, tasks, None)
         .and_then(|text| queue::parse(&text).ok())
         .map(|blocks| blocks.into_iter().map(|b| b.id).collect())
         .unwrap_or_default()
@@ -579,30 +632,21 @@ pub(crate) fn skills_dir_for(cfg: &Config) -> String {
 }
 
 // harness.lock has its own struct and is compared with skills::parse_lock, not this text pattern
-fn recut_keys_pattern(f: &str) -> Option<&'static str> {
-    match f {
-        "test-hashes.json" => Some(r#"^[+-]\s*"([^"]+)"\s*:"#),
-        _ => None,
-    }
-}
+const HASHES_KEY: &str = r#"^[+-]\s*"([^"]+)"\s*:"#;
 
 // the lock as toml::from_str reads it at a given commit; a missing file (nothing vendored yet at
 // that commit) is an empty lock, not an error
-fn lock_at(root: &Path, rev: &str) -> crate::skills::Lock {
-    git(root, &["show", &format!("{rev}:harness.lock")])
-        .ok()
+fn lock_at(ctx: &GateCtx, lock: &str, rev: Option<&str>) -> crate::skills::Lock {
+    show_at(ctx, lock, rev)
         .and_then(|text| crate::skills::parse_lock(&text).ok())
         .unwrap_or_default()
 }
 
-// same key regex as recut_keys_pattern, applied to a revision's whole file rather than a diff, to
+// same key regex as HASHES_KEY, applied to a revision's whole file rather than a diff, to
 // tell an added key (present in HEAD, absent at base) from a re-cut of one already at base
-fn keys_at(root: &Path, rev: &str, file: &str, diff_key_re: &str) -> Vec<String> {
+fn keys_at(ctx: &GateCtx, file: &str, diff_key_re: &str) -> Vec<String> {
     let plain = format!("^{}", &diff_key_re[5..]);
-    let (Ok(re), Ok(text)) = (
-        regex::Regex::new(&plain),
-        git(root, &["show", &format!("{rev}:{file}")]),
-    ) else {
+    let (Ok(re), Some(text)) = (regex::Regex::new(&plain), show_at(ctx, file, None)) else {
         return Vec::new();
     };
     let mut keys: Vec<String> = text
@@ -615,11 +659,8 @@ fn keys_at(root: &Path, rev: &str, file: &str, diff_key_re: &str) -> Vec<String>
     keys
 }
 
-fn recut_keys(root: &Path, base: &str, file: &str, key_re: &str) -> Vec<String> {
-    let (Ok(re), Ok(diff)) = (
-        regex::Regex::new(key_re),
-        git(root, &["diff", base, "HEAD", "--", file]),
-    ) else {
+fn recut_keys(ctx: &GateCtx, file: &str, key_re: &str) -> Vec<String> {
+    let (Ok(re), Some(diff)) = (regex::Regex::new(key_re), diff_since_base(ctx, file)) else {
         return Vec::new();
     };
     let mut keys: Vec<String> = diff
@@ -723,7 +764,11 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
     names.sort();
     names.dedup();
 
-    let baseline = baseline(root);
+    let baseline = baseline(&crate::config::instance_path(
+        root,
+        &cfg.layout.harness_dir,
+        ".check-baseline",
+    ));
     let (forgiven, unforgiven): (Vec<String>, Vec<String>) =
         names.iter().cloned().partition(|n| baseline.contains(n));
     CheckReport {
@@ -754,8 +799,8 @@ fn strip_duration(name: &str) -> String {
     }
 }
 
-fn baseline(root: &Path) -> Vec<String> {
-    std::fs::read_to_string(root.join(".check-baseline"))
+fn baseline(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
         .map(|l| l.split('#').next().unwrap_or("").trim().to_string())
@@ -837,8 +882,8 @@ fn dry_round(ctx: &mut GateCtx) -> GateOutcome {
     }
 }
 
-pub fn takeable(root: &Path, _cfg: &Config) -> Option<String> {
-    let text = tasks_file(root).read().ok()?;
+pub fn takeable(root: &Path, cfg: &Config) -> Option<String> {
+    let text = tasks_file(root, cfg).read().ok()?;
     queue::ready_unattended(&queue::parse(&text).ok()?)
 }
 
@@ -861,7 +906,7 @@ mod tests {
     impl Env {
         fn new(check_body: &str) -> Env {
             let repo = Repo::new();
-            repo.write(".harness/.gitignore", "events.jsonl\n*.log\nlogs/\n");
+            repo.write(".enallagi/.gitignore", "events.jsonl\n*.log\nlogs/\n");
             let cmd = repo.stub_check(check_body);
             repo.write(
                 "harness.toml",
@@ -869,7 +914,7 @@ mod tests {
             );
             repo.commit_all("harness");
             let cfg = crate::config::load(&repo.root).expect("load harness.toml");
-            let writer = Writer::new(Log::open(&repo.root.join(".harness")));
+            let writer = Writer::new(Log::open(&repo.root.join(".enallagi")));
             Env {
                 repo,
                 cfg,
@@ -887,6 +932,7 @@ mod tests {
                 cfg: &self.cfg,
                 task: task.map(str::to_string),
                 iter_base: base.map(str::to_string),
+                state_base: base.map(str::to_string),
                 stage_output: self.stage_output.clone(),
                 events: &mut self.writer,
                 dry_run: false,
@@ -906,7 +952,12 @@ mod tests {
         }
 
         fn tasks_text(&self) -> String {
-            std::fs::read_to_string(self.repo.root.join("TASKS.md")).expect("read TASKS.md")
+            std::fs::read_to_string(crate::config::instance_path(
+                &self.repo.root,
+                &self.cfg.layout.harness_dir,
+                "TASKS.md",
+            ))
+            .expect("read TASKS.md")
         }
 
         fn log(&self) -> String {
@@ -955,7 +1006,8 @@ mod tests {
     #[test]
     fn red_on_baseline_is_forgiven() {
         let env = Env::new("echo '(fail) alpha'\nexit 1\n");
-        env.repo.write(".check-baseline", "# inherited\nalpha\n");
+        env.repo
+            .write(".enallagi/.check-baseline", "# inherited\nalpha\n");
         let r = check_delta(&env.repo.root, &env.cfg, false);
         assert!(r.red);
         assert!(r.unforgiven.is_empty());
@@ -966,7 +1018,7 @@ mod tests {
     #[test]
     fn one_forgiven_one_new_is_still_red() {
         let env = Env::new("echo '(fail) alpha'\necho '(fail) beta [12ms]'\nexit 1\n");
-        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.write(".enallagi/.check-baseline", "alpha\n");
         let r = check_delta(&env.repo.root, &env.cfg, false);
         assert_eq!(r.unforgiven, vec!["beta".to_string()]);
         assert_eq!(r.forgiven, vec!["alpha".to_string()]);
@@ -1143,10 +1195,10 @@ mod tests {
     #[test]
     fn scope_allows_a_harness_edit_under_a_harness_task() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".harness/*", "none — harness");
+        env.queue("done", ".enallagi/*", "none — harness");
         env.repo.commit_all("verdict");
         let base = env.head();
-        env.repo.write(".harness/loop.sh", "# edited\n");
+        env.repo.write(".enallagi/loop.sh", "# edited\n");
         env.repo.commit_all("harness edit");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -1157,10 +1209,10 @@ mod tests {
     #[test]
     fn scope_rejects_the_same_edit_under_a_product_task() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".harness/*", "§11 row 1");
+        env.queue("done", ".enallagi/*", "§11 row 1");
         env.repo.commit_all("verdict");
         let base = env.head();
-        env.repo.write(".harness/loop.sh", "# edited\n");
+        env.repo.write(".enallagi/loop.sh", "# edited\n");
         env.repo.commit_all("harness edit");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -1349,7 +1401,8 @@ mod tests {
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.commit_all("verdict");
         env.repo.write("src/x.ts", "left behind");
-        let tasks = env.repo.root.join("TASKS.md");
+        let tasks =
+            crate::config::instance_path(&env.repo.root, &env.cfg.layout.harness_dir, "TASKS.md");
         std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o444))
             .expect("chmod TASKS.md");
 
@@ -1397,7 +1450,7 @@ mod tests {
         env.queue("done", "src/**", "§11 row 1");
         env.repo.commit_all("verdict");
         let base = env.head();
-        env.repo.write(".harness/roles/implementer.md", "# role\n");
+        env.repo.write(".enallagi/roles/implementer.md", "# role\n");
         env.repo
             .write("harness.lock", &role_lock_toml(&[("implementer", "aaa")]));
         env.repo.commit_all("vendor implementer");
@@ -1430,7 +1483,11 @@ mod tests {
     #[test]
     fn scope_exempts_a_freshly_added_lock_key_outside_scope() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".claude/skills/tdd/**", "§11 row 1");
+        env.queue(
+            "done",
+            ".enallagi/adapters/claude/skills/tdd/**",
+            "§11 row 1",
+        );
         env.repo
             .write("harness.lock", &lock_toml(&[("tdd", "aaa")]));
         env.repo.commit_all("verdict");
@@ -1449,7 +1506,11 @@ mod tests {
     #[test]
     fn scope_rejects_a_sha_only_recut_outside_scope() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".claude/skills/tdd/**", "§11 row 1");
+        env.queue(
+            "done",
+            ".enallagi/adapters/claude/skills/tdd/**",
+            "§11 row 1",
+        );
         env.repo
             .write("harness.lock", &lock_toml(&[("tdd-old", "aaa")]));
         env.repo.commit_all("verdict");
@@ -1471,7 +1532,11 @@ mod tests {
     #[test]
     fn scope_allows_a_sha_only_recut_inside_scope() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".claude/skills/tdd/**", "§11 row 1");
+        env.queue(
+            "done",
+            ".enallagi/adapters/claude/skills/tdd/**",
+            "§11 row 1",
+        );
         env.repo
             .write("harness.lock", &lock_toml(&[("tdd", "aaa")]));
         env.repo.commit_all("verdict");
@@ -1487,7 +1552,11 @@ mod tests {
     #[test]
     fn scope_rejects_a_removed_lock_key_outside_scope() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".claude/skills/tdd/**", "§11 row 1");
+        env.queue(
+            "done",
+            ".enallagi/adapters/claude/skills/tdd/**",
+            "§11 row 1",
+        );
         env.repo.write(
             "harness.lock",
             &lock_toml(&[("tdd", "aaa"), ("tdd-old", "aaa")]),
@@ -1514,14 +1583,17 @@ mod tests {
         env.repo.commit_all("verdict");
         let base = env.head();
         // never went through skills::resolve, so it names no id the lock added this iteration
-        env.repo
-            .write(".claude/skills/other/NOTES.md", "hand-written");
+        env.repo.write(
+            ".enallagi/adapters/claude/skills/other/NOTES.md",
+            "hand-written",
+        );
         env.repo.commit_all("stray file under the skills dir");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
         assert!(
-            out.reason.contains(".claude/skills/other/NOTES.md"),
+            out.reason
+                .contains(".enallagi/adapters/claude/skills/other/NOTES.md"),
             "{}",
             out.reason
         );
@@ -1530,10 +1602,10 @@ mod tests {
     #[test]
     fn skills_dir_falls_back_from_layout_to_preset_to_harness_dir() {
         let mut cfg = Config::default();
-        cfg.layout.harness_dir = ".harness".to_string();
-        assert_eq!(skills_dir_for(&cfg), ".harness/skills");
+        cfg.layout.harness_dir = ".enallagi".to_string();
+        assert_eq!(skills_dir_for(&cfg), ".enallagi/skills");
         cfg.agent.preset = "claude".to_string();
-        assert_eq!(skills_dir_for(&cfg), ".claude/skills");
+        assert_eq!(skills_dir_for(&cfg), ".enallagi/adapters/claude/skills");
         cfg.layout.skills_dir = Some("vendor/skills".to_string());
         assert_eq!(skills_dir_for(&cfg), "vendor/skills");
     }

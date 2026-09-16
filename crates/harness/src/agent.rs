@@ -1,6 +1,6 @@
 //! Adapter presets: one static TOML file per supported coding agent, embedded into the binary and parsed on demand.
 
-use crate::config::AgentConfig;
+use crate::config::{AgentConfig, Layout};
 use crate::events::{Kind, Writer};
 use regex::Regex;
 use std::collections::BTreeMap;
@@ -177,6 +177,16 @@ pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resol
     }
     preset.argv.clone_from(&argv);
     Ok(Resolved { argv, preset })
+}
+
+// substituted before {prompt}, so a prompt that quotes either token reaches the agent verbatim
+pub fn fill_layout(argv: &[String], layout: &Layout) -> Vec<String> {
+    argv.iter()
+        .map(|word| {
+            word.replace("{harness_dir}", &layout.harness_dir)
+                .replace("{context_file}", &layout.context_file)
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -557,6 +567,10 @@ mod tests {
         assert!(seconds_until_reset("resets 12:40am (Mars/Olympus)", now).is_none());
     }
 
+    fn stop_file(root: &std::path::Path) -> std::path::PathBuf {
+        crate::config::instance_path(root, ".enallagi", "STOP")
+    }
+
     fn spawner<'a>(argv: Vec<String>, root: &'a std::path::Path) -> StageSpawn<'a> {
         StageSpawn {
             argv,
@@ -575,7 +589,7 @@ mod tests {
     fn spawn_substitutes_and_streams() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent("echo \"prompt=$1 turns=$2\"; echo '{\"total_cost_usd\":0.1}'");
-        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let mut s = spawner(argv, &r.root);
         s.prompt = "hi there".into();
         s.turns = 7;
@@ -583,7 +597,7 @@ mod tests {
         let res = spawn(
             &s,
             &mut w,
-            &r.root.join("STOP"),
+            &stop_file(&r.root),
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -608,11 +622,11 @@ mod tests {
         let r = crate::fixture::Repo::new();
         // KILL, not INT: a job started with `&` from a non-interactive shell inherits SIGINT ignored
         let argv = r.stub_agent("kill -KILL $$");
-        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
             &mut w,
-            &r.root.join("STOP"),
+            &stop_file(&r.root),
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -623,13 +637,13 @@ mod tests {
     fn timeout_kills_and_reports_124() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent("sleep 30");
-        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let mut s = spawner(argv, &r.root);
         s.timeout = Some(std::time::Duration::from_secs(1));
         let res = spawn(
             &s,
             &mut w,
-            &r.root.join("STOP"),
+            &stop_file(&r.root),
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -640,13 +654,14 @@ mod tests {
     #[test]
     fn a_stop_file_during_the_limit_wait_stops_the_run() {
         let r = crate::fixture::Repo::new();
-        std::fs::write(r.root.join("STOP"), "").unwrap();
+        std::fs::create_dir_all(stop_file(&r.root).parent().unwrap()).unwrap();
+        std::fs::write(stop_file(&r.root), "").unwrap();
         let argv = r.stub_agent(&limit_notice("1M", "+1 minute"));
-        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let err = spawn(
             &spawner(argv, &r.root),
             &mut w,
-            &r.root.join("STOP"),
+            &stop_file(&r.root),
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap_err();
@@ -676,11 +691,11 @@ mod tests {
         let runs = r.root.join("runs");
         let notice = limit_notice("1M", "+1 minute");
         let argv = r.stub_agent(&format!("echo x >> {}; {notice}", runs.display()));
-        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
             &mut w,
-            &r.root.join("STOP"),
+            &stop_file(&r.root),
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap();
@@ -708,14 +723,14 @@ mod tests {
     fn the_prompt_is_substituted_last() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent("printf '%s|%s\\n' \"$1\" \"$2\"");
-        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let mut s = spawner(argv, &r.root);
         s.prompt = "see {turns} and {prompt}".into();
         s.turns = 7;
         let res = spawn(
             &s,
             &mut w,
-            &r.root.join("STOP"),
+            &stop_file(&r.root),
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -726,11 +741,11 @@ mod tests {
     fn a_reset_more_than_six_hours_out_is_not_a_limit() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent(&limit_notice("10H", "+10 hours"));
-        let mut w = Writer::new(Log::open(&r.root.join(".harness")));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
             &mut w,
-            &r.root.join("STOP"),
+            &stop_file(&r.root),
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap();

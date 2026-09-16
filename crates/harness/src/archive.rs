@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use crate::config::Config;
+use crate::config::{self, Config};
 use crate::git;
 use crate::queue;
 
@@ -109,12 +109,15 @@ pub fn archive_done_with(
     }
 
     // An uncommitted verdict folded into an archive commit loses its author and its message.
-    if !dry_run && !git::git_ok(root, &["diff", "--quiet", "--", "TASKS.md"]) {
+    let dir = &cfg.layout.harness_dir;
+    let tasks = config::instance_rel(root, dir, "TASKS.md");
+    let (repo, inner, _) = git::locate(root, dir, &tasks);
+    if !dry_run && !git::git_ok(&repo, &["diff", "--quiet", "--", &inner]) {
         return Err(ArchiveError::UncommittedTasks);
     }
 
-    let moved = archive_tasks(root, dry_run)?;
-    let progress_rolled = roll_progress(root, dry_run, progress_max, progress_keep)?;
+    let moved = archive_tasks(root, dir, dry_run)?;
+    let progress_rolled = roll_progress(root, dir, dry_run, progress_max, progress_keep)?;
 
     if dry_run {
         return Ok(ArchiveReport {
@@ -124,22 +127,17 @@ pub fn archive_done_with(
         });
     }
 
-    let commit_files: Vec<&str> = [
-        "TASKS.md",
-        "DECISIONS.md",
-        "PROGRESS.md",
-        "PROGRESS.archive.md",
-    ]
-    .into_iter()
-    .filter(|p| root.join(p).exists())
-    .collect();
-    if !commit_files.is_empty() {
-        git::commit_paths(
-            root,
-            &commit_files,
-            "chore(archive): finished blocks to DECISIONS.md, old entries to PROGRESS.archive.md",
-        )?;
-    }
+    git::commit_instance(
+        root,
+        dir,
+        &[
+            "TASKS.md",
+            "DECISIONS.md",
+            "PROGRESS.md",
+            "PROGRESS.archive.md",
+        ],
+        "chore(archive): finished blocks to DECISIONS.md, old entries to PROGRESS.archive.md",
+    )?;
 
     Ok(ArchiveReport {
         moved,
@@ -148,8 +146,9 @@ pub fn archive_done_with(
     })
 }
 
-fn archive_tasks(root: &Path, dry_run: bool) -> Result<Vec<String>, ArchiveError> {
-    let tasks_path = root.join("TASKS.md");
+fn archive_tasks(root: &Path, dir: &str, dry_run: bool) -> Result<Vec<String>, ArchiveError> {
+    let tasks = config::instance_rel(root, dir, "TASKS.md");
+    let tasks_path = root.join(&tasks);
     let src = fs::read_to_string(&tasks_path)?;
     let blocks = queue::parse(&src)?;
 
@@ -157,7 +156,13 @@ fn archive_tasks(root: &Path, dry_run: bool) -> Result<Vec<String>, ArchiveError
     let moved: Vec<String>;
 
     {
-        let sha = git::git(root, &["rev-parse", "--short", "HEAD"])?;
+        let (repo, inner, nested) = git::locate(root, dir, &tasks);
+        let sha = git::git(&repo, &["rev-parse", "--short", "HEAD"])?;
+        let show = if nested {
+            format!("git -C {dir} show {sha}:{inner}")
+        } else {
+            format!("git show {sha}:{tasks}")
+        };
         let lines: Vec<&str> = src.split('\n').collect();
         let mut out: Vec<String> = Vec::new();
         let mut cursor = 0usize;
@@ -189,9 +194,7 @@ fn archive_tasks(root: &Path, dry_run: bool) -> Result<Vec<String>, ArchiveError
             out.push(body[0].to_string());
             out.extend(keep);
             out.push("status: done".to_string());
-            out.push(format!(
-                "archived: DECISIONS.md — full block at `git show {sha}:TASKS.md`"
-            ));
+            out.push(format!("archived: DECISIONS.md — full block at `{show}`"));
             out.push(String::new());
 
             let block_text = body.join("\n");
@@ -202,7 +205,7 @@ fn archive_tasks(root: &Path, dry_run: bool) -> Result<Vec<String>, ArchiveError
         moved = archived.iter().map(|(id, _)| id.clone()).collect();
 
         if !dry_run && !archived.is_empty() {
-            let decisions_path = root.join("DECISIONS.md");
+            let decisions_path = config::instance_path(root, dir, "DECISIONS.md");
             let dec = fs::read_to_string(&decisions_path).unwrap_or_else(|_| {
                 "# DECISIONS\n\nCompleted task blocks, verbatim, moved out of TASKS.md once \
                  `done`.\nThe queue stays small; the audit trail stays whole. Each block is the \
@@ -225,11 +228,12 @@ fn archive_tasks(root: &Path, dry_run: bool) -> Result<Vec<String>, ArchiveError
 // split point snaps to the nearest entry heading so no entry is cut in half
 fn roll_progress(
     root: &Path,
+    dir: &str,
     dry_run: bool,
     max: usize,
     keep: usize,
 ) -> Result<usize, ArchiveError> {
-    let progress_path = root.join("PROGRESS.md");
+    let progress_path = config::instance_path(root, dir, "PROGRESS.md");
     let text = match fs::read_to_string(&progress_path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
@@ -263,7 +267,7 @@ fn roll_progress(
 
     let note = "<!-- Entries before this point are in PROGRESS.archive.md. Nothing reads it; it \
                 is the record. -->";
-    let archive_path = root.join("PROGRESS.archive.md");
+    let archive_path = config::instance_path(root, dir, "PROGRESS.archive.md");
     let archive_prefix = match fs::read_to_string(&archive_path) {
         Ok(existing) => format!("{}\n\n", existing.trim_end()),
         Err(_) => "# PROGRESS (archive)\n\nEntries rolled out of PROGRESS.md by \
@@ -296,6 +300,15 @@ mod tests {
         crate::config::load(root).expect("load default config")
     }
 
+    fn read(r: &Repo, name: &str) -> String {
+        fs::read_to_string(config::instance_path(
+            &r.root,
+            &cfg(&r.root).layout.harness_dir,
+            name,
+        ))
+        .unwrap()
+    }
+
     #[test]
     fn a_done_block_moves_to_decisions_and_leaves_a_stub() {
         let r = Repo::new();
@@ -320,14 +333,14 @@ mod tests {
         assert!(report.refused.is_none());
         assert_eq!(report.moved, vec!["T-001".to_string()]);
 
-        let decisions = fs::read_to_string(r.root.join("DECISIONS.md")).unwrap();
+        let decisions = read(&r, "DECISIONS.md");
         assert!(decisions.contains("## [T-001] Some finished work"));
         assert!(decisions.contains("status: done"));
         assert!(decisions.contains("notes: line one"));
         assert!(decisions.contains("notes: line two"));
         assert!(decisions.contains("notes: line three"));
 
-        let tasks = fs::read_to_string(r.root.join("TASKS.md")).unwrap();
+        let tasks = read(&r, "TASKS.md");
         assert!(tasks.contains("## [T-001] Some finished work"));
         assert!(!tasks.contains("notes: line one"));
         assert!(tasks.contains("status: done"));
@@ -362,7 +375,7 @@ mod tests {
         assert_eq!(report.moved, vec!["T-001".to_string()]);
         assert!(!report.moved.contains(&"T-999".to_string()));
 
-        let tasks = fs::read_to_string(r.root.join("TASKS.md")).unwrap();
+        let tasks = read(&r, "TASKS.md");
         let blocks = queue::parse(&tasks).unwrap();
         assert_eq!(queue::ids_at(&blocks, "ready"), vec!["T-002".to_string()]);
         assert!(!blocks.iter().any(|b| b.id == "T-999"));
@@ -395,13 +408,13 @@ mod tests {
         assert!(report.refused.is_none());
         assert!(report.progress_rolled > 0);
 
-        let archive = fs::read_to_string(r.root.join("PROGRESS.archive.md")).unwrap();
+        let archive = read(&r, "PROGRESS.archive.md");
         assert!(archive.contains("fixture entry 1"));
         let pos1 = archive.find("fixture entry 1").unwrap();
         let pos2 = archive.find("fixture entry 2").unwrap();
         assert!(pos1 < pos2, "oldest entry comes first in the archive");
 
-        let rolled = fs::read_to_string(r.root.join("PROGRESS.md")).unwrap();
+        let rolled = read(&r, "PROGRESS.md");
         assert!(!rolled.contains("fixture entry 1"));
         assert!(rolled.contains("fixture entry 6"));
         assert!(rolled.contains("## Entry format"));
@@ -428,12 +441,12 @@ mod tests {
             .arg("30")
             .spawn()
             .expect("spawn sleep");
-        r.write(".harness/loop.pid", &child.id().to_string());
+        r.write(".enallagi/loop.pid", &child.id().to_string());
 
         let cfg = cfg(&r.root);
-        let before = fs::read_to_string(r.root.join("TASKS.md")).unwrap();
+        let before = read(&r, "TASKS.md");
         let report = archive_done(&r.root, &cfg, false).expect("archive_done");
-        let after = fs::read_to_string(r.root.join("TASKS.md")).unwrap();
+        let after = read(&r, "TASKS.md");
 
         assert!(report.refused.is_some());
         assert_eq!(before, after);

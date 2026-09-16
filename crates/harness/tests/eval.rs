@@ -118,6 +118,26 @@ fn the_eval_runner_passes_a_role_that_obeys_its_rule() {
 }
 
 #[test]
+fn an_eval_script_calls_the_harness_binary_that_installed_its_fixture() {
+    let pkg = package();
+    write_eval(
+        pkg.path(),
+        "case",
+        "do the thing",
+        "command -v harness >bin.txt",
+        &format!(
+            r#"[ "$(cat bin.txt)" -ef "{}" ]"#,
+            env!("CARGO_BIN_EXE_harness")
+        ),
+        None,
+    );
+
+    let r = run_eval(pkg.path(), "true", &["case"]);
+    assert_eq!(r.code, 0, "stdout={} stderr={}", r.stdout, r.stderr);
+    assert_eq!(last_line(&r.stdout), "EVAL case PASS");
+}
+
+#[test]
 fn the_eval_runner_fails_a_role_that_breaks_its_rule() {
     let pkg = package();
     write_eval(
@@ -138,6 +158,32 @@ fn the_eval_runner_fails_a_role_that_breaks_its_rule() {
     );
     assert_eq!(r.code, 1);
     assert_eq!(last_line(&r.stdout), "EVAL case FAIL");
+}
+
+#[test]
+fn an_eval_agent_argv_carries_the_fixtures_harness_directory_and_context_file() {
+    let pkg = package();
+    write_eval(
+        pkg.path(),
+        "case",
+        "do the thing",
+        "true",
+        r#"[ "$(cat args.txt)" = ".enallagi .enallagi/AGENTS.md" ]"#,
+        None,
+    );
+    let stub = pkg.path().join("args.sh");
+    write_exec(&stub, "printf '%s %s\\n' \"$1\" \"$2\" >args.txt\n");
+
+    let r = run_eval(
+        pkg.path(),
+        &format!(
+            "{} {{harness_dir}} {{context_file}} {{prompt}}",
+            stub.display()
+        ),
+        &["case"],
+    );
+    assert_eq!(r.code, 0, "stdout={} stderr={}", r.stdout, r.stderr);
+    assert_eq!(last_line(&r.stdout), "EVAL case PASS");
 }
 
 #[test]
@@ -209,7 +255,7 @@ fn write_gate_fixture(pkg: &Path, other_assert: &str) -> PathBuf {
         "true",
         r#"[ -f outcome.txt ] && [ "$(cat outcome.txt)" = PASS ]"#,
         Some(&format!(
-            "sed -i.bak '/{RULE}/d' .harness/roles/verifier.md\nrm -f .harness/roles/verifier.md.bak\n"
+            "sed -i.bak '/{RULE}/d' .enallagi/roles/verifier.md\nrm -f .enallagi/roles/verifier.md.bak\n"
         )),
     );
     write_eval(pkg, "other", "OTHER", "true", other_assert, None);
@@ -219,7 +265,7 @@ fn write_gate_fixture(pkg: &Path, other_assert: &str) -> PathBuf {
         &stub,
         &format!(
             "case \"$1\" in\n\
-             RULE) grep -q '{RULE}' .harness/roles/verifier.md 2>/dev/null && echo PASS >outcome.txt ;;\n\
+             RULE) grep -q '{RULE}' .enallagi/roles/verifier.md 2>/dev/null && echo PASS >outcome.txt ;;\n\
              OTHER) : ;;\n\
              esac\n\
              exit 0\n"

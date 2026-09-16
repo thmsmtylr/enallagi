@@ -23,7 +23,8 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let mut claimed: BTreeSet<(String, String)> = BTreeSet::new();
     let mut found = Vec::new();
 
-    for block in common::task_blocks(ctx.root)? {
+    let tasks = common::instance(ctx, "TASKS.md");
+    for block in common::task_blocks(ctx)? {
         let status = common::field(&block, "status").map(|(_, v)| v);
         let rows = common::field(&block, "rows");
         let (Some((rows_at, rows)), Some(status)) = (rows, status) else {
@@ -47,7 +48,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             claimed.insert(reference.clone());
             if !defined.contains(&reference) {
                 found.push(common::finding(
-                    "TASKS.md",
+                    &tasks,
                     rows_at,
                     format!(
                         "{} claims row {}::{} and the exit criteria define no such row",
@@ -58,7 +59,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         }
     }
 
-    let spec = &ctx.cfg.layout.spec;
+    let spec = &common::instance(ctx, &ctx.cfg.layout.spec);
     for row in untested_rows(ctx)? {
         if !claimed.contains(&(row.name.clone(), row.test.clone())) {
             found.push(common::finding(
