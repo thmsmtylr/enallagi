@@ -29,6 +29,8 @@ fn harness(root: &Path, args: &[&str]) -> (i32, String) {
         .args(args)
         .current_dir(root)
         .env_remove("HARNESS_DIR")
+        // CI sets frozen, which refuses the fixture's path: skills before anything locks them
+        .env_remove("CI")
         .output()
         .expect("spawn harness");
     let text = format!(
