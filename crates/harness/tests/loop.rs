@@ -43,6 +43,18 @@ criteria:
   - it happens
 ";
 
+const LEVELLED_TASK: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.ts
+rows: none — harness
+status: ready
+model: m-task
+effort: e-task
+criteria:
+  - it happens
+";
+
 const QUIET: &str = "echo '{\"total_cost_usd\":0.5}'\n";
 
 fn script(repo: &Repo, rel: &str, body: &str) -> String {
@@ -232,6 +244,48 @@ fn a_dry_iteration_plans_implement_and_verify() {
     assert!(plan.contains("implement"), "{plan}");
     assert!(plan.contains("verify"), "{plan}");
     assert!(plan.contains("commit-verdict"), "{plan}");
+}
+
+// base_toml opens [agent] once, so a default level goes inside that table rather than after it
+fn with_agent_levels(toml: &str) -> String {
+    toml.replace(
+        "preset = \"custom\"",
+        "preset = \"custom\"\nmodel = \"m-agent\"\neffort = \"e-agent\"",
+    )
+}
+
+#[test]
+fn a_dry_stage_line_names_model_and_effort() {
+    let with_task = repo(&with_agent_levels(&base_toml("")), LEVELLED_TASK);
+    let plan = plan_of(&with_task);
+    assert!(
+        plan.contains("implement as role implementer via ./src/fakeagent.sh (turns: 5, model: m-task, effort: e-task)"),
+        "{plan}"
+    );
+    assert!(
+        plan.contains("verify as role verifier via ./src/fakeagent.sh (turns: 5, model: m-task, effort: e-task)"),
+        "{plan}"
+    );
+
+    let empty = repo(&with_agent_levels(&base_toml("")), "");
+    let plan = plan_of(&empty);
+    assert!(
+        plan.contains("scout as role scout via ./src/fakeagent.sh (turns: 5, model: m-agent, effort: e-agent)"),
+        "{plan}"
+    );
+    assert!(
+        plan.contains("adjudicate as role adjudicator via ./src/fakeagent.sh (turns: 5, model: m-agent, effort: e-agent)"),
+        "{plan}"
+    );
+}
+
+#[test]
+fn a_dry_stage_line_says_default_with_no_level() {
+    let plan = plan_of(&repo(&base_toml(""), TASKS));
+    assert!(
+        plan.contains("(turns: 5, model: default, effort: default)"),
+        "{plan}"
+    );
 }
 
 #[test]

@@ -138,6 +138,42 @@ pub struct Digest {
 #[error("{0}")]
 pub struct Refused(pub String);
 
+fn queue_blocks(root: &Path, cfg: &Config) -> Vec<queue::Block> {
+    std::fs::read_to_string(config::instance_path(
+        root,
+        &cfg.layout.harness_dir,
+        "TASKS.md",
+    ))
+    .ok()
+    .and_then(|t| queue::parse(&t).ok())
+    .unwrap_or_default()
+}
+
+// the same task the round would take, so the plan prices the stage the run will actually spawn
+fn plan_task(blocks: &[queue::Block], when: &Predicate) -> Option<String> {
+    if matches!(when, Predicate::QueueReviewing) {
+        queue::ids_at(blocks, "review").into_iter().next()
+    } else {
+        queue::ready_unattended(blocks)
+    }
+}
+
+fn task_levels(blocks: &[queue::Block], task: Option<&str>) -> agent::Levels {
+    let Some(b) = task.and_then(|id| blocks.iter().find(|b| b.id == id)) else {
+        return agent::Levels::default();
+    };
+    let value = |key: &str| queue::field(b, key).filter(|v| !v.is_empty());
+    agent::Levels {
+        model: value("model"),
+        effort: value("effort"),
+    }
+}
+
+// no level anywhere means no flag is passed, so the agent's own default is what runs
+fn level_word(level: &Option<String>) -> &str {
+    level.as_deref().unwrap_or("default")
+}
+
 pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
     let presets = agent::presets();
     let mut out = String::new();
@@ -145,14 +181,13 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
     let mut warnings = Vec::new();
 
     for pipeline in cfg.pipeline.iter() {
-        if !holds(
-            root,
-            cfg,
-            &config::parse_when(&pipeline.when)?,
-            &mut warnings,
-        ) {
+        let when = config::parse_when(&pipeline.when)?;
+        if !holds(root, cfg, &when, &mut warnings) {
             continue;
         }
+        let blocks = queue_blocks(root, cfg);
+        let task = plan_task(&blocks, &when);
+        let levels = task_levels(&blocks, task.as_deref());
         let _ = writeln!(
             out,
             "=== pipeline {} ({}) ===",
@@ -165,13 +200,16 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
             match (&stage.role, &stage.command) {
                 (Some(role), _) => {
                     scouting |= role == "scout";
-                    let resolved = agent::resolve(&cfg.agent, role, &presets)
+                    let resolved = agent::resolve_task(&cfg.agent, role, &presets, &levels)
                         .map_err(|e| ConfigError::UnknownPreset(e.to_string()))?;
                     let via = resolved.argv.first().cloned().unwrap_or_default();
                     let _ = writeln!(
                         out,
-                        "  DRY_RUN would spawn: {name} as role {role} via {via} (turns: {})",
-                        stage.turns
+                        "  DRY_RUN would spawn: {name} as role {role} via {via} \
+                         (turns: {}, model: {}, effort: {})",
+                        stage.turns,
+                        level_word(&resolved.levels.model),
+                        level_word(&resolved.levels.effort)
                     );
                     for line in prompt_for(role, cfg).lines() {
                         let _ = writeln!(out, "    | {line}");
@@ -629,7 +667,8 @@ impl<'a> Loop<'a> {
         env: BTreeMap<String, String>,
         timeout: Option<Duration>,
     ) -> Result<StageSpawn<'a>, Flow> {
-        let resolved = match agent::resolve(&self.cfg.agent, role, &self.presets) {
+        let levels = task_levels(&self.blocks(), task.as_deref());
+        let resolved = match agent::resolve_task(&self.cfg.agent, role, &self.presets, &levels) {
             Ok(resolved) => resolved,
             Err(err) => {
                 self.halt("stage", format!("{}: {err}", stage.name));
@@ -1003,11 +1042,7 @@ impl<'a> Loop<'a> {
     }
 
     fn blocks(&self) -> Vec<queue::Block> {
-        let path = self.file("TASKS.md");
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|t| queue::parse(&t).ok())
-            .unwrap_or_default()
+        queue_blocks(self.root, self.cfg)
     }
 
     fn ids_at(&self, status: &str) -> Vec<String> {
@@ -1238,5 +1273,6 @@ fn shell_preset() -> Preset {
         hook_events: BTreeMap::new(),
         env: BTreeMap::new(),
         model_flag: None,
+        effort_flag: None,
     }
 }

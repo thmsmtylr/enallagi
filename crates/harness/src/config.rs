@@ -114,6 +114,7 @@ pub struct AgentConfig {
     pub preset: String,
     pub command: Option<Vec<String>>,
     pub model: Option<String>,
+    pub effort: Option<String>,
     pub usage: Option<UsagePaths>,
     pub rate_limit_pattern: String,
     #[serde(flatten)]
@@ -126,6 +127,7 @@ pub struct AgentOverride {
     pub preset: Option<String>,
     pub command: Option<Vec<String>>,
     pub model: Option<String>,
+    pub effort: Option<String>,
     pub usage: Option<UsagePaths>,
 }
 

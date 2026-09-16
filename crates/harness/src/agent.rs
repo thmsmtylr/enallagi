@@ -48,6 +48,8 @@ pub struct Preset {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub model_flag: Option<String>,
+    #[serde(default)]
+    pub effort_flag: Option<String>,
 }
 
 pub type Presets = BTreeMap<String, Preset>;
@@ -95,9 +97,17 @@ pub fn presets() -> Presets {
         .collect()
 }
 
+/// A model and an effort as one block reads them; the first level `resolve_task` looks at.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Levels {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
 pub struct Resolved {
     pub argv: Vec<String>,
     pub preset: Preset,
+    pub levels: Levels,
 }
 
 // a hand-written command's cap is read back off its argv, never inherited from a preset it no longer matches
@@ -163,6 +173,16 @@ fn fill_plugins_off(argv: &[String]) -> Vec<String> {
 }
 
 pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resolved, AgentError> {
+    resolve_task(cfg, role, presets, &Levels::default())
+}
+
+/// `resolve` with the task's own levels, which outrank `[agent.<role>]` and `[agent]` in that order.
+pub fn resolve_task(
+    cfg: &AgentConfig,
+    role: &str,
+    presets: &Presets,
+    task: &Levels,
+) -> Result<Resolved, AgentError> {
     let over = cfg.roles.get(role);
     let name = over
         .and_then(|o| o.preset.as_deref())
@@ -170,9 +190,16 @@ pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resol
     let command = over
         .and_then(|o| o.command.as_ref())
         .or(cfg.command.as_ref());
-    let model = over
-        .and_then(|o| o.model.as_deref())
+    let model = task
+        .model
+        .as_deref()
+        .or(over.and_then(|o| o.model.as_deref()))
         .or(cfg.model.as_deref());
+    let effort = task
+        .effort
+        .as_deref()
+        .or(over.and_then(|o| o.effort.as_deref()))
+        .or(cfg.effort.as_deref());
     let usage = over.and_then(|o| o.usage.as_ref()).or(cfg.usage.as_ref());
 
     let mut preset = if name == "custom" {
@@ -189,6 +216,7 @@ pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resol
             hook_events: BTreeMap::new(),
             env: BTreeMap::new(),
             model_flag: None,
+            effort_flag: None,
         }
     } else {
         let mut preset = presets
@@ -216,9 +244,22 @@ pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resol
         argv.push(flag.clone());
         argv.push(model.to_string());
     }
+    // a preset with no effort_flag has no way to carry the setting, so it is dropped rather than refused
+    if let (Some(flag), Some(effort)) = (&preset.effort_flag, effort) {
+        argv.push(flag.clone());
+        argv.push(effort.to_string());
+    }
     let argv = fill_plugins_off(&argv);
     preset.argv.clone_from(&argv);
-    Ok(Resolved { argv, preset })
+    let levels = Levels {
+        model: model.map(str::to_string),
+        effort: effort.map(str::to_string),
+    };
+    Ok(Resolved {
+        argv,
+        preset,
+        levels,
+    })
 }
 
 fn fill_word(word: &str, layout: &Layout) -> String {
@@ -571,9 +612,7 @@ mod tests {
             "verifier".into(),
             crate::config::AgentOverride {
                 preset: Some("codex".into()),
-                command: None,
-                model: None,
-                usage: None,
+                ..crate::config::AgentOverride::default()
             },
         );
         let presets = presets();
@@ -629,6 +668,88 @@ mod tests {
         assert_eq!(
             settings_word(&argv)["enabledPlugins"],
             serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn a_task_level_wins_over_role_then_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = crate::config::load(dir.path()).unwrap().agent;
+        cfg.model = Some("m-agent".into());
+        cfg.effort = Some("e-agent".into());
+        let presets = presets();
+        let bare = resolve_task(&cfg, "scout", &presets, &Levels::default()).unwrap();
+        assert_eq!(bare.levels.model.as_deref(), Some("m-agent"));
+        assert_eq!(bare.levels.effort.as_deref(), Some("e-agent"));
+
+        cfg.roles.insert(
+            "scout".into(),
+            crate::config::AgentOverride {
+                model: Some("m-role".into()),
+                effort: Some("e-role".into()),
+                ..crate::config::AgentOverride::default()
+            },
+        );
+        let role = resolve_task(&cfg, "scout", &presets, &Levels::default()).unwrap();
+        assert_eq!(role.levels.model.as_deref(), Some("m-role"));
+        assert_eq!(role.levels.effort.as_deref(), Some("e-role"));
+
+        let task = Levels {
+            model: Some("m-task".into()),
+            effort: Some("e-task".into()),
+        };
+        let top = resolve_task(&cfg, "scout", &presets, &task).unwrap();
+        assert_eq!(top.levels.model.as_deref(), Some("m-task"));
+        assert_eq!(top.levels.effort.as_deref(), Some("e-task"));
+
+        let empty = crate::config::AgentConfig {
+            preset: "claude".into(),
+            ..crate::config::AgentConfig::default()
+        };
+        let none = resolve_task(&empty, "scout", &presets, &Levels::default()).unwrap();
+        assert_eq!(none.levels, Levels::default());
+        assert!(!none.argv.iter().any(|w| w == "--model" || w == "--effort"));
+    }
+
+    #[test]
+    fn effort_rides_the_preset_flag_or_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = crate::config::load(dir.path()).unwrap().agent;
+        let levels = Levels {
+            model: None,
+            effort: Some("xhigh".into()),
+        };
+        let claude = resolve_task(&cfg, "scout", &presets(), &levels).unwrap();
+        assert_eq!(
+            &claude.argv[claude.argv.len() - 2..],
+            &["--effort".to_string(), "xhigh".to_string()]
+        );
+
+        let mut without = cfg.clone();
+        without.preset = "codex".into();
+        let codex = resolve_task(&without, "scout", &presets(), &levels).unwrap();
+        assert!(presets()["codex"].effort_flag.is_none());
+        assert!(!codex.argv.iter().any(|w| w == "xhigh"));
+        assert_eq!(codex.levels.effort.as_deref(), Some("xhigh"));
+    }
+
+    #[test]
+    fn an_unknown_model_and_effort_reach_argv() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = crate::config::load(dir.path()).unwrap().agent;
+        let levels = Levels {
+            model: Some("no-such-model".into()),
+            effort: Some("ludicrous".into()),
+        };
+        let r = resolve_task(&cfg, "scout", &presets(), &levels).unwrap();
+        assert_eq!(
+            &r.argv[r.argv.len() - 4..],
+            &[
+                "--model".to_string(),
+                "no-such-model".to_string(),
+                "--effort".to_string(),
+                "ludicrous".to_string()
+            ]
         );
     }
 
