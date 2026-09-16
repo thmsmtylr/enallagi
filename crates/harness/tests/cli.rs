@@ -406,6 +406,54 @@ fn tasks_ready_finds_the_queue_config_refused() {
 }
 
 #[test]
+fn a_task_block_carries_model_and_effort() {
+    let r = enallagi::fixture::Repo::new();
+    r.write(
+        ".enallagi/TASKS.md",
+        "# TASKS\n\n\
+         ## [T-001] picked per task\n\
+         scope: src/a.ts\n\
+         blockedBy: none\n\
+         model: claude-haiku-4-5\n\
+         effort: low\n\
+         status: ready\n\
+         \n\
+         ## [T-002] picked per role\n\
+         scope: src/b.ts\n\
+         blockedBy: none\n\
+         status: ready\n",
+    );
+
+    let field = |id: &str, key: &str| {
+        let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+            .args(["tasks", "field", id, key])
+            .current_dir(&r.root)
+            .output()
+            .expect("run enallagi tasks field");
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
+    assert_eq!(field("T-001", "model"), "claude-haiku-4-5");
+    assert_eq!(field("T-001", "effort"), "low");
+    assert_eq!(field("T-001", "scope"), "src/a.ts");
+    assert_eq!(field("T-001", "blockedBy"), "none");
+    assert_eq!(field("T-002", "model"), "");
+    assert_eq!(field("T-002", "effort"), "");
+
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["tasks", "ready"])
+        .current_dir(&r.root)
+        .output()
+        .expect("run enallagi tasks ready");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "T-001",
+        "{out:?}"
+    );
+}
+
+#[test]
 fn tasks_archive_moves_a_done_block_and_names_it() {
     let r = enallagi::fixture::Repo::new();
     r.write(
