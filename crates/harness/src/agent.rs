@@ -121,6 +121,47 @@ fn drop_token(argv: &mut Vec<String>, token: &str) {
     }
 }
 
+// the name init.rs gives the plugin it writes for `--plugin-dir`; disabling it would take the harness's own hooks with it
+const ADAPTER_PLUGIN: &str = "harness@inline";
+
+// `--settings` layers over the operator's own file rather than displacing it, so a plugin enabled there loads into every lane unless it is named false here
+fn plugins_off(file: &str) -> String {
+    let path = match file.strip_prefix("~/") {
+        Some(rest) => match std::env::var_os("HOME") {
+            Some(home) => Path::new(&home).join(rest),
+            None => return "{}".to_string(),
+        },
+        None => Path::new(file).to_path_buf(),
+    };
+    let enabled = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get("enabledPlugins").cloned());
+    let Some(serde_json::Value::Object(enabled)) = enabled else {
+        return "{}".to_string();
+    };
+    let off: serde_json::Map<String, serde_json::Value> = enabled
+        .keys()
+        .filter(|id| id.as_str() != ADAPTER_PLUGIN)
+        .map(|id| (id.clone(), serde_json::Value::Bool(false)))
+        .collect();
+    serde_json::Value::Object(off).to_string()
+}
+
+// the settings path rides in the token rather than a preset key, so only a preset that asks for the override names a vendor's file
+fn fill_plugins_off(argv: &[String]) -> Vec<String> {
+    static TOKEN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = TOKEN.get_or_init(|| {
+        Regex::new(r"\{plugins_off:([^{}]*)\}").expect("the token pattern is a literal")
+    });
+    argv.iter()
+        .map(|word| {
+            re.replace_all(word, |caps: &regex::Captures| plugins_off(&caps[1]))
+                .into_owned()
+        })
+        .collect()
+}
+
 pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resolved, AgentError> {
     let over = cfg.roles.get(role);
     let name = over
@@ -175,6 +216,7 @@ pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resol
         argv.push(flag.clone());
         argv.push(model.to_string());
     }
+    let argv = fill_plugins_off(&argv);
     preset.argv.clone_from(&argv);
     Ok(Resolved { argv, preset })
 }
@@ -528,6 +570,55 @@ mod tests {
         assert_eq!(d.argv[0], "claude");
     }
 
+    fn claude_with_plugins_file(path: &str) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = crate::config::load(dir.path()).unwrap().agent;
+        let mut presets = presets();
+        let claude = presets.get_mut("claude").unwrap();
+        claude.argv = claude
+            .argv
+            .iter()
+            .map(|w| w.replace("~/.claude/settings.json", path))
+            .collect();
+        resolve(&cfg, "scout", &presets).unwrap().argv
+    }
+
+    fn settings_word(argv: &[String]) -> serde_json::Value {
+        let i = argv
+            .iter()
+            .position(|w| w == "--settings")
+            .expect("--settings");
+        serde_json::from_str(&argv[i + 1]).expect("the settings word is JSON")
+    }
+
+    #[test]
+    fn a_plugin_the_operator_enables_is_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        std::fs::write(
+            &file,
+            r#"{"enabledPlugins":{"caveman@caveman":true,"never-seen@shop":true,"harness@inline":true}}"#,
+        )
+        .unwrap();
+        let argv = claude_with_plugins_file(&file.to_string_lossy());
+        let plugins = settings_word(&argv)["enabledPlugins"].clone();
+        assert_eq!(plugins["caveman@caveman"], serde_json::json!(false));
+        // a plugin no preset names still reaches the lane unless the list is read from the operator's own file
+        assert_eq!(plugins["never-seen@shop"], serde_json::json!(false));
+        // the adapter arrives by --plugin-dir and must survive the override
+        assert_eq!(plugins.get("harness@inline"), None);
+        assert!(argv.iter().any(|w| w == "--plugin-dir"));
+    }
+
+    #[test]
+    fn no_plugins_file_leaves_the_settings_json() {
+        let argv = claude_with_plugins_file("/nonexistent/settings.json");
+        assert_eq!(
+            settings_word(&argv)["enabledPlugins"],
+            serde_json::json!({})
+        );
+    }
+
     #[test]
     fn custom_preset_needs_a_command() {
         let dir = tempfile::tempdir().unwrap();
@@ -775,8 +866,10 @@ mod tests {
         let runs = r.root.join("runs");
         // the shape claude prints when the agent reads a file that quotes the notice
         let echoed = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"assert!(seconds_until_reset(\"You've hit your session limit · resets 12:40am (Australia/Melbourne)\").is_some());"}]}}"#;
+        // the notice carries an apostrophe, and an unescaped one ends the shell string and hangs the stage on the syntax error it prints
+        let quoted = echoed.replace('\'', "'\\''");
         let argv = r.stub_agent(&format!(
-            "echo x >> {}; printf '%s\\n' '{echoed}'",
+            "echo x >> {}; printf '%s\\n' '{quoted}'",
             runs.display()
         ));
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
