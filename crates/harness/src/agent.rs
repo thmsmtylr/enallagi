@@ -324,10 +324,23 @@ const GRACE: Duration = Duration::from_secs(10);
 // a stale reset rolls to the same time tomorrow, so a further-out one isn't worth a day-long sleep
 const MAX_WAIT: u64 = 6 * 3600;
 
-// a tool result carries a file the agent read, so a repository quoting the limit notice is not one
-fn echoes_a_tool_result(line: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(line)
-        .is_ok_and(|v| v.get("type").and_then(|t| t.as_str()) == Some("user"))
+// only the run's own verdict line, never a file the agent read or a command it wrote: both quote the
+// notice while working on this scan, and each cost a round a multi-hour sleep on 2026-09-16
+fn notice_of(line: &str) -> Option<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        // a preset that prints plain text has no envelope to read, so the line stands as itself
+        return Some(line.to_string());
+    };
+    if value.get("type").and_then(|t| t.as_str()) != Some("result") {
+        return None;
+    }
+    Some(
+        value
+            .get("result")
+            .and_then(|r| r.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    )
 }
 
 // retried at most twice: an agent that prints the limit notice forever would hold the run forever
@@ -355,13 +368,13 @@ pub fn spawn(
         let Some(matched) = result
             .output
             .lines()
-            .filter(|l| !echoes_a_tool_result(l))
-            .find(|l| rate_limit.is_match(l))
+            .filter_map(notice_of)
+            .find(|text| rate_limit.is_match(text))
         else {
             return Ok(result);
         };
         let Some(sleep_seconds) =
-            seconds_until_reset(matched, jiff::Zoned::now()).filter(|s| *s <= MAX_WAIT)
+            seconds_until_reset(&matched, jiff::Zoned::now()).filter(|s| *s <= MAX_WAIT)
         else {
             return Ok(result);
         };
@@ -861,16 +874,18 @@ mod tests {
     }
 
     #[test]
-    fn a_limit_notice_inside_a_tool_result_is_not_a_limit() {
+    fn a_limit_notice_the_agent_only_quoted_is_not_a_limit() {
         let r = crate::fixture::Repo::new();
         let runs = r.root.join("runs");
-        // the shape claude prints when the agent reads a file that quotes the notice
-        let echoed = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"assert!(seconds_until_reset(\"You've hit your session limit · resets 12:40am (Australia/Melbourne)\").is_some());"}]}}"#;
+        // both shapes seen on 2026-09-16: a file the agent read, and a command the agent wrote
+        let read = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"assert!(seconds_until_reset(\"You've hit your session limit · resets 12:40am (Australia/Melbourne)\").is_some());"}]}}"#;
+        let wrote = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"printf '%s' \"You've hit your session limit · resets 12:40am (Australia/Melbourne)\" > stub"}}]}}"#;
         // the notice carries an apostrophe, and an unescaped one ends the shell string and hangs the stage on the syntax error it prints
-        let quoted = echoed.replace('\'', "'\\''");
         let argv = r.stub_agent(&format!(
-            "echo x >> {}; printf '%s\\n' '{quoted}'",
-            runs.display()
+            "echo x >> {}; printf '%s\\n%s\\n' '{}' '{}'",
+            runs.display(),
+            read.replace('\'', "'\\''"),
+            wrote.replace('\'', "'\\''")
         ));
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
@@ -888,7 +903,7 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|e| matches!(e.kind, Kind::Limit { .. })),
-            "a tool result quoting the notice must not sleep the stage"
+            "a notice the agent read or wrote, rather than reported, must not sleep the stage"
         );
     }
 
