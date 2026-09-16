@@ -436,6 +436,11 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let mut harness_hit: Vec<String> = Vec::new();
     let changed = range_files(ctx, &base, "");
     let added = range_files(ctx, &base, "A");
+    // cargo rewrites Cargo.lock from a manifest the range changed, and a commit without it leaves
+    // the tree dirty after the next build; the manifest still has to be on the scope: line
+    let manifest_in_scope = changed
+        .iter()
+        .any(|f| f.ends_with("Cargo.toml") && in_scope(f, &pats));
     for f in changed {
         if bookkeeping.contains(&f) || f == lock {
             continue;
@@ -450,6 +455,9 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         // a file the range ADDS under a locked id is that id's re-vendoring; one it rewrites is a
         // hand edit, which the scope: line still has to name
         if added.contains(&f) && locked_skills.iter().any(|d| f.starts_with(d)) {
+            continue;
+        }
+        if manifest_in_scope && (f == "Cargo.lock" || f.ends_with("/Cargo.lock")) {
             continue;
         }
         // test-hashes.json is exempt when every re-cut key (present at base too, with a new value)
@@ -1313,6 +1321,61 @@ mod tests {
         let out = run("scope", &mut off.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
         assert!(out.reason.contains("test-hashes.json"), "{}", out.reason);
+    }
+
+    #[test]
+    fn scope_exempts_a_lock_beside_an_in_scope_manifest() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", "crates/**", "§11 row 1");
+        env.repo
+            .write("crates/a/Cargo.toml", "[package]\nname = \"old\"\n");
+        env.repo
+            .write("Cargo.lock", "[[package]]\nname = \"old\"\n");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo
+            .write("crates/a/Cargo.toml", "[package]\nname = \"new\"\n");
+        env.repo
+            .write("Cargo.lock", "[[package]]\nname = \"new\"\n");
+        env.repo.commit_all("rename the package");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
+    fn scope_rejects_a_lock_with_no_manifest_change() {
+        let mut alone = Env::new("exit 0\n");
+        alone.queue("done", "crates/**", "§11 row 1");
+        alone
+            .repo
+            .write("Cargo.lock", "[[package]]\nname = \"old\"\n");
+        alone.repo.commit_all("verdict");
+        let base = alone.head();
+        alone
+            .repo
+            .write("Cargo.lock", "[[package]]\nname = \"new\"\n");
+        alone.repo.commit_all("lock alone");
+        let out = run("scope", &mut alone.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(out.reason.contains("Cargo.lock"), "{}", out.reason);
+
+        let mut off = Env::new("exit 0\n");
+        off.queue("done", "crates/**", "§11 row 1");
+        off.repo
+            .write("vendor/b/Cargo.toml", "[package]\nname = \"old\"\n");
+        off.repo
+            .write("Cargo.lock", "[[package]]\nname = \"old\"\n");
+        off.repo.commit_all("verdict");
+        let base = off.head();
+        off.repo
+            .write("vendor/b/Cargo.toml", "[package]\nname = \"new\"\n");
+        off.repo
+            .write("Cargo.lock", "[[package]]\nname = \"new\"\n");
+        off.repo.commit_all("rename an off-scope package");
+        let out = run("scope", &mut off.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(out.reason.contains("Cargo.lock"), "{}", out.reason);
     }
 
     #[test]
