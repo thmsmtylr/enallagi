@@ -365,6 +365,25 @@ const GRACE: Duration = Duration::from_secs(10);
 // a stale reset rolls to the same time tomorrow, so a further-out one isn't worth a day-long sleep
 const MAX_WAIT: u64 = 6 * 3600;
 
+#[cfg(not(test))]
+fn stage_now() -> jiff::Zoned {
+    jiff::Zoned::now()
+}
+
+// a test fixes the instant a notice is read against, so a reset time is a verdict and not a race
+#[cfg(test)]
+thread_local! {
+    static FIXED_NOW: std::cell::RefCell<Option<jiff::Zoned>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn stage_now() -> jiff::Zoned {
+    FIXED_NOW
+        .with(|n| n.borrow().clone())
+        .unwrap_or_else(jiff::Zoned::now)
+}
+
 // only the run's own verdict line, never a file the agent read or a command it wrote: both quote the
 // notice while working on this scan, and each cost a round a multi-hour sleep on 2026-09-16
 fn notice_of(line: &str) -> Option<String> {
@@ -415,7 +434,7 @@ pub fn spawn(
             return Ok(result);
         };
         let Some(sleep_seconds) =
-            seconds_until_reset(&matched, jiff::Zoned::now()).filter(|s| *s <= MAX_WAIT)
+            seconds_until_reset(&matched, stage_now()).filter(|s| *s <= MAX_WAIT)
         else {
             return Ok(result);
         };
@@ -818,6 +837,10 @@ mod tests {
         assert!(seconds_until_reset("resets 12:40am (Mars/Olympus)", now).is_none());
     }
 
+    fn fix_now(zoned: jiff::Zoned) {
+        FIXED_NOW.with(|n| *n.borrow_mut() = Some(zoned));
+    }
+
     fn stop_file(root: &std::path::Path) -> std::path::PathBuf {
         crate::config::instance_path(root, ".enallagi", "STOP")
     }
@@ -931,9 +954,14 @@ mod tests {
         let r = crate::fixture::Repo::new();
         std::fs::create_dir_all(stop_file(&r.root).parent().unwrap()).unwrap();
         std::fs::write(stop_file(&r.root), "").unwrap();
-        // an hour, not a minute: a loaded machine can spend the minute inside run_once, and a reset
-        // already past rolls to tomorrow, exceeds MAX_WAIT, and is discarded before any wait happens
-        let argv = r.stub_agent(&limit_notice("1H", "+1 hour"));
+        fix_now(
+            jiff::civil::date(2026, 9, 7)
+                .at(10, 0, 0, 0)
+                .in_tz("Australia/Melbourne")
+                .unwrap(),
+        );
+        let argv =
+            r.stub_agent("echo 'hit your session limit resets 10:01am (Australia/Melbourne)'");
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let err = spawn(
             &spawner(argv, &r.root),
