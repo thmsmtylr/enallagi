@@ -874,7 +874,7 @@ mod tests {
     }
 
     #[test]
-    fn a_limit_notice_the_agent_only_quoted_is_not_a_limit() {
+    fn a_limit_notice_the_agent_quoted_is_not_a_limit() {
         let r = crate::fixture::Repo::new();
         let runs = r.root.join("runs");
         // both shapes seen on 2026-09-16: a file the agent read, and a command the agent wrote
