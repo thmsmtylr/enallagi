@@ -31,7 +31,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         for (old, new) in &moves {
             println!("  {verb}: {old} -> {new}");
         }
-        println!("\nNext: git add the old and new paths, then re-run `harness init`.");
+        println!("\nNext: git add the old and new paths, then re-run `enallagi init`.");
         return Ok(0);
     }
     let report = init::install(&root, &opts)?;
@@ -40,7 +40,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         println!("  would move: {old} -> {new}");
     }
     if !report.moves.is_empty() {
-        println!("  nothing was moved; `harness init --move` moves them");
+        println!("  nothing was moved; `enallagi init --move` moves them");
     }
 
     let verb = if args.dry_run { "would write" } else { "wrote" };
@@ -77,19 +77,19 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         "
 Next, in {root}:
   1. Edit {toml} — 'check.command', 'layout.spec' and 'agent.preset' are the three that matter.
-  2. Re-run `harness init`. Substitution is idempotent.
-  3. Write your exit criteria into {spec} under the heading harness.toml names.
+  2. Re-run `enallagi init`. Substitution is idempotent.
+  3. Write your exit criteria into {spec} under the heading enallagi.toml names.
   4. git add{add}{track}
      # everything this run wrote. gate_verdict counts an untracked path as work off the branch,
      # so a document left untracked here fails the first verdict.
-  5. harness probe     # what the tree says about itself
-  6. harness run --iterations 1     # one iteration, attended, watch it work",
+  5. enallagi probe     # what the tree says about itself
+  6. enallagi run --iterations 1     # one iteration, attended, watch it work",
         root = root.display(),
         // named unconditionally: on a re-run it's neither written nor kept, so leaving it off would leave the answers untracked
         track = report
             .track
             .iter()
-            .filter(|path| *path != "harness.toml")
+            .filter(|path| *path != "enallagi.toml")
             .fold(String::new(), |line, path| line + " " + path),
     );
     Ok(0)

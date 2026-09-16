@@ -1,4 +1,4 @@
-# Embedded defaults; harness.toml deep-merges over them, tables key by key and arrays whole.
+# Embedded defaults; enallagi.toml deep-merges over them, tables key by key and arrays whole.
 
 # preset names the agent's headless command (claude, codex, ... or custom with a command list); [agent.<role>] overrides it per role.
 [agent]
@@ -19,7 +19,7 @@ pointer_files = ["CLAUDE.md", "GEMINI.md", "QWEN.md", ".github/copilot-instructi
 harness_dir = ".enallagi"
 skill_invocation = "invoke it via the Skill tool"
 
-# driver_command runs the built artifact in a throwaway directory and prints one `FINDING ` line per shortfall; empty is off, and HARNESS_DRIVER=1 is also required.
+# driver_command runs the built artifact in a throwaway directory and prints one `FINDING ` line per shortfall; empty is off, and ENALLAGI_DRIVER=1 is also required.
 driver_command = ""
 
 spec = "SPEC.md"
@@ -70,7 +70,7 @@ docs = [
   "SPEC.md",
   "TASKS.md",
   "harness.default.toml",
-  "harness.toml",
+  "enallagi.toml",
   "test-hashes.json",
 ]
 harness_allow = [
@@ -134,7 +134,7 @@ post = ["commit-verdict", "queue-intact", "verdict", "scope"]
 name = "scout"
 role = "scout"
 turns = 30
-env = { HARNESS_DRIVER = "1" }
+env = { ENALLAGI_DRIVER = "1" }
 
 [[stage]]
 name = "adjudicate"

@@ -1,13 +1,13 @@
-//! Roles declared and fetched like skills: `[[role]]` in harness.toml, pinned in harness.lock.
+//! Roles declared and fetched like skills: `[[role]]` in enallagi.toml, pinned in harness.lock.
 
-use harness::agent::presets;
-use harness::config;
-use harness::events::{Kind, Log, Writer};
-use harness::fixture::Repo;
-use harness::hooks;
-use harness::pipeline::{self, RunOpts};
-use harness::roles;
-use harness::skills::{self, ResolveOpts, SkillError};
+use enallagi::agent::presets;
+use enallagi::config;
+use enallagi::events::{Kind, Log, Writer};
+use enallagi::fixture::Repo;
+use enallagi::hooks;
+use enallagi::pipeline::{self, RunOpts};
+use enallagi::roles;
+use enallagi::skills::{self, ResolveOpts, SkillError};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
@@ -36,7 +36,7 @@ fn sha256(bytes: &[u8]) -> String {
 fn declare(repo: &Repo, source: &str, rev: Option<&str>) -> config::Config {
     let rev = rev.map_or(String::new(), |r| format!("rev = \"{r}\"\n"));
     repo.write(
-        "harness.toml",
+        "enallagi.toml",
         &format!(
             "[[role]]\nname = \"implementer\"\nsource = \"{source}\"\npath = \"roles\"\n{rev}"
         ),
@@ -51,12 +51,12 @@ fn a_declared_role_lands_before_its_stage() {
     let upstream = Repo::new();
     upstream.write("roles/implementer.md", BODY);
     upstream.commit_all("role");
-    harness::git::git(&upstream.root, &["tag", "v1"]).expect("tag");
+    enallagi::git::git(&upstream.root, &["tag", "v1"]).expect("tag");
     let bare_home = tempfile::TempDir::new().expect("tempdir");
     let bare = bare_home.path().join("upstream.git");
     let from = upstream.root.to_string_lossy().to_string();
     let to = bare.to_string_lossy().to_string();
-    harness::git::git(bare_home.path(), &["clone", "--bare", "-q", &from, &to])
+    enallagi::git::git(bare_home.path(), &["clone", "--bare", "-q", &from, &to])
         .expect("bare clone");
 
     let repo = Repo::new();
@@ -74,7 +74,7 @@ fn a_declared_role_lands_before_its_stage() {
     assert_eq!(got[0].path, vendored);
     assert_eq!(fs::read_to_string(&vendored).expect("vendored"), BODY);
 
-    let tag_sha = harness::git::git(&upstream.root, &["rev-parse", "v1^{commit}"]).expect("sha");
+    let tag_sha = enallagi::git::git(&upstream.root, &["rev-parse", "v1^{commit}"]).expect("sha");
     let lock = skills::read_lock(&repo.root, ".enallagi").expect("lock");
     assert!(lock.skill.is_empty());
     assert_eq!(lock.role.len(), 1);
@@ -163,7 +163,7 @@ fn pipeline_repo() -> Repo {
         argv.join(", ")
     );
     let skills = repo.local_skills(&toml);
-    repo.write("harness.toml", &format!("{toml}{skills}"));
+    repo.write("enallagi.toml", &format!("{toml}{skills}"));
     repo.write(
         "TASKS.md",
         "## [T-001] do the thing\n\nscope: src/a.ts\nrows: none — harness\nstatus: ready\ncriteria:\n  - it happens\n",

@@ -14,7 +14,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             Ok(0)
         }
         Err(err) => {
-            eprintln!("harness base: {err}");
+            eprintln!("enallagi base: {err}");
             Ok(1)
         }
     }

@@ -38,7 +38,7 @@ jobs:
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,x86_64-apple-darwin,aarch64-apple-darwin
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: the tag tracks no instance file
-        run: cargo test -p harness --test floor -- --include-ignored --exact main_tracks_no_instance_file
+        run: cargo test -p enallagi --test floor -- --include-ignored --exact main_tracks_no_instance_file
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: '0.13.0'
@@ -49,15 +49,15 @@ jobs:
           mkdir -p dist
           for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin; do
             cargo zigbuild --release --target "$target"
-            cp "target/$target/release/harness" "dist/harness-$target"
+            cp "target/$target/release/enallagi" "dist/enallagi-$target"
           done
       - name: SHA256SUMS
-        run: (cd dist && sha256sum harness-* > SHA256SUMS)
+        run: (cd dist && sha256sum enallagi-* > SHA256SUMS)
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
-            dist/harness-x86_64-unknown-linux-musl
-            dist/harness-aarch64-unknown-linux-musl
-            dist/harness-x86_64-apple-darwin
-            dist/harness-aarch64-apple-darwin
+            dist/enallagi-x86_64-unknown-linux-musl
+            dist/enallagi-aarch64-unknown-linux-musl
+            dist/enallagi-x86_64-apple-darwin
+            dist/enallagi-aarch64-apple-darwin
             dist/SHA256SUMS

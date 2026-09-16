@@ -85,7 +85,7 @@ pub fn locate(root: &Path, harness_dir: &str, path: &str) -> (PathBuf, String, b
     }
 }
 
-// the subject names the product HEAD the state was committed against, which is what `harness base` reads back
+// the subject names the product HEAD the state was committed against, which is what `enallagi base` reads back
 pub fn commit_instance(
     root: &Path,
     harness_dir: &str,

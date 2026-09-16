@@ -20,7 +20,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "harness",
+    name = "enallagi",
     version,
     about = "An autonomous task loop for a coding agent, installed into any git repository."
 )]
@@ -31,7 +31,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Install the harness into this repository: seed the documents, write harness.toml, wire the adapter
+    /// Install the harness into this repository: seed the documents, write enallagi.toml, wire the adapter
     Init {
         /// Agent preset whose hook and instruction files to write (claude, codex, gemini, copilot, cursor, qwen, …)
         #[arg(long)]

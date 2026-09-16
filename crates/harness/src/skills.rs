@@ -17,7 +17,7 @@ pub enum SkillError {
     BadId { id: String },
     #[error("skill {id}: path `{path}` must be relative and free of `..`")]
     BadPath { id: String, path: String },
-    #[error("skill {id} is not declared in harness.toml")]
+    #[error("skill {id} is not declared in enallagi.toml")]
     Undeclared { id: String },
     #[error("skill {id} is unresolved: {why}")]
     Unresolved { id: String, why: String },

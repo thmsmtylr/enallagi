@@ -1,4 +1,4 @@
-//! `harness run [n]` -- the launcher, in the TUI when there is one to draw in.
+//! `enallagi run [n]` -- the launcher, in the TUI when there is one to draw in.
 
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -95,7 +95,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             failed.load(Ordering::Relaxed) || !digest.halts.is_empty(),
         )),
         Err(err) if err.downcast_ref::<pipeline::Refused>().is_some() => {
-            eprintln!("harness run: {err}");
+            eprintln!("enallagi run: {err}");
             Ok(2)
         }
         Err(err) => Err(err),

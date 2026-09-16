@@ -114,7 +114,7 @@ pub enum InitError {
         "{path} is not valid JSON ({message}); fix it or move it aside, nothing here will guess"
     )]
     InvalidJson { path: String, message: String },
-    #[error("a token survived substitution, so harness.toml is missing a key: {}: {}", .0, .1.join(" "))]
+    #[error("a token survived substitution, so enallagi.toml is missing a key: {}: {}", .0, .1.join(" "))]
     TokenSurvived(String, Vec<String>),
     #[error("{0} already exists; move it aside, nothing is overwritten")]
     MoveTarget(String),
@@ -207,12 +207,17 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     let toml = config_rel(root);
     // before subst, which would put a root-layout queue under the harness directory
     let sub = |text: &str| {
+        let text = text.replace(config::LEGACY_DIR_TOKEN, config::DIR_TOKEN);
         let text = ROOT_INSTANCE_FILES
             .iter()
-            .fold(text.to_string(), |acc, name| {
-                acc.replace(&format!("__HARNESS_DIR__/{name}"), &at(name))
+            .fold(text, |acc, name| {
+                acc.replace(&format!("{}/{name}", config::DIR_TOKEN), &at(name))
             })
-            .replace("__HARNESS_DIR__/harness.toml", &toml);
+            .replace(&format!("{}/{}", config::DIR_TOKEN, config::CONFIG), &toml)
+            .replace(
+                &format!("{}/{}", config::DIR_TOKEN, config::LEGACY_CONFIG),
+                &toml,
+            );
         config::subst(&text, &cfg)
     };
     let presets = agent::presets();
@@ -406,7 +411,7 @@ fn seed_config(
         let read = fs::read_to_string(&json).map_err(io(json.display()))?;
         let (text, renamed) = config::migrate_json(&read)?;
         report.notes.push(
-            "migrated: harness.json -> harness.toml; the old file is now harness.json.migrated"
+            "migrated: harness.json -> enallagi.toml; the old file is now harness.json.migrated"
                 .to_string(),
         );
         report.migrated_keys = renamed;
@@ -414,7 +419,7 @@ fn seed_config(
     } else {
         report
             .notes
-            .push("no harness.toml — seeding the defaults. Edit it, then re-run.".to_string());
+            .push("no enallagi.toml — seeding the defaults. Edit it, then re-run.".to_string());
         config::DEFAULT_TOML.to_string()
     };
     plan.push(write(config_rel(root), text.clone()));
@@ -459,13 +464,13 @@ pub fn moves(root: &Path) -> Result<Vec<(String, String)>, InitError> {
             out.push((old.clone(), format!("{dir}/{name}")));
         }
     }
-    let root_toml = config::config_path(root) == root.join("harness.toml");
+    let root_toml = config::config_path(root) == root.join("enallagi.toml");
     let names = ROOT_INSTANCE_FILES
         .iter()
         .copied()
-        .chain(["harness.toml", cfg.layout.spec.as_str()]);
+        .chain(["enallagi.toml", cfg.layout.spec.as_str()]);
     for name in names {
-        let at_root = if name == "harness.toml" {
+        let at_root = if name == "enallagi.toml" {
             root_toml
         } else {
             config::instance_rel(root, &dir, name) == name
@@ -669,13 +674,16 @@ fn claude_hooks(sub: &dyn Fn(&str) -> String) -> Result<Value, InitError> {
     Ok(value)
 }
 
-// e.g. "hooks/immutable.sh" -> "harness hook immutable", wherever "command" appears
+// e.g. "hooks/immutable.sh" -> "enallagi hook immutable", wherever "command" appears
 fn rewrite_commands(value: &mut Value) {
     match value {
         Value::Object(map) => {
             if let Some(Value::String(command)) = map.get("command") {
                 let name = hook_name(command);
-                map.insert("command".to_string(), json!(format!("harness hook {name}")));
+                map.insert(
+                    "command".to_string(),
+                    json!(format!("enallagi hook {name}")),
+                );
                 return;
             }
             for (_, child) in map.iter_mut() {
@@ -709,7 +717,7 @@ fn hooks_value(preset: &Preset) -> Value {
         };
         let hooks: Vec<Value> = names
             .iter()
-            .map(|n| json!({ "type": "command", "command": format!("harness hook {n}") }))
+            .map(|n| json!({ "type": "command", "command": format!("enallagi hook {n}") }))
             .collect();
         events.insert(key.clone(), json!([{ "hooks": hooks }]));
     }

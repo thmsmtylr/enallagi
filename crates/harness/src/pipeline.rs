@@ -1,4 +1,4 @@
-//! The launcher: runs pipelines from `harness.toml` with halts and gates.
+//! The launcher: runs pipelines from `enallagi.toml` with halts and gates.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -24,15 +24,15 @@ and no answer will come, so never end a turn on a question -- decide and act. A 
 or agent process in ps is your PARENT process, not a competing writer: LEARNINGS.md's one-checkout-one-writer
 rule is about a second operator, and it does not apply to the process that started you.";
 
-const SCOUT: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/run/roles/scout.md: read that file first and follow it exactly. Run `harness probe` and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop.";
+const SCOUT: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/scout.md: read that file first and follow it exactly. Run `enallagi probe` and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop.";
 
-const ADJUDICATOR: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/run/roles/adjudicator.md: read that file first and follow it exactly. Act on every block with 'status: proposed' in TASKS.md, in file order. Promote it to 'status: ready' with a scope and criteria an agent that has read only __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or __CONTEXT_FILE__ is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop.";
+const ADJUDICATOR: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/adjudicator.md: read that file first and follow it exactly. Act on every block with 'status: proposed' in TASKS.md, in file order. Promote it to 'status: ready' with a scope and criteria an agent that has read only __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or __CONTEXT_FILE__ is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop.";
 
-const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __HARNESS_DIR__/run/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the product paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason. Never stage or commit TASKS.md, PROGRESS.md or any other file under __HARNESS_DIR__: this loop commits them when your stage ends. An implementation left uncommitted is a lost iteration.";
+const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __ENALLAGI_DIR__/run/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the product paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason. Never stage or commit TASKS.md, PROGRESS.md or any other file under __ENALLAGI_DIR__: this loop commits them when your stage ends. An implementation left uncommitted is a lost iteration.";
 
-const VERIFIER: &str = "Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Your role is defined in __HARNESS_DIR__/run/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons; this loop commits the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop.";
+const VERIFIER: &str = "Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons; this loop commits the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop.";
 
-const GENERIC: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/run/roles/__ROLE__.md: read that file first and follow it exactly. Then stop.";
+const GENERIC: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/__ROLE__.md: read that file first and follow it exactly. Then stop.";
 
 fn prompt_for(role: &str, cfg: &Config) -> String {
     let body = match role {
@@ -197,7 +197,7 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
 
     if scouting {
         out.push_str("  probes, which are the scout's whole input:\n");
-        // HARNESS_DRIVER only here and the scout stage -- it installs throwaway repos and costs wall clock elsewhere
+        // ENALLAGI_DRIVER only here and the scout stage -- it installs throwaway repos and costs wall clock elsewhere
         let check = check_outcome(root, cfg);
         let ctx = ProbeCtx {
             root,
@@ -485,10 +485,10 @@ impl<'a> Loop<'a> {
             }
         };
         let mut env = stage.env.clone();
-        env.insert("HARNESS_ROOT".into(), self.root.display().to_string());
-        env.insert("HARNESS_STAGE".into(), stage.name.clone());
-        env.insert("HARNESS_TASK".into(), task.clone().unwrap_or_default());
-        env.insert("HARNESS_ITERATION".into(), self.writer.iter.to_string());
+        env.insert("ENALLAGI_ROOT".into(), self.root.display().to_string());
+        env.insert("ENALLAGI_STAGE".into(), stage.name.clone());
+        env.insert("ENALLAGI_TASK".into(), task.clone().unwrap_or_default());
+        env.insert("ENALLAGI_ITERATION".into(), self.writer.iter.to_string());
 
         let (spawn, role) = match (&stage.role, &stage.command) {
             (Some(role), _) => match self.role_spawn(stage, role, task.clone(), env, timeout) {
@@ -1039,7 +1039,7 @@ impl<'a> Loop<'a> {
         self.check_log();
     }
 
-    // an event that never reached the log is one `harness watch` and the probes will never see
+    // an event that never reached the log is one `enallagi watch` and the probes will never see
     fn check_log(&mut self) {
         let Some(err) = self.writer.last_error().map(str::to_string) else {
             return;
@@ -1187,7 +1187,7 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
                 root,
                 cfg,
                 check: Some(&check),
-                driver: std::env::var("HARNESS_DRIVER").as_deref() == Ok("1"),
+                driver: std::env::var("ENALLAGI_DRIVER").as_deref() == Ok("1"),
             };
             probes::run_all(&ctx, std::slice::from_ref(name))
                 .iter()

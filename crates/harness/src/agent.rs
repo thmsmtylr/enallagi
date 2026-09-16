@@ -346,7 +346,9 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         .collect();
     let (program, args) = argv.split_first().ok_or(AgentError::EmptyCommand)?;
 
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    crate::config::drop_legacy_env(&mut command);
+    let mut child = command
         .args(args)
         .current_dir(s.cwd)
         .envs(&s.preset.env)

@@ -14,7 +14,7 @@ pub struct Block {
 #[derive(Debug, thiserror::Error)]
 pub enum QueueError {
     #[error(
-        "harness tasks: duplicate id {id} at lines {first} and {second} -- the queue is \
+        "enallagi tasks: duplicate id {id} at lines {first} and {second} -- the queue is \
          ambiguous and nothing here will guess"
     )]
     DuplicateId {
@@ -23,13 +23,13 @@ pub enum QueueError {
         second: usize,
     },
     #[error(
-        "harness tasks: the code fence opened at line {opened} never closes, so every block \
+        "enallagi tasks: the code fence opened at line {opened} never closes, so every block \
          after it would be invisible. Close it."
     )]
     UnterminatedFence { opened: usize },
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("harness tasks: no such task {0}")]
+    #[error("enallagi tasks: no such task {0}")]
     NoSuchTask(String),
 }
 

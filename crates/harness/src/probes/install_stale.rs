@@ -17,7 +17,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             dry_run: true,
         },
     )
-    .map_err(|e| format!("harness init could not plan this tree: {e}"))?;
+    .map_err(|e| format!("enallagi init could not plan this tree: {e}"))?;
 
     let presets = agent::presets();
     let skills = init::skills_root(ctx.cfg, presets.get(&ctx.cfg.agent.preset));
@@ -32,9 +32,9 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             continue;
         }
         let message = if !common::is_file(ctx.root, &path) {
-            "harness init writes this file and the instance does not have it; re-run `harness init`"
+            "enallagi init writes this file and the instance does not have it; re-run `enallagi init`"
         } else if common::read(ctx.root, &path)? != content {
-            "the installed copy differs from the source it was built from; re-run `harness init`"
+            "the installed copy differs from the source it was built from; re-run `enallagi init`"
         } else {
             continue;
         };

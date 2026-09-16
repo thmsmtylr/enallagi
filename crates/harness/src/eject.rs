@@ -1,4 +1,4 @@
-//! Removes what `harness init` put into a repository: the harness directory, the entry points it excluded, and the exclude block.
+//! Removes what `enallagi init` put into a repository: the harness directory, the entry points it excluded, and the exclude block.
 
 use crate::{config, git};
 use std::fs;

@@ -1,5 +1,5 @@
-use harness::fixture::Repo;
-use harness::init::{self, InitOpts};
+use enallagi::fixture::Repo;
+use enallagi::init::{self, InitOpts};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -56,12 +56,12 @@ fn crate_sources() -> Vec<(PathBuf, String)> {
         .collect()
 }
 
-// HARNESS_BIN points at the test binary so nothing here builds release or reads one off PATH
+// ENALLAGI_BIN points at the test binary so nothing here builds release or reads one off PATH
 fn script(program: &Path, cwd: &Path, args: &[&str]) -> (i32, String) {
-    let out = Command::new(program)
+    let out = enallagi::fixture::command(&program.display().to_string())
         .args(args)
         .current_dir(cwd)
-        .env("HARNESS_BIN", env!("CARGO_BIN_EXE_harness"))
+        .env("ENALLAGI_BIN", env!("CARGO_BIN_EXE_enallagi"))
         .output()
         .unwrap_or_else(|e| panic!("run {}: {e}", program.display()));
     let mut text = String::from_utf8_lossy(&out.stdout).to_string();
@@ -70,7 +70,7 @@ fn script(program: &Path, cwd: &Path, args: &[&str]) -> (i32, String) {
 }
 
 fn harness(cwd: &Path, args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(args)
         .current_dir(cwd)
         .output()
@@ -372,12 +372,12 @@ fn ci_runs_the_floor_on_a_gnu_and_a_bsd_userland() {
     assert_eq!(matrix_os(&block), vec!["macos-latest", "ubuntu-latest"]);
     assert!(invokes_floor(&block), "{block}");
     assert_eq!(switched_off(&block), 0, "{block}");
-    // whole-file, not job-scoped: HARNESS_EVALS set at workflow top level would be missed otherwise
-    assert!(!re(r"(?m)^[^#]*HARNESS_EVALS").is_match(&ci()));
+    // whole-file, not job-scoped: ENALLAGI_EVALS set at workflow top level would be missed otherwise
+    assert!(!re(r"(?m)^[^#]*ENALLAGI_EVALS").is_match(&ci()));
 
-    // the driver job is the other half of the floor: it runs cargo test with HARNESS_DRIVER set
+    // the driver job is the other half of the floor: it runs cargo test with ENALLAGI_DRIVER set
     let driver_block = job_block(&ci(), "driver");
-    let driver_env = re(r#"(?m)^[^#]*HARNESS_DRIVER:\s*['"]?1['"]?"#);
+    let driver_env = re(r#"(?m)^[^#]*ENALLAGI_DRIVER:\s*['"]?1['"]?"#);
     assert!(invokes_floor(&driver_block), "{driver_block}");
     assert!(driver_env.is_match(&driver_block), "{driver_block}");
 
@@ -401,8 +401,8 @@ fn ci_runs_the_floor_on_a_gnu_and_a_bsd_userland() {
 
 #[test]
 fn ci_runs_the_driver_against_the_artifact() {
-    // read by VALUE not presence: `HARNESS_DRIVER: ''` is present but the feature is off
-    let set = re(r#"(?m)^[^#]*HARNESS_DRIVER:\s*['"]?[^\s'"]"#);
+    // read by VALUE not presence: `ENALLAGI_DRIVER: ''` is present but the feature is off
+    let set = re(r#"(?m)^[^#]*ENALLAGI_DRIVER:\s*['"]?[^\s'"]"#);
     let block = job_block(&ci(), "driver");
     assert!(!block.is_empty(), "no driver job in ci.yml");
     assert!(set.is_match(&block), "{block}");
@@ -410,9 +410,9 @@ fn ci_runs_the_driver_against_the_artifact() {
     assert_eq!(switched_off(&block), 0, "{block}");
 
     let no_job = "jobs:\n  floor:\n    steps:\n      - run: ./selftest.sh\n";
-    let no_var = "jobs:\n  driver:\n    steps:\n      - name: the floor, with the driver reaching the artifact\n        env:\n          HARNESS_DRIVER: ''\n        run: ./selftest.sh\n";
-    let switched = "jobs:\n  driver:\n    if: false\n    steps:\n      - env:\n          HARNESS_DRIVER: '1'\n        run: ./selftest.sh\n";
-    let soft = "jobs:\n  driver:\n    steps:\n      - env:\n          HARNESS_DRIVER: '1'\n        continue-on-error: true\n        run: ./selftest.sh\n";
+    let no_var = "jobs:\n  driver:\n    steps:\n      - name: the floor, with the driver reaching the artifact\n        env:\n          ENALLAGI_DRIVER: ''\n        run: ./selftest.sh\n";
+    let switched = "jobs:\n  driver:\n    if: false\n    steps:\n      - env:\n          ENALLAGI_DRIVER: '1'\n        run: ./selftest.sh\n";
+    let soft = "jobs:\n  driver:\n    steps:\n      - env:\n          ENALLAGI_DRIVER: '1'\n        continue-on-error: true\n        run: ./selftest.sh\n";
 
     let reading = |yml: &str| {
         let b = job_block(yml, "driver");
@@ -502,12 +502,12 @@ fn the_skill_hook_fires_on_a_headless_lane() {
     ))
     .expect("hooks");
     let on_prompt = hooks["hooks"]["UserPromptSubmit"].to_string();
-    assert!(on_prompt.contains("harness hook skills"), "{on_prompt}");
+    assert!(on_prompt.contains("enallagi hook skills"), "{on_prompt}");
 
     // count is asserted so an emptied skill list can't trivially pass this
     let (code, stdout, stderr) = harness(&repo.root, &["hook", "skills"]);
     assert_eq!(code, 0, "{stderr}");
-    let cfg = harness::config::load(&repo.root).expect("config");
+    let cfg = enallagi::config::load(&repo.root).expect("config");
     assert_eq!(cfg.skill.len(), 7);
     for skill in &cfg.skill {
         assert!(
@@ -616,12 +616,12 @@ fn no_identifier_runs_past_fifty_characters() {
     assert!(long.is_empty(), "{} over {CAP}: {long:#?}", long.len());
 }
 
-// main ships the package; what `harness init` writes lives only on dogfood/* branches
+// main ships the package; what `enallagi init` writes lives only on dogfood/* branches
 #[test]
 #[ignore = "main only: ci.yml runs it on main and on pull requests into main"]
 fn main_tracks_no_instance_file() {
     let mut instance = std::collections::BTreeSet::from(["test-hashes.json".to_string()]);
-    for name in harness::agent::presets().keys() {
+    for name in enallagi::agent::presets().keys() {
         let repo = Repo::new();
         let opts = InitOpts {
             adapter: Some(name.clone()),
@@ -642,7 +642,7 @@ fn main_tracks_no_instance_file() {
             "LEARNINGS.md",
             "SPEC.md",
             ".check-baseline",
-            "harness.toml",
+            "enallagi.toml",
         ]
         .map(String::from),
     );
@@ -724,14 +724,14 @@ fn the_driver_reports_shortfalls_as_findings() {
         };
         let rev = format!("{}^{{commit}}", &caps[1]);
         assert!(
-            harness::git::git_ok(&repo_root(), &["rev-parse", "-q", "--verify", &rev]),
+            enallagi::git::git_ok(&repo_root(), &["rev-parse", "-q", "--verify", &rev]),
             "{line}"
         );
     }
 }
 
 #[test]
-#[ignore = "spawns a real agent; run with HARNESS_EVALS and --ignored"]
+#[ignore = "spawns a real agent; run with ENALLAGI_EVALS and --ignored"]
 fn the_trimmed_role_prompts_still_pass_their_evals() {
     let (code, stdout, stderr) = harness(&repo_root(), &["eval"]);
     assert_eq!(code, 0, "{stdout}{stderr}");

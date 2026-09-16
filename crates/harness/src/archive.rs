@@ -271,7 +271,7 @@ fn roll_progress(
     let archive_prefix = match fs::read_to_string(&archive_path) {
         Ok(existing) => format!("{}\n\n", existing.trim_end()),
         Err(_) => "# PROGRESS (archive)\n\nEntries rolled out of PROGRESS.md by \
-                   `harness run`, oldest first.\nThe loop does not read this file. It \
+                   `enallagi run`, oldest first.\nThe loop does not read this file. It \
                    exists so the record stays whole.\n\n"
             .to_string(),
     };

@@ -331,7 +331,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
             "ready",
             &reason,
             &format!(
-                "chore({task}): harness gate rejected a done verdict with work off the branch"
+                "chore({task}): enallagi gate rejected a done verdict with work off the branch"
             ),
             &format!("{task} was forced back to ready: done with {left} uncommitted path(s)."),
         );
@@ -359,7 +359,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         &task,
         "ready",
         &reason,
-        &format!("chore({task}): harness gate rejected a false VERIFIED"),
+        &format!("chore({task}): enallagi gate rejected a false VERIFIED"),
         &format!(
             "{task} was forced back to ready by the gate: the verifier said done, the gate was red.\ncheck tail:\n{tail8}"
         ),
@@ -616,6 +616,7 @@ fn is_harness_path(cfg: &Config, f: &str) -> bool {
         || matches!(
             f,
             ".check-baseline"
+                | "enallagi.toml"
                 | "harness.toml"
                 | "harness.json"
                 | "harness.lock"
@@ -909,11 +910,11 @@ mod tests {
             repo.write(".enallagi/.gitignore", "events.jsonl\n*.log\nlogs/\n");
             let cmd = repo.stub_check(check_body);
             repo.write(
-                "harness.toml",
+                "enallagi.toml",
                 &format!("[check]\ncommand = \"{cmd}\"\nfail_name = '\\(fail\\) (.+)$'\n"),
             );
             repo.commit_all("harness");
-            let cfg = crate::config::load(&repo.root).expect("load harness.toml");
+            let cfg = crate::config::load(&repo.root).expect("load enallagi.toml");
             let writer = Writer::new(Log::open(&repo.root.join(".enallagi")));
             Env {
                 repo,
@@ -1067,7 +1068,7 @@ mod tests {
             "{text}"
         );
         assert!(env.log().contains(
-            "chore(T-001): harness gate rejected a done verdict with work off the branch"
+            "chore(T-001): enallagi gate rejected a done verdict with work off the branch"
         ));
         assert_eq!(env.warnings.len(), 1);
         let events = env.events();
@@ -1092,7 +1093,7 @@ mod tests {
         assert!(env.tasks_text().contains("status: ready"));
         assert!(env
             .log()
-            .contains("chore(T-001): harness gate rejected a false VERIFIED"));
+            .contains("chore(T-001): enallagi gate rejected a false VERIFIED"));
         assert_eq!(env.warnings.len(), 1);
         assert!(env.warnings[0].contains("boom"), "{}", env.warnings[0]);
         assert!(
@@ -1615,12 +1616,12 @@ mod tests {
         let repo = Repo::new();
         let cmd = repo.stub_check("echo \"$1\" >> ran.txt\nexit 0\n");
         repo.write(
-            "harness.toml",
+            "enallagi.toml",
             &format!(
                 "[check]\ncommand = \"{cmd} plain\"\nforce = \"{cmd} forced\"\nfail_name = '\\(fail\\) (.+)$'\n"
             ),
         );
-        let cfg = crate::config::load(&repo.root).expect("load harness.toml");
+        let cfg = crate::config::load(&repo.root).expect("load enallagi.toml");
         check_delta(&repo.root, &cfg, true);
         assert_eq!(
             std::fs::read_to_string(repo.root.join("ran.txt")).expect("ran.txt"),

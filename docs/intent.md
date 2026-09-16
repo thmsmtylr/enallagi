@@ -27,9 +27,9 @@ person in the invocation path. The playbook's controls are code:
 | "the agent that wrote the code has no way to approve it" | five role prompts with separated authority; the implementer may set `review` and never `done` (`roles/`) |
 | "a fresh context window once the session believes the work is done" | one process per stage, no shared conversation (`crates/harness/src/agent.rs`) |
 | "verification before a task is reported done" | the `verdict` gate re-runs the check behind the verifier's verdict and forces `done` back to `ready` (`crates/harness/src/gates.rs`) |
-| "a hook that blocks edits to test files during a fix task" | `test-hashes.json` plus `harness hook immutable` (`crates/harness/src/hooks.rs`) |
-| "evals … run on any change to CLAUDE.md, skills or hooks" | `harness eval --gate <name>`: a rule is accepted only when its eval fails without it |
-| "a deterministic script watches … and invokes Claude when a control band is breached" | `harness probe`: twenty-one deterministic analyses, no model, emitting `FINDING` lines that are the queue's only input |
+| "a hook that blocks edits to test files during a fix task" | `test-hashes.json` plus `enallagi hook immutable` (`crates/harness/src/hooks.rs`) |
+| "evals … run on any change to CLAUDE.md, skills or hooks" | `enallagi eval --gate <name>`: a rule is accepted only when its eval fails without it |
+| "a deterministic script watches … and invokes Claude when a control band is breached" | `enallagi probe`: twenty-one deterministic analyses, no model, emitting `FINDING` lines that are the queue's only input |
 
 The probes watch the repository's own invariants: an untested exit criterion, a rail naming
 enforcement that does not exist, a rule with no eval behind it. The loop has a control band before
@@ -43,9 +43,9 @@ else, and `docs/bootstrap.sh --check` fails on a history with no verifier reject
 
 Measured 2026-09-08 against the Rust binary that replaced the bash package:
 
-- `cargo test -p harness -q 2>&1 | grep 'test result'` → 285 passed / 0 failed / 3 ignored, summed
+- `cargo test -p enallagi -q 2>&1 | grep 'test result'` → 285 passed / 0 failed / 3 ignored, summed
   across the crate's `test result:` lines (lib, main, seven integration files, doctests).
-- `target/release/harness probe`, run after `harness init` into a fresh, otherwise-empty git repo →
+- `target/release/enallagi probe`, run after `enallagi init` into a fresh, otherwise-empty git repo →
   exit 0. `spec-untested 1`, `queue-uncovered 1`, `rail-unenforced 2`, `hash-uncovered 1`,
   `skill-ungated 3`, `check-red 1`, all from the seeded templates' own unfilled placeholders
   (`src/thing.test.ts` named and absent, `test-hashes.json` unwritten, three `[[skill]]` entries
@@ -63,7 +63,7 @@ Against the playbook's six stages:
 | 2 Design | **out of scope.** `SPEC.md` is written by a human and accepted by a human. |
 | 3 Build | built: roles, `one-scope`, task-block criteria as the committed plan, hooks as guardrails |
 | 4 Test | built: delta against `.check-baseline`, the ablation gate |
-| 5 Deploy | **partial.** The CI matrix exists, and `harness pr` builds one pull-request branch per landed task; the PR review loop and the release gate do not |
+| 5 Deploy | **partial.** The CI matrix exists, and `enallagi pr` builds one pull-request branch per landed task; the PR review loop and the release gate do not |
 | 6 Maintain | built: twenty-one probes, deterministic, no model in the detection path |
 
 ## Where it goes

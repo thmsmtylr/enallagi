@@ -2,7 +2,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 fn package() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -57,7 +56,7 @@ fn run_harness_eval_in(
     names: &[&str],
     tmpdir: Option<&Path>,
 ) -> Eval {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_harness"));
+    let mut cmd = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"));
     if let Some(t) = tmpdir {
         cmd.env("TMPDIR", t);
     }
@@ -74,7 +73,7 @@ fn run_harness_eval_in(
             cmd.env_remove("EVAL_AGENT");
         }
     }
-    let out = cmd.output().expect("run harness eval");
+    let out = cmd.output().expect("run enallagi eval");
     Eval {
         stdout: String::from_utf8_lossy(&out.stdout).to_string(),
         stderr: String::from_utf8_lossy(&out.stderr).to_string(),
@@ -124,10 +123,10 @@ fn an_eval_script_calls_the_installing_binary() {
         pkg.path(),
         "case",
         "do the thing",
-        "command -v harness >bin.txt",
+        "command -v enallagi >bin.txt",
         &format!(
             r#"[ "$(cat bin.txt)" -ef "{}" ]"#,
-            env!("CARGO_BIN_EXE_harness")
+            env!("CARGO_BIN_EXE_enallagi")
         ),
         None,
     );
@@ -192,7 +191,7 @@ fn no_agent_configured_refuses_the_evals() {
     write_eval(pkg.path(), "case", "do the thing", "true", "true", None);
     // a preset that resolves to nothing: agent resolution fails closed
     fs::write(
-        pkg.path().join("harness.toml"),
+        pkg.path().join("enallagi.toml"),
         "[agent]\npreset = \"doesnotexist\"\n",
     )
     .unwrap();
@@ -244,7 +243,7 @@ fn a_fixture_that_cannot_be_built_is_error_never_fail() {
     );
 }
 
-// RULE is a real line of the verifier prompt harness init writes; ablate.sh deletes it
+// RULE is a real line of the verifier prompt enallagi init writes; ablate.sh deletes it
 const RULE: &str = "git status --porcelain";
 
 fn write_gate_fixture(pkg: &Path, other_assert: &str) -> PathBuf {

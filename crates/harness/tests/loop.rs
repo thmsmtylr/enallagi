@@ -1,8 +1,8 @@
 //! The launcher: the dry plan, the halts, the run log and the budget, with stub agents in place of a coding agent.
 
-use harness::events::{Event, Kind};
-use harness::fixture::Repo;
-use harness::pipeline::{self, Digest, RunOpts};
+use enallagi::events::{Event, Kind};
+use enallagi::fixture::Repo;
+use enallagi::pipeline::{self, Digest, RunOpts};
 use std::sync::{Arc, Mutex};
 
 const TASKS: &str = "\
@@ -113,7 +113,7 @@ post = ["commit-round", "adjudicator-halt", "dry-round"]
     )
 }
 
-// Every fixture config must carry the `path:` skills `repo()` wrote: rewriting harness.toml with
+// Every fixture config must carry the `path:` skills `repo()` wrote: rewriting enallagi.toml with
 // base_toml alone falls back to the shipped `[[skill]]` table, whose sources are github clones, and
 // the test then reaches the network.
 fn write_toml(r: &Repo, toml: &str) {
@@ -124,12 +124,12 @@ fn write_toml(r: &Repo, toml: &str) {
         !full.contains(remote) && !full.contains("source = \"git+"),
         "a fixture config may not name a remote skill source:\n{full}"
     );
-    r.write("harness.toml", &full);
+    r.write("enallagi.toml", &full);
 }
 
 fn repo(toml: &str, tasks: &str) -> Repo {
     let repo = Repo::new();
-    // what `harness init` ignores under the harness dir; vendored skills and roles are committed
+    // what `enallagi init` ignores under the harness dir; vendored skills and roles are committed
     repo.write(
         ".enallagi/.gitignore",
         "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\n",
@@ -159,7 +159,7 @@ fn implementer(repo: &Repo, extra: &str) -> String {
              git add -A >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     )
 }
@@ -170,7 +170,7 @@ fn verifier(repo: &Repo) -> String {
         "src/fakeverify.sh",
         &format!(
             "{bin} tasks set-status T-001 done 'stub verified'\n{QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     )
 }
@@ -220,7 +220,7 @@ fn ends(events: &[Event]) -> Vec<&Kind> {
 }
 
 fn plan_of(repo: &Repo) -> String {
-    let cfg = harness::config::load(&repo.root).expect("load");
+    let cfg = enallagi::config::load(&repo.root).expect("load");
     pipeline::plan(&repo.root, &cfg).expect("plan")
 }
 
@@ -449,7 +449,7 @@ fn a_command_stage_runs_with_the_harness_environment() {
     let toml = base_toml("").replace(
         "stages = [\"implement\", \"verify\"]",
         "stages = [\"note\"]",
-    ) + "\n[[stage]]\nname = \"note\"\ncommand = \"printf '%s %s %s' \\\"$HARNESS_TASK\\\" \\\"$HARNESS_STAGE\\\" \\\"$HARNESS_ITERATION\\\" >env.txt\"\nturns = 1\n";
+    ) + "\n[[stage]]\nname = \"note\"\ncommand = \"printf '%s %s %s' \\\"$ENALLAGI_TASK\\\" \\\"$ENALLAGI_STAGE\\\" \\\"$ENALLAGI_ITERATION\\\" >env.txt\"\nturns = 1\n";
     let r = repo(&toml, TASKS);
     go(&r, &opts(1));
     let seen = std::fs::read_to_string(r.root.join("env.txt")).expect("the command stage ran");
@@ -517,7 +517,7 @@ fn a_new_needs_spec_halts() {
         &r,
         &format!(
             "{bin} tasks set-status T-001 needs-spec 'the contract does not answer it'\n",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let toml = base_toml(&role_commands(&implement, "./src/fakeagent.sh")).replace(
@@ -557,12 +557,12 @@ fn run_without_a_tty_prints_one_line_per_event() {
 
     // this asserts what a tty-less run prints; CI would make the run --frozen and refuse the
     // fixture's unvendored skills, which is `an_unresolved_skill_refuses_a_stage`
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["run", "--no-tui", "--iterations", "1"])
         .current_dir(&r.root)
         .env_remove("CI")
         .output()
-        .expect("run harness run");
+        .expect("run enallagi run");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{stdout}");
     assert_eq!(
@@ -578,11 +578,11 @@ fn harness_run_exits_2_on_a_refused_config() {
         &base_toml("").replace("\"commit-round\"", "\"nope\""),
         TASKS,
     );
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["run", "--no-tui", "--iterations", "1"])
         .current_dir(&r.root)
         .output()
-        .expect("run harness run");
+        .expect("run enallagi run");
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("nope"));
 }
@@ -673,7 +673,7 @@ fn a_fetched_skill_commits_before_its_stage() {
              git add -- src/a.ts PROGRESS.md TASKS.md >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let verify = script(
@@ -684,7 +684,7 @@ fn a_fetched_skill_commits_before_its_stage() {
              git add -- TASKS.md >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'verify: T-001 verdict' >/dev/null 2>&1\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let skills = r.local_skills(&toml);
@@ -726,7 +726,7 @@ fn a_fetched_skill_commits_before_its_stage() {
     assert!(ls.contains("harness.lock"), "{ls}");
     assert!(ls.contains(".enallagi/skills/tdd/SKILL.md"), "{ls}");
     assert!(ls.contains(".enallagi/roles/implementer.md"), "{ls}");
-    let lock = harness::skills::read_lock(&r.root, ".enallagi").expect("lock");
+    let lock = enallagi::skills::read_lock(&r.root, ".enallagi").expect("lock");
     assert_eq!(lock.role.len(), 1, "{lock:?}");
     assert_eq!(lock.role[0].id, "implementer");
 }
@@ -819,7 +819,7 @@ fn an_implementer_done_skips_verify() {
         &r,
         &format!(
             "{bin} tasks set-status T-001 done 'I verified myself'\n",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let verify = script(&r, "src/fakeverify.sh", "touch verify-ran\n");
@@ -848,7 +848,7 @@ fn stopping_short_of_review_skips_verify() {
         &r,
         &format!(
             "{bin} tasks set-status T-001 blocked 'the fixture is missing'\n",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let verify = script(&r, "src/fakeverify.sh", "touch verify-ran\n");
@@ -907,10 +907,10 @@ fn a_stranded_review_verifies_next_run() {
     }
 
     let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    let blocks = harness::queue::parse(&text).expect("parse");
+    let blocks = enallagi::queue::parse(&text).expect("parse");
     let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
     assert_eq!(
-        harness::queue::field(t001, "status").as_deref(),
+        enallagi::queue::field(t001, "status").as_deref(),
         Some("done")
     );
     assert_eq!(digest.landed, vec!["T-001".to_string()]);
@@ -950,7 +950,7 @@ fn a_verify_only_iteration_leaves_one_entry() {
     assert!(text.contains("review pipeline"), "{text}");
     assert!(text.contains("\nfriction: none\n"), "{text}");
     assert!(
-        harness::git::porcelain(&r.root).is_empty(),
+        enallagi::git::porcelain(&r.root).is_empty(),
         "the entry is committed"
     );
 }
@@ -1000,15 +1000,15 @@ fn review_wins_over_ready() {
     );
 
     let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    let blocks = harness::queue::parse(&text).expect("parse");
+    let blocks = enallagi::queue::parse(&text).expect("parse");
     let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
     let t002 = blocks.iter().find(|b| b.id == "T-002").expect("T-002");
     assert_eq!(
-        harness::queue::field(t001, "status").as_deref(),
+        enallagi::queue::field(t001, "status").as_deref(),
         Some("done")
     );
     assert_eq!(
-        harness::queue::field(t002, "status").as_deref(),
+        enallagi::queue::field(t002, "status").as_deref(),
         Some("ready"),
         "T-002 is untouched: the task pipeline never ran"
     );
@@ -1061,16 +1061,16 @@ fn verifier_noting(r: &Repo, note: &str, proposed: &str) -> String {
              printf 'notes: {note}\\n' >>TASKS.md\n\
              printf '%s' '{proposed}' >>TASKS.md\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     )
 }
 
 fn t001_status(r: &Repo) -> Option<String> {
     let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    let blocks = harness::queue::parse(&text).expect("parse");
+    let blocks = enallagi::queue::parse(&text).expect("parse");
     let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
-    harness::queue::field(t001, "status")
+    enallagi::queue::field(t001, "status")
 }
 
 #[test]
@@ -1092,7 +1092,7 @@ fn a_deferred_finding_with_no_block_is_refused() {
     assert_eq!(t001_status(&r).as_deref(), Some("review"));
     assert!(digest.landed.is_empty(), "{:?}", digest.landed);
     assert!(
-        harness::git::porcelain(&r.root).is_empty(),
+        enallagi::git::porcelain(&r.root).is_empty(),
         "the refused verdict is committed, not left in the tree"
     );
 }
@@ -1184,7 +1184,7 @@ fn an_uncommitted_minor_is_not_the_verdict() {
              git add -A >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {IMPLEMENTER_NOTE}{QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     a_clean_verdict_after_the_implementer(&r, &implement);
@@ -1204,7 +1204,7 @@ fn a_root_layout_lands_a_stub_task() {
     let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
     assert!(tasks.contains("status: done"), "{tasks}");
     assert!(!r.root.join(".enallagi/TASKS.md").exists());
-    assert!(harness::git::porcelain(&r.root).is_empty());
+    assert!(enallagi::git::porcelain(&r.root).is_empty());
 }
 
 #[test]
@@ -1229,13 +1229,13 @@ fn a_nested_layout_lands_a_stub_task() {
              git add -A >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let verify = verifier(&r);
     let toml = base_toml(&role_commands(&implement, &verify));
     r.write(
-        ".enallagi/harness.toml",
+        ".enallagi/enallagi.toml",
         &format!("{toml}{}", r.local_skills(&toml)),
     );
     r.commit_all("stubs");
@@ -1249,7 +1249,7 @@ fn a_nested_layout_lands_a_stub_task() {
         "PROGRESS.md",
         "DECISIONS.md",
         "SPEC.md",
-        "harness.toml",
+        "enallagi.toml",
         "harness.lock",
     ] {
         assert!(
@@ -1258,15 +1258,15 @@ fn a_nested_layout_lands_a_stub_task() {
         );
     }
     assert!(r.root.join(".enallagi/harness.lock").is_file());
-    assert!(harness::git::porcelain(&r.root).is_empty());
+    assert!(enallagi::git::porcelain(&r.root).is_empty());
 }
 
 #[test]
 fn an_install_lands_a_task_and_touches_nothing_else() {
     let r = Repo::new();
-    harness::init::install(
+    enallagi::init::install(
         &r.root,
-        &harness::init::InitOpts {
+        &enallagi::init::InitOpts {
             adapter: Some("claude".to_string()),
             ..Default::default()
         },
@@ -1284,23 +1284,23 @@ fn an_install_lands_a_task_and_touches_nothing_else() {
              git add -A >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let verify = verifier(&r);
     let toml = base_toml(&role_commands(&implement, &verify));
     r.write(
-        ".enallagi/harness.toml",
+        ".enallagi/enallagi.toml",
         &format!("{toml}{}", r.local_skills(&toml)),
     );
     r.write(".enallagi/TASKS.md", TASKS);
     r.commit_all("installed");
-    let base = harness::git::git(&r.root, &["rev-parse", "HEAD"]).expect("HEAD");
+    let base = enallagi::git::git(&r.root, &["rev-parse", "HEAD"]).expect("HEAD");
 
     let (digest, events) = go(&r, &opts(1));
     assert_eq!(digest.landed, vec!["T-001".to_string()], "{events:#?}");
     let changed =
-        harness::git::git(&r.root, &["diff", "--name-only", &base, "HEAD"]).expect("diff");
+        enallagi::git::git(&r.root, &["diff", "--name-only", &base, "HEAD"]).expect("diff");
     assert!(changed.lines().any(|p| p == "src/thing.ts"), "{changed}");
     for path in changed.lines() {
         assert!(
@@ -1312,20 +1312,20 @@ fn an_install_lands_a_task_and_touches_nothing_else() {
         "TASKS.md",
         "PROGRESS.md",
         "SPEC.md",
-        "harness.toml",
+        "enallagi.toml",
         "harness.lock",
     ] {
         assert!(!r.root.join(name).exists(), "{name} is at the root");
     }
-    assert!(harness::git::porcelain(&r.root).is_empty());
+    assert!(enallagi::git::porcelain(&r.root).is_empty());
 }
 
 #[test]
 fn a_claude_install_writes_nothing_under_dot_claude() {
     let r = Repo::new();
-    harness::init::install(
+    enallagi::init::install(
         &r.root,
-        &harness::init::InitOpts {
+        &enallagi::init::InitOpts {
             adapter: Some("claude".to_string()),
             ..Default::default()
         },
@@ -1343,7 +1343,7 @@ fn a_claude_install_writes_nothing_under_dot_claude() {
              git add src/thing.ts >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let verify = verifier(&r);
@@ -1353,7 +1353,7 @@ fn a_claude_install_writes_nothing_under_dot_claude() {
     );
     assert!(toml.contains("preset = \"claude\""));
     r.write(
-        ".enallagi/harness.toml",
+        ".enallagi/enallagi.toml",
         &format!("{toml}{}", r.local_skills(&toml)),
     );
     r.write(".enallagi/TASKS.md", TASKS);
@@ -1366,11 +1366,11 @@ fn a_claude_install_writes_nothing_under_dot_claude() {
         .join(".enallagi/adapters/claude/skills/tdd/SKILL.md")
         .is_file());
     assert!(!r.root.join(".claude").exists());
-    assert!(harness::git::porcelain(&r.root).is_empty());
+    assert!(enallagi::git::porcelain(&r.root).is_empty());
 }
 
 fn in_dir(dir: &std::path::Path, args: &[&str]) -> String {
-    harness::git::git(dir, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+    enallagi::git::git(dir, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
 }
 
 // the harness directory is its own repository, ignored by the product's
@@ -1398,13 +1398,13 @@ fn nested(check: &str, implement_extra: &str) -> Repo {
              git add src/thing.ts >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let verify = verifier(&r);
     let toml = base_toml(&role_commands(&implement, &verify));
     r.write(
-        ".enallagi/harness.toml",
+        ".enallagi/enallagi.toml",
         &format!("{toml}{}", r.local_skills(&toml)),
     );
     r.commit_all("stubs");
@@ -1422,9 +1422,9 @@ fn nested(check: &str, implement_extra: &str) -> Repo {
 
 fn nested_status(r: &Repo) -> Option<String> {
     let text = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
-    let blocks = harness::queue::parse(&text).expect("parse");
+    let blocks = enallagi::queue::parse(&text).expect("parse");
     let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
-    harness::queue::field(t001, "status")
+    enallagi::queue::field(t001, "status")
 }
 
 #[test]
@@ -1438,7 +1438,7 @@ fn an_unsupported_done_is_forced_back_to_ready() {
     assert!(
         state_log
             .lines()
-            .any(|s| s.starts_with("chore(T-001): harness gate rejected a false VERIFIED at ")),
+            .any(|s| s.starts_with("chore(T-001): enallagi gate rejected a false VERIFIED at ")),
         "{state_log}"
     );
     assert!(in_dir(&r.root.join(".enallagi"), &["status", "--porcelain"]).is_empty());
@@ -1500,5 +1500,5 @@ fn a_landed_iteration_leaves_no_instance_path() {
         "{subjects}"
     );
     assert!(in_dir(&state, &["status", "--porcelain"]).is_empty());
-    assert!(harness::git::porcelain(&r.root).is_empty());
+    assert!(enallagi::git::porcelain(&r.root).is_empty());
 }

@@ -1,16 +1,16 @@
 //! The probe assertions, one test per assertion and named after it.
 
-use harness::config::{self, Config};
-use harness::fixture::Repo;
-use harness::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
+use enallagi::config::{self, Config};
+use enallagi::fixture::Repo;
+use enallagi::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
 use std::fs;
 
 // install is the seed: docs, rails and roles all come from the binary, so a probe reads the tree an operator would get
 fn seeded_with(overrides: &str) -> (Repo, Config) {
     let repo = Repo::new();
     repo.init_harness(overrides);
-    harness::git::git(&repo.root, &["add", "-A"]).expect("add");
-    harness::git::git(
+    enallagi::git::git(&repo.root, &["add", "-A"]).expect("add");
+    enallagi::git::git(
         &repo.root,
         &[
             "-c",
@@ -149,7 +149,7 @@ fn the_seeded_criterion_is_untested() {
 
 #[test]
 fn harness_immutable_has_no_hash_key() {
-    // the rail names the file that is the gate; with the launcher a binary, that file is harness.toml
+    // the rail names the file that is the gate; with the launcher a binary, that file is enallagi.toml
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     let found = findings(&results, "hash-uncovered");
@@ -157,7 +157,7 @@ fn harness_immutable_has_no_hash_key() {
     assert!(
         found[0]
             .message
-            .contains("`harness-immutable` names harness.toml"),
+            .contains("`harness-immutable` names enallagi.toml"),
         "{}",
         found[0].message
     );
@@ -284,7 +284,7 @@ fn and_a_repeat_a_dated_kill_line_names_is_covered() {
     append(
         &repo,
         "DECISIONS.md",
-        "\n## Rejected findings\n- [2026-09-13] the same friction is recorded 2 times: FIFTH sighting of a check firing on the prose that documents it - and the first where the \u{2014} refuted by `harness eval --gate prose-check`: `GATE prose-check REJECT the case passes with the rule ablated, so the rule changed no outcome`; PROGRESS.md keeps the evidence\n",
+        "\n## Rejected findings\n- [2026-09-13] the same friction is recorded 2 times: FIFTH sighting of a check firing on the prose that documents it - and the first where the \u{2014} refuted by `enallagi eval --gate prose-check`: `GATE prose-check REJECT the case passes with the rule ablated, so the rule changed no outcome`; PROGRESS.md keeps the evidence\n",
     );
     assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
 }
@@ -309,7 +309,7 @@ fn frictions_sharing_words_do_not_collapse() {
 
 fn with_driver(body: &str) -> (Repo, Config) {
     let (repo, cfg) =
-        seeded_with("[layout]\ndriver_command = \"$HARNESS_ROOT/src/fakedriver.sh\"\n");
+        seeded_with("[layout]\ndriver_command = \"$ENALLAGI_ROOT/src/fakedriver.sh\"\n");
     repo.write("src/fakedriver.sh", &format!("#!/usr/bin/env bash\n{body}"));
     #[cfg(unix)]
     {
@@ -339,7 +339,7 @@ fn the_drivers_shortfall_is_one_finding() {
     assert_eq!(count(&results, "driver"), Some(1), "{}", render(&results));
     assert!(
         render(&results)
-            .contains("FINDING driver $HARNESS_ROOT/src/fakedriver.sh:0 the artifact answered but wrote nothing to the store"),
+            .contains("FINDING driver $ENALLAGI_ROOT/src/fakedriver.sh:0 the artifact answered but wrote nothing to the store"),
         "{}",
         render(&results)
     );
@@ -615,10 +615,10 @@ fn the_state_repository_log_is_read_too() {
         "the fixture is a nested install"
     );
     for (key, value) in [("user.email", "t@t"), ("user.name", "t")] {
-        harness::git::git(&state, &["config", key, value]).expect("identity");
+        enallagi::git::git(&state, &["config", key, value]).expect("identity");
     }
-    harness::git::git(&state, &["add", "-A"]).expect("add");
-    harness::git::git(
+    enallagi::git::git(&state, &["add", "-A"]).expect("add");
+    enallagi::git::git(
         &state,
         &[
             "-c",

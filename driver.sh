@@ -21,25 +21,25 @@
 #           nothing from a probe that did not run
 #
 # Usage:  ./driver.sh            from anywhere
-#         driver_command = "$HARNESS_ROOT/driver.sh"   in harness.toml, with HARNESS_DRIVER=1
+#         driver_command = "$ENALLAGI_ROOT/driver.sh"   in enallagi.toml, with ENALLAGI_DRIVER=1
 #
-# HARNESS_BIN names the binary under test. It defaults to this checkout's release build, which is
+# ENALLAGI_BIN names the binary under test. It defaults to this checkout's release build, which is
 # built here when it is absent: the driver measures the artifact, so it must not measure a stale one
 # the caller happens to have on PATH.
 set -u
 PKG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HARNESS_BIN="${HARNESS_BIN:-$PKG/target/release/harness}"
-if [ ! -x "$HARNESS_BIN" ]; then
+ENALLAGI_BIN="${ENALLAGI_BIN:-$PKG/target/release/enallagi}"
+if [ ! -x "$ENALLAGI_BIN" ]; then
   (cd "$PKG" && cargo build --release -q) || {
-    echo "driver: no $HARNESS_BIN and cargo build --release failed" >&2
+    echo "driver: no $ENALLAGI_BIN and cargo build --release failed" >&2
     exit 3
   }
 fi
-[ -x "$HARNESS_BIN" ] || {
-  echo "driver: $HARNESS_BIN is not executable" >&2
+[ -x "$ENALLAGI_BIN" ] || {
+  echo "driver: $ENALLAGI_BIN is not executable" >&2
   exit 3
 }
-export HARNESS_BIN # the lane fixture runs `harness tasks set-status`
+export ENALLAGI_BIN # the lane fixture runs `enallagi tasks set-status`
 
 # One throwaway repo, one installed harness, one iteration, one sloppy lane. Everything this
 # function prints is read back by the caller; nothing is judged in here.
@@ -60,7 +60,7 @@ case "$1" in
   *"roles/implementer.md"*)
     echo "the work" > src/allowed.ts
     [ "$MODE" = "out-of-scope" ] && echo "not mine" > src/sneaky.ts
-    "$HARNESS_BIN" tasks set-status T-001 review 'driver lane implemented' >/dev/null
+    "$ENALLAGI_BIN" tasks set-status T-001 review 'driver lane implemented' >/dev/null
     [ "$MODE" != "no-progress" ] && printf '\n## driver — T-001 — landed\nfriction: none\n' >> .enallagi/PROGRESS.md
     # this mode exists for exactly this: the work never lands on the branch.
     # `if`, never `[ ] && ...` as the last statement of a branch: a false test is the script's
@@ -68,7 +68,7 @@ case "$1" in
     if [ "$MODE" != "uncommitted" ]; then git add -A && git commit -qm "feat: T-001" >/dev/null; fi
     ;;
   *"roles/verifier.md"*)
-    "$HARNESS_BIN" tasks set-status T-001 done 'driver lane verified' >/dev/null ;;
+    "$ENALLAGI_BIN" tasks set-status T-001 done 'driver lane verified' >/dev/null ;;
 esac
 echo '{"total_cost_usd": 0.5}'
 LANE
@@ -79,7 +79,7 @@ LANE
     check=true
     [ "$mode" = "red-check" ] && check=false
     mkdir -p .enallagi
-    cat >.enallagi/harness.toml <<TOML
+    cat >.enallagi/enallagi.toml <<TOML
 [agent]
 preset = "custom"
 command = ["./src/lane.sh", "{prompt}", "{turns}"]
@@ -97,22 +97,22 @@ TOML
       mkdir -p "vendor/$id"
       printf '# %s\n' "$id" >"vendor/$id/SKILL.md"
       printf '\n[[skill]]\nid = "%s"\nsource = "path:vendor/%s"\npath = ""\ngate = "none"\nwhy = "the driver fixture"\n' \
-        "$id" "$id" >>.enallagi/harness.toml
+        "$id" "$id" >>.enallagi/enallagi.toml
     done
 
-    "$HARNESS_BIN" init >/dev/null 2>&1 || exit 3
-    "$HARNESS_BIN" skills sync >/dev/null 2>&1 || exit 3
+    "$ENALLAGI_BIN" init >/dev/null 2>&1 || exit 3
+    "$ENALLAGI_BIN" skills sync >/dev/null 2>&1 || exit 3
 
     # The seeded T-001 ships with an empty scope: line. Give it one, so the scope gate has
     # something to judge the lane's diff against.
     sed -i.bak 's|^scope:$|scope: src/allowed.ts|' .enallagi/TASKS.md && rm -f .enallagi/TASKS.md.bak
     git add -A && git commit -qm 'chore: T-001 setup' >/dev/null
 
-    MODE="$mode" "$HARNESS_BIN" run --iterations 1 --no-tui 2>&1
+    MODE="$mode" "$ENALLAGI_BIN" run --iterations 1 --no-tui 2>&1
     # the persistent effect, read from the tree and not from anything the run said
-    echo "EFFECT status=$("$HARNESS_BIN" tasks list | awk '/^T-001/{print $NF}')"
+    echo "EFFECT status=$("$ENALLAGI_BIN" tasks list | awk '/^T-001/{print $NF}')"
     echo "EFFECT dirty=$(git status --porcelain | grep -c . || true)"
-    echo "EFFECT stages=$("$HARNESS_BIN" events 2>/dev/null | grep -c 'stage\.end' || true)"
+    echo "EFFECT stages=$("$ENALLAGI_BIN" events 2>/dev/null | grep -c 'stage\.end' || true)"
   )
   rc=$?
   rm -rf "$d"

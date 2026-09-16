@@ -1,6 +1,6 @@
-//! `harness eject`: a repository the harness was brought into, ran in and left looks as it did before.
+//! `enallagi eject`: a repository the harness was brought into, ran in and left looks as it did before.
 
-use harness::fixture::Repo;
+use enallagi::fixture::Repo;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -25,10 +25,10 @@ const SKILLS: [&str; 7] = [
 ];
 
 fn harness(root: &Path, args: &[&str]) -> (i32, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(args)
         .current_dir(root)
-        .env_remove("HARNESS_DIR")
+        .env_remove("ENALLAGI_DIR")
         // CI sets frozen, which refuses the fixture's path: skills before anything locks them
         .env_remove("CI")
         .output()
@@ -42,7 +42,7 @@ fn harness(root: &Path, args: &[&str]) -> (i32, String) {
 }
 
 fn git(root: &Path, args: &[&str]) -> String {
-    harness::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+    enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
 }
 
 fn exclude(root: &Path) -> String {
@@ -70,7 +70,7 @@ fn exec(path: &Path, body: &str) -> String {
 
 // the stubs and skills live outside the repository, so nothing but init and the run touches it
 fn stub_config(tools: &Path) -> String {
-    let bin = env!("CARGO_BIN_EXE_harness");
+    let bin = env!("CARGO_BIN_EXE_enallagi");
     let quiet = "echo '{\"total_cost_usd\":0.5}'\n";
     let check = exec(&tools.join("check.sh"), "exit 0\n");
     let agent = exec(&tools.join("agent.sh"), quiet);
@@ -175,7 +175,7 @@ fn an_ejected_repository_looks_untouched() {
     let (code, out) = harness(&r.root, &["init", "--adapter", "claude"]);
     assert_eq!(code, 0, "{out}");
     std::fs::write(
-        r.root.join(".enallagi/harness.toml"),
+        r.root.join(".enallagi/enallagi.toml"),
         stub_config(tools.path()),
     )
     .expect("config");
@@ -288,12 +288,12 @@ fn eject_refuses_its_own_ancestor_loop() {
     assert_eq!(code, 0, "{out}");
 
     for flag in ["", "--dry-run"] {
-        let out = Command::new("bash")
+        let out = enallagi::fixture::command("bash")
             .args(["-c", "echo $$ > .enallagi/loop.pid; \"$0\" eject $1"])
-            .arg(env!("CARGO_BIN_EXE_harness"))
+            .arg(env!("CARGO_BIN_EXE_enallagi"))
             .arg(flag)
             .current_dir(&r.root)
-            .env_remove("HARNESS_DIR")
+            .env_remove("ENALLAGI_DIR")
             .output()
             .expect("spawn bash");
         let text = format!(

@@ -18,7 +18,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     let report = worktree::lane(root, &cfg, &mut |wt| {
         let status = Command::new(std::env::current_exe()?)
             .args(["run", "--iterations", &n.to_string(), "--no-tui"])
-            .env("HARNESS_DIR", wt.join(&cfg.layout.harness_dir))
+            .env("ENALLAGI_DIR", wt.join(&cfg.layout.harness_dir))
             .current_dir(wt)
             .status()?;
         if !status.success() {

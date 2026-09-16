@@ -31,7 +31,7 @@ pub fn immutable(root: &Path, input: &str) -> (i32, String) {
             2,
             format!(
                 "immutable: {hit} is locked by harness.lock. This edit is refused. Re-resolve \
-                 the lock deliberately (`harness skills sync`), not through the edit tool."
+                 the lock deliberately (`enallagi skills sync`), not through the edit tool."
             ),
         );
     }
@@ -400,7 +400,7 @@ mod tests {
         r.write(".enallagi/TASKS.md", "# TASKS\n");
         r.write("src/a.ts", "export const a = 1\n");
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
-        r.write(".enallagi/harness.toml", "[check]\ncomand = \"x\"\n");
+        r.write(".enallagi/enallagi.toml", "[check]\ncomand = \"x\"\n");
         assert!(config::load(&r.root).is_err());
         let (code, msg) = immutable(&r.root, &input("src/a.ts"));
         assert_eq!(code, 2, "{msg}");
@@ -560,7 +560,7 @@ mod tests {
         let r = Repo::new();
         let cmd = r.stub_check("echo '(fail) alpha'\nexit 1\n");
         r.write(
-            "harness.toml",
+            "enallagi.toml",
             &format!("[check]\ncommand = \"{cmd}\"\nfail_name = '\\(fail\\) (.+)$'\n"),
         );
         let (code, msg) = verify_done(&r.root, "{}");
@@ -570,7 +570,7 @@ mod tests {
 
         let cmd = r.stub_check("exit 0\n");
         r.write(
-            "harness.toml",
+            "enallagi.toml",
             &format!("[check]\ncommand = \"{cmd}\"\nfail_name = '\\(fail\\) (.+)$'\n"),
         );
         let (code, msg) = verify_done(&r.root, "{}");
@@ -582,7 +582,7 @@ mod tests {
     fn the_skills_contract_lists_every_declared_skill() {
         let r = Repo::new();
         r.write(
-            "harness.toml",
+            "enallagi.toml",
             "[[skill]]\nid = \"tdd\"\nsource = \"path:skills/tdd\"\npath = \"skills/tdd\"\ngate = \"verdict\"\nwhy = \"forces a failing test first\"\n",
         );
         let (code, _) = skills_contract(&r.root);

@@ -1,9 +1,21 @@
-//! fixture: test support, also used by `harness eval` and the driver.
+//! fixture: test support, also used by `enallagi eval` and the driver.
 
 use crate::git;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+
+// a lane exports its own variables, and a spawned binary must read the fixture's tree, not the lane's
+pub fn command(bin: &str) -> Command {
+    let mut cmd = Command::new(bin);
+    crate::config::drop_legacy_env(&mut cmd);
+    for (key, _) in std::env::vars() {
+        if key.starts_with(crate::config::ENV) {
+            cmd.env_remove(key);
+        }
+    }
+    cmd
+}
 
 pub struct Repo {
     pub dir: tempfile::TempDir,
@@ -101,7 +113,7 @@ impl Repo {
     }
 
     pub fn init_harness(&self, toml_overrides: &str) {
-        self.write("harness.toml", toml_overrides);
+        self.write("enallagi.toml", toml_overrides);
         crate::init::install(&self.root, &crate::init::InitOpts::default()).expect("install");
     }
 

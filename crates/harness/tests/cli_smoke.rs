@@ -1,7 +1,6 @@
-//! `harness init`, then every read-only subcommand, against one fresh install: the binary an operator actually types, not a module call.
+//! `enallagi init`, then every read-only subcommand, against one fresh install: the binary an operator actually types, not a module call.
 
-use harness::fixture::Repo;
-use std::process::Command;
+use enallagi::fixture::Repo;
 
 struct Out {
     code: i32,
@@ -9,12 +8,12 @@ struct Out {
     stderr: String,
 }
 
-fn harness(repo: &Repo, args: &[&str]) -> Out {
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+fn run(repo: &Repo, args: &[&str]) -> Out {
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(args)
         .current_dir(&repo.root)
         .output()
-        .expect("run harness");
+        .expect("run enallagi");
     Out {
         code: out.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&out.stdout).to_string(),
@@ -26,10 +25,10 @@ fn installed() -> Repo {
     let repo = Repo::new();
     // the shipped default check is `bun run check`; a machine without bun would make check-red ERROR
     repo.write(
-        "harness.toml",
+        "enallagi.toml",
         "[check]\ncommand = \"true\"\nfail_name = \"x\"\n",
     );
-    let out = harness(&repo, &["init"]);
+    let out = run(&repo, &["init"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
     assert!(repo.root.join(".enallagi/RAILS.md").is_file());
     repo
@@ -38,14 +37,14 @@ fn installed() -> Repo {
 #[test]
 fn probe_exits_0_on_a_fresh_install() {
     let repo = installed();
-    let out = harness(&repo, &["probe"]);
+    let out = run(&repo, &["probe"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
     assert_eq!(
         out.stdout
             .lines()
             .filter(|l| l.starts_with("PROBE "))
             .count(),
-        harness::probes::NAMES.len()
+        enallagi::probes::NAMES.len()
     );
     assert_eq!(
         out.stdout.lines().filter(|l| l.contains(" ERROR ")).count(),
@@ -58,7 +57,7 @@ fn probe_exits_0_on_a_fresh_install() {
 #[test]
 fn run_dry_run_prints_the_plan_and_exits_0() {
     let repo = installed();
-    let out = harness(&repo, &["run", "--iterations", "1", "--dry-run"]);
+    let out = run(&repo, &["run", "--iterations", "1", "--dry-run"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
     // discover's `when` negates task's, so exactly one of the pair is ever planned
     assert!(
@@ -75,7 +74,7 @@ fn run_dry_run_prints_the_plan_and_exits_0() {
 #[test]
 fn tasks_list_prints_the_seeded_queue() {
     let repo = installed();
-    let out = harness(&repo, &["tasks", "list"]);
+    let out = run(&repo, &["tasks", "list"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
     let rows: Vec<&str> = out.stdout.lines().collect();
     assert_eq!(rows.len(), 1, "{}", out.stdout);
@@ -86,14 +85,14 @@ fn tasks_list_prints_the_seeded_queue() {
 #[test]
 fn skills_list_prints_the_seven_declared_skills() {
     let repo = installed();
-    let out = harness(&repo, &["skills", "list"]);
+    let out = run(&repo, &["skills", "list"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
     let ids: Vec<&str> = out
         .stdout
         .lines()
         .filter_map(|l| l.split_whitespace().next())
         .collect();
-    let cfg = harness::config::load(&repo.root).expect("config");
+    let cfg = enallagi::config::load(&repo.root).expect("config");
     assert_eq!(cfg.skill.len(), 7);
     assert_eq!(
         ids,
@@ -104,20 +103,20 @@ fn skills_list_prints_the_seven_declared_skills() {
 #[test]
 fn events_on_an_empty_log_prints_nothing_and_exits_0() {
     let repo = installed();
-    let out = harness(&repo, &["events"]);
+    let out = run(&repo, &["events"]);
     assert_eq!(out.code, 0, "{}", out.stderr);
     assert_eq!(out.stdout, "");
 }
 
 #[test]
 fn version_names_the_crate_version() {
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .arg("--version")
         .output()
-        .expect("run harness --version");
+        .expect("run enallagi --version");
     assert!(out.status.success(), "{out:?}");
     assert_eq!(
         String::from_utf8_lossy(&out.stdout).trim(),
-        format!("harness {}", env!("CARGO_PKG_VERSION"))
+        format!("enallagi {}", env!("CARGO_PKG_VERSION"))
     );
 }

@@ -20,7 +20,7 @@ pub struct PrReport {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PrError {
-    #[error("harness pr refused, nothing was built:\n  {}", .0.join("\n  "))]
+    #[error("enallagi pr refused, nothing was built:\n  {}", .0.join("\n  "))]
     Refused(Vec<String>),
     #[error("the diff does not apply to {base}, a three-way merge conflict in:\n  {}", .files.join("\n  "))]
     Conflict { base: String, files: Vec<String> },

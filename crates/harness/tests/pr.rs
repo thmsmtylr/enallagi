@@ -1,8 +1,7 @@
-//! `harness pr`: a landed task becomes a branch off the upstream default branch holding only its own product change.
+//! `enallagi pr`: a landed task becomes a branch off the upstream default branch holding only its own product change.
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const THING: &str = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\n";
 
@@ -14,7 +13,7 @@ struct Fixture {
 }
 
 fn git(root: &Path, args: &[&str]) -> String {
-    harness::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+    enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
 }
 
 fn write(root: &Path, rel: &str, text: &str) {
@@ -76,7 +75,7 @@ impl Fixture {
         let check = exec(&tools.join("check.sh"), check);
         write(
             &state,
-            "harness.toml",
+            "enallagi.toml",
             &format!("[check]\ncommand = \"{check}\"\n"),
         );
         write(&state, "TASKS.md", tasks);
@@ -109,10 +108,10 @@ impl Fixture {
             self.tools.display(),
             std::env::var("PATH").unwrap_or_default()
         );
-        let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+        let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
             .args(args)
             .current_dir(&self.root)
-            .env_remove("HARNESS_DIR")
+            .env_remove("ENALLAGI_DIR")
             .env("PATH", path)
             .output()
             .expect("spawn harness");

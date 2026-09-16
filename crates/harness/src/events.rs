@@ -1,4 +1,4 @@
-//! The append-only JSONL event log written during a run and read back by `harness watch`/`events` and the probes.
+//! The append-only JSONL event log written during a run and read back by `enallagi watch`/`events` and the probes.
 
 use std::fs;
 use std::io::{self, Write};
