@@ -374,7 +374,7 @@ fn an_unreachable_artifact_is_an_error() {
 fn every_declared_skill_names_its_enforcing_gate() {
     // asserts the COUNT, not just emptiness: an entry deleted to make this pass is the thing that fails it
     let (repo, cfg) = seeded();
-    assert_eq!(cfg.skill.len(), 7);
+    assert_eq!(cfg.skill.len(), 8);
     let results = run(&repo, &cfg);
     let found = findings(&results, "skill-ungated");
     let undefined: Vec<&str> = found

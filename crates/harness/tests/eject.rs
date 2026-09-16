@@ -14,7 +14,7 @@ criteria:
   - it happens
 ";
 
-const SKILLS: [&str; 7] = [
+const SKILLS: [&str; 8] = [
     "tdd",
     "ponytail",
     "debugging",
@@ -22,6 +22,7 @@ const SKILLS: [&str; 7] = [
     "verify-before-done",
     "review-requested",
     "brainstorming",
+    "caveman-commit",
 ];
 
 fn harness(root: &Path, args: &[&str]) -> (i32, String) {

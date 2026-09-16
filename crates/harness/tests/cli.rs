@@ -189,6 +189,7 @@ fn skills_sync_works_under_a_custom_preset() {
         "verify-before-done",
         "review-requested",
         "brainstorming",
+        "caveman-commit",
     ] {
         toml.push_str(&format!(
             "[[skill]]\nid = \"{id}\"\nsource = \"path:vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"x\"\n\n"
@@ -213,7 +214,7 @@ fn skills_check_refuses_what_sync_then_locks() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     // the shipped roles name every one of these, and `skills check` validates the config first
-    const IDS: [&str; 7] = [
+    const IDS: [&str; 8] = [
         "tdd",
         "ponytail",
         "debugging",
@@ -221,6 +222,7 @@ fn skills_check_refuses_what_sync_then_locks() {
         "verify-before-done",
         "review-requested",
         "brainstorming",
+        "caveman-commit",
     ];
     let mut toml = String::new();
     for id in IDS {

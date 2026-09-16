@@ -200,4 +200,12 @@ rev = "v6.3.0"
 gate = "queue-uncovered"
 why = "criteria are written before code, which here happens in the queue and not in a chat"
 
+[[skill]]
+id = "caveman-commit"
+source = "github:JuliusBrussee/caveman"
+path = "skills/caveman-commit"
+rev = "v2.7.0"
+gate = "plain-record"
+why = "a commit subject names what changed and stops there"
+
 # [[role]] takes name, source, path and rev as [[skill]] does; <path>/<name>.md vendors to <harness_dir>/roles/<name>.md and pins in harness.lock.

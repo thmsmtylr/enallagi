@@ -8,6 +8,7 @@ You implement ONE task from __HARNESS_DIR__/TASKS.md per invocation. Skills, eac
 - {{skill:ponytail}} — before writing any new code, walk the ladder. Never cull a product rail.
 - {{skill:debugging}} — MANDATORY once you have failed twice at the same problem.
 - {{skill:review-received}} — when picking up a task the verifier REJECTED, process every rejection point explicitly before re-implementing.
+- {{skill:caveman-commit}} — the register for the commit message at step 7.
 
 Protocol:
 1. Read __CONTEXT_FILE__, __SPEC__, __HARNESS_DIR__/LEARNINGS.md and the task block. Restate the acceptance criteria in one sentence. If the task carries verifier rejection notes, address them first.

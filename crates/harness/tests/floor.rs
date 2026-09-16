@@ -508,13 +508,35 @@ fn the_skill_hook_fires_on_a_headless_lane() {
     let (code, stdout, stderr) = harness(&repo.root, &["hook", "skills"]);
     assert_eq!(code, 0, "{stderr}");
     let cfg = enallagi::config::load(&repo.root).expect("config");
-    assert_eq!(cfg.skill.len(), 7);
+    assert_eq!(cfg.skill.len(), 8);
     for skill in &cfg.skill {
         assert!(
             stdout.contains(&skill.id),
             "{} absent from {stdout}",
             skill.id
         );
+    }
+}
+
+#[test]
+fn the_commit_register_skill_reaches_both_lanes() {
+    // found by its gate, not its id: plain-record is the probe that fails when a subject comments
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cfg = enallagi::config::load(dir.path()).expect("the shipped defaults load");
+    let decl = cfg
+        .skill
+        .iter()
+        .find(|s| s.gate == "plain-record")
+        .expect("no shipped skill names gate plain-record");
+    assert!(decl.source.starts_with("github:"), "{}", decl.source);
+    assert!(decl.path.ends_with(&decl.id), "{}", decl.path);
+    assert!(decl.rev.is_some(), "{} is unpinned", decl.id);
+    assert!(!decl.why.is_empty(), "{} says what it is for", decl.id);
+
+    let token = format!("{{{{skill:{}}}}}", decl.id);
+    for role in ["implementer", "verifier"] {
+        let text = read(&repo_root().join(format!("roles/{role}.md")));
+        assert!(text.contains(&token), "roles/{role}.md wants {token}");
     }
 }
 

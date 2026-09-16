@@ -90,7 +90,7 @@ impl Repo {
     /// `[[skill]]` entries for every shipped skill id the given TOML does not declare, each a
     /// `path:` source under `vendor/`, so a fixture run never reaches the network.
     pub fn local_skills(&self, toml: &str) -> String {
-        const IDS: [&str; 7] = [
+        const IDS: [&str; 8] = [
             "tdd",
             "ponytail",
             "debugging",
@@ -98,6 +98,7 @@ impl Repo {
             "verify-before-done",
             "review-requested",
             "brainstorming",
+            "caveman-commit",
         ];
         let mut out = String::new();
         for id in IDS {

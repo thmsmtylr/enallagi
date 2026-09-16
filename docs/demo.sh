@@ -65,7 +65,7 @@ chmod +x src/lane.sh
 # The skills the role prompts name are declared with `path:` sources this script writes, so the real
 # resolve, vendor and lock path runs with nothing to fetch. Dropping them instead leaves the prompts'
 # `{{skill:id}}` tokens unmatched and the run refuses the stage.
-for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming; do
+for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming caveman-commit; do
   mkdir -p "vendor/$id"
   printf '# %s\n' "$id" >"vendor/$id/SKILL.md"
 done
@@ -82,7 +82,7 @@ cost = "total_cost_usd"
 [check]
 command = "true"
 TOML
-for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming; do
+for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming caveman-commit; do
   printf '\n[[skill]]\nid = "%s"\nsource = "path:vendor/%s"\npath = ""\ngate = "none"\nwhy = "the demo fixture"\n' \
     "$id" "$id" >>enallagi.toml
 done

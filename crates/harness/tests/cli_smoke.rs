@@ -83,7 +83,7 @@ fn tasks_list_prints_the_seeded_queue() {
 }
 
 #[test]
-fn skills_list_prints_the_seven_declared_skills() {
+fn skills_list_prints_every_declared_skill() {
     let repo = installed();
     let out = run(&repo, &["skills", "list"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
@@ -93,7 +93,7 @@ fn skills_list_prints_the_seven_declared_skills() {
         .filter_map(|l| l.split_whitespace().next())
         .collect();
     let cfg = enallagi::config::load(&repo.root).expect("config");
-    assert_eq!(cfg.skill.len(), 7);
+    assert_eq!(cfg.skill.len(), 8);
     assert_eq!(
         ids,
         cfg.skill.iter().map(|s| s.id.as_str()).collect::<Vec<_>>()

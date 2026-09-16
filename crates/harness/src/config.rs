@@ -1162,7 +1162,7 @@ mod tests {
         let c = load(tempfile::tempdir().unwrap().path()).unwrap();
         let roles = |_: &str| Some(String::new());
         assert!(validate(&c, &crate::agent::presets(), &roles).is_ok());
-        assert_eq!(c.skill.len(), 7);
+        assert_eq!(c.skill.len(), 8);
         assert_eq!(c.layout.learnings_cap, 12);
         assert_eq!(c.layout.skills_dir, None);
         assert_eq!(c.stage[2].env["ENALLAGI_DRIVER"], "1");
