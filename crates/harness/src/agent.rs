@@ -179,13 +179,20 @@ pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resol
     Ok(Resolved { argv, preset })
 }
 
+fn fill_word(word: &str, layout: &Layout) -> String {
+    word.replace("{harness_dir}", &layout.harness_dir)
+        .replace("{context_file}", &layout.context_file)
+}
+
 // substituted before {prompt}, so a prompt that quotes either token reaches the agent verbatim
 pub fn fill_layout(argv: &[String], layout: &Layout) -> Vec<String> {
-    argv.iter()
-        .map(|word| {
-            word.replace("{harness_dir}", &layout.harness_dir)
-                .replace("{context_file}", &layout.context_file)
-        })
+    argv.iter().map(|w| fill_word(w, layout)).collect()
+}
+
+/// A preset's `env` with the same layout tokens its `argv` takes.
+pub fn fill_env(env: &BTreeMap<String, String>, layout: &Layout) -> BTreeMap<String, String> {
+    env.iter()
+        .map(|(k, v)| (k.clone(), fill_word(v, layout)))
         .collect()
 }
 
@@ -346,12 +353,18 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         .collect();
     let (program, args) = argv.split_first().ok_or(AgentError::EmptyCommand)?;
 
+    // the layout is reloaded here because StageSpawn carries the filled argv, not the layout that filled it
+    let preset_env = match crate::config::load(s.cwd) {
+        Ok(cfg) => fill_env(&s.preset.env, &cfg.layout),
+        Err(_) => s.preset.env.clone(),
+    };
+
     let mut command = Command::new(program);
     crate::config::drop_legacy_env(&mut command);
     let mut child = command
         .args(args)
         .current_dir(s.cwd)
-        .envs(&s.preset.env)
+        .envs(&preset_env)
         .envs(&s.env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -617,6 +630,30 @@ mod tests {
             .unwrap()
             .iter()
             .any(|e| matches!(e.kind, Kind::StageOutput { .. })));
+    }
+
+    #[test]
+    fn a_preset_env_value_takes_the_layout_tokens() {
+        let r = crate::fixture::Repo::new();
+        let argv = r.stub_agent("echo \"config=$CLAUDE_CONFIG_DIR\"");
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
+        let mut s = spawner(argv, &r.root);
+        s.preset.env.insert(
+            "CLAUDE_CONFIG_DIR".to_string(),
+            "{harness_dir}/run/claude".to_string(),
+        );
+        let res = spawn(
+            &s,
+            &mut w,
+            &stop_file(&r.root),
+            &Regex::new("never").unwrap(),
+        )
+        .unwrap();
+        assert!(
+            res.output.contains("config=.enallagi/run/claude"),
+            "{}",
+            res.output
+        );
     }
 
     #[test]
