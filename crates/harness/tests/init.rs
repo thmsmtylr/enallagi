@@ -492,7 +492,14 @@ fn the_claude_preset_loads_the_plugin_and_names_its_skills_by_the_plugin() {
         .iter()
         .position(|w| w == "--settings")
         .expect("claude carries the deny rules");
-    assert!(claude.argv[settings + 1].contains("Bash(git push:*)"));
+    let json = &claude.argv[settings + 1];
+    assert!(json.contains("Bash(git push:*)"));
+    // a lane that keeps Monitor or a default attribution puts a co-author trailer on every commit
+    assert!(json.contains("\"Monitor\""), "{json}");
+    assert!(
+        json.contains("\"attribution\":{\"commit\":\"\",\"pr\":\"\"}"),
+        "{json}"
+    );
     assert_eq!(
         claude.skills_dir.as_deref(),
         Some("{harness_dir}/adapters/claude/skills")
