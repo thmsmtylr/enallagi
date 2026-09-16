@@ -62,7 +62,7 @@ const RAILS: &str = include_str!("../../../templates/RAILS.md");
 const CONTEXT: &str = include_str!("../../../templates/AGENTS.md");
 const POINTER: &str = include_str!("../../../templates/pointer.md");
 const SPEC_SECTION: &str = include_str!("../../../templates/SPEC.section.md");
-const EVALS_README: &str = include_str!("../../../evals/README.md");
+const EVALS_README: &str = include_str!("../../../templates/evals.README.md");
 const CLAUDE_PLUGIN: &str = "adapters/claude";
 const CLAUDE_HOOKS: &str = include_str!("../../../adapters/claude/hooks/hooks.json");
 
