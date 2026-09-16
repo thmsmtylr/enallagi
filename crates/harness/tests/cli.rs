@@ -298,11 +298,12 @@ fn the_shipped_documents_describe_and_do_not_argue() {
         }
     }
     let order = [
+        "Highlights",
         "Install",
         "From install to a landed task",
         "How a run works",
         "Configuration",
-        "Files",
+        "Commands",
         "License",
     ];
     if sections != order {
@@ -884,6 +885,19 @@ fn every_readme_command_runs_or_is_named() {
         (
             "enallagi run --iterations 1",
             "spawns the agent CLI, which no test may call",
+        ),
+        (
+            "cargo install --locked --git https://github.com/thmsmtylr/enallagi enallagi",
+            "builds from the network and installs outside the tree",
+        ),
+        (
+            "enallagi worktree 1",
+            "spawns the agent CLI in a worktree, which no test may call",
+        ),
+        ("enallagi watch", "attaches a live view and does not exit on its own"),
+        (
+            "enallagi pr T-001 --push",
+            "pushes a branch and opens a pull request",
         ),
     ];
 
