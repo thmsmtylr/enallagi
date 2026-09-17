@@ -63,12 +63,12 @@ fn left_message(
     }
     let said: String = report.reason.lines().map(|l| format!("  {l}\n")).collect();
     let mut msg = format!(
-        "worktree: {branch} did not fast-forward into {parent_branch}. git said:\n{said}Nothing was merged and nothing was removed. A merge here is a decision, not a step:"
+        "worktree: {branch} did not fast-forward into {parent_branch}. git said:\n{said}Nothing was merged, nothing was removed:"
     );
     for (repo, dir) in &repos {
         let (repo, dir) = (repo.display(), dir.display());
         msg.push_str(&format!(
-            "\n  cd {dir}                       # the lane's work, intact\n  git -C {repo} merge {branch}       # if you want the merge commit\n  git -C {repo} worktree remove {dir} && git -C {repo} branch -D {branch}   # if you do not want the work"
+            "\n  cd {dir}\n  git -C {repo} merge {branch}                 # keep the work\n  git -C {repo} worktree remove {dir} && git -C {repo} branch -D {branch}   # discard it"
         ));
     }
     msg
@@ -90,8 +90,8 @@ mod tests {
         };
         let msg = left_message(Path::new("/r"), ".enallagi", "main", &report);
         for want in [
-            "cd /r/.enallagi/worktrees/lane-x ",
-            "cd /r/.enallagi/worktrees/lane-x/.enallagi ",
+            "cd /r/.enallagi/worktrees/lane-x\n",
+            "cd /r/.enallagi/worktrees/lane-x/.enallagi\n",
             "git -C /r merge lane/x",
             "git -C /r/.enallagi merge lane/x",
         ] {

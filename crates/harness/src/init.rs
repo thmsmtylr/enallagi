@@ -62,7 +62,7 @@ const RAILS: &str = include_str!("../../../templates/RAILS.md");
 const CONTEXT: &str = include_str!("../../../templates/AGENTS.md");
 const POINTER: &str = include_str!("../../../templates/pointer.md");
 const SPEC_SECTION: &str = include_str!("../../../templates/SPEC.section.md");
-const EVALS_README: &str = include_str!("../../../evals/README.md");
+const EVALS_README: &str = include_str!("../../../templates/evals.README.md");
 const CLAUDE_PLUGIN: &str = "adapters/claude";
 const CLAUDE_HOOKS: &str = include_str!("../../../adapters/claude/hooks/hooks.json");
 
@@ -110,9 +110,7 @@ pub enum InitError {
     Config(#[from] config::ConfigError),
     #[error("no adapter named {0}")]
     UnknownAdapter(String),
-    #[error(
-        "{path} is not valid JSON ({message}); fix it or move it aside, nothing here will guess"
-    )]
+    #[error("{path} is not valid JSON ({message}); fix it or move it aside")]
     InvalidJson { path: String, message: String },
     #[error("a token survived substitution, so enallagi.toml is missing a key: {}: {}", .0, .1.join(" "))]
     TokenSurvived(String, Vec<String>),

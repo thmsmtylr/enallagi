@@ -76,14 +76,12 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     println!(
         "
 Next, in {root}:
-  1. Edit {toml} — 'check.command', 'layout.spec' and 'agent.preset' are the three that matter.
-  2. Re-run `enallagi init`. Substitution is idempotent.
-  3. Write your exit criteria into {spec} under the heading enallagi.toml names.
+  1. Edit {toml}: check.command, layout.spec, agent.preset
+  2. enallagi init
+  3. Write exit criteria into {spec}
   4. git add{add}{track}
-     # everything this run wrote. gate_verdict counts an untracked path as work off the branch,
-     # so a document left untracked here fails the first verdict.
-  5. enallagi probe     # what the tree says about itself
-  6. enallagi run --iterations 1     # one iteration, attended, watch it work",
+  5. enallagi probe
+  6. enallagi run --iterations 1",
         root = root.display(),
         // named unconditionally: on a re-run it's neither written nor kept, so leaving it off would leave the answers untracked
         track = report
