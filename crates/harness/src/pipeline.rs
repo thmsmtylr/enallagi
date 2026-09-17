@@ -80,6 +80,8 @@ fn rendered_role_path(root: &Path, cfg: &Config, role: &str) -> PathBuf {
 #[derive(Debug, Clone)]
 pub struct RunOpts {
     pub max_iter: u32,
+    // empty runs every pipeline whose `when` holds; a name here is the only one the round may choose
+    pub pipelines: Vec<String>,
     pub dry_run: bool,
     pub frozen: bool,
     pub tui: bool,
@@ -92,6 +94,7 @@ impl Default for RunOpts {
     fn default() -> Self {
         RunOpts {
             max_iter: 3,
+            pipelines: Vec::new(),
             dry_run: false,
             frozen: false,
             tui: false,
@@ -292,6 +295,18 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
     })?;
     let rate_limit = Regex::new(&format!("(?i){}", cfg.agent.rate_limit_pattern))
         .map_err(|e| Refused(format!("agent.rate_limit_pattern: {e}")))?;
+    if let Some(unknown) = opts
+        .pipelines
+        .iter()
+        .find(|name| !cfg.pipeline.iter().any(|p| &p.name == *name))
+    {
+        let names: Vec<&str> = cfg.pipeline.iter().map(|p| p.name.as_str()).collect();
+        return Err(Refused(format!(
+            "--pipeline {unknown}: enallagi.toml names {}",
+            names.join(", ")
+        ))
+        .into());
+    }
 
     if opts.dry_run {
         print!("{}", plan(root, &cfg).map_err(|e| Refused(e.to_string()))?);
@@ -464,9 +479,15 @@ impl<'a> Loop<'a> {
         let progress_before = file_len(&self.file("PROGRESS.md"));
 
         let Some(pipeline) = self.choose() else {
-            self.digest
-                .warnings
-                .push("no pipeline's `when` held; nothing to run.".to_string());
+            let reason = if self.opts.pipelines.is_empty() {
+                "no pipeline's `when` held; nothing to run.".to_string()
+            } else {
+                format!(
+                    "--pipeline {}: no `when` held; nothing to run.",
+                    self.opts.pipelines.join(", ")
+                )
+            };
+            self.digest.warnings.push(reason);
             return false;
         };
 
@@ -1016,6 +1037,11 @@ impl<'a> Loop<'a> {
 
     fn choose(&mut self) -> Option<config::Pipeline> {
         for i in 0..self.cfg.pipeline.len() {
+            if !self.opts.pipelines.is_empty()
+                && !self.opts.pipelines.contains(&self.cfg.pipeline[i].name)
+            {
+                continue;
+            }
             let Ok(when) = config::parse_when(&self.cfg.pipeline[i].when) else {
                 continue;
             };

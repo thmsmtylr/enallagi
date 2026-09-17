@@ -76,6 +76,9 @@ Each iteration takes the first `ready` task whose blockers are `done`.
 A `done` the gates disagree with goes back to `ready`. A question the criteria do not answer
 becomes `needs-spec` and halts the run.
 
+`enallagi run --pipeline task` runs only the pipeline named. Repeat the flag to name more than one.
+With none named, every pipeline in `.enallagi/enallagi.toml` is eligible.
+
 ## Configuration
 
 `.enallagi/enallagi.toml` holds the whole configuration.

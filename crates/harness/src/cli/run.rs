@@ -10,6 +10,7 @@ use crate::{git, skills, tui};
 
 pub struct Args {
     pub iterations: u32,
+    pub pipelines: Vec<String>,
     pub budget_usd: Option<f64>,
     pub budget_seconds: Option<u64>,
     pub budget_tokens: Option<u64>,
@@ -28,6 +29,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     // flags set here win: with_env_budgets only fills a field still None
     let opts = RunOpts {
         max_iter: args.iterations,
+        pipelines: args.pipelines.clone(),
         dry_run: args.dry_run,
         // CI is frozen whether or not anyone passed the flag: fetching a skill mid-run breaks the lock
         frozen: args.frozen || skills::frozen_from_env(std::env::var_os("CI").as_deref()),

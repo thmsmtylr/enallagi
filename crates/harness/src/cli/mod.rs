@@ -64,6 +64,9 @@ pub enum Command {
         /// Iterations to run; a run also ends after two discovery rounds that leave nothing takeable
         #[arg(short = 'n', long = "iterations", default_value_t = 3)]
         iterations: u32,
+        /// Pipeline from enallagi.toml to run, repeatable; none given runs whichever one's `when` holds
+        #[arg(long = "pipeline", value_name = "NAME")]
+        pipeline: Vec<String>,
         /// Dollar budget for the run; overrides BUDGET_USD when given
         #[arg(long = "budget-usd")]
         budget_usd: Option<f64>,
@@ -202,6 +205,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         }),
         Command::Run {
             iterations,
+            pipeline,
             budget_usd,
             budget_seconds,
             budget_tokens,
@@ -210,6 +214,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             frozen,
         } => run::run(&run::Args {
             iterations,
+            pipelines: pipeline,
             budget_usd,
             budget_seconds,
             budget_tokens,
@@ -256,13 +261,14 @@ mod tests {
         "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 19] = [
+    const FLAGS: [&str; 20] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
         "eject --dry-run",
         "eject --keep-record",
         "run --iterations",
+        "run --pipeline",
         "run --budget-usd",
         "run --budget-seconds",
         "run --budget-tokens",
@@ -356,6 +362,23 @@ mod tests {
     #[test]
     fn every_flag_is_in_the_reviewed_vocabulary() {
         assert_eq!(visible_flags(), FLAGS);
+    }
+
+    #[test]
+    fn run_takes_the_pipeline_flag_more_than_once() {
+        let cli = Cli::try_parse_from([
+            "enallagi",
+            "run",
+            "--pipeline",
+            "task",
+            "--pipeline",
+            "review",
+        ])
+        .expect("parse");
+        let Command::Run { pipeline, .. } = cli.command else {
+            panic!("{:?}", cli.command)
+        };
+        assert_eq!(pipeline, ["task", "review"]);
     }
 
     #[test]

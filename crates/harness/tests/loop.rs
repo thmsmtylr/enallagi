@@ -2142,3 +2142,71 @@ fn the_digest_counts_standing_and_expired() {
     assert!(line.starts_with("proposed: 2 standing, oldest "), "{line}");
     assert!(line.ends_with(" rounds, expired 1"), "{line}");
 }
+
+fn named(pipelines: &[&str], max_iter: u32) -> RunOpts {
+    RunOpts {
+        max_iter,
+        pipelines: pipelines.iter().map(|p| p.to_string()).collect(),
+        ..RunOpts::default()
+    }
+}
+
+// no TASKS.md and a scout stub: `!queue.takeable` holds and discover is the round's pipeline
+fn empty_queue_with_scout() -> Repo {
+    let r = repo("", "");
+    let scout = script(&r, "src/fakescout.sh", QUIET);
+    write_toml(&r, &base_toml(&role_command("scout", &scout)));
+    r.commit_all("a scout");
+    r
+}
+
+#[test]
+fn only_a_named_pipeline_runs_its_stages() {
+    let (_, events) = go(&empty_queue_with_scout(), &named(&["discover"], 1));
+    assert!(
+        stages_started(&events).contains(&"scout".to_string()),
+        "{events:#?}"
+    );
+
+    let (_, events) = go(&empty_queue_with_scout(), &named(&["task"], 1));
+    assert!(stages_started(&events).is_empty(), "{events:#?}");
+}
+
+#[test]
+fn a_filtered_round_with_nothing_to_run_ends() {
+    let (digest, events) = go(&empty_queue_with_scout(), &named(&["task"], 3));
+    assert_eq!(digest.iterations, 1, "{digest:#?}");
+    let warnings = events
+        .iter()
+        .find_map(|e| match &e.kind {
+            Kind::RunEnd { warnings, .. } => Some(warnings.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{events:#?}"));
+    assert!(
+        warnings.iter().any(|w| w.contains("--pipeline task")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn an_unnamed_run_still_reaches_discover() {
+    let (_, events) = go(&empty_queue_with_scout(), &opts(1));
+    assert!(
+        stages_started(&events).contains(&"scout".to_string()),
+        "{events:#?}"
+    );
+}
+
+#[test]
+fn an_unknown_pipeline_name_is_refused() {
+    let r = repo(&base_toml(""), TASKS);
+    let (outcome, events) = try_go(&r, &named(&["nope"], 1));
+    let err = outcome.expect_err("refused");
+    assert!(err.downcast_ref::<pipeline::Refused>().is_some(), "{err}");
+    let text = err.to_string();
+    for name in ["nope", "review", "task", "discover"] {
+        assert!(text.contains(name), "{text}");
+    }
+    assert!(stages_started(&events).is_empty(), "{events:#?}");
+}
