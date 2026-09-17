@@ -2247,7 +2247,7 @@ fn pid_from(path: &std::path::Path) -> String {
     panic!("{} was never written", path.display());
 }
 
-fn stop_leaves_nothing_running(signal: &str) {
+fn stop_leaves_nothing_running(signal: &str) -> Vec<Event> {
     let r = sleeping_agent();
     let mut launcher = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["run", "--iterations", "1", "--no-tui"])
@@ -2285,6 +2285,7 @@ fn stop_leaves_nothing_running(signal: &str) {
         matches!(log.last().map(|e| &e.kind), Some(Kind::RunEnd { .. })),
         "{log:#?}"
     );
+    log
 }
 
 #[test]
@@ -2295,4 +2296,19 @@ fn a_sigterm_stops_the_lane_and_its_child() {
 #[test]
 fn a_sigint_stops_the_lane_and_its_child() {
     stop_leaves_nothing_running("INT");
+}
+
+#[test]
+fn a_stopped_stage_still_records_its_end() {
+    let log = stop_leaves_nothing_running("TERM");
+    let at = |p: fn(&Kind) -> bool| log.iter().position(|e| p(&e.kind));
+    let start = at(|k| matches!(k, Kind::StageStart { stage, .. } if stage == "implement"))
+        .unwrap_or_else(|| panic!("no stage.start for implement: {log:#?}"));
+    let end = at(
+        |k| matches!(k, Kind::StageEnd { stage, exit, .. } if stage == "implement" && *exit != 0),
+    )
+    .unwrap_or_else(|| panic!("the stopped stage logged no end and no exit: {log:#?}"));
+    let run_end =
+        at(|k| matches!(k, Kind::RunEnd { .. })).unwrap_or_else(|| panic!("no run.end: {log:#?}"));
+    assert!(start < end && end < run_end, "{log:#?}");
 }
