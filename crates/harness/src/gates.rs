@@ -372,32 +372,52 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
     )
 }
 
-fn diff_range(root: &Path, base: &str, filter: &str) -> Vec<String> {
-    let flag = format!("--diff-filter={filter}");
-    let mut args = vec!["diff", "--name-only"];
-    if !filter.is_empty() {
-        args.push(&flag);
-    }
-    args.extend([base, "HEAD"]);
-    git(root, &args)
-        .map(|s| {
-            s.lines()
-                .filter(|l| !l.is_empty())
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default()
+// word boundaries, so one id never matches a longer id it prefixes
+pub fn names_task(subject: &str, task: &str) -> bool {
+    regex::Regex::new(&format!(r"\b{}\b", regex::escape(task))).is_ok_and(|re| re.is_match(subject))
 }
 
-// the iteration's files: the product repository's, and in a nested install the harness
-// directory's under its own prefix. filter is a git --diff-filter value, empty for every change
-fn range_files(ctx: &GateCtx, base: &str, filter: &str) -> Vec<String> {
+// the files the task's own commits changed: a commit whose subject names no task, or another task,
+// is an operator's or another round's and is not charged here. filter is a git --diff-filter value,
+// empty for every change
+fn commit_files(root: &Path, base: &str, task: &str, filter: &str) -> Vec<String> {
+    let range = format!("{base}..HEAD");
+    let log = git(
+        root,
+        &["log", "--reverse", "--no-merges", "--format=%h %s", &range],
+    )
+    .unwrap_or_default();
+    let flag = format!("--diff-filter={filter}");
+    let mut files: Vec<String> = Vec::new();
+    for sha in log
+        .lines()
+        .filter_map(|l| l.split_once(' '))
+        .filter(|(_, subject)| names_task(subject, task))
+        .map(|(sha, _)| sha.to_string())
+    {
+        let mut args = vec!["show", "--format=", "--name-only"];
+        if !filter.is_empty() {
+            args.push(&flag);
+        }
+        args.push(&sha);
+        for f in git(root, &args).unwrap_or_default().lines() {
+            if !f.is_empty() && !files.iter().any(|seen| seen == f) {
+                files.push(f.to_string());
+            }
+        }
+    }
+    files
+}
+
+// the task's files: the product repository's, and in a nested install the harness
+// directory's under its own prefix
+fn task_files(ctx: &GateCtx, base: &str, task: &str, filter: &str) -> Vec<String> {
     let dir = &ctx.cfg.layout.harness_dir;
     let state = git::state_root(ctx.root, dir);
-    let mut files = diff_range(ctx.root, base, filter);
+    let mut files = commit_files(ctx.root, base, task, filter);
     if let Some(state_base) = ctx.state_base.as_deref().filter(|_| state != ctx.root) {
         files.extend(
-            diff_range(&state, state_base, filter)
+            commit_files(&state, state_base, task, filter)
                 .into_iter()
                 .map(|f| format!("{dir}/{f}")),
         );
@@ -440,8 +460,8 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
 
     let mut out_of: Vec<String> = Vec::new();
     let mut harness_hit: Vec<String> = Vec::new();
-    let changed = range_files(ctx, &base, "");
-    let added = range_files(ctx, &base, "A");
+    let changed = task_files(ctx, &base, &task, "");
+    let added = task_files(ctx, &base, &task, "A");
     // cargo rewrites Cargo.lock from a manifest the range changed, and a commit without it leaves
     // the tree dirty after the next build; the manifest still has to be on the scope: line
     let manifest_in_scope = changed
@@ -1462,7 +1482,7 @@ mod tests {
         env.repo.commit_all("verdict");
         let base = env.head();
         env.repo.write("src/other.ts", "stray");
-        env.repo.commit_all("stray");
+        env.repo.commit_all("T-001 stray");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
@@ -1479,13 +1499,42 @@ mod tests {
     }
 
     #[test]
+    fn a_commit_naming_no_task_is_not_charged() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", "src/a.ts", "§11 row 1");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write("src/other.ts", "an operator's own work");
+        env.repo.commit_all("fix: a hand edit between two rounds");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        assert!(env.tasks_text().contains("status: done"));
+    }
+
+    #[test]
+    fn a_commit_naming_another_task_is_not_charged() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", "src/a.ts", "§11 row 1");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write("src/other.ts", "another task's work");
+        env.repo
+            .commit_all("feat(src): T-002 another task on the branch");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        assert!(env.tasks_text().contains("status: done"));
+    }
+
+    #[test]
     fn scope_allows_a_harness_edit_under_a_harness_task() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", ".enallagi/*", "none — harness");
         env.repo.commit_all("verdict");
         let base = env.head();
         env.repo.write(".enallagi/loop.sh", "# edited\n");
-        env.repo.commit_all("harness edit");
+        env.repo.commit_all("T-001 harness edit");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
@@ -1499,7 +1548,7 @@ mod tests {
         env.repo.commit_all("verdict");
         let base = env.head();
         env.repo.write(".enallagi/loop.sh", "# edited\n");
-        env.repo.commit_all("harness edit");
+        env.repo.commit_all("T-001 harness edit");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
@@ -1519,7 +1568,7 @@ mod tests {
         env.repo.commit_all("verdict");
         let base = env.head();
         env.repo.write(".check-baseline", "alpha\nbeta\n");
-        env.repo.commit_all("baseline grew");
+        env.repo.commit_all("T-001 baseline grew");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
@@ -1545,7 +1594,7 @@ mod tests {
         let base = env.head();
         env.repo
             .write("test-hashes.json", "{\n  \"src/a.ts\": \"bbb\"\n}\n");
-        env.repo.commit_all("recut");
+        env.repo.commit_all("T-001 recut");
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
 
@@ -1557,7 +1606,7 @@ mod tests {
         let base = off.head();
         off.repo
             .write("test-hashes.json", "{\n  \"src/b.ts\": \"bbb\"\n}\n");
-        off.repo.commit_all("recut");
+        off.repo.commit_all("T-001 recut");
         let out = run("scope", &mut off.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
         assert!(out.reason.contains("test-hashes.json"), "{}", out.reason);
@@ -1577,7 +1626,7 @@ mod tests {
             .write("crates/a/Cargo.toml", "[package]\nname = \"new\"\n");
         env.repo
             .write("Cargo.lock", "[[package]]\nname = \"new\"\n");
-        env.repo.commit_all("rename the package");
+        env.repo.commit_all("T-001 rename the package");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
@@ -1595,7 +1644,7 @@ mod tests {
         alone
             .repo
             .write("Cargo.lock", "[[package]]\nname = \"new\"\n");
-        alone.repo.commit_all("lock alone");
+        alone.repo.commit_all("T-001 lock alone");
         let out = run("scope", &mut alone.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
         assert!(out.reason.contains("Cargo.lock"), "{}", out.reason);
@@ -1612,7 +1661,7 @@ mod tests {
             .write("vendor/b/Cargo.toml", "[package]\nname = \"new\"\n");
         off.repo
             .write("Cargo.lock", "[[package]]\nname = \"new\"\n");
-        off.repo.commit_all("rename an off-scope package");
+        off.repo.commit_all("T-001 rename an off-scope package");
         let out = run("scope", &mut off.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
         assert!(out.reason.contains("Cargo.lock"), "{}", out.reason);
@@ -1794,7 +1843,7 @@ mod tests {
         env.repo.write(".enallagi/roles/implementer.md", "# role\n");
         env.repo
             .write("harness.lock", &role_lock_toml(&[("implementer", "aaa")]));
-        env.repo.commit_all("vendor implementer");
+        env.repo.commit_all("T-001 vendor implementer");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
@@ -1810,7 +1859,7 @@ mod tests {
         let base = env.head();
         env.repo
             .write("harness.lock", &role_lock_toml(&[("implementer", "bbb")]));
-        env.repo.commit_all("recut implementer");
+        env.repo.commit_all("T-001 recut implementer");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
@@ -1838,7 +1887,7 @@ mod tests {
             "harness.lock",
             &lock_toml(&[("tdd", "aaa"), ("tdd-old", "aaa")]),
         );
-        env.repo.commit_all("vendor tdd-old");
+        env.repo.commit_all("T-001 vendor tdd-old");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
@@ -1859,7 +1908,7 @@ mod tests {
         // only sha256 changes -- the id line itself never appears in the diff
         env.repo
             .write("harness.lock", &lock_toml(&[("tdd-old", "bbb")]));
-        env.repo.commit_all("recut tdd-old");
+        env.repo.commit_all("T-001 recut tdd-old");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
@@ -1884,7 +1933,7 @@ mod tests {
         let base = env.head();
         env.repo
             .write("harness.lock", &lock_toml(&[("tdd", "bbb")]));
-        env.repo.commit_all("recut tdd");
+        env.repo.commit_all("T-001 recut tdd");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
@@ -1906,7 +1955,7 @@ mod tests {
         let base = env.head();
         env.repo
             .write("harness.lock", &lock_toml(&[("tdd", "aaa")]));
-        env.repo.commit_all("drop tdd-old");
+        env.repo.commit_all("T-001 drop tdd-old");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
@@ -1928,7 +1977,7 @@ mod tests {
         // the id is already locked, so the re-vendoring leaves harness.lock byte-identical
         env.repo
             .write(".enallagi/adapters/claude/skills/demo/SKILL.md", "# demo\n");
-        env.repo.commit_all("chore(vendor): demo");
+        env.repo.commit_all("chore(vendor): T-001 demo");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
@@ -1948,7 +1997,7 @@ mod tests {
             ".enallagi/adapters/claude/skills/demo/SKILL.md",
             "# demo, by hand\n",
         );
-        env.repo.commit_all("hand edit under the skills dir");
+        env.repo.commit_all("T-001 hand edit under the skills dir");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
@@ -1971,7 +2020,7 @@ mod tests {
             ".enallagi/adapters/claude/skills/other/NOTES.md",
             "hand-written",
         );
-        env.repo.commit_all("stray file under the skills dir");
+        env.repo.commit_all("T-001 stray file under the skills dir");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
