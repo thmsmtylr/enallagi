@@ -12,3 +12,4 @@ target/
 .harness/worktrees/
 .harness/loop.pid
 .harness/run/
+.DS_Store
