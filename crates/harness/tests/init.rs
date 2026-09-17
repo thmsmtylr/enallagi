@@ -450,11 +450,12 @@ fn a_stale_force_is_reported_against_the_command() {
             .replace("command = \"bun run check\"", "command = \"make check\""),
     );
     let report = install(&repo);
-    assert!(
-        report.notes.iter().any(|n| n.contains("check.force")),
-        "{:?}",
-        report.notes
-    );
+    let note = report
+        .notes
+        .iter()
+        .find(|n| n.contains("follows command"))
+        .unwrap_or_else(|| panic!("{:?}", report.notes));
+    assert!(note.contains("check.force is the default"), "{note}");
 }
 
 #[test]
