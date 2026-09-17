@@ -29,6 +29,7 @@ names a test by `file::test name`, copied character for character from __SPEC__'
 | `no-invented-strategy` | Never state a business model, sequence, price or market position that was not given to you. An open question is written as an open question. | judgment — the verifier |
 | `tidy` | The tree holds the product and the documents that govern it. A throwaway experiment is deleted the moment its number exists. Gitignored is not absent. Deleted work stays citable by sha: `git show <sha>:<path>`. | `harness probe` → `litter` |
 | `anchored` | A finding enters the queue only with the probe, the command and the output that produced it; an unanchored finding is a rejection, not a task. | judgment — the adjudicator |
+| `plain-record` | A commit subject, a task note and every line the binary prints record a step, a path, a command or an output. No aphorism, no count of causes restating the change, no aside set off by an em dash, no sentence on what the work meant. | `harness probe` → `plain-record` |
 
 > **Hooks are an adapter, not the enforcement.** They are configured per tool — Claude and Gemini in
 > `settings.json`, Copilot in `.github/hooks/*.json`, Cursor in `hooks.json` — and **Codex has none**
