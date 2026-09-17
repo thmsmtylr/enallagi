@@ -90,7 +90,7 @@ stages = ["verify"]
 [[pipeline]]
 name = "task"
 when = "queue.takeable"
-stages = ["implement", "verify"]
+stages = ["implement", "verify", "adjudicate"]
 
 [[pipeline]]
 name = "discover"
@@ -119,7 +119,7 @@ turns = 5
 name = "adjudicate"
 role = "adjudicator"
 turns = 5
-post = ["commit-round", "adjudicator-halt", "dry-round"]
+post = ["commit-round", "queue-intact", "adjudicator-halt", "dry-round"]
 {extra}
 "#
     )
@@ -501,7 +501,7 @@ fn an_unresolved_skill_refuses_a_stage() {
 #[test]
 fn a_command_stage_runs_with_the_harness_environment() {
     let toml = base_toml("").replace(
-        "stages = [\"implement\", \"verify\"]",
+        "stages = [\"implement\", \"verify\", \"adjudicate\"]",
         "stages = [\"note\"]",
     ) + "\n[[stage]]\nname = \"note\"\ncommand = \"printf '%s %s %s' \\\"$ENALLAGI_TASK\\\" \\\"$ENALLAGI_STAGE\\\" \\\"$ENALLAGI_ITERATION\\\" >env.txt\"\nturns = 1\n";
     let r = repo(&toml, TASKS);
@@ -575,7 +575,7 @@ fn a_new_needs_spec_halts() {
         ),
     );
     let toml = base_toml(&role_commands(&implement, "./src/fakeagent.sh")).replace(
-        "stages = [\"implement\", \"verify\"]",
+        "stages = [\"implement\", \"verify\", \"adjudicate\"]",
         "stages = [\"implement\"]",
     );
     write_toml(&r, &toml);
@@ -653,7 +653,7 @@ why = "the failing test is written first"
 #[test]
 fn rendering_a_role_keeps_its_source() {
     let toml = base_toml(SKILL).replace(
-        "stages = [\"implement\", \"verify\"]",
+        "stages = [\"implement\", \"verify\", \"adjudicate\"]",
         "stages = [\"implement\"]",
     );
     let r = repo(&toml, TASKS);
@@ -800,15 +800,12 @@ fn an_unnamed_red_check_is_a_finding() {
 #[test]
 fn a_proposed_fix_naming_the_contract_halts() {
     let r = repo("", "");
-    let adjudicate = script(
+    let scout = script(
         &r,
-        "src/fakeadj.sh",
+        "src/fakescout.sh",
         "printf '\\n## [T-002] the schema is wrong\\nstatus: proposed\\nprobe: spec-untested\\noutput: SPEC.md does not say which store\\n' >>TASKS.md\n",
     );
-    let extra = format!(
-        "\n[agent.adjudicator]\ncommand = [\"{adjudicate}\", \"{{prompt}}\", \"{{turns}}\"]\n"
-    );
-    write_toml(&r, &base_toml(&extra));
+    write_toml(&r, &base_toml(&role_command("scout", &scout)));
     r.write("TASKS.md", "# queue\n");
     r.commit_all("stubs");
 
@@ -826,7 +823,7 @@ fn a_proposed_fix_naming_the_contract_halts() {
 #[test]
 fn stage_output_streams_to_the_sink() {
     let toml = base_toml("").replace(
-        "stages = [\"implement\", \"verify\"]",
+        "stages = [\"implement\", \"verify\", \"adjudicate\"]",
         "stages = [\"implement\"]",
     );
     let r = repo(&toml, TASKS);
@@ -1555,4 +1552,304 @@ fn a_landed_iteration_leaves_no_instance_path() {
     );
     assert!(in_dir(&state, &["status", "--porcelain"]).is_empty());
     assert!(enallagi::git::porcelain(&r.root).is_empty());
+}
+
+// A drain round needs a block filed this iteration; the verifier files one when its rejection turns
+// something up, which is where every finding this session came from.
+const FILED: &str = "\n## [T-009] the fence scan reads one language only\n\nscope: src/thing.ts\nrows: none — harness\nstatus: proposed\ncriteria:\n  - the scan reads every fence\n";
+
+const RESTATED: &str = "\n## [T-009] the check was red at HEAD\n\nscope: src/thing.ts\nrows: none — harness\nstatus: proposed\ncriteria:\n  - the check was red at HEAD\n";
+
+const REJECTION: &str = "the check was red at HEAD";
+
+const ATTENDED_TASKS: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.ts
+rows: none — harness
+status: ready
+criteria:
+  - it happens
+
+## [T-002] the one a human runs
+
+scope: src/other.ts
+rows: none — harness
+status: ready
+attended: true
+criteria:
+  - it happens
+";
+
+fn role_command(role: &str, path: &str) -> String {
+    format!("\n[agent.{role}]\ncommand = [\"{path}\", \"{{prompt}}\", \"{{turns}}\"]\n")
+}
+
+fn rejecting_verifier(r: &Repo) -> String {
+    script(
+        r,
+        "src/fakeverify.sh",
+        &format!(
+            "{bin} tasks set-status T-001 ready '{REJECTION}'\n\
+             cat src/filed.md >>TASKS.md\n\
+             {QUIET}",
+            bin = env!("CARGO_BIN_EXE_enallagi"),
+        ),
+    )
+}
+
+fn adjudicator(r: &Repo, body: &str) -> String {
+    script(r, "src/fakeadj.sh", &format!("{body}{QUIET}"))
+}
+
+fn promotes(id: &str) -> String {
+    format!(
+        "{bin} tasks set-status {id} ready 'promoted'\n",
+        bin = env!("CARGO_BIN_EXE_enallagi"),
+    )
+}
+
+// one repo whose verifier rejects, files `filed`, and whose adjudicator runs `body`
+fn draining(r: &Repo, filed: &str, body: &str) {
+    let implement = implementer(r, "");
+    let verify = rejecting_verifier(r);
+    let adj = adjudicator(r, body);
+    let roles = format!(
+        "{}{}",
+        role_commands(&implement, &verify),
+        role_command("adjudicator", &adj)
+    );
+    write_toml(r, &base_toml(&roles));
+    r.write("TASKS.md", TASKS);
+    r.write("src/filed.md", filed);
+    r.commit_all("stubs");
+}
+
+fn stages_started(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            Kind::StageStart { stage, .. } => Some(stage.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn status_of(r: &Repo, id: &str) -> Option<String> {
+    let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    let blocks = enallagi::queue::parse(&text).expect("parse");
+    blocks
+        .iter()
+        .find(|b| b.id == id)
+        .and_then(|b| enallagi::queue::field(b, "status"))
+}
+
+#[test]
+fn adjudicate_follows_a_rejection_in_one_round() {
+    let r = repo("", "");
+    draining(&r, FILED, &promotes("T-009"));
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(
+        stages_started(&events),
+        vec!["implement", "verify", "adjudicate"],
+        "{events:#?}"
+    );
+    assert_eq!(status_of(&r, "T-001").as_deref(), Some("ready"));
+    assert!(
+        digest.promoted.contains(&"T-009".to_string()),
+        "{:?}",
+        digest.promoted
+    );
+}
+
+#[test]
+fn a_verdict_filing_nothing_skips_adjudicate() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    let adj = adjudicator(&r, "touch adjudicate-ran\n");
+    let roles = format!(
+        "{}{}",
+        role_commands(&implement, &verify),
+        role_command("adjudicator", &adj)
+    );
+    write_toml(&r, &base_toml(&roles));
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(
+        stages_started(&events),
+        vec!["implement", "verify"],
+        "{events:#?}"
+    );
+    assert!(!r.root.join("adjudicate-ran").exists());
+    assert_eq!(digest.landed, vec!["T-001".to_string()]);
+}
+
+#[test]
+fn the_adjudicate_gates_run_in_a_task_round() {
+    let r = repo("", "");
+    draining(&r, FILED, &promotes("T-009"));
+
+    let (_, events) = go(&r, &opts(1));
+    let at = events
+        .iter()
+        .position(|e| matches!(&e.kind, Kind::StageStart { stage, .. } if stage == "adjudicate"))
+        .expect("the adjudicate stage started");
+    let gates: Vec<&str> = events[at..]
+        .iter()
+        .filter_map(|e| match &e.kind {
+            Kind::Gate { gate, .. } => Some(gate.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        gates,
+        vec![
+            "commit-round",
+            "queue-intact",
+            "adjudicator-halt",
+            "dry-round"
+        ],
+        "{events:#?}"
+    );
+}
+
+#[test]
+fn a_promotion_repeating_a_rejection_is_refused() {
+    let r = repo("", "");
+    draining(&r, RESTATED, &promotes("T-009"));
+
+    let (digest, _) = go(&r, &opts(1));
+    assert_eq!(status_of(&r, "T-009").as_deref(), Some("proposed"));
+    assert!(
+        !digest.promoted.contains(&"T-009".to_string()),
+        "{:?}",
+        digest.promoted
+    );
+    let named = digest
+        .warnings
+        .iter()
+        .find(|w| w.contains("T-009") && w.contains("T-001") && w.contains(REJECTION));
+    assert!(named.is_some(), "{:?}", digest.warnings);
+}
+
+#[test]
+fn no_scout_still_reaches_the_adjudicator() {
+    let r = repo("", "");
+    draining(&r, FILED, &promotes("T-009"));
+    let toml = std::fs::read_to_string(r.root.join("enallagi.toml")).expect("enallagi.toml");
+    let toml = toml
+        .replace(
+            "[[pipeline]]\nname = \"discover\"\nwhen = \"!queue.takeable\"\nstages = [\"scout\", \"adjudicate\"]\nend_after_dry_rounds = 2\n",
+            "",
+        )
+        .replace("[[stage]]\nname = \"scout\"\nrole = \"scout\"\nturns = 5\n", "");
+    assert!(!toml.contains("scout"), "{toml}");
+    r.write("enallagi.toml", &toml);
+    r.commit_all("no scout");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert!(
+        stages_started(&events).contains(&"adjudicate".to_string()),
+        "{events:#?}"
+    );
+    assert!(
+        digest.promoted.contains(&"T-009".to_string()),
+        "{:?}",
+        digest.promoted
+    );
+}
+
+#[test]
+fn a_stage_that_exits_records_what_it_promoted() {
+    let r = repo("", "");
+    draining(&r, FILED, &format!("{}exit 1\n", promotes("T-009")));
+
+    let (digest, _) = go(&r, &opts(1));
+    assert!(
+        digest.promoted.contains(&"T-009".to_string()),
+        "{:?}",
+        digest.promoted
+    );
+    assert!(
+        digest
+            .halts
+            .iter()
+            .any(|h| h.contains("adjudicate exited 1")),
+        "{:?}",
+        digest.halts
+    );
+}
+
+#[test]
+fn the_dry_plan_names_adjudicate_after_verify() {
+    let r = repo(&base_toml(""), TASKS);
+    let plan = plan_of(&r);
+    let at = plan
+        .find("=== pipeline task (queue.takeable) ===")
+        .unwrap_or_else(|| panic!("{plan}"));
+    let section = &plan[at..];
+    let section = &section[..section[1..]
+        .find("=== pipeline ")
+        .map(|i| i + 1)
+        .unwrap_or(section.len())];
+    let verify = section.find("would spawn: verify").expect(section);
+    let adjudicate = section.find("would spawn: adjudicate").expect(section);
+    assert!(verify < adjudicate, "{section}");
+}
+
+#[test]
+fn the_shipped_task_pipeline_adjudicates() {
+    let r = Repo::new();
+    r.write("enallagi.toml", "[check]\ncommand = \"true\"\n");
+    let cfg = enallagi::config::load(&r.root).expect("load");
+    let task = cfg
+        .pipeline
+        .iter()
+        .find(|p| p.name == "task")
+        .expect("the task pipeline");
+    assert_eq!(task.stages, vec!["implement", "verify", "adjudicate"]);
+}
+
+#[test]
+fn an_attended_block_waits_for_a_scout_round() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    let scout = script(&r, "src/fakescout.sh", QUIET);
+    let roles = format!(
+        "{}{}",
+        role_commands(&implement, &verify),
+        role_command("scout", &scout)
+    );
+    write_toml(&r, &base_toml(&roles));
+    r.write("TASKS.md", ATTENDED_TASKS);
+    r.commit_all("stubs");
+
+    let (digest, events) = go(&r, &opts(2));
+    assert!(
+        stages_started(&events).contains(&"scout".to_string()),
+        "{events:#?}"
+    );
+    assert!(
+        !digest
+            .halts
+            .iter()
+            .any(|h| h.contains("A human has to run it")),
+        "{:?}",
+        digest.halts
+    );
+}
+
+#[test]
+fn the_adjudicator_prompt_names_the_filed_ids() {
+    let r = repo("", "");
+    draining(&r, FILED, "printf '%s' \"$1\" >adjudicate-prompt\n");
+
+    go(&r, &opts(1));
+    let prompt = std::fs::read_to_string(r.root.join("adjudicate-prompt")).expect("the prompt");
+    assert!(prompt.contains("T-009"), "{prompt}");
 }

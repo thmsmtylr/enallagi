@@ -107,10 +107,11 @@ name = "review"
 when = "queue.reviewing"
 stages = ["verify"]
 
+# adjudicate runs last: the round drains whatever the verdict filed before the next task is picked.
 [[pipeline]]
 name = "task"
 when = "queue.takeable"
-stages = ["implement", "verify"]
+stages = ["implement", "verify", "adjudicate"]
 
 [[pipeline]]
 name = "discover"
