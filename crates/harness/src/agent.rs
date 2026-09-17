@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -373,6 +374,41 @@ const GRACE: Duration = Duration::from_secs(10);
 // a stale reset rolls to the same time tomorrow, so a further-out one isn't worth a day-long sleep
 const MAX_WAIT: u64 = 6 * 3600;
 
+// the two numbers POSIX fixes, so no binding crate is needed to name them
+const SIGINT: i32 = 2;
+const SIGTERM: i32 = 15;
+const SIG_DFL: usize = 0;
+
+static SIGNALLED: AtomicI32 = AtomicI32::new(0);
+
+extern "C" {
+    fn signal(signum: i32, handler: usize) -> usize;
+}
+
+extern "C" fn note_signal(signum: i32) {
+    SIGNALLED.store(signum, Ordering::Relaxed);
+    // an operator who signals twice is not made to wait: the second one gets the default disposition
+    unsafe { signal(signum, SIG_DFL) };
+}
+
+/// Take SIGINT and SIGTERM, so a stop reaches the agent the launcher spawned instead of orphaning it.
+pub fn catch_stop_signals() {
+    let handler = note_signal as extern "C" fn(i32) as usize;
+    unsafe {
+        signal(SIGINT, handler);
+        signal(SIGTERM, handler);
+    }
+}
+
+/// The name of the signal a stop arrived on, once one has.
+pub fn stop_signal() -> Option<&'static str> {
+    match SIGNALLED.load(Ordering::Relaxed) {
+        SIGINT => Some("SIGINT"),
+        SIGTERM => Some("SIGTERM"),
+        _ => None,
+    }
+}
+
 #[cfg(not(test))]
 fn stage_now() -> jiff::Zoned {
     jiff::Zoned::now()
@@ -493,8 +529,10 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         Err(_) => s.preset.env.clone(),
     };
 
+    use std::os::unix::process::CommandExt;
     let mut command = Command::new(program);
     crate::config::drop_legacy_env(&mut command);
+    // the agent gets its own process group, so a stop reaches the lanes and shells it spawned too
     let mut child = command
         .args(args)
         .current_dir(s.cwd)
@@ -503,7 +541,9 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()?;
+    let pgid = child.id();
 
     // stdout and stderr interleave into one buffer: most presets put progress on stderr and gates read one stream
     let buffer = Arc::new(Mutex::new(String::new()));
@@ -519,13 +559,18 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
     let mut sent = 0usize;
     let mut last_emit = Instant::now();
     let mut timed_out = false;
+    let mut stopped = false;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
         }
+        if stop_signal().is_some() {
+            stopped = true;
+            break kill_group(&mut child, pgid)?;
+        }
         if s.timeout.is_some_and(|t| started.elapsed() >= t) {
             timed_out = true;
-            break terminate(&mut child)?;
+            break kill_group(&mut child, pgid)?;
         }
         if last_emit.elapsed() >= Duration::from_secs(1) {
             flush(&buffer, &mut sent, &s.stage, events);
@@ -533,10 +578,8 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         }
         std::thread::sleep(POLL);
     };
-    // ponytail: a timed-out child can leave a grandchild holding the pipe, so
-    // the readers are joined only on a clean exit; upgrade to a process-group
-    // kill if a preset turns out to orphan writers on a clean exit too.
-    if !timed_out {
+    // a killed child can leave a grandchild holding the pipe, so the readers are joined only on a clean exit
+    if !timed_out && !stopped {
         for reader in readers {
             let _ = reader.join();
         }
@@ -558,20 +601,35 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
     Ok((exit, output, timed_out))
 }
 
-fn terminate(child: &mut std::process::Child) -> Result<std::process::ExitStatus, AgentError> {
-    let pid = child.id().to_string();
-    let _ = Command::new("kill").args(["-TERM", &pid]).status();
+fn kill_group(
+    child: &mut std::process::Child,
+    pgid: u32,
+) -> Result<std::process::ExitStatus, AgentError> {
+    let group = format!("-{pgid}");
+    signal_group("TERM", &group);
     let deadline = Instant::now() + GRACE;
-    loop {
+    let status = loop {
         if let Some(status) = child.try_wait()? {
-            return Ok(status);
+            break status;
         }
         if Instant::now() >= deadline {
             child.kill()?;
-            return Ok(child.wait()?);
+            break child.wait()?;
         }
         std::thread::sleep(POLL);
-    }
+    };
+    // the agent exiting says nothing about a grandchild it left behind
+    signal_group("KILL", &group);
+    Ok(status)
+}
+
+// a group already gone prints `No such process` on stderr, which is not the stage's output to carry
+fn signal_group(name: &str, group: &str) {
+    let _ = Command::new("kill")
+        .args([&format!("-{name}"), group])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn drain<R: Read + Send + 'static>(

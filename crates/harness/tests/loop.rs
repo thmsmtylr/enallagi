@@ -2210,3 +2210,89 @@ fn an_unknown_pipeline_name_is_refused() {
     }
     assert!(stages_started(&events).is_empty(), "{events:#?}");
 }
+
+// a stop arrives as a signal to a process, so these drive the binary rather than pipeline::run
+fn sleeping_agent() -> Repo {
+    let r = repo(&base_toml(""), TASKS);
+    script(
+        &r,
+        "src/fakeagent.sh",
+        "echo $$ >agent.pid\nsleep 120 &\necho $! >child.pid\nsleep 120\n",
+    );
+    r.commit_all("a sleeping agent");
+    r
+}
+
+fn alive(pid: &str) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", pid])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn pid_from(path: &std::path::Path) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            let pid = text.trim().to_string();
+            if !pid.is_empty() {
+                return pid;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("{} was never written", path.display());
+}
+
+fn stop_leaves_nothing_running(signal: &str) {
+    let r = sleeping_agent();
+    let mut launcher = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["run", "--iterations", "1", "--no-tui"])
+        .current_dir(&r.root)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("enallagi run");
+    let child = pid_from(&r.root.join("child.pid"));
+    let agent = pid_from(&r.root.join("agent.pid"));
+
+    let sent = std::process::Command::new("kill")
+        .args([&format!("-{signal}"), &launcher.id().to_string()])
+        .status()
+        .expect("signal the launcher");
+    assert!(sent.success(), "{signal} was not delivered");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while (alive(&agent) || alive(&child)) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(!alive(&agent), "the agent {agent} outlived the launcher");
+    assert!(!alive(&child), "the agent's child {child} outlived it");
+    launcher.wait().expect("the launcher exited");
+
+    let log = enallagi::events::Log::open(&r.root.join(".enallagi"))
+        .read()
+        .expect("events.jsonl");
+    assert!(
+        log.iter()
+            .any(|e| matches!(&e.kind, Kind::Halt { halt, .. } if halt == "signal")),
+        "{log:#?}"
+    );
+    assert!(
+        matches!(log.last().map(|e| &e.kind), Some(Kind::RunEnd { .. })),
+        "{log:#?}"
+    );
+}
+
+#[test]
+fn a_sigterm_stops_the_lane_and_its_child() {
+    stop_leaves_nothing_running("TERM");
+}
+
+#[test]
+fn a_sigint_stops_the_lane_and_its_child() {
+    stop_leaves_nothing_running("INT");
+}

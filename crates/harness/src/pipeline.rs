@@ -705,7 +705,13 @@ impl<'a> Loop<'a> {
             turns: result.usage.turns,
         });
 
-        let flow = if result.exit != 0 {
+        let flow = if let Some(signal) = agent::stop_signal() {
+            self.halt(
+                "signal",
+                format!("{} was stopped by {signal}, exiting.", stage.name),
+            );
+            Flow::Stop
+        } else if result.exit != 0 {
             self.halt(
                 "stage",
                 format!(
@@ -937,9 +943,13 @@ impl<'a> Loop<'a> {
         }
     }
 
-    // order matters: STOP file, then budgets, then a new needs-spec task
+    // order matters: a signal, then the STOP file, then budgets, then a new needs-spec task
     fn boundary(&mut self, needs_spec: bool) -> bool {
         if self.stopped {
+            return true;
+        }
+        if let Some(signal) = agent::stop_signal() {
+            self.halt("signal", format!("stopped by {signal}, exiting."));
             return true;
         }
         if self.file("STOP").is_file() {

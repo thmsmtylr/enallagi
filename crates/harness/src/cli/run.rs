@@ -6,7 +6,7 @@ use std::sync::{mpsc, Arc};
 
 use crate::events::{self, Event, Kind};
 use crate::pipeline::{self, RunOpts};
-use crate::{git, skills, tui};
+use crate::{agent, git, skills, tui};
 
 pub struct Args {
     pub iterations: u32,
@@ -20,6 +20,8 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
+    // a stop is the operator's, so it ends the run through the digest rather than orphaning a lane
+    agent::catch_stop_signals();
     let cwd = std::env::current_dir()?;
     let root = match git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
         Ok(top) => std::path::PathBuf::from(top),
