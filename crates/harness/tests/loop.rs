@@ -1562,6 +1562,11 @@ const RESTATED: &str = "\n## [T-009] the check was red at HEAD\n\nscope: src/thi
 
 const REJECTION: &str = "the check was red at HEAD";
 
+const NOTED_REJECTION: &str =
+    "the fence scan reads one language only and nothing in the queue says so";
+
+const NOTED_RESTATED: &str = "\n## [T-009] the fence scan reads one language only\n\nscope: src/thing.ts\nrows: none — harness\nstatus: proposed\ncriteria:\n  - the fence scan reads one language only and nothing in the queue says so\n";
+
 const ATTENDED_TASKS: &str = "\
 ## [T-001] do the thing
 
@@ -1598,6 +1603,21 @@ fn rejecting_verifier(r: &Repo) -> String {
     )
 }
 
+// the role prompt has the verifier edit the block and append `REJECTED` to notes; only set-status writes a `gate:` line
+fn verifier_rejecting_in_notes(r: &Repo) -> String {
+    script(
+        r,
+        "src/fakeverify.sh",
+        &format!(
+            "sed -i.bak 's/^status: review$/status: ready/' TASKS.md\n\
+             rm -f TASKS.md.bak\n\
+             printf 'notes: Verifier: REJECTED on criterion 1. {NOTED_REJECTION}. Re-run it.\\n' >>TASKS.md\n\
+             cat src/filed.md >>TASKS.md\n\
+             {QUIET}"
+        ),
+    )
+}
+
 fn adjudicator(r: &Repo, body: &str) -> String {
     script(r, "src/fakeadj.sh", &format!("{body}{QUIET}"))
 }
@@ -1611,12 +1631,16 @@ fn promotes(id: &str) -> String {
 
 // one repo whose verifier rejects, files `filed`, and whose adjudicator runs `body`
 fn draining(r: &Repo, filed: &str, body: &str) {
-    let implement = implementer(r, "");
     let verify = rejecting_verifier(r);
+    draining_with(r, &verify, filed, body);
+}
+
+fn draining_with(r: &Repo, verify: &str, filed: &str, body: &str) {
+    let implement = implementer(r, "");
     let adj = adjudicator(r, body);
     let roles = format!(
         "{}{}",
-        role_commands(&implement, &verify),
+        role_commands(&implement, verify),
         role_command("adjudicator", &adj)
     );
     write_toml(r, &base_toml(&roles));
@@ -1852,4 +1876,44 @@ fn the_adjudicator_prompt_names_the_filed_ids() {
     go(&r, &opts(1));
     let prompt = std::fs::read_to_string(r.root.join("adjudicate-prompt")).expect("the prompt");
     assert!(prompt.contains("T-009"), "{prompt}");
+}
+
+#[test]
+fn a_task_round_does_not_spend_the_discovery_budget() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    let scout = script(&r, "src/fakescout.sh", QUIET);
+    let roles = format!(
+        "{}{}",
+        role_commands(&implement, &verify),
+        role_command("scout", &scout)
+    );
+    write_toml(&r, &base_toml(&roles));
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    // one task round, then the discover pipeline's two dry rounds: the task round is not one of them
+    let (digest, _) = go(&r, &opts(5));
+    assert_eq!(digest.iterations, 3, "{digest:#?}");
+}
+
+#[test]
+fn a_promotion_repeating_a_noted_verdict_is_refused() {
+    let r = repo("", "");
+    let verify = verifier_rejecting_in_notes(&r);
+    draining_with(&r, &verify, NOTED_RESTATED, &promotes("T-009"));
+
+    let (digest, _) = go(&r, &opts(1));
+    assert_eq!(status_of(&r, "T-009").as_deref(), Some("proposed"));
+    assert!(
+        !digest.promoted.contains(&"T-009".to_string()),
+        "{:?}",
+        digest.promoted
+    );
+    let named = digest
+        .warnings
+        .iter()
+        .find(|w| w.contains("T-009") && w.contains("T-001") && w.contains(NOTED_REJECTION));
+    assert!(named.is_some(), "{:?}", digest.warnings);
 }

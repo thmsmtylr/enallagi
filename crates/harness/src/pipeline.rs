@@ -285,7 +285,7 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         needs_spec_at_start: Vec::new(),
         proposed_at_start: Vec::new(),
         dry_rounds: 0,
-        scouted: false,
+        dry_pipeline: None,
         stopped: false,
     };
     looper.go()
@@ -314,7 +314,7 @@ struct Loop<'a> {
     needs_spec_at_start: Vec<String>,
     proposed_at_start: Vec<String>,
     dry_rounds: u32,
-    scouted: bool,
+    dry_pipeline: Option<String>,
     stopped: bool,
 }
 
@@ -425,8 +425,22 @@ impl<'a> Loop<'a> {
         let state_base = git::head(&self.state_root());
         let progress_before = file_len(&self.file("PROGRESS.md"));
 
+        let Some(pipeline) = self.choose() else {
+            self.digest
+                .warnings
+                .push("no pipeline's `when` held; nothing to run.".to_string());
+            return false;
+        };
+
+        // dry rounds are consecutive rounds of one pipeline: a task round that empties the queue is
+        // not a discovery round, and only the pipeline holding end_after_dry_rounds spends it
+        if self.dry_pipeline.as_deref() != Some(pipeline.name.as_str()) {
+            self.dry_rounds = 0;
+            self.dry_pipeline = Some(pipeline.name.clone());
+        }
+
         // fires only after a discovery round already found nothing takeable; attended:true blocks alone are the ordinary human-wait state
-        if takeable.is_none() && self.scouted && self.dry_rounds >= 1 {
+        if takeable.is_none() && self.dry_rounds >= 1 {
             if let Some(id) = self.first_attended_ready() {
                 self.halt(
                     &id,
@@ -437,13 +451,6 @@ impl<'a> Loop<'a> {
                 return false;
             }
         }
-
-        let Some(pipeline) = self.choose() else {
-            self.digest
-                .warnings
-                .push("no pipeline's `when` held; nothing to run.".to_string());
-            return false;
-        };
 
         // the review pipeline verifies a task stranded at review, not the ordinary ready-and-unattended one
         let task = if matches!(
@@ -459,7 +466,6 @@ impl<'a> Loop<'a> {
             let Some(stage) = self.cfg.stage.iter().find(|s| &s.name == name).cloned() else {
                 continue;
             };
-            self.scouted |= stage.role.as_deref() == Some("scout");
             let bases = (iter_base.clone(), state_base.clone());
             match self.stage(&stage, task.clone(), bases) {
                 Flow::Go => {}
@@ -1100,27 +1106,27 @@ impl<'a> Loop<'a> {
             return;
         };
         let blocks = self.blocks();
-        let Some(verdict) = blocks
+        let rejected = blocks
             .iter()
             .find(|b| b.id == task)
-            .and_then(|b| queue::field(b, "gate"))
-            .filter(|v| !v.trim().is_empty())
-        else {
+            .filter(|b| queue::field(b, "status").as_deref() == Some("ready"));
+        let Some(claims) = rejected.and_then(rejection_text).map(|v| claims(&v)) else {
             return;
         };
-        let needle = squash(&verdict);
-        let restated: Vec<String> = self
+        let restated: Vec<(String, String)> = self
             .ids_at("ready")
             .into_iter()
             .filter(|id| id != task && !ready_before.contains(id))
-            .filter(|id| {
-                blocks
+            .filter_map(|id| {
+                let text = blocks
                     .iter()
-                    .find(|b| &b.id == id)
-                    .is_some_and(|b| squash(&queue::block_text(b)).contains(&needle))
+                    .find(|b| b.id == id)
+                    .map(|b| squash(&queue::block_text(b)))?;
+                let claim = claims.iter().find(|c| text.contains(&squash(c)))?;
+                Some((id, claim.clone()))
             })
             .collect();
-        for id in restated {
+        for (id, verdict) in restated {
             let reason = format!("{id} restates the verdict on {task}: {verdict}");
             let q = Queue {
                 path: self.file("TASKS.md"),
@@ -1222,6 +1228,27 @@ fn listing(out: &mut String, heading: &str, items: &[String]) {
     for item in items {
         let _ = writeln!(out, "  {item}");
     }
+}
+
+// the verifier writes its verdict into the block's notes as `REJECTED`; a `gate:` line is written
+// only by set_status, and the newest one sits directly under `status:`
+fn rejection_text(b: &queue::Block) -> Option<String> {
+    let text = queue::block_text(b);
+    if let Some(at) = text.rfind("REJECTED") {
+        return Some(text[at..].to_string());
+    }
+    queue::field(b, "gate").filter(|v| !v.trim().is_empty())
+}
+
+// a verdict is a paragraph and a promotion copies one claim of it, never the whole thing. A run
+// under five words recurs by chance, and one quoting a command or a path is boilerplate two blocks
+// share without either restating the other.
+fn claims(verdict: &str) -> Vec<String> {
+    verdict
+        .split(['.', '\n'])
+        .filter(|s| !s.contains('`') && s.split_whitespace().count() >= 5)
+        .map(|s| s.trim().to_string())
+        .collect()
 }
 
 // lowercase, one space between words: two statements of the same sentence compare equal
