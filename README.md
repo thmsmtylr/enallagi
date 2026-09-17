@@ -1,6 +1,6 @@
 # enallagi
 
-**The fractionl harness that could.**
+**The fractional harness that could.**
 
 An autonomous task loop for a coding agent, in one static binary.
 
