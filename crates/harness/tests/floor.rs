@@ -19,6 +19,19 @@ fn re(pattern: &str) -> regex::Regex {
     regex::Regex::new(pattern).expect("compile pattern")
 }
 
+// a locally excluded scratch file under a scanned directory is not a shipped file
+fn tracked(root: &Path) -> std::collections::HashSet<PathBuf> {
+    let out = Command::new("git")
+        .current_dir(root)
+        .args(["ls-files"])
+        .output()
+        .expect("git ls-files");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(PathBuf::from)
+        .collect()
+}
+
 fn walk(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
@@ -615,9 +628,13 @@ fn no_shipped_document_calls_the_binary_harness() {
     assert!(old.is_match("harness probe"), "the scan cannot report");
 
     let root = repo_root();
+    let shipped = tracked(&root);
     for dir in ["roles", "templates", "skills", "evals", "adapters", "docs"] {
         let at = root.join(dir);
         for rel in walk(&at) {
+            if !shipped.contains(&Path::new(dir).join(&rel)) {
+                continue;
+            }
             let Ok(text) = fs::read_to_string(at.join(&rel)) else {
                 continue;
             };
