@@ -1,4 +1,4 @@
-//! The launcher: runs pipelines from `harness.toml` with halts and gates.
+//! The launcher: runs pipelines from `enallagi.toml` with halts and gates.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -24,15 +24,15 @@ and no answer will come, so never end a turn on a question -- decide and act. A 
 or agent process in ps is your PARENT process, not a competing writer: LEARNINGS.md's one-checkout-one-writer
 rule is about a second operator, and it does not apply to the process that started you.";
 
-const SCOUT: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/run/roles/scout.md: read that file first and follow it exactly. Run `harness probe` and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop.";
+const SCOUT: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/scout.md: read that file first and follow it exactly. Run `enallagi probe` and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop.";
 
-const ADJUDICATOR: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/run/roles/adjudicator.md: read that file first and follow it exactly. Act on every block with 'status: proposed' in TASKS.md, in file order. Promote it to 'status: ready' with a scope and criteria an agent that has read only __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or __CONTEXT_FILE__ is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop.";
+const ADJUDICATOR: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/adjudicator.md: read that file first and follow it exactly. Act on every block with 'status: proposed' this iteration filed, in file order. Promote it to 'status: ready' with a scope and criteria an agent that has read only __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or __CONTEXT_FILE__ is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop.";
 
-const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __HARNESS_DIR__/run/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the product paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason. Never stage or commit TASKS.md, PROGRESS.md or any other file under __HARNESS_DIR__: this loop commits them when your stage ends. An implementation left uncommitted is a lost iteration.";
+const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __ENALLAGI_DIR__/run/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the product paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason. Never stage or commit TASKS.md, PROGRESS.md or any other file under __ENALLAGI_DIR__: this loop commits them when your stage ends. An implementation left uncommitted is a lost iteration.";
 
-const VERIFIER: &str = "Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Your role is defined in __HARNESS_DIR__/run/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons; this loop commits the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop.";
+const VERIFIER: &str = "Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons; this loop commits the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop.";
 
-const GENERIC: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __HARNESS_DIR__/run/roles/__ROLE__.md: read that file first and follow it exactly. Then stop.";
+const GENERIC: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/__ROLE__.md: read that file first and follow it exactly. Then stop.";
 
 fn prompt_for(role: &str, cfg: &Config) -> String {
     let body = match role {
@@ -138,6 +138,42 @@ pub struct Digest {
 #[error("{0}")]
 pub struct Refused(pub String);
 
+fn queue_blocks(root: &Path, cfg: &Config) -> Vec<queue::Block> {
+    std::fs::read_to_string(config::instance_path(
+        root,
+        &cfg.layout.harness_dir,
+        "TASKS.md",
+    ))
+    .ok()
+    .and_then(|t| queue::parse(&t).ok())
+    .unwrap_or_default()
+}
+
+// the same task the round would take, so the plan prices the stage the run will actually spawn
+fn plan_task(blocks: &[queue::Block], when: &Predicate) -> Option<String> {
+    if matches!(when, Predicate::QueueReviewing) {
+        queue::ids_at(blocks, "review").into_iter().next()
+    } else {
+        queue::ready_unattended(blocks)
+    }
+}
+
+fn task_levels(blocks: &[queue::Block], task: Option<&str>) -> agent::Levels {
+    let Some(b) = task.and_then(|id| blocks.iter().find(|b| b.id == id)) else {
+        return agent::Levels::default();
+    };
+    let value = |key: &str| queue::field(b, key).filter(|v| !v.is_empty());
+    agent::Levels {
+        model: value("model"),
+        effort: value("effort"),
+    }
+}
+
+// no level anywhere means no flag is passed, so the agent's own default is what runs
+fn level_word(level: &Option<String>) -> &str {
+    level.as_deref().unwrap_or("default")
+}
+
 pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
     let presets = agent::presets();
     let mut out = String::new();
@@ -145,14 +181,13 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
     let mut warnings = Vec::new();
 
     for pipeline in cfg.pipeline.iter() {
-        if !holds(
-            root,
-            cfg,
-            &config::parse_when(&pipeline.when)?,
-            &mut warnings,
-        ) {
+        let when = config::parse_when(&pipeline.when)?;
+        if !holds(root, cfg, &when, &mut warnings) {
             continue;
         }
+        let blocks = queue_blocks(root, cfg);
+        let task = plan_task(&blocks, &when);
+        let levels = task_levels(&blocks, task.as_deref());
         let _ = writeln!(
             out,
             "=== pipeline {} ({}) ===",
@@ -165,13 +200,16 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
             match (&stage.role, &stage.command) {
                 (Some(role), _) => {
                     scouting |= role == "scout";
-                    let resolved = agent::resolve(&cfg.agent, role, &presets)
+                    let resolved = agent::resolve_task(&cfg.agent, role, &presets, &levels)
                         .map_err(|e| ConfigError::UnknownPreset(e.to_string()))?;
                     let via = resolved.argv.first().cloned().unwrap_or_default();
                     let _ = writeln!(
                         out,
-                        "  DRY_RUN would spawn: {name} as role {role} via {via} (turns: {})",
-                        stage.turns
+                        "  DRY_RUN would spawn: {name} as role {role} via {via} \
+                         (turns: {}, model: {}, effort: {})",
+                        stage.turns,
+                        level_word(&resolved.levels.model),
+                        level_word(&resolved.levels.effort)
                     );
                     for line in prompt_for(role, cfg).lines() {
                         let _ = writeln!(out, "    | {line}");
@@ -197,7 +235,7 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
 
     if scouting {
         out.push_str("  probes, which are the scout's whole input:\n");
-        // HARNESS_DRIVER only here and the scout stage -- it installs throwaway repos and costs wall clock elsewhere
+        // ENALLAGI_DRIVER only here and the scout stage -- it installs throwaway repos and costs wall clock elsewhere
         let check = check_outcome(root, cfg);
         let ctx = ProbeCtx {
             root,
@@ -245,7 +283,9 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         tokens_missing: false,
         spent_tokens: 0,
         needs_spec_at_start: Vec::new(),
+        proposed_at_start: Vec::new(),
         dry_rounds: 0,
+        dry_pipeline: None,
         stopped: false,
     };
     looper.go()
@@ -272,7 +312,9 @@ struct Loop<'a> {
     tokens_missing: bool,
     spent_tokens: u64,
     needs_spec_at_start: Vec<String>,
+    proposed_at_start: Vec<String>,
     dry_rounds: u32,
+    dry_pipeline: Option<String>,
     stopped: bool,
 }
 
@@ -376,11 +418,26 @@ impl<'a> Loop<'a> {
         self.archive();
 
         let ready_before = self.ids_at("ready");
+        self.proposed_at_start = self.ids_at("proposed");
         let rejections_before = self.rejections();
         let takeable = gates::takeable(self.root, self.cfg);
         let iter_base = git::head(self.root);
         let state_base = git::head(&self.state_root());
         let progress_before = file_len(&self.file("PROGRESS.md"));
+
+        let Some(pipeline) = self.choose() else {
+            self.digest
+                .warnings
+                .push("no pipeline's `when` held; nothing to run.".to_string());
+            return false;
+        };
+
+        // dry rounds are consecutive rounds of one pipeline: a task round that empties the queue is
+        // not a discovery round, and only the pipeline holding end_after_dry_rounds spends it
+        if self.dry_pipeline.as_deref() != Some(pipeline.name.as_str()) {
+            self.dry_rounds = 0;
+            self.dry_pipeline = Some(pipeline.name.clone());
+        }
 
         // fires only after a discovery round already found nothing takeable; attended:true blocks alone are the ordinary human-wait state
         if takeable.is_none() && self.dry_rounds >= 1 {
@@ -394,13 +451,6 @@ impl<'a> Loop<'a> {
                 return false;
             }
         }
-
-        let Some(pipeline) = self.choose() else {
-            self.digest
-                .warnings
-                .push("no pipeline's `when` held; nothing to run.".to_string());
-            return false;
-        };
 
         // the review pipeline verifies a task stranded at review, not the ordinary ready-and-unattended one
         let task = if matches!(
@@ -425,10 +475,15 @@ impl<'a> Loop<'a> {
                     self.boundary(false);
                     break;
                 }
-                Flow::Stop => return false,
+                // a stage that exhausted its turns still decided the blocks it decided before it did
+                Flow::Stop => {
+                    self.promotions(&ready_before, &rejections_before);
+                    return false;
+                }
             }
         }
 
+        self.refuse_restated(task.as_deref(), &ready_before);
         self.promotions(&ready_before, &rejections_before);
         match &task {
             Some(task) => self.task_outcome(task, &pipeline, progress_before),
@@ -477,6 +532,12 @@ impl<'a> Loop<'a> {
             return Flow::Stop;
         }
 
+        // the per-iteration drain reads only what this round filed; a standing backlog is a separate invocation
+        if stage.role.as_deref() == Some("adjudicator") && self.newly_proposed().is_empty() {
+            let stage_bases = iter_bases.clone();
+            return self.gates(stage, task, iter_bases, stage_bases, String::new());
+        }
+
         let timeout = match stage.timeout_duration() {
             Ok(t) => t,
             Err(err) => {
@@ -485,10 +546,10 @@ impl<'a> Loop<'a> {
             }
         };
         let mut env = stage.env.clone();
-        env.insert("HARNESS_ROOT".into(), self.root.display().to_string());
-        env.insert("HARNESS_STAGE".into(), stage.name.clone());
-        env.insert("HARNESS_TASK".into(), task.clone().unwrap_or_default());
-        env.insert("HARNESS_ITERATION".into(), self.writer.iter.to_string());
+        env.insert("ENALLAGI_ROOT".into(), self.root.display().to_string());
+        env.insert("ENALLAGI_STAGE".into(), stage.name.clone());
+        env.insert("ENALLAGI_TASK".into(), task.clone().unwrap_or_default());
+        env.insert("ENALLAGI_ITERATION".into(), self.writer.iter.to_string());
 
         let (spawn, role) = match (&stage.role, &stage.command) {
             (Some(role), _) => match self.role_spawn(stage, role, task.clone(), env, timeout) {
@@ -629,7 +690,8 @@ impl<'a> Loop<'a> {
         env: BTreeMap<String, String>,
         timeout: Option<Duration>,
     ) -> Result<StageSpawn<'a>, Flow> {
-        let resolved = match agent::resolve(&self.cfg.agent, role, &self.presets) {
+        let levels = task_levels(&self.blocks(), task.as_deref());
+        let resolved = match agent::resolve_task(&self.cfg.agent, role, &self.presets, &levels) {
             Ok(resolved) => resolved,
             Err(err) => {
                 self.halt("stage", format!("{}: {err}", stage.name));
@@ -706,7 +768,7 @@ impl<'a> Loop<'a> {
             env,
             cwd: self.root,
             timeout,
-            prompt: prompt_for(role, self.cfg),
+            prompt: self.stage_prompt(role),
             turns: stage.turns,
             stage: stage.name.clone(),
             task,
@@ -1003,11 +1065,7 @@ impl<'a> Loop<'a> {
     }
 
     fn blocks(&self) -> Vec<queue::Block> {
-        let path = self.file("TASKS.md");
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|t| queue::parse(&t).ok())
-            .unwrap_or_default()
+        queue_blocks(self.root, self.cfg)
     }
 
     fn ids_at(&self, status: &str) -> Vec<String> {
@@ -1016,6 +1074,76 @@ impl<'a> Loop<'a> {
 
     fn first_at_review(&self) -> Option<String> {
         self.ids_at("review").into_iter().next()
+    }
+
+    fn newly_proposed(&self) -> Vec<String> {
+        self.ids_at("proposed")
+            .into_iter()
+            .filter(|id| !self.proposed_at_start.contains(id))
+            .collect()
+    }
+
+    // the drain's prompt carries the round's own ids, so the stage is sized for them and not for the backlog
+    fn stage_prompt(&self, role: &str) -> String {
+        let prompt = prompt_for(role, self.cfg);
+        let ids = match role {
+            "adjudicator" => self.newly_proposed(),
+            _ => Vec::new(),
+        };
+        if ids.is_empty() {
+            return prompt;
+        }
+        format!(
+            "{prompt} This iteration filed {}. Act on those blocks and leave any older proposed block alone.",
+            ids.join(", ")
+        )
+    }
+
+    // a rejection the verifier just wrote is already queued as the task's own work; a block promoted
+    // over the top of it is a second copy of one job
+    fn refuse_restated(&mut self, task: Option<&str>, ready_before: &[String]) {
+        let Some(task) = task else {
+            return;
+        };
+        let blocks = self.blocks();
+        let rejected = blocks
+            .iter()
+            .find(|b| b.id == task)
+            .filter(|b| queue::field(b, "status").as_deref() == Some("ready"));
+        let Some(claims) = rejected.and_then(rejection_text).map(|v| claims(&v)) else {
+            return;
+        };
+        let restated: Vec<(String, String)> = self
+            .ids_at("ready")
+            .into_iter()
+            .filter(|id| id != task && !ready_before.contains(id))
+            .filter_map(|id| {
+                let text = blocks
+                    .iter()
+                    .find(|b| b.id == id)
+                    .map(|b| squash(&queue::block_text(b)))?;
+                let claim = claims.iter().find(|c| text.contains(&squash(c)))?;
+                Some((id, claim.clone()))
+            })
+            .collect();
+        for (id, verdict) in restated {
+            let reason = format!("{id} restates the verdict on {task}: {verdict}");
+            let q = Queue {
+                path: self.file("TASKS.md"),
+            };
+            let written = q
+                .read()
+                .and_then(|text| queue::set_status(&text, &id, "proposed", &reason))
+                .and_then(|text| q.write(&text));
+            if let Err(err) = written {
+                self.digest.warnings.push(format!("TASKS.md: {err}"));
+                continue;
+            }
+            self.commit_state(&format!("queue: {reason}"));
+            self.digest.warnings.push(format!(
+                "{id} was put back to proposed: it restates the verdict on {task} ({verdict})."
+            ));
+        }
     }
 
     fn first_attended_ready(&self) -> Option<String> {
@@ -1039,7 +1167,7 @@ impl<'a> Loop<'a> {
         self.check_log();
     }
 
-    // an event that never reached the log is one `harness watch` and the probes will never see
+    // an event that never reached the log is one `enallagi watch` and the probes will never see
     fn check_log(&mut self) {
         let Some(err) = self.writer.last_error().map(str::to_string) else {
             return;
@@ -1100,6 +1228,35 @@ fn listing(out: &mut String, heading: &str, items: &[String]) {
     for item in items {
         let _ = writeln!(out, "  {item}");
     }
+}
+
+// the verifier writes its verdict into the block's notes as `REJECTED`; a `gate:` line is written
+// only by set_status, and the newest one sits directly under `status:`
+fn rejection_text(b: &queue::Block) -> Option<String> {
+    let text = queue::block_text(b);
+    if let Some(at) = text.rfind("REJECTED") {
+        return Some(text[at..].to_string());
+    }
+    queue::field(b, "gate").filter(|v| !v.trim().is_empty())
+}
+
+// a verdict is a paragraph and a promotion copies one claim of it, never the whole thing. A run
+// under five words recurs by chance, and one quoting a command or a path is boilerplate two blocks
+// share without either restating the other.
+fn claims(verdict: &str) -> Vec<String> {
+    verdict
+        .split(['.', '\n'])
+        .filter(|s| !s.contains('`') && s.split_whitespace().count() >= 5)
+        .map(|s| s.trim().to_string())
+        .collect()
+}
+
+// lowercase, one space between words: two statements of the same sentence compare equal
+fn squash(text: &str) -> String {
+    text.split_whitespace()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn file_len(path: &Path) -> u64 {
@@ -1187,7 +1344,7 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
                 root,
                 cfg,
                 check: Some(&check),
-                driver: std::env::var("HARNESS_DRIVER").as_deref() == Ok("1"),
+                driver: std::env::var("ENALLAGI_DRIVER").as_deref() == Ok("1"),
             };
             probes::run_all(&ctx, std::slice::from_ref(name))
                 .iter()
@@ -1238,5 +1395,6 @@ fn shell_preset() -> Preset {
         hook_events: BTreeMap::new(),
         env: BTreeMap::new(),
         model_flag: None,
+        effort_flag: None,
     }
 }

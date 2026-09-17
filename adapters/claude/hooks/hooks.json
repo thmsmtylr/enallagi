@@ -6,11 +6,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/__HARNESS_DIR__/hooks/immutable.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/__ENALLAGI_DIR__/hooks/immutable.sh"
           },
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/__HARNESS_DIR__/hooks/one-writer.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/__ENALLAGI_DIR__/hooks/one-writer.sh"
           }
         ]
       }
@@ -21,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/__HARNESS_DIR__/hooks/skill-hook.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/__ENALLAGI_DIR__/hooks/skill-hook.sh"
           }
         ]
       }
@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/__HARNESS_DIR__/hooks/verify-done.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/__ENALLAGI_DIR__/hooks/verify-done.sh"
           }
         ]
       }

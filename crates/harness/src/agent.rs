@@ -48,6 +48,8 @@ pub struct Preset {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub model_flag: Option<String>,
+    #[serde(default)]
+    pub effort_flag: Option<String>,
 }
 
 pub type Presets = BTreeMap<String, Preset>;
@@ -95,9 +97,17 @@ pub fn presets() -> Presets {
         .collect()
 }
 
+/// A model and an effort as one block reads them; the first level `resolve_task` looks at.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Levels {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
 pub struct Resolved {
     pub argv: Vec<String>,
     pub preset: Preset,
+    pub levels: Levels,
 }
 
 // a hand-written command's cap is read back off its argv, never inherited from a preset it no longer matches
@@ -121,7 +131,58 @@ fn drop_token(argv: &mut Vec<String>, token: &str) {
     }
 }
 
+// the name init.rs gives the plugin it writes for `--plugin-dir`; disabling it would take the harness's own hooks with it
+const ADAPTER_PLUGIN: &str = "harness@inline";
+
+// `--settings` layers over the operator's own file rather than displacing it, so a plugin enabled there loads into every lane unless it is named false here
+fn plugins_off(file: &str) -> String {
+    let path = match file.strip_prefix("~/") {
+        Some(rest) => match std::env::var_os("HOME") {
+            Some(home) => Path::new(&home).join(rest),
+            None => return "{}".to_string(),
+        },
+        None => Path::new(file).to_path_buf(),
+    };
+    let enabled = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get("enabledPlugins").cloned());
+    let Some(serde_json::Value::Object(enabled)) = enabled else {
+        return "{}".to_string();
+    };
+    let off: serde_json::Map<String, serde_json::Value> = enabled
+        .keys()
+        .filter(|id| id.as_str() != ADAPTER_PLUGIN)
+        .map(|id| (id.clone(), serde_json::Value::Bool(false)))
+        .collect();
+    serde_json::Value::Object(off).to_string()
+}
+
+// the settings path rides in the token rather than a preset key, so only a preset that asks for the override names a vendor's file
+fn fill_plugins_off(argv: &[String]) -> Vec<String> {
+    static TOKEN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = TOKEN.get_or_init(|| {
+        Regex::new(r"\{plugins_off:([^{}]*)\}").expect("the token pattern is a literal")
+    });
+    argv.iter()
+        .map(|word| {
+            re.replace_all(word, |caps: &regex::Captures| plugins_off(&caps[1]))
+                .into_owned()
+        })
+        .collect()
+}
+
 pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resolved, AgentError> {
+    resolve_task(cfg, role, presets, &Levels::default())
+}
+
+/// `resolve` with the task's own levels, which outrank `[agent.<role>]` and `[agent]` in that order.
+pub fn resolve_task(
+    cfg: &AgentConfig,
+    role: &str,
+    presets: &Presets,
+    task: &Levels,
+) -> Result<Resolved, AgentError> {
     let over = cfg.roles.get(role);
     let name = over
         .and_then(|o| o.preset.as_deref())
@@ -129,9 +190,16 @@ pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resol
     let command = over
         .and_then(|o| o.command.as_ref())
         .or(cfg.command.as_ref());
-    let model = over
-        .and_then(|o| o.model.as_deref())
+    let model = task
+        .model
+        .as_deref()
+        .or(over.and_then(|o| o.model.as_deref()))
         .or(cfg.model.as_deref());
+    let effort = task
+        .effort
+        .as_deref()
+        .or(over.and_then(|o| o.effort.as_deref()))
+        .or(cfg.effort.as_deref());
     let usage = over.and_then(|o| o.usage.as_ref()).or(cfg.usage.as_ref());
 
     let mut preset = if name == "custom" {
@@ -148,6 +216,7 @@ pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resol
             hook_events: BTreeMap::new(),
             env: BTreeMap::new(),
             model_flag: None,
+            effort_flag: None,
         }
     } else {
         let mut preset = presets
@@ -175,17 +244,38 @@ pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resol
         argv.push(flag.clone());
         argv.push(model.to_string());
     }
+    // a preset with no effort_flag has no way to carry the setting, so it is dropped rather than refused
+    if let (Some(flag), Some(effort)) = (&preset.effort_flag, effort) {
+        argv.push(flag.clone());
+        argv.push(effort.to_string());
+    }
+    let argv = fill_plugins_off(&argv);
     preset.argv.clone_from(&argv);
-    Ok(Resolved { argv, preset })
+    let levels = Levels {
+        model: model.map(str::to_string),
+        effort: effort.map(str::to_string),
+    };
+    Ok(Resolved {
+        argv,
+        preset,
+        levels,
+    })
+}
+
+fn fill_word(word: &str, layout: &Layout) -> String {
+    word.replace("{harness_dir}", &layout.harness_dir)
+        .replace("{context_file}", &layout.context_file)
 }
 
 // substituted before {prompt}, so a prompt that quotes either token reaches the agent verbatim
 pub fn fill_layout(argv: &[String], layout: &Layout) -> Vec<String> {
-    argv.iter()
-        .map(|word| {
-            word.replace("{harness_dir}", &layout.harness_dir)
-                .replace("{context_file}", &layout.context_file)
-        })
+    argv.iter().map(|w| fill_word(w, layout)).collect()
+}
+
+/// A preset's `env` with the same layout tokens its `argv` takes.
+pub fn fill_env(env: &BTreeMap<String, String>, layout: &Layout) -> BTreeMap<String, String> {
+    env.iter()
+        .map(|(k, v)| (k.clone(), fill_word(v, layout)))
         .collect()
 }
 
@@ -275,6 +365,44 @@ const GRACE: Duration = Duration::from_secs(10);
 // a stale reset rolls to the same time tomorrow, so a further-out one isn't worth a day-long sleep
 const MAX_WAIT: u64 = 6 * 3600;
 
+#[cfg(not(test))]
+fn stage_now() -> jiff::Zoned {
+    jiff::Zoned::now()
+}
+
+// a test fixes the instant a notice is read against, so a reset time is a verdict and not a race
+#[cfg(test)]
+thread_local! {
+    static FIXED_NOW: std::cell::RefCell<Option<jiff::Zoned>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn stage_now() -> jiff::Zoned {
+    FIXED_NOW
+        .with(|n| n.borrow().clone())
+        .unwrap_or_else(jiff::Zoned::now)
+}
+
+// only the run's own verdict line, never a file the agent read or a command it wrote: both quote the
+// notice while working on this scan, and each cost a round a multi-hour sleep on 2026-09-16
+fn notice_of(line: &str) -> Option<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        // a preset that prints plain text has no envelope to read, so the line stands as itself
+        return Some(line.to_string());
+    };
+    if value.get("type").and_then(|t| t.as_str()) != Some("result") {
+        return None;
+    }
+    Some(
+        value
+            .get("result")
+            .and_then(|r| r.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    )
+}
+
 // retried at most twice: an agent that prints the limit notice forever would hold the run forever
 pub fn spawn(
     s: &StageSpawn,
@@ -297,11 +425,16 @@ pub fn spawn(
         if attempt >= 2 {
             return Ok(result);
         }
-        let Some(matched) = result.output.lines().find(|l| rate_limit.is_match(l)) else {
+        let Some(matched) = result
+            .output
+            .lines()
+            .filter_map(notice_of)
+            .find(|text| rate_limit.is_match(text))
+        else {
             return Ok(result);
         };
         let Some(sleep_seconds) =
-            seconds_until_reset(matched, jiff::Zoned::now()).filter(|s| *s <= MAX_WAIT)
+            seconds_until_reset(&matched, stage_now()).filter(|s| *s <= MAX_WAIT)
         else {
             return Ok(result);
         };
@@ -346,10 +479,18 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         .collect();
     let (program, args) = argv.split_first().ok_or(AgentError::EmptyCommand)?;
 
-    let mut child = Command::new(program)
+    // the layout is reloaded here because StageSpawn carries the filled argv, not the layout that filled it
+    let preset_env = match crate::config::load(s.cwd) {
+        Ok(cfg) => fill_env(&s.preset.env, &cfg.layout),
+        Err(_) => s.preset.env.clone(),
+    };
+
+    let mut command = Command::new(program);
+    crate::config::drop_legacy_env(&mut command);
+    let mut child = command
         .args(args)
         .current_dir(s.cwd)
-        .envs(&s.preset.env)
+        .envs(&preset_env)
         .envs(&s.env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -490,9 +631,7 @@ mod tests {
             "verifier".into(),
             crate::config::AgentOverride {
                 preset: Some("codex".into()),
-                command: None,
-                model: None,
-                usage: None,
+                ..crate::config::AgentOverride::default()
             },
         );
         let presets = presets();
@@ -500,6 +639,137 @@ mod tests {
         assert_eq!(r.argv[0], "codex");
         let d = resolve(&cfg, "implementer", &presets).unwrap();
         assert_eq!(d.argv[0], "claude");
+    }
+
+    fn claude_with_plugins_file(path: &str) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = crate::config::load(dir.path()).unwrap().agent;
+        let mut presets = presets();
+        let claude = presets.get_mut("claude").unwrap();
+        claude.argv = claude
+            .argv
+            .iter()
+            .map(|w| w.replace("~/.claude/settings.json", path))
+            .collect();
+        resolve(&cfg, "scout", &presets).unwrap().argv
+    }
+
+    fn settings_word(argv: &[String]) -> serde_json::Value {
+        let i = argv
+            .iter()
+            .position(|w| w == "--settings")
+            .expect("--settings");
+        serde_json::from_str(&argv[i + 1]).expect("the settings word is JSON")
+    }
+
+    #[test]
+    fn a_plugin_the_operator_enables_is_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        std::fs::write(
+            &file,
+            r#"{"enabledPlugins":{"caveman@caveman":true,"never-seen@shop":true,"harness@inline":true}}"#,
+        )
+        .unwrap();
+        let argv = claude_with_plugins_file(&file.to_string_lossy());
+        let plugins = settings_word(&argv)["enabledPlugins"].clone();
+        assert_eq!(plugins["caveman@caveman"], serde_json::json!(false));
+        // a plugin no preset names still reaches the lane unless the list is read from the operator's own file
+        assert_eq!(plugins["never-seen@shop"], serde_json::json!(false));
+        // the adapter arrives by --plugin-dir and must survive the override
+        assert_eq!(plugins.get("harness@inline"), None);
+        assert!(argv.iter().any(|w| w == "--plugin-dir"));
+    }
+
+    #[test]
+    fn no_plugins_file_leaves_the_settings_json() {
+        let argv = claude_with_plugins_file("/nonexistent/settings.json");
+        assert_eq!(
+            settings_word(&argv)["enabledPlugins"],
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn a_task_level_wins_over_role_then_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = crate::config::load(dir.path()).unwrap().agent;
+        cfg.model = Some("m-agent".into());
+        cfg.effort = Some("e-agent".into());
+        let presets = presets();
+        let bare = resolve_task(&cfg, "scout", &presets, &Levels::default()).unwrap();
+        assert_eq!(bare.levels.model.as_deref(), Some("m-agent"));
+        assert_eq!(bare.levels.effort.as_deref(), Some("e-agent"));
+
+        cfg.roles.insert(
+            "scout".into(),
+            crate::config::AgentOverride {
+                model: Some("m-role".into()),
+                effort: Some("e-role".into()),
+                ..crate::config::AgentOverride::default()
+            },
+        );
+        let role = resolve_task(&cfg, "scout", &presets, &Levels::default()).unwrap();
+        assert_eq!(role.levels.model.as_deref(), Some("m-role"));
+        assert_eq!(role.levels.effort.as_deref(), Some("e-role"));
+
+        let task = Levels {
+            model: Some("m-task".into()),
+            effort: Some("e-task".into()),
+        };
+        let top = resolve_task(&cfg, "scout", &presets, &task).unwrap();
+        assert_eq!(top.levels.model.as_deref(), Some("m-task"));
+        assert_eq!(top.levels.effort.as_deref(), Some("e-task"));
+
+        let empty = crate::config::AgentConfig {
+            preset: "claude".into(),
+            ..crate::config::AgentConfig::default()
+        };
+        let none = resolve_task(&empty, "scout", &presets, &Levels::default()).unwrap();
+        assert_eq!(none.levels, Levels::default());
+        assert!(!none.argv.iter().any(|w| w == "--model" || w == "--effort"));
+    }
+
+    #[test]
+    fn effort_rides_the_preset_flag_or_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = crate::config::load(dir.path()).unwrap().agent;
+        let levels = Levels {
+            model: None,
+            effort: Some("xhigh".into()),
+        };
+        let claude = resolve_task(&cfg, "scout", &presets(), &levels).unwrap();
+        assert_eq!(
+            &claude.argv[claude.argv.len() - 2..],
+            &["--effort".to_string(), "xhigh".to_string()]
+        );
+
+        let mut without = cfg.clone();
+        without.preset = "codex".into();
+        let codex = resolve_task(&without, "scout", &presets(), &levels).unwrap();
+        assert!(presets()["codex"].effort_flag.is_none());
+        assert!(!codex.argv.iter().any(|w| w == "xhigh"));
+        assert_eq!(codex.levels.effort.as_deref(), Some("xhigh"));
+    }
+
+    #[test]
+    fn an_unknown_model_and_effort_reach_argv() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = crate::config::load(dir.path()).unwrap().agent;
+        let levels = Levels {
+            model: Some("no-such-model".into()),
+            effort: Some("ludicrous".into()),
+        };
+        let r = resolve_task(&cfg, "scout", &presets(), &levels).unwrap();
+        assert_eq!(
+            &r.argv[r.argv.len() - 4..],
+            &[
+                "--model".to_string(),
+                "no-such-model".to_string(),
+                "--effort".to_string(),
+                "ludicrous".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -516,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn a_preset_without_a_turn_flag_loses_the_turns_word_and_its_flag() {
+    fn a_preset_without_a_turn_flag_drops_both() {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = crate::config::load(dir.path()).unwrap().agent;
         cfg.preset = "gemini".into();
@@ -565,6 +835,10 @@ mod tests {
         assert_eq!(s, 14 * 3600 + 40 * 60 + 60);
         assert!(seconds_until_reset("hit your session limit", now.clone()).is_none());
         assert!(seconds_until_reset("resets 12:40am (Mars/Olympus)", now).is_none());
+    }
+
+    fn fix_now(zoned: jiff::Zoned) {
+        FIXED_NOW.with(|n| *n.borrow_mut() = Some(zoned));
     }
 
     fn stop_file(root: &std::path::Path) -> std::path::PathBuf {
@@ -618,6 +892,30 @@ mod tests {
     }
 
     #[test]
+    fn a_preset_env_value_takes_the_layout_tokens() {
+        let r = crate::fixture::Repo::new();
+        let argv = r.stub_agent("echo \"config=$CLAUDE_CONFIG_DIR\"");
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
+        let mut s = spawner(argv, &r.root);
+        s.preset.env.insert(
+            "CLAUDE_CONFIG_DIR".to_string(),
+            "{harness_dir}/run/claude".to_string(),
+        );
+        let res = spawn(
+            &s,
+            &mut w,
+            &stop_file(&r.root),
+            &Regex::new("never").unwrap(),
+        )
+        .unwrap();
+        assert!(
+            res.output.contains("config=.enallagi/run/claude"),
+            "{}",
+            res.output
+        );
+    }
+
+    #[test]
     fn a_signalled_child_reports_128_plus_the_signal() {
         let r = crate::fixture::Repo::new();
         // KILL, not INT: a job started with `&` from a non-interactive shell inherits SIGINT ignored
@@ -656,7 +954,14 @@ mod tests {
         let r = crate::fixture::Repo::new();
         std::fs::create_dir_all(stop_file(&r.root).parent().unwrap()).unwrap();
         std::fs::write(stop_file(&r.root), "").unwrap();
-        let argv = r.stub_agent(&limit_notice("1M", "+1 minute"));
+        fix_now(
+            jiff::civil::date(2026, 9, 7)
+                .at(10, 0, 0, 0)
+                .in_tz("Australia/Melbourne")
+                .unwrap(),
+        );
+        let argv =
+            r.stub_agent("echo 'hit your session limit resets 10:01am (Australia/Melbourne)'");
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let err = spawn(
             &spawner(argv, &r.root),
@@ -717,6 +1022,40 @@ mod tests {
             })
             .collect();
         assert_eq!(limits, vec![0, 1]);
+    }
+
+    #[test]
+    fn a_limit_notice_the_agent_quoted_is_not_a_limit() {
+        let r = crate::fixture::Repo::new();
+        let runs = r.root.join("runs");
+        // both shapes seen on 2026-09-16: a file the agent read, and a command the agent wrote
+        let read = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"assert!(seconds_until_reset(\"You've hit your session limit · resets 12:40am (Australia/Melbourne)\").is_some());"}]}}"#;
+        let wrote = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"printf '%s' \"You've hit your session limit · resets 12:40am (Australia/Melbourne)\" > stub"}}]}}"#;
+        // the notice carries an apostrophe, and an unescaped one ends the shell string and hangs the stage on the syntax error it prints
+        let argv = r.stub_agent(&format!(
+            "echo x >> {}; printf '%s\\n%s\\n' '{}' '{}'",
+            runs.display(),
+            read.replace('\'', "'\\''"),
+            wrote.replace('\'', "'\\''")
+        ));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
+        let res = spawn(
+            &spawner(argv, &r.root),
+            &mut w,
+            &stop_file(&r.root),
+            &Regex::new("hit your session limit").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(res.exit, 0);
+        assert_eq!(std::fs::read_to_string(&runs).unwrap().lines().count(), 1);
+        assert!(
+            !w.log
+                .read()
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e.kind, Kind::Limit { .. })),
+            "a notice the agent read or wrote, rather than reported, must not sleep the stage"
+        );
     }
 
     #[test]

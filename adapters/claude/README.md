@@ -1,6 +1,6 @@
 # Adapter: Claude Code
 
-`harness init /path/to/repo --adapter claude` adds two things the base install leaves out, because
+`enallagi init /path/to/repo --adapter claude` adds two things the base install leaves out, because
 neither mechanism is portable. Both go into a plugin at `.enallagi/adapters/claude/`, which the
 `claude` preset loads with `--plugin-dir`:
 
@@ -13,4 +13,4 @@ The `PreToolUse` immutable hook is worth having where you can get it: it turns a
 file into a refusal in-session rather than a diff someone has to notice.
 
 If you use another tool, point its hook mechanism at the same two subcommands:
-`harness hook verify-done` (Stop) and `harness hook immutable` (before an edit).
+`enallagi hook verify-done` (Stop) and `enallagi hook immutable` (before an edit).

@@ -1,5 +1,5 @@
-use harness::fixture::Repo;
-use harness::init::{self, InitOpts};
+use enallagi::fixture::Repo;
+use enallagi::init::{self, InitOpts};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -17,6 +17,19 @@ fn read(path: &Path) -> String {
 
 fn re(pattern: &str) -> regex::Regex {
     regex::Regex::new(pattern).expect("compile pattern")
+}
+
+// a locally excluded scratch file under a scanned directory is not a shipped file
+fn tracked(root: &Path) -> std::collections::HashSet<PathBuf> {
+    let out = Command::new("git")
+        .current_dir(root)
+        .args(["ls-files"])
+        .output()
+        .expect("git ls-files");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(PathBuf::from)
+        .collect()
 }
 
 fn walk(dir: &Path) -> Vec<PathBuf> {
@@ -56,12 +69,12 @@ fn crate_sources() -> Vec<(PathBuf, String)> {
         .collect()
 }
 
-// HARNESS_BIN points at the test binary so nothing here builds release or reads one off PATH
+// ENALLAGI_BIN points at the test binary so nothing here builds release or reads one off PATH
 fn script(program: &Path, cwd: &Path, args: &[&str]) -> (i32, String) {
-    let out = Command::new(program)
+    let out = enallagi::fixture::command(&program.display().to_string())
         .args(args)
         .current_dir(cwd)
-        .env("HARNESS_BIN", env!("CARGO_BIN_EXE_harness"))
+        .env("ENALLAGI_BIN", env!("CARGO_BIN_EXE_enallagi"))
         .output()
         .unwrap_or_else(|e| panic!("run {}: {e}", program.display()));
     let mut text = String::from_utf8_lossy(&out.stdout).to_string();
@@ -70,7 +83,7 @@ fn script(program: &Path, cwd: &Path, args: &[&str]) -> (i32, String) {
 }
 
 fn harness(cwd: &Path, args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(args)
         .current_dir(cwd)
         .output()
@@ -105,7 +118,7 @@ fn history(subjects: &[&str]) -> tempfile::TempDir {
 }
 
 #[test]
-fn no_installed_script_hardcodes_a_vendor_path_or_process() {
+fn no_script_hardcodes_a_vendor_path() {
     // prose may name a vendor; only an executable path or process guard may not
     let vendor = re(r"\.claude/(hooks|agents)|pgrep -f \.claude|spin [^|]*\bclaude\b");
     assert!(
@@ -155,11 +168,11 @@ fn the_launcher_parses_no_task_blocks_itself() {
 }
 
 #[test]
-fn the_write_path_gate_installs_where_the_rules_are_written() {
+fn the_write_path_gate_installs_with_the_rules() {
     let repo = Repo::new();
     repo.init_harness("");
     let readme = read(&repo.root.join(".enallagi/evals/README.md"));
-    assert!(readme.contains("harness eval --gate"), "{readme:.400}");
+    assert!(readme.contains("enallagi eval --gate"), "{readme:.400}");
 
     // reachable, not merely documented: the gate must refuse this repo's own candidate rule
     let (code, _, stderr) = harness(&repo.root, &["eval", "--gate", "a-candidate-rule"]);
@@ -168,7 +181,7 @@ fn the_write_path_gate_installs_where_the_rules_are_written() {
 }
 
 #[test]
-fn the_driver_names_a_commit_on_the_round_that_no_task_claims() {
+fn the_driver_names_an_unclaimed_commit() {
     let driver = repo_root().join("driver.sh");
 
     let fires = history(&[
@@ -200,7 +213,7 @@ const NO_REJECTION: [&str; 8] = [
 ];
 
 #[test]
-fn a_history_with_no_rejection_fails_the_bootstrap_check() {
+fn a_history_with_no_rejection_fails() {
     let bootstrap = repo_root().join("docs/bootstrap.sh");
     let fixture = history(&NO_REJECTION);
     let (code, out) = script(&bootstrap, fixture.path(), &["--check"]);
@@ -235,7 +248,7 @@ fn the_bootstrap_record_is_derived_from_git() {
 }
 
 #[test]
-fn docs_demo_drives_one_loop_iteration_end_to_end_and_deletes_what_it_made() {
+fn docs_demo_drives_one_iteration_and_cleans_up() {
     let (code, out) = script(&repo_root().join("docs/demo.sh"), &repo_root(), &[]);
     assert_eq!(code, 0, "{out}");
 
@@ -293,7 +306,7 @@ fn hash_mismatches(root: &Path) -> Vec<String> {
 }
 
 #[test]
-fn every_file_test_hashes_covers_still_hashes_to_its_recorded_digest() {
+fn every_hashed_file_matches_its_digest() {
     let fixture = tempfile::tempdir().expect("tempdir");
     fs::write(fixture.path().join("covered.txt"), "the real bytes").expect("write");
     fs::write(
@@ -372,12 +385,12 @@ fn ci_runs_the_floor_on_a_gnu_and_a_bsd_userland() {
     assert_eq!(matrix_os(&block), vec!["macos-latest", "ubuntu-latest"]);
     assert!(invokes_floor(&block), "{block}");
     assert_eq!(switched_off(&block), 0, "{block}");
-    // whole-file, not job-scoped: HARNESS_EVALS set at workflow top level would be missed otherwise
-    assert!(!re(r"(?m)^[^#]*HARNESS_EVALS").is_match(&ci()));
+    // whole-file, not job-scoped: ENALLAGI_EVALS set at workflow top level would be missed otherwise
+    assert!(!re(r"(?m)^[^#]*ENALLAGI_EVALS").is_match(&ci()));
 
-    // the driver job is the other half of the floor: it runs cargo test with HARNESS_DRIVER set
+    // the driver job is the other half of the floor: it runs cargo test with ENALLAGI_DRIVER set
     let driver_block = job_block(&ci(), "driver");
-    let driver_env = re(r#"(?m)^[^#]*HARNESS_DRIVER:\s*['"]?1['"]?"#);
+    let driver_env = re(r#"(?m)^[^#]*ENALLAGI_DRIVER:\s*['"]?1['"]?"#);
     assert!(invokes_floor(&driver_block), "{driver_block}");
     assert!(driver_env.is_match(&driver_block), "{driver_block}");
 
@@ -400,9 +413,9 @@ fn ci_runs_the_floor_on_a_gnu_and_a_bsd_userland() {
 }
 
 #[test]
-fn ci_runs_the_floor_with_the_driver_reaching_the_artifact() {
-    // read by VALUE not presence: `HARNESS_DRIVER: ''` is present but the feature is off
-    let set = re(r#"(?m)^[^#]*HARNESS_DRIVER:\s*['"]?[^\s'"]"#);
+fn ci_runs_the_driver_against_the_artifact() {
+    // read by VALUE not presence: `ENALLAGI_DRIVER: ''` is present but the feature is off
+    let set = re(r#"(?m)^[^#]*ENALLAGI_DRIVER:\s*['"]?[^\s'"]"#);
     let block = job_block(&ci(), "driver");
     assert!(!block.is_empty(), "no driver job in ci.yml");
     assert!(set.is_match(&block), "{block}");
@@ -410,9 +423,9 @@ fn ci_runs_the_floor_with_the_driver_reaching_the_artifact() {
     assert_eq!(switched_off(&block), 0, "{block}");
 
     let no_job = "jobs:\n  floor:\n    steps:\n      - run: ./selftest.sh\n";
-    let no_var = "jobs:\n  driver:\n    steps:\n      - name: the floor, with the driver reaching the artifact\n        env:\n          HARNESS_DRIVER: ''\n        run: ./selftest.sh\n";
-    let switched = "jobs:\n  driver:\n    if: false\n    steps:\n      - env:\n          HARNESS_DRIVER: '1'\n        run: ./selftest.sh\n";
-    let soft = "jobs:\n  driver:\n    steps:\n      - env:\n          HARNESS_DRIVER: '1'\n        continue-on-error: true\n        run: ./selftest.sh\n";
+    let no_var = "jobs:\n  driver:\n    steps:\n      - name: the floor, with the driver reaching the artifact\n        env:\n          ENALLAGI_DRIVER: ''\n        run: ./selftest.sh\n";
+    let switched = "jobs:\n  driver:\n    if: false\n    steps:\n      - env:\n          ENALLAGI_DRIVER: '1'\n        run: ./selftest.sh\n";
+    let soft = "jobs:\n  driver:\n    steps:\n      - env:\n          ENALLAGI_DRIVER: '1'\n        continue-on-error: true\n        run: ./selftest.sh\n";
 
     let reading = |yml: &str| {
         let b = job_block(yml, "driver");
@@ -432,7 +445,7 @@ fn ci_runs_the_floor_with_the_driver_reaching_the_artifact() {
 // A fixture that inherits the shipped `[[skill]]` table clones github from a test: it passed on a
 // warm cache and raced itself in CI. Only harness.default.toml may name a remote source.
 #[test]
-fn no_test_fixture_declares_a_skill_the_suite_would_have_to_fetch() {
+fn no_fixture_declares_a_fetched_skill() {
     let root = repo_root();
     let needle = concat!("source = \"", "github:");
     let mut offences = Vec::new();
@@ -502,19 +515,41 @@ fn the_skill_hook_fires_on_a_headless_lane() {
     ))
     .expect("hooks");
     let on_prompt = hooks["hooks"]["UserPromptSubmit"].to_string();
-    assert!(on_prompt.contains("harness hook skills"), "{on_prompt}");
+    assert!(on_prompt.contains("enallagi hook skills"), "{on_prompt}");
 
     // count is asserted so an emptied skill list can't trivially pass this
     let (code, stdout, stderr) = harness(&repo.root, &["hook", "skills"]);
     assert_eq!(code, 0, "{stderr}");
-    let cfg = harness::config::load(&repo.root).expect("config");
-    assert_eq!(cfg.skill.len(), 7);
+    let cfg = enallagi::config::load(&repo.root).expect("config");
+    assert_eq!(cfg.skill.len(), 8);
     for skill in &cfg.skill {
         assert!(
             stdout.contains(&skill.id),
             "{} absent from {stdout}",
             skill.id
         );
+    }
+}
+
+#[test]
+fn the_commit_register_skill_reaches_both_lanes() {
+    // found by its gate, not its id: plain-record is the probe that fails when a subject comments
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cfg = enallagi::config::load(dir.path()).expect("the shipped defaults load");
+    let decl = cfg
+        .skill
+        .iter()
+        .find(|s| s.gate == "plain-record")
+        .expect("no shipped skill names gate plain-record");
+    assert!(decl.source.starts_with("github:"), "{}", decl.source);
+    assert!(decl.path.ends_with(&decl.id), "{}", decl.path);
+    assert!(decl.rev.is_some(), "{} is unpinned", decl.id);
+    assert!(!decl.why.is_empty(), "{} says what it is for", decl.id);
+
+    let token = format!("{{{{skill:{}}}}}", decl.id);
+    for role in ["implementer", "verifier"] {
+        let text = read(&repo_root().join(format!("roles/{role}.md")));
+        assert!(text.contains(&token), "roles/{role}.md wants {token}");
     }
 }
 
@@ -583,12 +618,75 @@ fn no_shipped_file_carries_rhetorical_filler() {
     }
 }
 
-// main ships the package; what `harness init` writes lives only on dogfood/* branches
+#[test]
+fn no_shipped_document_calls_the_binary_harness() {
+    // `harness` survives as a common noun, a path the tree holds and a key the source reads; the
+    // binary, the config and the prompt token are `enallagi`
+    let old = re(
+        r"harness (init|eject|run|watch|probe|pr|base|gate|hook|skills|tasks|eval|events|worktree)\b|harness\.toml|__HARNESS_DIR__|HARNESS_[A-Z]",
+    );
+    assert!(old.is_match("harness probe"), "the scan cannot report");
+
+    let root = repo_root();
+    let shipped = tracked(&root);
+    for dir in ["roles", "templates", "skills", "evals", "adapters", "docs"] {
+        let at = root.join(dir);
+        for rel in walk(&at) {
+            if !shipped.contains(&Path::new(dir).join(&rel)) {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(at.join(&rel)) else {
+                continue;
+            };
+            assert!(
+                !old.is_match(&text),
+                "{dir}/{}: {:?}",
+                rel.display(),
+                old.find(&text).map(|m| m.as_str())
+            );
+        }
+    }
+}
+
+#[test]
+fn no_identifier_runs_past_fifty_characters() {
+    const CAP: usize = 50;
+    let decl = re(r"\b(?:fn|struct|enum|trait|union|mod|const|static|type)\s+([A-Za-z_]\w*)");
+    let field = re(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?([a-z_]\w*)[ \t]*:");
+    assert!(decl.is_match("fn a() {}"), "the scan cannot report");
+    assert!(
+        field.is_match("    name: String,"),
+        "the scan cannot report"
+    );
+
+    let crates = repo_root().join("crates");
+    let mut long = Vec::new();
+    for rel in walk(&crates) {
+        if rel.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        let text = read(&crates.join(&rel));
+        for name in [&decl, &field]
+            .iter()
+            .flat_map(|p| p.captures_iter(&text))
+            .map(|c| c[1].to_string())
+        {
+            if name.len() > CAP {
+                long.push(format!("{}: {name} ({})", rel.display(), name.len()));
+            }
+        }
+    }
+    long.sort();
+    long.dedup();
+    assert!(long.is_empty(), "{} over {CAP}: {long:#?}", long.len());
+}
+
+// main ships the package; what `enallagi init` writes lives only on dogfood/* branches
 #[test]
 #[ignore = "main only: ci.yml runs it on main and on pull requests into main"]
 fn main_tracks_no_instance_file() {
     let mut instance = std::collections::BTreeSet::from(["test-hashes.json".to_string()]);
-    for name in harness::agent::presets().keys() {
+    for name in enallagi::agent::presets().keys() {
         let repo = Repo::new();
         let opts = InitOpts {
             adapter: Some(name.clone()),
@@ -609,7 +707,7 @@ fn main_tracks_no_instance_file() {
             "LEARNINGS.md",
             "SPEC.md",
             ".check-baseline",
-            "harness.toml",
+            "enallagi.toml",
         ]
         .map(String::from),
     );
@@ -673,7 +771,7 @@ fn the_shell_package_is_gone() {
 
 #[test]
 #[ignore = "installs four repos and drives four iterations; run with --ignored"]
-fn the_package_driver_reports_shortfalls_as_finding_lines() {
+fn the_driver_reports_shortfalls_as_findings() {
     // deliberately not asserting findings.len() > 0 -- that would require the harness to stay broken
     let (code, out) = script(&repo_root().join("driver.sh"), &repo_root(), &[]);
     assert_eq!(code, 0, "{out}");
@@ -691,14 +789,14 @@ fn the_package_driver_reports_shortfalls_as_finding_lines() {
         };
         let rev = format!("{}^{{commit}}", &caps[1]);
         assert!(
-            harness::git::git_ok(&repo_root(), &["rev-parse", "-q", "--verify", &rev]),
+            enallagi::git::git_ok(&repo_root(), &["rev-parse", "-q", "--verify", &rev]),
             "{line}"
         );
     }
 }
 
 #[test]
-#[ignore = "spawns a real agent; run with HARNESS_EVALS and --ignored"]
+#[ignore = "spawns a real agent; run with ENALLAGI_EVALS and --ignored"]
 fn the_trimmed_role_prompts_still_pass_their_evals() {
     let (code, stdout, stderr) = harness(&repo_root(), &["eval"]);
     assert_eq!(code, 0, "{stdout}{stderr}");
@@ -730,4 +828,132 @@ fn the_licence_is_mit() {
             "NOTICE omits the {source} copyright holder"
         );
     }
+}
+
+fn release_yml() -> String {
+    read(&repo_root().join(".github/workflows/release.yml"))
+}
+
+fn crate_version_in(manifest: &str) -> String {
+    re(r#"(?m)^version = "([^"]+)""#)
+        .captures(manifest)
+        .map(|c| c[1].to_string())
+        .expect("a version line in the manifest")
+}
+
+// a tag is the release; one that does not name the crate version ships a binary printing a version
+// its own release page does not carry
+fn tag_mismatch(tag: &str, version: &str) -> Option<String> {
+    match tag.strip_prefix('v') {
+        Some(rest) if rest == version => None,
+        _ => Some(format!("tag {tag} against crate version {version}")),
+    }
+}
+
+#[test]
+fn the_release_procedure_is_stated_in_one_file() {
+    let procedure = release_yml();
+    for step in [
+        "crates/harness/Cargo.toml",
+        "CHANGELOG.md",
+        "git tag -a v",
+        "git push origin v",
+    ] {
+        assert!(
+            procedure.contains(step),
+            "release.yml states no {step} step"
+        );
+    }
+
+    let readme = read(&repo_root().join("README.md"));
+    assert!(
+        readme.contains(".github/workflows/release.yml"),
+        "README links no release procedure"
+    );
+    let commands = re(r"(?m)^[^#]*git (tag|push origin v)");
+    assert!(
+        commands.is_match("git tag -a v1.0.0"),
+        "the scan cannot report"
+    );
+    assert!(
+        !commands.is_match(&readme),
+        "{:?}",
+        commands.find(&readme).map(|m| m.as_str())
+    );
+}
+
+#[test]
+fn the_changelog_lists_unreleased_and_the_tag() {
+    let text = read(&repo_root().join("CHANGELOG.md"));
+    let headings: Vec<&str> = text.lines().filter(|l| l.starts_with("## ")).collect();
+    assert_eq!(
+        headings.first().copied(),
+        Some("## Unreleased"),
+        "{headings:?}"
+    );
+    assert!(
+        headings.iter().any(|h| h.starts_with("## v0.1.0")),
+        "{headings:?}"
+    );
+
+    let entries: Vec<&str> = text
+        .lines()
+        .skip_while(|l| *l != "## Unreleased")
+        .skip(1)
+        .take_while(|l| !l.starts_with("## "))
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    assert!(!entries.is_empty(), "{text}");
+    for line in &entries {
+        assert!(line.starts_with("- "), "{line}");
+    }
+}
+
+#[test]
+fn a_tag_that_disagrees_with_the_version_fails() {
+    assert_eq!(tag_mismatch("v0.1.0", "0.1.0"), None);
+    let reported = tag_mismatch("v0.2.0", "0.1.0").expect("a mismatch is reported");
+    assert!(
+        reported.contains("v0.2.0") && reported.contains("0.1.0"),
+        "{reported}"
+    );
+    assert!(tag_mismatch("0.1.0", "0.1.0").is_some());
+    assert!(tag_mismatch("v0.1.0-rc1", "0.1.0").is_some());
+}
+
+#[test]
+fn the_binary_prints_the_crate_version() {
+    let root = repo_root();
+    let version = crate_version_in(&read(&root.join("crates/harness/Cargo.toml")));
+    let (code, stdout, stderr) = harness(&root, &["--version"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert_eq!(stdout.trim(), format!("enallagi {version}"));
+    assert_eq!(
+        crate_version_in("[package]\nversion = \"9.9.9\"\n"),
+        "9.9.9"
+    );
+}
+
+#[test]
+fn the_release_job_checks_the_tag_version() {
+    let block = job_block(&release_yml(), "release");
+    let check = block
+        .find("--exact the_tag_equals_the_crate_version")
+        .unwrap_or_else(|| panic!("no tag-version step:\n{block}"));
+    let build = block
+        .find("cargo zigbuild")
+        .unwrap_or_else(|| panic!("no build step:\n{block}"));
+    assert!(check < build, "{block}");
+    assert_eq!(switched_off(&block), 0, "{block}");
+}
+
+// GITHUB_REF_NAME is unset outside the release job, and a check that cannot read what it compares
+// fails rather than passes
+#[test]
+#[ignore = "release only: release.yml runs it on a tag push"]
+fn the_tag_equals_the_crate_version() {
+    let tag = std::env::var("GITHUB_REF_NAME").unwrap_or_default();
+    assert!(!tag.is_empty(), "GITHUB_REF_NAME is unset");
+    let version = crate_version_in(&read(&repo_root().join("crates/harness/Cargo.toml")));
+    assert_eq!(tag_mismatch(&tag, &version), None);
 }

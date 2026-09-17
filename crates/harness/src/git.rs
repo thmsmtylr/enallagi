@@ -85,7 +85,7 @@ pub fn locate(root: &Path, harness_dir: &str, path: &str) -> (PathBuf, String, b
     }
 }
 
-// the subject names the product HEAD the state was committed against, which is what `harness base` reads back
+// the subject names the product HEAD the state was committed against, which is what `enallagi base` reads back
 pub fn commit_instance(
     root: &Path,
     harness_dir: &str,
@@ -221,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_path_does_not_stop_the_others_from_being_committed() {
+    fn a_missing_path_still_commits_the_others() {
         let r = Repo::new();
         r.write("TASKS.md", "queue\n");
         assert!(commit_paths(&r.root, &["TASKS.md", "DECISIONS.md"], "queue").unwrap());

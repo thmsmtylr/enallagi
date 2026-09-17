@@ -16,7 +16,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         root: &root,
         cfg: &cfg,
         check: None,
-        driver: std::env::var("HARNESS_DRIVER").as_deref() == Ok("1"),
+        driver: std::env::var("ENALLAGI_DRIVER").as_deref() == Ok("1"),
     };
     let results = probes::run_all(&ctx, &args.names);
     print!("{}", probes::render(&results));

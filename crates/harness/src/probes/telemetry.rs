@@ -487,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn rejection_repeat_fires_at_exactly_the_half_boundary() {
+    fn rejection_repeat_fires_at_the_boundary() {
         let (dir, mut w) = writer();
         w.emit(status(
             "T-1",
@@ -514,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn rejection_repeat_does_not_fire_just_under_the_boundary() {
+    fn rejection_repeat_holds_under_the_boundary() {
         let (dir, mut w) = writer();
         w.emit(status(
             "T-1",

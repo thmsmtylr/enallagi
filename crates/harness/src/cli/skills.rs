@@ -1,4 +1,4 @@
-//! `harness skills check|sync|list` -- the CLI surface over `skills`.
+//! `enallagi skills check|sync|list` -- the CLI surface over `skills`.
 
 use crate::agent;
 use crate::config;
@@ -95,7 +95,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         return Ok(0);
     }
     for line in &unresolved {
-        eprintln!("harness skills: {line}");
+        eprintln!("enallagi skills: {line}");
     }
     Ok(2)
 }

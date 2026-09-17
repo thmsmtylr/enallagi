@@ -1,4 +1,4 @@
-//! The append-only JSONL event log written during a run and read back by `harness watch`/`events` and the probes.
+//! The append-only JSONL event log written during a run and read back by `enallagi watch`/`events` and the probes.
 
 use std::fs;
 use std::io::{self, Write};
@@ -391,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn read_lines_pairs_the_raw_line_with_its_parsed_event() {
+    fn read_lines_pairs_raw_with_parsed() {
         let d = tempfile::tempdir().unwrap();
         let mut w = Writer::new(Log::open(d.path()));
         w.emit(Kind::Halt {

@@ -11,6 +11,10 @@ pub enum WorktreeError {
     Detached,
     #[error("worktree: could not create {0}")]
     Create(PathBuf),
+    #[error(
+        "worktree: {repo} has uncommitted work; commit it before a lane branches from it: {files}"
+    )]
+    Dirty { repo: PathBuf, files: String },
     #[error("worktree: {repo} fast-forwarded to {branch}, a later merge was refused, and `git reset --keep {pre}` failed: {stderr}. Both lane worktrees are left")]
     Rollback {
         repo: PathBuf,
@@ -96,6 +100,22 @@ pub fn lane(
         return Err(WorktreeError::Detached);
     }
 
+    // a lane branches from the parent's HEAD, so work uncommitted there is work it never sees
+    let state_root = git::state_root(root, &cfg.layout.harness_dir);
+    let mut parents = vec![root.to_path_buf()];
+    if state_root != root {
+        parents.insert(0, state_root);
+    }
+    for repo in parents {
+        let files = git::porcelain(&repo);
+        if !files.is_empty() {
+            return Err(WorktreeError::Dirty {
+                repo,
+                files: files.join(", "),
+            });
+        }
+    }
+
     let ts = jiff::Timestamp::now().strftime("%Y%m%d-%H%M%S").to_string();
     let base = format!("{ts}-{}", std::process::id());
     let (branch, dir, pairs) = create_worktree(root, cfg, &base)?;
@@ -179,7 +199,7 @@ mod tests {
     fn repo_with_harness_dir() -> Repo {
         let r = Repo::new();
         r.write(".gitignore", ".enallagi/worktrees/\n");
-        r.write("harness.toml", "");
+        r.write("enallagi.toml", "");
         r.commit_all("gitignore worktrees");
         r
     }
@@ -265,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn two_lanes_landing_different_tasks_both_merge_and_the_state_queue_holds_both_verdicts() {
+    fn two_lanes_merge_and_both_verdicts_land() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -296,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lane_whose_state_branch_cannot_fast_forward_merges_neither_branch() {
+    fn a_stuck_state_branch_merges_neither() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -311,6 +331,12 @@ mod tests {
         .expect("lane");
 
         assert!(!report.merged, "reason: {}", report.reason);
+        assert!(report.reason.contains(&report.branch), "{}", report.reason);
+        assert!(
+            report.reason.contains(&state.display().to_string()),
+            "{}",
+            report.reason
+        );
         assert_eq!(git::head(&r.root), pre_head);
         assert!(!r.root.join("one.txt").exists());
         let left = report.left.clone().expect("left in place");
@@ -322,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lane_whose_product_branch_cannot_fast_forward_merges_neither_branch() {
+    fn a_stuck_product_branch_merges_neither() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -344,7 +370,94 @@ mod tests {
     }
 
     #[test]
-    fn a_product_merge_git_refuses_leaves_neither_repository_merged() {
+    fn a_dirty_product_parent_refuses_the_lane() {
+        let r = nested_repo();
+        let cfg = cfg(&r);
+        r.write("scratch.txt", "an operator's uncommitted work");
+
+        let mut ran = false;
+        let err = lane(&r.root, &cfg, &mut |_wt| {
+            ran = true;
+            Ok(())
+        })
+        .err()
+        .expect("refused");
+
+        assert!(!ran, "the lane ran against a dirty parent");
+        let msg = err.to_string();
+        assert!(msg.contains("scratch.txt"), "{msg}");
+        assert!(msg.contains(&r.root.display().to_string()), "{msg}");
+        let listed = git::git(&r.root, &["worktree", "list"]).expect("worktree list");
+        assert!(!listed.contains("/worktrees/lane-"), "{listed}");
+    }
+
+    #[test]
+    fn a_dirty_state_parent_refuses_the_lane() {
+        let r = nested_repo();
+        let cfg = cfg(&r);
+        let state = r.root.join(".enallagi");
+        std::fs::write(
+            state.join("TASKS.md"),
+            "# TASKS\n\nan uncommitted queue edit\n",
+        )
+        .expect("write");
+
+        let mut ran = false;
+        let err = lane(&r.root, &cfg, &mut |_wt| {
+            ran = true;
+            Ok(())
+        })
+        .err()
+        .expect("refused");
+
+        assert!(!ran, "the lane ran against a dirty state repository");
+        let msg = err.to_string();
+        assert!(msg.contains("TASKS.md"), "{msg}");
+        assert!(msg.contains(&state.display().to_string()), "{msg}");
+        let listed = git::git(&state, &["worktree", "list"]).expect("worktree list");
+        assert!(!listed.contains("/worktrees/lane-"), "{listed}");
+    }
+
+    #[test]
+    fn a_locked_parent_index_leaves_both_worktrees() {
+        let r = nested_repo();
+        let cfg = cfg(&r);
+        let state = r.root.join(".enallagi");
+        let lock = r.root.join(".git/index.lock");
+        let (pre_root, pre_state) = (git::head(&r.root), git::head(&state));
+
+        let report = lane(&r.root, &cfg, &mut |wt| {
+            land(wt, "T-001", "one.txt");
+            // another process holding the parent index is what the merge hits
+            std::fs::write(&lock, "").expect("write the lock");
+            Ok(())
+        })
+        .expect("lane");
+        std::fs::remove_file(&lock).expect("release the lock");
+
+        assert!(!report.merged, "reason: {}", report.reason);
+        // both repositories have an index.lock, so the parent product path is what pins the case
+        let named = r
+            .root
+            .canonicalize()
+            .expect("canonicalize")
+            .join(".git/index.lock");
+        assert!(
+            report.reason.contains(&named.display().to_string()),
+            "{}",
+            report.reason
+        );
+        assert_eq!(git::head(&r.root), pre_root);
+        assert_eq!(git::head(&state), pre_state, "reason: {}", report.reason);
+        let left = report.left.clone().expect("left in place");
+        assert!(left.exists(), "{}", left.display());
+        let left_state = report.state.clone().expect("the state worktree");
+        assert!(left_state.exists(), "{}", left_state.display());
+        remove_left(&r, &report);
+    }
+
+    #[test]
+    fn a_refused_product_merge_rolls_back() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -366,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn a_worktree_lane_leaves_the_parent_checkout_untouched() {
+    fn a_lane_leaves_the_parent_untouched() {
         let r = repo_with_harness_dir();
         let cfg = cfg(&r);
         let pre_head = git::head(&r.root);
@@ -443,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lane_that_cannot_fast_forward_is_left_for_a_human_and_its_work_is_still_there() {
+    fn a_stuck_lane_is_left_with_its_work() {
         let r = repo_with_harness_dir();
         let cfg = cfg(&r);
         let pre_head = git::head(&r.root);
@@ -474,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_that_errors_still_merges_and_the_error_is_kept() {
+    fn a_run_that_errors_still_merges() {
         let r = repo_with_harness_dir();
         let cfg = cfg(&r);
 

@@ -1,4 +1,4 @@
-# Embedded defaults; harness.toml deep-merges over them, tables key by key and arrays whole.
+# Embedded defaults; enallagi.toml deep-merges over them, tables key by key and arrays whole.
 
 # preset names the agent's headless command (claude, codex, ... or custom with a command list); [agent.<role>] overrides it per role.
 [agent]
@@ -19,7 +19,7 @@ pointer_files = ["CLAUDE.md", "GEMINI.md", "QWEN.md", ".github/copilot-instructi
 harness_dir = ".enallagi"
 skill_invocation = "invoke it via the Skill tool"
 
-# driver_command runs the built artifact in a throwaway directory and prints one `FINDING ` line per shortfall; empty is off, and HARNESS_DRIVER=1 is also required.
+# driver_command runs the built artifact in a throwaway directory and prints one `FINDING ` line per shortfall; empty is off, and ENALLAGI_DRIVER=1 is also required.
 driver_command = ""
 
 spec = "SPEC.md"
@@ -70,7 +70,7 @@ docs = [
   "SPEC.md",
   "TASKS.md",
   "harness.default.toml",
-  "harness.toml",
+  "enallagi.toml",
   "test-hashes.json",
 ]
 harness_allow = [
@@ -107,10 +107,11 @@ name = "review"
 when = "queue.reviewing"
 stages = ["verify"]
 
+# adjudicate runs last: the round drains whatever the verdict filed before the next task is picked.
 [[pipeline]]
 name = "task"
 when = "queue.takeable"
-stages = ["implement", "verify"]
+stages = ["implement", "verify", "adjudicate"]
 
 [[pipeline]]
 name = "discover"
@@ -134,7 +135,7 @@ post = ["commit-verdict", "queue-intact", "verdict", "scope"]
 name = "scout"
 role = "scout"
 turns = 30
-env = { HARNESS_DRIVER = "1" }
+env = { ENALLAGI_DRIVER = "1" }
 
 [[stage]]
 name = "adjudicate"
@@ -199,5 +200,13 @@ path = "skills/brainstorming"
 rev = "v6.3.0"
 gate = "queue-uncovered"
 why = "criteria are written before code, which here happens in the queue and not in a chat"
+
+[[skill]]
+id = "caveman-commit"
+source = "github:JuliusBrussee/caveman"
+path = "skills/caveman-commit"
+rev = "v2.7.0"
+gate = "plain-record"
+why = "a commit subject names what changed and stops there"
 
 # [[role]] takes name, source, path and rev as [[skill]] does; <path>/<name>.md vendors to <harness_dir>/roles/<name>.md and pins in harness.lock.

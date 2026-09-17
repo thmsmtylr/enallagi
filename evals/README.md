@@ -4,21 +4,21 @@ One directory per eval. Each is a fixture repo, a request, and an assertion:
 
 | File | |
 | --- | --- |
-| `setup.sh` | builds the fixture state, cwd is a throwaway repo with the harness installed |
-| `prompt.txt` | the request, in the shape `harness run` sends it |
+| `setup.sh` | builds the fixture state, cwd is a throwaway repo with enallagi installed |
+| `prompt.txt` | the request, in the shape `enallagi run` sends it |
 | `assert.sh` | exits 0 when the role obeyed its rule |
 | `ablate.sh` | removes the rule from the fixture, so the gate can tell a load-bearing rule from a decorative one |
 
 ```bash
-harness eval                 every eval
-harness eval verifier        one
-harness eval --gate <name>   decide a candidate rule
+enallagi eval                 every eval
+enallagi eval verifier        one
+enallagi eval --gate <name>   decide a candidate rule
 ```
 
-`--gate` is the write-path check on a new `__HARNESS_DIR__/LEARNINGS.md` rule. It accepts only when the eval passes
+`--gate` is the write-path check on a new `__ENALLAGI_DIR__/LEARNINGS.md` rule. It accepts only when the eval passes
 with the rule, fails with the rule ablated, and every other eval still passes.
 
-The agent comes from `EVAL_AGENT`, else `__HARNESS_DIR__/harness.toml`'s `[agent]`. With neither, `harness eval`
+The agent comes from `EVAL_AGENT`, else `__ENALLAGI_DIR__/enallagi.toml`'s `[agent]`. With neither, `enallagi eval`
 refuses rather than reporting a result it did not measure.
 
 `verifier-findings` builds a JavaScript fixture and needs `bun` on `PATH`; without it its

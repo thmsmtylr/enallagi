@@ -1,8 +1,6 @@
-use std::process::Command;
-
 #[test]
 fn help_exits_0_and_lists_subcommands() {
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .arg("--help")
         .output()
         .expect("run harness --help");
@@ -20,10 +18,10 @@ fn help_exits_0_and_lists_subcommands() {
 
 #[test]
 fn run_help_mentions_iterations_and_budget_usd() {
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["run", "--help"])
         .output()
-        .expect("run harness run --help");
+        .expect("run enallagi run --help");
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("--iterations"), "{stdout}");
@@ -32,10 +30,10 @@ fn run_help_mentions_iterations_and_budget_usd() {
 
 #[test]
 fn run_rejects_a_bare_iteration_count() {
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["run", "7"])
         .output()
-        .expect("run harness run 7");
+        .expect("run enallagi run 7");
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("--iterations"), "{stderr}");
@@ -44,11 +42,11 @@ fn run_rejects_a_bare_iteration_count() {
 #[test]
 fn events_with_no_log_exits_0_with_no_output() {
     let dir = tempfile::tempdir().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .arg("events")
         .current_dir(dir.path())
         .output()
-        .expect("run harness events");
+        .expect("run enallagi events");
     assert!(out.status.success());
     assert!(out.stdout.is_empty());
 }
@@ -69,11 +67,11 @@ fn events_json_prints_raw_lines_and_filters_by_task() {
     )
     .unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["events", "--task", "T-1", "--json"])
         .current_dir(dir.path())
         .output()
-        .expect("run harness events --task T-1 --json");
+        .expect("run enallagi events --task T-1 --json");
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(stdout.lines().count(), 1);
@@ -89,11 +87,11 @@ fn events_json_echoes_the_file_line_verbatim() {
     let line = r#"{"kind":"halt","reason":"boom","extra_field":"unexpected","seq":1,"iter":0,"run":"r","ts":"2026-09-07T00:00:00Z","halt":"stop"}"#;
     std::fs::write(harness_dir.join("events.jsonl"), format!("{line}\n")).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["events", "--json"])
         .current_dir(dir.path())
         .output()
-        .expect("run harness events --json");
+        .expect("run enallagi events --json");
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(
@@ -119,11 +117,11 @@ fn events_since_keeps_only_events_at_or_after() {
     )
     .unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["events", "--since", "2026-09-07T00:00:01Z", "--json"])
         .current_dir(dir.path())
         .output()
-        .expect("run harness events --since ...");
+        .expect("run enallagi events --since ...");
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(stdout.lines().count(), 1);
@@ -131,15 +129,15 @@ fn events_since_keeps_only_events_at_or_after() {
 }
 
 fn events_in(dir: &std::path::Path) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_harness"))
+    enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["events", "--json"])
         .current_dir(dir)
         .output()
-        .expect("run harness events --json")
+        .expect("run enallagi events --json")
 }
 
 #[test]
-fn a_legacy_harness_directory_is_read_with_a_warning_naming_the_move() {
+fn a_legacy_directory_is_read_with_a_warning() {
     let dir = tempfile::tempdir().unwrap();
     let line = r#"{"ts":"2026-09-07T00:00:00Z","run":"r","iter":0,"seq":1,"kind":"halt","halt":"a","reason":"legacy"}"#;
     std::fs::create_dir_all(dir.path().join(".harness")).unwrap();
@@ -154,11 +152,11 @@ fn a_legacy_harness_directory_is_read_with_a_warning_naming_the_move() {
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim_end(), line);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
-    assert!(stderr.contains("harness init --move"), "{stderr}");
+    assert!(stderr.contains("enallagi init --move"), "{stderr}");
 }
 
 #[test]
-fn the_enallagi_directory_is_read_without_a_warning_when_both_exist() {
+fn the_new_directory_wins_without_a_warning() {
     let dir = tempfile::tempdir().unwrap();
     let line = r#"{"ts":"2026-09-07T00:00:00Z","run":"r","iter":0,"seq":1,"kind":"halt","halt":"a","reason":"current"}"#;
     std::fs::create_dir_all(dir.path().join(".harness")).unwrap();
@@ -177,7 +175,7 @@ fn the_enallagi_directory_is_read_without_a_warning_when_both_exist() {
 }
 
 #[test]
-fn skills_sync_works_under_a_custom_preset_which_has_no_directory_of_its_own() {
+fn skills_sync_works_under_a_custom_preset() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let mut toml = String::from(
@@ -191,6 +189,7 @@ fn skills_sync_works_under_a_custom_preset_which_has_no_directory_of_its_own() {
         "verify-before-done",
         "review-requested",
         "brainstorming",
+        "caveman-commit",
     ] {
         toml.push_str(&format!(
             "[[skill]]\nid = \"{id}\"\nsource = \"path:vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"x\"\n\n"
@@ -198,13 +197,13 @@ fn skills_sync_works_under_a_custom_preset_which_has_no_directory_of_its_own() {
         std::fs::create_dir_all(root.join(format!("vendor/{id}"))).unwrap();
         std::fs::write(root.join(format!("vendor/{id}/SKILL.md")), "body\n").unwrap();
     }
-    std::fs::write(root.join("harness.toml"), toml).unwrap();
+    std::fs::write(root.join("enallagi.toml"), toml).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["skills", "sync"])
         .current_dir(root)
         .output()
-        .expect("run harness skills sync");
+        .expect("run enallagi skills sync");
     assert!(out.status.success(), "{out:?}");
     assert!(root.join(".enallagi/skills/tdd/SKILL.md").is_file());
     assert!(root.join(".enallagi/harness.lock").is_file());
@@ -215,7 +214,7 @@ fn skills_check_refuses_what_sync_then_locks() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     // the shipped roles name every one of these, and `skills check` validates the config first
-    const IDS: [&str; 7] = [
+    const IDS: [&str; 8] = [
         "tdd",
         "ponytail",
         "debugging",
@@ -223,6 +222,7 @@ fn skills_check_refuses_what_sync_then_locks() {
         "verify-before-done",
         "review-requested",
         "brainstorming",
+        "caveman-commit",
     ];
     let mut toml = String::new();
     for id in IDS {
@@ -232,14 +232,14 @@ fn skills_check_refuses_what_sync_then_locks() {
         std::fs::create_dir_all(root.join(format!("vendor/{id}"))).unwrap();
         std::fs::write(root.join(format!("vendor/{id}/SKILL.md")), "body\n").unwrap();
     }
-    std::fs::write(root.join("harness.toml"), toml).unwrap();
+    std::fs::write(root.join("enallagi.toml"), toml).unwrap();
 
     let harness = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_harness"))
+        enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
             .args(args)
             .current_dir(root)
             .output()
-            .expect("run harness skills")
+            .expect("run enallagi skills")
     };
 
     let out = harness(&["skills", "check"]);
@@ -285,8 +285,29 @@ fn the_shipped_documents_describe_and_do_not_argue() {
     let mut offences = Vec::new();
 
     let readme = read("README.md");
-    if readme.lines().count() > 280 {
+    if readme.lines().count() >= 200 {
         offences.push(format!("README.md is {} lines", readme.lines().count()));
+    }
+    let mut sections: Vec<&str> = Vec::new();
+    let mut fenced = false;
+    for line in readme.lines() {
+        if line.starts_with("```") {
+            fenced = !fenced;
+        } else if let Some(h) = line.strip_prefix("## ").filter(|_| !fenced) {
+            sections.push(h);
+        }
+    }
+    let order = [
+        "Highlights",
+        "Install",
+        "From install to a landed task",
+        "How a run works",
+        "Configuration",
+        "Commands",
+        "License",
+    ];
+    if sections != order {
+        offences.push(format!("README.md headings {sections:?}"));
     }
     let intent = read("docs/intent.md");
     for (name, text) in [("README.md", &readme), ("docs/intent.md", &intent)] {
@@ -315,7 +336,7 @@ fn the_shipped_documents_describe_and_do_not_argue() {
         offences.push(format!("docs/intent.md headings {headings:?}"));
     }
 
-    let toml = harness::config::DEFAULT_TOML;
+    let toml = enallagi::config::DEFAULT_TOML;
     let mut run = 0usize;
     for (i, line) in toml.lines().enumerate() {
         run = if line.trim_start().starts_with('#') {
@@ -335,7 +356,7 @@ fn the_shipped_documents_describe_and_do_not_argue() {
     }
 
     // the citations moved to docs/intent.md appear in no other shipped document
-    let cfg = harness::config::load(&root).expect("harness.toml");
+    let cfg = enallagi::config::load(&root).expect("enallagi.toml");
     let mut elsewhere = vec![
         cfg.layout.context_file.clone(),
         "templates/pointer.md".to_string(),
@@ -358,46 +379,94 @@ fn the_shipped_documents_describe_and_do_not_argue() {
         }
     }
 
-    // `harness probe` reads check-unnamed 0 and litter 0
-    let green = harness::probes::CheckOutcome {
+    // `enallagi probe` reads check-unnamed 0 and litter 0
+    let green = enallagi::probes::CheckOutcome {
         ran: true,
         red: false,
         output: String::new(),
     };
-    let ctx = harness::probes::ProbeCtx {
+    let ctx = enallagi::probes::ProbeCtx {
         root: &root,
         cfg: &cfg,
         check: Some(&green),
         driver: false,
     };
     if root.join(&cfg.layout.context_file).is_file() {
-        for (name, result) in harness::probes::run_all(&ctx, &["check-unnamed".to_string()]) {
+        for (name, result) in enallagi::probes::run_all(&ctx, &["check-unnamed".to_string()]) {
             match result {
-                harness::probes::ProbeResult::Count(found) if found.is_empty() => {}
+                enallagi::probes::ProbeResult::Count(found) if found.is_empty() => {}
                 other => offences.push(format!("{name}: {other:?}")),
             }
         }
     }
     if !cfg.layout.docs.iter().any(|d| d == "test-hashes.json") {
-        offences.push("harness.toml docs omits test-hashes.json, which litter flags".to_string());
+        offences.push("enallagi.toml docs omits test-hashes.json, which litter flags".to_string());
     }
     assert!(offences.is_empty(), "{}", offences.join("\n"));
 }
 
 #[test]
-fn tasks_ready_finds_the_harness_directory_queue_when_the_config_is_refused() {
-    let r = harness::fixture::Repo::new();
+fn tasks_ready_finds_the_queue_config_refused() {
+    let r = enallagi::fixture::Repo::new();
     r.write(
         ".enallagi/TASKS.md",
         "# TASKS\n\n## [T-001] open\nscope: src/a.ts\nstatus: ready\n",
     );
-    r.write(".enallagi/harness.toml", "[check]\ncomand = \"x\"\n");
+    r.write(".enallagi/enallagi.toml", "[check]\ncomand = \"x\"\n");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["tasks", "ready"])
         .current_dir(&r.root)
         .output()
-        .expect("run harness tasks ready");
+        .expect("run enallagi tasks ready");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "T-001",
+        "{out:?}"
+    );
+}
+
+#[test]
+fn a_task_block_carries_model_and_effort() {
+    let r = enallagi::fixture::Repo::new();
+    r.write(
+        ".enallagi/TASKS.md",
+        "# TASKS\n\n\
+         ## [T-001] picked per task\n\
+         scope: src/a.ts\n\
+         blockedBy: none\n\
+         model: claude-haiku-4-5\n\
+         effort: low\n\
+         status: ready\n\
+         \n\
+         ## [T-002] picked per role\n\
+         scope: src/b.ts\n\
+         blockedBy: none\n\
+         status: ready\n",
+    );
+
+    let field = |id: &str, key: &str| {
+        let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+            .args(["tasks", "field", id, key])
+            .current_dir(&r.root)
+            .output()
+            .expect("run enallagi tasks field");
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
+    assert_eq!(field("T-001", "model"), "claude-haiku-4-5");
+    assert_eq!(field("T-001", "effort"), "low");
+    assert_eq!(field("T-001", "scope"), "src/a.ts");
+    assert_eq!(field("T-001", "blockedBy"), "none");
+    assert_eq!(field("T-002", "model"), "");
+    assert_eq!(field("T-002", "effort"), "");
+
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["tasks", "ready"])
+        .current_dir(&r.root)
+        .output()
+        .expect("run enallagi tasks ready");
     assert_eq!(
         String::from_utf8_lossy(&out.stdout).trim(),
         "T-001",
@@ -407,7 +476,7 @@ fn tasks_ready_finds_the_harness_directory_queue_when_the_config_is_refused() {
 
 #[test]
 fn tasks_archive_moves_a_done_block_and_names_it() {
-    let r = harness::fixture::Repo::new();
+    let r = enallagi::fixture::Repo::new();
     r.write(
         "TASKS.md",
         "# TASKS\n\n\
@@ -423,11 +492,11 @@ fn tasks_archive_moves_a_done_block_and_names_it() {
     r.write("DECISIONS.md", "# DECISIONS\n");
     r.commit_all("seed the queue");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["tasks", "archive"])
         .current_dir(&r.root)
         .output()
-        .expect("run harness tasks archive");
+        .expect("run enallagi tasks archive");
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(
@@ -446,11 +515,11 @@ fn tasks_archive_moves_a_done_block_and_names_it() {
         "{decisions}"
     );
 
-    let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["tasks", "archive"])
         .current_dir(&r.root)
         .output()
-        .expect("run harness tasks archive twice");
+        .expect("run enallagi tasks archive twice");
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert_eq!(
         String::from_utf8_lossy(&out.stdout).trim(),
@@ -459,17 +528,17 @@ fn tasks_archive_moves_a_done_block_and_names_it() {
 }
 
 fn base_of(root: &std::path::Path, task: &str) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_harness"))
+    enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["base", task])
         .current_dir(root)
         .output()
-        .expect("run harness base")
+        .expect("run enallagi base")
 }
 
 #[test]
-fn base_prints_the_product_sha_the_state_commit_adding_the_heading_records() {
-    let r = harness::fixture::Repo::new();
-    let git = |dir: &std::path::Path, args: &[&str]| harness::git::git(dir, args).expect("git");
+fn base_prints_the_state_commits_product_sha() {
+    let r = enallagi::fixture::Repo::new();
+    let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
     r.write(".git/info/exclude", ".enallagi/\n");
     let queued = git(&r.root, &["rev-parse", "HEAD"]);
     let state = r.root.join(".enallagi");
@@ -514,14 +583,14 @@ fn base_prints_the_product_sha_the_state_commit_adding_the_heading_records() {
 }
 
 #[test]
-fn base_in_the_root_layout_prints_what_the_pickaxe_on_tasks_md_prints() {
-    let r = harness::fixture::Repo::new();
+fn base_in_the_root_layout_matches_the_pickaxe() {
+    let r = enallagi::fixture::Repo::new();
     r.write("TASKS.md", "# TASKS\n\n## [T-001] open\nstatus: ready\n");
     r.commit_all("queue: T-001");
     r.write("src/a.ts", "work\n");
     r.commit_all("T-001 work");
 
-    let pickaxe = harness::git::git(
+    let pickaxe = enallagi::git::git(
         &r.root,
         &[
             "log",
@@ -541,7 +610,7 @@ fn base_in_the_root_layout_prints_what_the_pickaxe_on_tasks_md_prints() {
 }
 
 fn in_harness(root: &std::path::Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_harness"))
+    enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(args)
         .current_dir(root)
         .output()
@@ -549,9 +618,9 @@ fn in_harness(root: &std::path::Path, args: &[&str]) -> std::process::Output {
 }
 
 #[test]
-fn gate_scope_with_the_product_base_refuses_a_grown_baseline_in_a_nested_install() {
-    let r = harness::fixture::Repo::new();
-    let git = |dir: &std::path::Path, args: &[&str]| harness::git::git(dir, args).expect("git");
+fn gate_scope_refuses_a_grown_nested_baseline() {
+    let r = enallagi::fixture::Repo::new();
+    let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
     let out = in_harness(&r.root, &["init"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     git(
@@ -609,9 +678,87 @@ fn gate_scope_with_the_product_base_refuses_a_grown_baseline_in_a_nested_install
     );
 }
 
+// a nested install with T-900 verified done and `demo` locked at the base; `at_base` writes the
+// vendored skill before the base commit, so the vendor commit rewrites it instead of adding it
+fn vendored_demo(at_base: bool) -> (enallagi::fixture::Repo, String) {
+    let r = enallagi::fixture::Repo::new();
+    let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
+    let out = in_harness(&r.root, &["init"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    git(
+        &r.root,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "install",
+        ],
+    );
+    let queued = git(&r.root, &["rev-parse", "HEAD"]);
+    let state = r.root.join(".enallagi");
+    // CI runners have no global git identity, so the nested repository needs its own
+    git(&state, &["config", "user.name", "t"]);
+    git(&state, &["config", "user.email", "t@t"]);
+    let commit_state = |msg: &str| {
+        git(&state, &["add", "-A"]);
+        git(
+            &state,
+            &["-c", "commit.gpgsign=false", "commit", "-qm", msg],
+        );
+    };
+    let skill = ".enallagi/adapters/claude/skills/demo/SKILL.md";
+    let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
+    let block = "\n## [T-900] vendor\nscope: a.txt\nrows: none — harness\nstatus: review\n";
+    r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
+    r.write(
+        ".enallagi/harness.lock",
+        "version = 1\n\n[[skill]]\nid = \"demo\"\nsource = \"path:vendor/demo\"\nsha256 = \"aaa\"\n",
+    );
+    if at_base {
+        r.write(skill, "# demo\n");
+    }
+    commit_state(&format!("queue at {queued}"));
+
+    r.write(skill, "# demo, re-vendored\n");
+    commit_state("chore(vendor): demo");
+
+    r.write("a.txt", "work\n");
+    r.commit_all("T-900 work");
+    let worked = git(&r.root, &["rev-parse", "HEAD"]);
+    let done = block.replace("status: review", "status: done");
+    r.write(".enallagi/TASKS.md", &format!("{tasks}{done}"));
+    commit_state(&format!("verify T-900 at {worked}"));
+    (r, queued)
+}
+
 #[test]
-fn tasks_ready_reads_the_queue_in_harness_dir_before_the_configured_directory() {
-    let r = harness::fixture::Repo::new();
+fn gate_scope_exempts_a_revendored_locked_skill() {
+    let (r, queued) = vendored_demo(false);
+    let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("T-900 stayed inside its scope."),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn gate_scope_rejects_a_rewritten_vendored_skill() {
+    let (r, queued) = vendored_demo(true);
+    let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout)
+            .contains(".enallagi/adapters/claude/skills/demo/SKILL.md"),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn tasks_ready_prefers_the_harness_dir_queue() {
+    let r = enallagi::fixture::Repo::new();
     r.write(
         ".enallagi/TASKS.md",
         "# TASKS\n\n## [T-001] parent\nscope: src/a.ts\nstatus: ready\n",
@@ -628,12 +775,12 @@ fn tasks_ready_reads_the_queue_in_harness_dir_before_the_configured_directory() 
     .expect("write");
 
     let ready = |dir: &std::path::Path| {
-        let out = Command::new(env!("CARGO_BIN_EXE_harness"))
+        let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
             .args(["tasks", "ready"])
-            .env("HARNESS_DIR", dir)
+            .env("ENALLAGI_DIR", dir)
             .current_dir(&r.root)
             .output()
-            .expect("run harness tasks ready");
+            .expect("run enallagi tasks ready");
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
     assert_eq!(ready(&r.root.join("lane/.enallagi")), "T-002");
@@ -641,8 +788,8 @@ fn tasks_ready_reads_the_queue_in_harness_dir_before_the_configured_directory() 
 }
 
 #[test]
-fn the_immutable_hook_reads_test_hashes_in_harness_dir() {
-    let r = harness::fixture::Repo::new();
+fn the_immutable_hook_reads_nested_hashes() {
+    let r = enallagi::fixture::Repo::new();
     r.write(".enallagi/TASKS.md", "# TASKS\n");
     r.write("lane/.enallagi/TASKS.md", "# TASKS\n");
     r.write(
@@ -650,15 +797,15 @@ fn the_immutable_hook_reads_test_hashes_in_harness_dir() {
         r#"{"src/schema.ts":"deadbeef"}"#,
     );
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_harness"))
+    let mut child = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["hook", "immutable"])
-        .env("HARNESS_DIR", r.root.join("lane/.enallagi"))
+        .env("ENALLAGI_DIR", r.root.join("lane/.enallagi"))
         .env_remove("CLAUDE_PROJECT_DIR")
         .current_dir(&r.root)
         .stdin(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .expect("run harness hook immutable");
+        .expect("run enallagi hook immutable");
     use std::io::Write;
     child
         .stdin
@@ -668,4 +815,124 @@ fn the_immutable_hook_reads_test_hashes_in_harness_dir() {
         .expect("write stdin");
     let out = child.wait_with_output().expect("wait");
     assert_eq!(out.status.code(), Some(2), "{out:?}");
+}
+
+#[test]
+fn a_legacy_variable_exits_2_naming_the_new_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["tasks", "ready"])
+        .env(format!("{}DIR", enallagi::config::LEGACY_ENV), dir.path())
+        .current_dir(dir.path())
+        .output()
+        .expect("run tasks ready");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("ENALLAGI_DIR"), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+}
+
+#[test]
+fn the_new_variable_admits_the_legacy_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["tasks", "ready"])
+        .env(format!("{}DIR", enallagi::config::LEGACY_ENV), dir.path())
+        .env("ENALLAGI_DIR", dir.path())
+        .current_dir(dir.path())
+        .output()
+        .expect("run tasks ready");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+}
+
+#[test]
+fn a_legacy_config_name_warns_about_the_rename() {
+    let r = enallagi::fixture::Repo::new();
+    r.write(".enallagi/TASKS.md", "# TASKS\n");
+    r.write(".enallagi/harness.toml", "[check]\ncommand = \"true\"\n");
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["tasks", "list"])
+        .current_dir(&r.root)
+        .output()
+        .expect("run tasks list");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("enallagi.toml"), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+}
+
+#[test]
+fn every_readme_command_runs_or_is_named() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
+    let unrunnable = [
+        (
+            "curl -LO https://github.com/thmsmtylr/enallagi/releases/latest/download/enallagi-aarch64-apple-darwin",
+            "downloads a release asset over the network",
+        ),
+        (
+            "chmod +x enallagi-aarch64-apple-darwin",
+            "the asset the curl line downloads is not in the tree",
+        ),
+        (
+            "sudo mv enallagi-aarch64-apple-darwin /usr/local/bin/enallagi",
+            "installs system-wide as root",
+        ),
+        (
+            "$EDITOR .enallagi/enallagi.toml",
+            "opens an interactive editor",
+        ),
+        (
+            "enallagi run --iterations 1",
+            "spawns the agent CLI, which no test may call",
+        ),
+        (
+            "cargo install --locked --git https://github.com/thmsmtylr/enallagi enallagi",
+            "builds from the network and installs outside the tree",
+        ),
+        (
+            "enallagi worktree 1",
+            "spawns the agent CLI in a worktree, which no test may call",
+        ),
+        ("enallagi watch", "attaches a live view and does not exit on its own"),
+        (
+            "enallagi pr T-001 --push",
+            "pushes a branch and opens a pull request",
+        ),
+    ];
+
+    let mut fenced: Vec<String> = Vec::new();
+    let mut in_bash = false;
+    for line in readme.lines() {
+        if let Some(lang) = line.strip_prefix("```") {
+            in_bash = lang == "bash";
+            continue;
+        }
+        let cmd = line.split_once(" #").map_or(line, |(c, _)| c).trim();
+        if in_bash && !cmd.is_empty() {
+            fenced.push(cmd.to_string());
+        }
+    }
+    assert!(fenced.len() > 8, "README fenced commands: {fenced:?}");
+    for (cmd, _) in &unrunnable {
+        assert!(
+            fenced.iter().any(|f| f == cmd),
+            "no README command reads {cmd}"
+        );
+    }
+
+    let repo = enallagi::fixture::Repo::new();
+    for cmd in &fenced {
+        if unrunnable.iter().any(|(named, _)| named == cmd) {
+            continue;
+        }
+        let args: Vec<&str> = cmd.split_whitespace().collect();
+        assert_eq!(args[0], "enallagi", "{cmd} has no runner and no reason");
+        let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+            .args(&args[1..])
+            .current_dir(&repo.root)
+            .output()
+            .unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        assert_eq!(out.status.code(), Some(0), "{cmd}: {out:?}");
+    }
 }

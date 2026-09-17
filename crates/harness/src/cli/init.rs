@@ -31,7 +31,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         for (old, new) in &moves {
             println!("  {verb}: {old} -> {new}");
         }
-        println!("\nNext: git add the old and new paths, then re-run `harness init`.");
+        println!("\nNext: git add the old and new paths, then re-run `enallagi init`.");
         return Ok(0);
     }
     let report = init::install(&root, &opts)?;
@@ -40,7 +40,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         println!("  would move: {old} -> {new}");
     }
     if !report.moves.is_empty() {
-        println!("  nothing was moved; `harness init --move` moves them");
+        println!("  nothing was moved; `enallagi init --move` moves them");
     }
 
     let verb = if args.dry_run { "would write" } else { "wrote" };
@@ -77,17 +77,17 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         "
 Next, in {root}:
   1. Edit {toml}: check.command, layout.spec, agent.preset
-  2. harness init
+  2. enallagi init
   3. Write exit criteria into {spec}
   4. git add{add}{track}
-  5. harness probe
-  6. harness run --iterations 1",
+  5. enallagi probe
+  6. enallagi run --iterations 1",
         root = root.display(),
         // named unconditionally: on a re-run it's neither written nor kept, so leaving it off would leave the answers untracked
         track = report
             .track
             .iter()
-            .filter(|path| *path != "harness.toml")
+            .filter(|path| *path != "enallagi.toml")
             .fold(String::new(), |line, path| line + " " + path),
     );
     Ok(0)

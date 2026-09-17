@@ -7,7 +7,7 @@ pub struct Args {
     pub args: Vec<String>,
 }
 
-const USAGE: &str = "harness tasks: usage: harness tasks <list|ready|ready-unattended|ids-at|block|field|set-status|unblock|rejections|archive> [args] [file]";
+const USAGE: &str = "enallagi tasks: usage: enallagi tasks <list|ready|ready-unattended|ids-at|block|field|set-status|unblock|rejections|archive> [args] [file]";
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
     let a = &args.args;
@@ -95,7 +95,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 Err(e) => return Ok(fail(&e)),
             };
             if out == text {
-                eprintln!("harness tasks: no block {id}, nothing written");
+                eprintln!("enallagi tasks: no block {id}, nothing written");
                 return Ok(1);
             }
             match (Queue { path }).write(&out) {

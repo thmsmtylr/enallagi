@@ -54,7 +54,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         file,
         start,
         format!(
-            "the Commands section names no command matching harness.toml check ({check}), so every lane is told to verify with something else"
+            "the Commands section names no command matching enallagi.toml check ({check}), so every lane is told to verify with something else"
         ),
     )])
 }

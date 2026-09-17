@@ -6,7 +6,7 @@
 # fmt, clippy at -D warnings and the workspace test suite on both userlands. `cross-build` proves the
 # four release targets compile. Every `uses:` is pinned to a 40-character commit SHA with its tag in
 # a trailing comment (`every_github_action_is_pinned_to_a_commit_sha`, crates/harness/tests/floor.rs).
-# HARNESS_EVALS is deliberately never set: the evals spawn a real agent, and a CI job holding a model
+# ENALLAGI_EVALS is deliberately never set: the evals spawn a real agent, and a CI job holding a model
 # credential is the blast radius this project argues against.
 name: ci
 
@@ -46,7 +46,7 @@ jobs:
   # `the_package_driver_reports_shortfalls_as_finding_lines` is `#[ignore]`d because it installs a
   # throwaway repo and drives the release binary through it; `--include-ignored driver` selects that
   # one test by name and none of the other ignored tests (the retired shellcheck/shfmt stand-ins, the
-  # eval that needs HARNESS_EVALS). HARNESS_DRIVER=1 is set HERE and nowhere else in this file --
+  # eval that needs ENALLAGI_EVALS). ENALLAGI_DRIVER=1 is set HERE and nowhere else in this file --
   # without it the test still runs but skips the assertion that reaches the artifact.
   driver:
     name: driver
@@ -64,8 +64,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: the driver reaches the built artifact
         env:
-          HARNESS_DRIVER: '1'
-        run: cargo test -p harness --test floor -- --include-ignored driver
+          ENALLAGI_DRIVER: '1'
+        run: cargo test -p enallagi --test floor -- --include-ignored driver
 
   # main is the published package. A dogfood instance, or a round with no strip commit, fails here on
   # a push to main and on a pull request into it; dogfood/* branches carry the instance and skip.
@@ -86,8 +86,8 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: main tracks no instance file
-        run: cargo test -p harness --test floor -- --include-ignored --exact main_tracks_no_instance_file
+      - name: the published package tracks no instance file
+        run: cargo test -p enallagi --test floor -- --include-ignored --exact main_tracks_no_instance_file
 
   # The vendored skills are not in the tree: `sync` fetches them from harness.lock and `check`
   # refuses a pin whose vendored content no longer hashes to what the lock records, so a tag moved
@@ -107,9 +107,9 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: every declared skill resolves from the lock
-        run: cargo run -q -p harness -- skills sync
+        run: cargo run -q -p enallagi -- skills sync
       - name: and matches the pin the lock records
-        run: cargo run -q -p harness -- skills check
+        run: cargo run -q -p enallagi -- skills check
 
   # fmt, clippy at -D warnings, and the workspace test suite, on both userlands: macos-latest and
   # ubuntu-latest differ in their default toolchains and filesystem behaviour, and this is the only
@@ -166,7 +166,7 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: '0.13.0'
-      - name: cargo-zigbuild
+      - name: cargo-zigbuild is the cross-build linker
         run: cargo install cargo-zigbuild --locked
       - name: x86_64-unknown-linux-musl
         run: cargo zigbuild --release --target x86_64-unknown-linux-musl
@@ -178,20 +178,20 @@ jobs:
         run: cargo zigbuild --release --target aarch64-apple-darwin
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: harness-x86_64-unknown-linux-musl
-          path: target/x86_64-unknown-linux-musl/release/harness
+          name: enallagi-x86_64-unknown-linux-musl
+          path: target/x86_64-unknown-linux-musl/release/enallagi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: harness-aarch64-unknown-linux-musl
-          path: target/aarch64-unknown-linux-musl/release/harness
+          name: enallagi-aarch64-unknown-linux-musl
+          path: target/aarch64-unknown-linux-musl/release/enallagi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: harness-x86_64-apple-darwin
-          path: target/x86_64-apple-darwin/release/harness
+          name: enallagi-x86_64-apple-darwin
+          path: target/x86_64-apple-darwin/release/enallagi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: harness-aarch64-apple-darwin
-          path: target/aarch64-apple-darwin/release/harness
+          name: enallagi-aarch64-apple-darwin
+          path: target/aarch64-apple-darwin/release/enallagi
 
   # Scorecard refuses on anything but the default branch, and publishing needs an OIDC token a
   # pull_request run does not get, so this job is skipped there rather than failed.

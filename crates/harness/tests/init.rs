@@ -1,8 +1,8 @@
 //! The install assertions, one test per assertion and named after it.
 
-use harness::fixture::Repo;
-use harness::init::{self, InitOpts, InitReport};
-use harness::probes::{self, CheckOutcome, Finding, ProbeCtx, ProbeResult};
+use enallagi::fixture::Repo;
+use enallagi::init::{self, InitOpts, InitReport};
+use enallagi::probes::{self, CheckOutcome, Finding, ProbeCtx, ProbeResult};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -26,7 +26,7 @@ fn read(repo: &Repo, rel: &str) -> String {
 }
 
 fn stale(repo: &Repo) -> Vec<Finding> {
-    let cfg = harness::config::load(&repo.root).expect("config");
+    let cfg = enallagi::config::load(&repo.root).expect("config");
     let check = CheckOutcome {
         ran: true,
         red: false,
@@ -74,10 +74,12 @@ fn walk(root: &Path) -> Vec<PathBuf> {
 fn init_exits_0_on_a_fresh_repo() {
     let repo = Repo::new();
     let report = install(&repo);
-    assert!(repo.root.join(".enallagi/harness.toml").is_file());
+    assert!(repo.root.join(".enallagi/enallagi.toml").is_file());
     assert!(repo.root.join(".enallagi/RAILS.md").is_file());
     assert!(!repo.root.join(".harness").exists());
-    assert!(report.wrote.contains(&".enallagi/harness.toml".to_string()));
+    assert!(report
+        .wrote
+        .contains(&".enallagi/enallagi.toml".to_string()));
     assert!(
         report.wrote.contains(&".enallagi/AGENTS.md".to_string()),
         "{:?}",
@@ -92,11 +94,11 @@ fn init_exits_0_on_a_fresh_repo() {
 }
 
 #[test]
-fn init_makes_the_harness_directory_a_repository_the_product_ignores() {
+fn init_makes_the_dir_an_ignored_repository() {
     let repo = Repo::new();
     install(&repo);
     let state = repo.root.join(".enallagi");
-    let git = |dir: &Path, args: &[&str]| harness::git::git(dir, args);
+    let git = |dir: &Path, args: &[&str]| enallagi::git::git(dir, args);
     let top = git(&state, &["rev-parse", "--show-toplevel"]).expect("a repository");
     assert_eq!(
         fs::canonicalize(top).expect("top"),
@@ -104,7 +106,7 @@ fn init_makes_the_harness_directory_a_repository_the_product_ignores() {
     );
     for scratch in ["events.jsonl", "loop.pid", "run/roles/implementer.md"] {
         assert!(
-            harness::git::git_ok(&state, &["check-ignore", "-q", scratch]),
+            enallagi::git::git_ok(&state, &["check-ignore", "-q", scratch]),
             "{scratch} is not ignored by the harness directory's repository"
         );
     }
@@ -129,14 +131,14 @@ fn init_makes_the_harness_directory_a_repository_the_product_ignores() {
 }
 
 #[test]
-fn init_with_each_preset_leaves_a_clean_fixture_clean_and_its_gitignore_unchanged() {
-    for name in harness::agent::presets().keys() {
+fn init_leaves_a_clean_fixture_clean() {
+    for name in enallagi::agent::presets().keys() {
         let repo = Repo::new();
         repo.write(".gitignore", "node_modules/\n");
         repo.commit_all("ignore");
         with(&repo, &adapter(name));
         with(&repo, &adapter(name));
-        let git = |args: &[&str]| harness::git::git(&repo.root, args).expect("git");
+        let git = |args: &[&str]| enallagi::git::git(&repo.root, args).expect("git");
         assert_eq!(
             git(&["status", "--porcelain", "--untracked-files=all"]),
             "",
@@ -147,12 +149,12 @@ fn init_with_each_preset_leaves_a_clean_fixture_clean_and_its_gitignore_unchange
 }
 
 #[test]
-fn init_excludes_the_harness_directory_and_every_entry_point_in_one_marked_block() {
+fn init_excludes_the_dir_in_one_block() {
     let repo = Repo::new();
     let report = with(&repo, &adapter("gemini"));
     with(&repo, &adapter("gemini"));
     let exclude =
-        harness::git::git(&repo.root, &["rev-parse", "--git-path", "info/exclude"]).expect("path");
+        enallagi::git::git(&repo.root, &["rev-parse", "--git-path", "info/exclude"]).expect("path");
     let exclude = read(&repo, &exclude);
     let lines: Vec<&str> = exclude.lines().collect();
     let open = lines.iter().filter(|l| **l == "# >>> harness").count();
@@ -181,11 +183,11 @@ fn init_excludes_the_harness_directory_and_every_entry_point_in_one_marked_block
 }
 
 #[test]
-fn a_root_layout_with_no_harness_toml_seeds_the_context_file_at_the_root() {
+fn a_root_layout_seeds_the_context_file() {
     let repo = Repo::new();
     repo.write("TASKS.md", "# TASKS\n");
     let report = install(&repo);
-    let cfg = harness::config::load(&repo.root).expect("config");
+    let cfg = enallagi::config::load(&repo.root).expect("config");
     assert_eq!(cfg.layout.context_file, "AGENTS.md");
     assert!(
         report.wrote.contains(&"AGENTS.md".to_string()),
@@ -196,7 +198,7 @@ fn a_root_layout_with_no_harness_toml_seeds_the_context_file_at_the_root() {
 }
 
 #[test]
-fn init_leaves_a_root_layout_queue_in_the_product_repository() {
+fn init_leaves_a_root_queue_in_the_product() {
     let repo = Repo::new();
     repo.write("TASKS.md", "# TASKS\n");
     repo.commit_all("queue");
@@ -261,7 +263,7 @@ fn re_init_is_idempotent() {
 }
 
 #[test]
-fn the_context_file_is_seeded_and_the_pointers_point_at_it() {
+fn the_context_file_is_seeded_and_pointed_at() {
     let repo = Repo::new();
     with(&repo, &adapter("codex"));
     assert!(!read(&repo, ".enallagi/AGENTS.md").is_empty());
@@ -335,12 +337,12 @@ fn documents_with_content_are_kept() {
 }
 
 #[test]
-fn the_context_file_is_resynced_to_the_configured_check() {
+fn the_context_file_resyncs_the_check() {
     let repo = Repo::new();
     install(&repo);
     assert!(read(&repo, ".enallagi/AGENTS.md").contains("`bun run check`"));
     repo.write(
-        ".enallagi/harness.toml",
+        ".enallagi/enallagi.toml",
         "[check]\ncommand = \"make check\"\n",
     );
     install(&repo);
@@ -350,7 +352,7 @@ fn the_context_file_is_resynced_to_the_configured_check() {
 }
 
 #[test]
-fn an_installed_file_that_drifted_from_its_source_is_reported() {
+fn a_drifted_install_is_reported() {
     let repo = Repo::new();
     install(&repo);
     // zero on a freshly installed tree, or this is a permanent finding nobody reads
@@ -382,14 +384,14 @@ fn an_installed_file_that_drifted_from_its_source_is_reported() {
 }
 
 #[test]
-fn init_migrates_harness_json_and_prints_each_renamed_key() {
+fn init_migrates_harness_json_keys() {
     let repo = Repo::new();
     repo.write(
         "harness.json",
         r#"{"check": "make check", "spec": "DESIGN.md", "harnessDir": ".enallagi"}"#,
     );
     let report = install(&repo);
-    assert!(read(&repo, ".enallagi/harness.toml").contains("make check"));
+    assert!(read(&repo, ".enallagi/enallagi.toml").contains("make check"));
     assert!(repo.root.join("harness.json.migrated").is_file());
     assert!(!repo.root.join("harness.json").exists());
     assert!(
@@ -410,7 +412,7 @@ fn init_migrates_harness_json_and_prints_each_renamed_key() {
 }
 
 #[test]
-fn the_claude_adapter_writes_a_plugin_under_the_harness_directory() {
+fn the_claude_adapter_writes_a_plugin() {
     let repo = Repo::new();
     let theirs = "{ \"model\": \"opus\" }\n";
     repo.write(".claude/settings.json", theirs);
@@ -465,10 +467,10 @@ fn the_claude_adapter_writes_a_plugin_under_the_harness_directory() {
         "the foreign hook was dropped"
     );
     for command in [
-        "harness hook immutable",
-        "harness hook one-writer",
-        "harness hook verify-done",
-        "harness hook skills",
+        "enallagi hook immutable",
+        "enallagi hook one-writer",
+        "enallagi hook verify-done",
+        "enallagi hook skills",
     ] {
         assert!(hooks.contains(command), "no {command} in {hooks}");
     }
@@ -479,8 +481,8 @@ fn the_claude_adapter_writes_a_plugin_under_the_harness_directory() {
 }
 
 #[test]
-fn the_claude_preset_loads_the_plugin_and_names_its_skills_by_the_plugin() {
-    let claude = &harness::agent::presets()["claude"];
+fn the_claude_preset_loads_the_plugin() {
+    let claude = &enallagi::agent::presets()["claude"];
     let flag = claude
         .argv
         .iter()
@@ -515,7 +517,7 @@ fn the_claude_preset_loads_the_plugin_and_names_its_skills_by_the_plugin() {
 }
 
 #[test]
-fn a_default_claude_install_names_its_skills_plugin_harness() {
+fn the_default_skills_plugin_is_harness() {
     let repo = Repo::new();
     install(&repo);
     let manifest: serde_json::Value = serde_json::from_str(&read(
@@ -527,7 +529,7 @@ fn a_default_claude_install_names_its_skills_plugin_harness() {
 }
 
 #[test]
-fn a_root_layout_keeps_the_claude_skills_under_dot_claude() {
+fn a_root_layout_keeps_dot_claude_skills() {
     let repo = root_layout();
     let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
     let paths: Vec<&str> = planned.iter().map(|(path, _)| path.as_str()).collect();
@@ -535,7 +537,7 @@ fn a_root_layout_keeps_the_claude_skills_under_dot_claude() {
         paths.contains(&".claude/skills/running-the-loop/SKILL.md"),
         "{paths:?}"
     );
-    let cfg = harness::config::load(&repo.root).expect("config");
+    let cfg = enallagi::config::load(&repo.root).expect("config");
     assert_eq!(cfg.layout.skills_dir.as_deref(), Some(".claude/skills"));
 
     let unconfigured = Repo::new();
@@ -557,16 +559,16 @@ fn the_codex_adapter_writes_hooks_json() {
         serde_json::from_str(&read(&repo, "hooks.json")).expect("hooks json");
     assert_eq!(
         hooks["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-        "harness hook immutable"
+        "enallagi hook immutable"
     );
     assert_eq!(
         hooks["hooks"]["Stop"][0]["hooks"][0]["command"],
-        "harness hook verify-done"
+        "enallagi hook verify-done"
     );
 }
 
 #[test]
-fn the_adapter_points_its_own_instruction_file_at_the_context_file() {
+fn the_adapter_points_at_the_context_file() {
     let repo = Repo::new();
     let report = with(&repo, &adapter("qwen"));
     assert!(read(&repo, "QWEN.md").contains("AGENTS.md"));
@@ -583,8 +585,8 @@ fn the_adapter_points_its_own_instruction_file_at_the_context_file() {
 }
 
 #[test]
-fn each_preset_gets_a_root_pointer_only_when_its_argv_cannot_name_the_context_file() {
-    let presets = harness::agent::presets();
+fn a_root_pointer_only_without_an_argv_token() {
+    let presets = enallagi::agent::presets();
     let claude = &presets["claude"].argv;
     let flag = claude
         .iter()
@@ -629,7 +631,7 @@ fn each_preset_gets_a_root_pointer_only_when_its_argv_cannot_name_the_context_fi
 #[test]
 fn a_tracked_instruction_file_is_never_written() {
     let files = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "QWEN.md"];
-    for name in harness::agent::presets().keys() {
+    for name in enallagi::agent::presets().keys() {
         let repo = Repo::new();
         for file in files {
             repo.write(file, "");
@@ -662,7 +664,7 @@ fn a_settings_file_that_is_not_json_is_refused() {
 }
 
 #[test]
-fn a_preset_with_no_hooks_file_still_points_its_instruction_file_at_the_context_file() {
+fn a_preset_with_no_hooks_still_points() {
     let repo = Repo::new();
     let report = with(&repo, &adapter("omp"));
     assert!(read(&repo, ".omp/AGENTS.md").contains("AGENTS.md"));
@@ -699,7 +701,7 @@ fn an_unknown_adapter_is_refused() {
 }
 
 #[test]
-fn dry_run_writes_nothing_and_says_what_it_would_write() {
+fn dry_run_writes_nothing_and_says_so() {
     let repo = Repo::new();
     let before = walk(&repo.root);
     let report = with(
@@ -713,8 +715,8 @@ fn dry_run_writes_nothing_and_says_what_it_would_write() {
     assert!(report.wrote.contains(&".enallagi/RAILS.md".to_string()));
     let planned = init::planned_files(&repo.root, &InitOpts::default()).expect("plan");
     assert!(planned.iter().any(|(p, c)| p == ".enallagi/roles/scout.md"
-        && c.contains("harness probe")
-        && !c.contains("__HARNESS_DIR__/hooks")));
+        && c.contains("enallagi probe")
+        && !c.contains("__ENALLAGI_DIR__/hooks")));
 }
 
 #[test]
@@ -757,7 +759,7 @@ fn the_seeded_documents_state_rules_and_do_not_argue() {
 }
 
 #[test]
-fn init_plans_every_instance_file_under_the_harness_directory() {
+fn init_plans_every_instance_file() {
     let repo = Repo::new();
     let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
     let entry_points = [
@@ -775,7 +777,7 @@ fn init_plans_every_instance_file_under_the_harness_directory() {
         );
     }
     for path in [
-        ".enallagi/harness.toml",
+        ".enallagi/enallagi.toml",
         ".enallagi/TASKS.md",
         ".enallagi/SPEC.md",
         ".enallagi/evals/README.md",
@@ -788,7 +790,7 @@ const ROOT_LAYOUT: &[(&str, &str)] = &[
     ("TASKS.md", "# TASKS\n"),
     ("PROGRESS.md", "# PROGRESS\n"),
     ("SPEC.md", "# spec\n"),
-    ("harness.toml", "[check]\ncommand = \"true\"\n"),
+    ("enallagi.toml", "[check]\ncommand = \"true\"\n"),
     (".harness/RAILS.md", "rails\n"),
     (".harness/roles/scout.md", "scout\n"),
 ];
@@ -820,7 +822,7 @@ fn instance_mentions(planned: &[(String, String)]) -> Vec<(String, String)> {
 }
 
 #[test]
-fn every_rendered_role_template_and_skill_names_instance_files_under_the_harness_directory() {
+fn rendered_files_name_the_harness_dir() {
     let repo = Repo::new();
     let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
     let off: Vec<_> = instance_mentions(&planned)
@@ -849,18 +851,18 @@ fn moved_to(rel: &str) -> String {
 }
 
 fn harness_init(repo: &Repo, args: &[&str]) -> String {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .arg("init")
         .args(args)
         .current_dir(&repo.root)
         .output()
-        .expect("run harness init");
+        .expect("run enallagi init");
     assert!(out.status.success(), "{out:?}");
     String::from_utf8_lossy(&out.stdout).to_string()
 }
 
 #[test]
-fn the_git_add_line_init_prints_on_a_fresh_install_exits_0() {
+fn the_printed_git_add_line_exits_0() {
     let repo = Repo::new();
     let stdout = harness_init(&repo, &[]);
     let line = stdout
@@ -879,7 +881,7 @@ fn the_git_add_line_init_prints_on_a_fresh_install_exits_0() {
 }
 
 #[test]
-fn init_lists_each_root_and_legacy_instance_file_with_its_new_path_and_moves_nothing() {
+fn init_lists_new_paths_and_moves_nothing() {
     let repo = root_layout();
     let stdout = harness_init(&repo, &[]);
     for (rel, _) in ROOT_LAYOUT {
@@ -891,7 +893,7 @@ fn init_lists_each_root_and_legacy_instance_file_with_its_new_path_and_moves_not
 }
 
 #[test]
-fn init_move_puts_every_listed_file_at_its_new_path_unchanged() {
+fn init_move_puts_files_at_their_new_paths() {
     let repo = root_layout();
     let stdout = harness_init(&repo, &["--move"]);
     for (rel, text) in ROOT_LAYOUT {

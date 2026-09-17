@@ -5,23 +5,23 @@
 #
 # The coding agent is replaced by `src/lane.sh`, a fixture that does what the role prompt it is
 # handed asks for — the same shape driver.sh uses, and the reason this runs on a stranger's laptop.
-# Everything else is the real package: the real `harness init`, the real launcher, the real gates.
+# Everything else is the real package: the real `enallagi init`, the real launcher, the real gates.
 # What the reader is meant to notice is the last section: the launcher re-runs the check and the
 # scope diff BEHIND the verifier's verdict, so `done` is a fact about the tree and not a claim an
 # agent made about itself.
 #
-# HARNESS_BIN names the binary. It defaults to this checkout's release build, which is built here
+# ENALLAGI_BIN names the binary. It defaults to this checkout's release build, which is built here
 # when it is absent.
 set -u
 PKG="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HARNESS_BIN="${HARNESS_BIN:-$PKG/target/release/harness}"
-if [ ! -x "$HARNESS_BIN" ]; then
+ENALLAGI_BIN="${ENALLAGI_BIN:-$PKG/target/release/enallagi}"
+if [ ! -x "$ENALLAGI_BIN" ]; then
   (cd "$PKG" && cargo build --release -q) || {
-    echo "demo: no $HARNESS_BIN and cargo build --release failed" >&2
+    echo "demo: no $ENALLAGI_BIN and cargo build --release failed" >&2
     exit 3
   }
 fi
-export HARNESS_BIN
+export ENALLAGI_BIN
 
 D=$(mktemp -d) || exit 3
 # the machine is left as it was found, on every exit path
@@ -38,7 +38,7 @@ mkdir -p src && echo 'export const x = 1' >src/schema.ts
 git add -A && git commit -qm 'chore: init' >/dev/null
 
 cat <<'INTRO'
-harness demo — one task goes ready -> done in a repository this script creates and then deletes.
+enallagi demo — one task goes ready -> done in a repository this script creates and then deletes.
 Nothing is installed on your machine and no credential is read. Takes about fifteen seconds.
 INTRO
 
@@ -50,12 +50,12 @@ cat >src/lane.sh <<'LANE'
 case "$1" in
   *"roles/implementer.md"*)
     echo 'export const y = 2' > src/allowed.ts
-    "$HARNESS_BIN" tasks set-status T-001 review 'the demo lane implemented it' >/dev/null
+    "$ENALLAGI_BIN" tasks set-status T-001 review 'the demo lane implemented it' >/dev/null
     printf '\n## demo — T-001 — landed\nfriction: none\n' >> .enallagi/PROGRESS.md
     git add -A && git commit -qm 'feat: T-001 the work' >/dev/null
     ;;
   *"roles/verifier.md"*)
-    "$HARNESS_BIN" tasks set-status T-001 done 'the demo lane verified it' >/dev/null
+    "$ENALLAGI_BIN" tasks set-status T-001 done 'the demo lane verified it' >/dev/null
     ;;
 esac
 echo '{"total_cost_usd": 0.01}'
@@ -65,13 +65,13 @@ chmod +x src/lane.sh
 # The skills the role prompts name are declared with `path:` sources this script writes, so the real
 # resolve, vendor and lock path runs with nothing to fetch. Dropping them instead leaves the prompts'
 # `{{skill:id}}` tokens unmatched and the run refuses the stage.
-for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming; do
+for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming caveman-commit; do
   mkdir -p "vendor/$id"
   printf '# %s\n' "$id" >"vendor/$id/SKILL.md"
 done
 
 # a real repo puts its test command in check.command
-cat >harness.toml <<'TOML'
+cat >enallagi.toml <<'TOML'
 [agent]
 preset = "custom"
 command = ["./src/lane.sh", "{prompt}", "{turns}"]
@@ -82,13 +82,13 @@ cost = "total_cost_usd"
 [check]
 command = "true"
 TOML
-for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming; do
+for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming caveman-commit; do
   printf '\n[[skill]]\nid = "%s"\nsource = "path:vendor/%s"\npath = ""\ngate = "none"\nwhy = "the demo fixture"\n' \
-    "$id" "$id" >>harness.toml
+    "$id" "$id" >>enallagi.toml
 done
 
 step "install into a throwaway repo  ($D)"
-INSTALL=$("$HARNESS_BIN" init 2>&1) || {
+INSTALL=$("$ENALLAGI_BIN" init 2>&1) || {
   printf '%s\n' "$INSTALL" >&2
   echo "demo: install failed" >&2
   exit 3
@@ -104,16 +104,16 @@ git add -A && git commit -qm 'chore: T-001 setup' >/dev/null
 # `CI` forces --frozen, which refuses a stage whose skills are not already vendored and locked, so
 # the demo vendors them first. The sources are local, so this reaches no network.
 step "vendor the declared skills and pin them in harness.lock"
-"$HARNESS_BIN" skills sync | sed 's/^/  /'
+"$ENALLAGI_BIN" skills sync | sed 's/^/  /'
 git add -A && git commit -qm 'chore: vendor the declared skills' >/dev/null
 
 step "the queue"
-"$HARNESS_BIN" tasks list
+"$ENALLAGI_BIN" tasks list
 
 step "one iteration: an implementer process, then a separate verifier process"
-"$HARNESS_BIN" run --iterations 1 --no-tui 2>&1 | grep -E 'stage\.start|kind=gate| gate |run\.end'
+"$ENALLAGI_BIN" run --iterations 1 --no-tui 2>&1 | grep -E 'stage\.start|kind=gate| gate |run\.end'
 
 step "what persisted, read back off the tree and not off anything an agent said"
-printf 'T-001  status: %s\n' "$("$HARNESS_BIN" tasks list | awk '/^T-001/{print $NF}')"
+printf 'T-001  status: %s\n' "$("$ENALLAGI_BIN" tasks list | awk '/^T-001/{print $NF}')"
 git log --oneline --format='%s' | sed 's/^/commit  /' | head -3
 printf 'PROGRESS.md ends: %s\n' "$(grep '^## ' .enallagi/PROGRESS.md | tail -1)"

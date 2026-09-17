@@ -1,16 +1,16 @@
 //! The probe assertions, one test per assertion and named after it.
 
-use harness::config::{self, Config};
-use harness::fixture::Repo;
-use harness::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
+use enallagi::config::{self, Config};
+use enallagi::fixture::Repo;
+use enallagi::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
 use std::fs;
 
 // install is the seed: docs, rails and roles all come from the binary, so a probe reads the tree an operator would get
 fn seeded_with(overrides: &str) -> (Repo, Config) {
     let repo = Repo::new();
     repo.init_harness(overrides);
-    harness::git::git(&repo.root, &["add", "-A"]).expect("add");
-    harness::git::git(
+    enallagi::git::git(&repo.root, &["add", "-A"]).expect("add");
+    enallagi::git::git(
         &repo.root,
         &[
             "-c",
@@ -111,7 +111,7 @@ fn no_probe_errored() {
 }
 
 #[test]
-fn check_unnamed_reads_the_context_file_under_the_harness_directory() {
+fn check_unnamed_reads_the_nested_context_file() {
     let (repo, cfg) = seeded();
     assert_eq!(cfg.layout.context_file, ".enallagi/AGENTS.md");
     assert!(!repo.root.join("AGENTS.md").exists());
@@ -131,7 +131,7 @@ fn the_row_parser_reads_the_seeded_criteria_table() {
 }
 
 #[test]
-fn a_fresh_install_has_two_unenforced_rails_both_wanting_test_hashes() {
+fn a_fresh_install_has_two_unenforced_rails() {
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     let found = findings(&results, "rail-unenforced");
@@ -142,14 +142,14 @@ fn a_fresh_install_has_two_unenforced_rails_both_wanting_test_hashes() {
 }
 
 #[test]
-fn the_seeded_criterion_is_untested_and_no_task_in_flight_names_it() {
+fn the_seeded_criterion_is_untested() {
     let (repo, cfg) = seeded();
     assert_eq!(count(&run(&repo, &cfg), "queue-uncovered"), Some(1));
 }
 
 #[test]
-fn harness_immutable_names_the_config_and_no_test_hashes_covers_it() {
-    // the rail names the file that is the gate; with the launcher a binary, that file is harness.toml
+fn harness_immutable_has_no_hash_key() {
+    // the rail names the file that is the gate; with the launcher a binary, that file is enallagi.toml
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     let found = findings(&results, "hash-uncovered");
@@ -157,7 +157,7 @@ fn harness_immutable_names_the_config_and_no_test_hashes_covers_it() {
     assert!(
         found[0]
             .message
-            .contains("`harness-immutable` names harness.toml"),
+            .contains("`harness-immutable` names enallagi.toml"),
         "{}",
         found[0].message
     );
@@ -170,7 +170,7 @@ fn the_seeded_progress_repeats_no_friction() {
 }
 
 #[test]
-fn with_no_driver_command_the_driver_says_so_rather_than_scoring_zero() {
+fn no_driver_command_is_not_a_zero() {
     let (repo, cfg) = seeded();
     let out = render(&run(&repo, &cfg));
     assert!(out.contains("PROBE driver OFF -- "), "{out}");
@@ -196,7 +196,7 @@ fn the_tree_has_no_litter() {
 }
 
 #[test]
-fn the_seeded_learnings_are_all_seed_entries_which_predate_the_gate() {
+fn the_seeded_learnings_all_predate_the_gate() {
     let (repo, cfg) = seeded();
     assert_eq!(count(&run(&repo, &cfg), "learning-ungated"), Some(0));
 }
@@ -213,7 +213,7 @@ fn a_dated_learning_with_no_eval_is_reported() {
 }
 
 #[test]
-fn and_the_same_rule_naming_an_eval_that_exists_is_not() {
+fn a_rule_naming_a_real_eval_is_not() {
     let (repo, cfg) = seeded();
     append(
         &repo,
@@ -284,13 +284,13 @@ fn and_a_repeat_a_dated_kill_line_names_is_covered() {
     append(
         &repo,
         "DECISIONS.md",
-        "\n## Rejected findings\n- [2026-09-13] the same friction is recorded 2 times: FIFTH sighting of a check firing on the prose that documents it - and the first where the \u{2014} refuted by `harness eval --gate prose-check`: `GATE prose-check REJECT the case passes with the rule ablated, so the rule changed no outcome`; PROGRESS.md keeps the evidence\n",
+        "\n## Rejected findings\n- [2026-09-13] the same friction is recorded 2 times: FIFTH sighting of a check firing on the prose that documents it - and the first where the \u{2014} refuted by `enallagi eval --gate prose-check`: `GATE prose-check REJECT the case passes with the rule ablated, so the rule changed no outcome`; PROGRESS.md keeps the evidence\n",
     );
     assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
 }
 
 #[test]
-fn and_two_frictions_that_merely_share_words_are_not_collapsed_into_it() {
+fn frictions_sharing_words_do_not_collapse() {
     let (repo, cfg) = seeded();
     append(&repo, "PROGRESS.md", FRICTION_FIXTURE);
     let out = render(&run(&repo, &cfg));
@@ -309,7 +309,7 @@ fn and_two_frictions_that_merely_share_words_are_not_collapsed_into_it() {
 
 fn with_driver(body: &str) -> (Repo, Config) {
     let (repo, cfg) =
-        seeded_with("[layout]\ndriver_command = \"$HARNESS_ROOT/src/fakedriver.sh\"\n");
+        seeded_with("[layout]\ndriver_command = \"$ENALLAGI_ROOT/src/fakedriver.sh\"\n");
     repo.write("src/fakedriver.sh", &format!("#!/usr/bin/env bash\n{body}"));
     #[cfg(unix)]
     {
@@ -339,7 +339,7 @@ fn the_drivers_shortfall_is_one_finding() {
     assert_eq!(count(&results, "driver"), Some(1), "{}", render(&results));
     assert!(
         render(&results)
-            .contains("FINDING driver $HARNESS_ROOT/src/fakedriver.sh:0 the artifact answered but wrote nothing to the store"),
+            .contains("FINDING driver $ENALLAGI_ROOT/src/fakedriver.sh:0 the artifact answered but wrote nothing to the store"),
         "{}",
         render(&results)
     );
@@ -353,14 +353,14 @@ fn configured_but_harness_driver_unset_is_still_off() {
 }
 
 #[test]
-fn a_driver_that_cannot_reach_the_artifact_fails_the_whole_probe_run() {
+fn an_unreachable_driver_fails_the_run() {
     let (repo, cfg) = with_driver("echo \"connection refused\" >&2\nexit 7\n");
     let results = run_with(&repo, &cfg, true);
     assert_eq!(errors(&results), vec!["driver"], "{}", render(&results));
 }
 
 #[test]
-fn an_unreachable_artifact_is_error_never_a_count_of_zero() {
+fn an_unreachable_artifact_is_an_error() {
     let (repo, cfg) = with_driver("echo \"connection refused\" >&2\nexit 7\n");
     let out = render(&run_with(&repo, &cfg, true));
     assert!(out.contains("PROBE driver ERROR "), "{out}");
@@ -374,7 +374,7 @@ fn an_unreachable_artifact_is_error_never_a_count_of_zero() {
 fn every_declared_skill_names_its_enforcing_gate() {
     // asserts the COUNT, not just emptiness: an entry deleted to make this pass is the thing that fails it
     let (repo, cfg) = seeded();
-    assert_eq!(cfg.skill.len(), 7);
+    assert_eq!(cfg.skill.len(), 8);
     let results = run(&repo, &cfg);
     let found = findings(&results, "skill-ungated");
     let undefined: Vec<&str> = found
@@ -427,7 +427,7 @@ fn ceilings() -> (Repo, Config) {
 }
 
 #[test]
-fn a_ceiling_whose_kill_is_already_written_down_is_not_re_proposed() {
+fn a_written_down_ceiling_is_not_reproposed() {
     let (repo, cfg) = ceilings();
     let before = count(&run(&repo, &cfg), "ponytail-ceiling").expect("count");
     assert_eq!(before, 3);
@@ -499,7 +499,7 @@ fn a_ceiling_with_no_kill_line_is_still_reported() {
 }
 
 #[test]
-fn a_row_with_a_slash_resolves_under_source_root_before_the_repo_root() {
+fn a_slashed_row_resolves_under_source_root() {
     let (repo, cfg) = seeded_with(
         "[layout]\nsource_root = \"crate\"\ntest_file_suffix_re = '\\.rs'\ntest_decl_patterns = [\"fn {name}(\"]\n",
     );
@@ -520,7 +520,7 @@ fn a_row_with_a_slash_resolves_under_source_root_before_the_repo_root() {
 }
 
 #[test]
-fn a_done_blocks_scope_is_history_and_an_open_blocks_scope_must_name_a_file() {
+fn only_an_open_block_needs_a_scope_file() {
     let (repo, cfg) = seeded();
     append(
         &repo,
@@ -615,10 +615,10 @@ fn the_state_repository_log_is_read_too() {
         "the fixture is a nested install"
     );
     for (key, value) in [("user.email", "t@t"), ("user.name", "t")] {
-        harness::git::git(&state, &["config", key, value]).expect("identity");
+        enallagi::git::git(&state, &["config", key, value]).expect("identity");
     }
-    harness::git::git(&state, &["add", "-A"]).expect("add");
-    harness::git::git(
+    enallagi::git::git(&state, &["add", "-A"]).expect("add");
+    enallagi::git::git(
         &state,
         &[
             "-c",

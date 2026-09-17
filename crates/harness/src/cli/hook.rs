@@ -30,7 +30,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         "one-writer" => hooks::one_writer(&root, &input),
         "verify-done" => hooks::verify_done(&root, &input),
         "skills" => hooks::skills_contract(&root),
-        other => (2, format!("harness hook: unknown hook `{other}`")),
+        other => (2, format!("enallagi hook: unknown hook `{other}`")),
     };
     if !message.is_empty() {
         eprintln!("{message}");

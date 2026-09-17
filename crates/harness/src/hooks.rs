@@ -31,7 +31,7 @@ pub fn immutable(root: &Path, input: &str) -> (i32, String) {
             2,
             format!(
                 "immutable: {hit} is locked by harness.lock. This edit is refused. Re-resolve \
-                 the lock deliberately (`harness skills sync`), not through the edit tool."
+                 the lock deliberately (`enallagi skills sync`), not through the edit tool."
             ),
         );
     }
@@ -395,12 +395,12 @@ mod tests {
     }
 
     #[test]
-    fn immutable_refuses_an_edit_to_a_hashed_file_when_the_config_is_refused() {
+    fn immutable_refuses_an_edit_config_refused() {
         let r = Repo::new();
         r.write(".enallagi/TASKS.md", "# TASKS\n");
         r.write("src/a.ts", "export const a = 1\n");
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
-        r.write(".enallagi/harness.toml", "[check]\ncomand = \"x\"\n");
+        r.write(".enallagi/enallagi.toml", "[check]\ncomand = \"x\"\n");
         assert!(config::load(&r.root).is_err());
         let (code, msg) = immutable(&r.root, &input("src/a.ts"));
         assert_eq!(code, 2, "{msg}");
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn immutable_refuses_a_symlinked_alias_of_a_hashed_file() {
+    fn immutable_refuses_a_symlinked_alias() {
         let r = Repo::new();
         r.write("src/a.ts", "export const a = 1\n");
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn immutable_refuses_a_symlinked_directory_containing_a_locked_skill() {
+    fn immutable_refuses_a_symlinked_skill_dir() {
         let r = Repo::new();
         r.write(".enallagi/adapters/claude/skills/tdd/SKILL.md", "# tdd\n");
         r.write(
@@ -472,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn immutable_normalizes_a_nonexistent_target_under_an_existing_directory() {
+    fn immutable_normalizes_a_missing_target() {
         let r = Repo::new();
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         let (code, msg) = immutable(&r.root, &input("src/does-not-exist-yet.ts"));
@@ -480,7 +480,7 @@ mod tests {
     }
 
     #[test]
-    fn immutable_refuses_a_workspace_package_json_when_scripts_are_hashed() {
+    fn immutable_refuses_a_workspace_manifest() {
         let r = Repo::new();
         r.write(
             "package.json",
@@ -504,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn a_write_from_a_session_that_is_not_the_live_lane_is_refused() {
+    fn a_write_from_another_session_is_refused() {
         let r = Repo::new();
         r.write(
             "TASKS.md",
@@ -533,7 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pid_file_left_by_a_loop_that_is_gone_is_not_a_live_loop() {
+    fn a_stale_pid_file_is_not_a_live_loop() {
         let r = Repo::new();
         let child = StdCommand::new("sleep")
             .arg("30")
@@ -560,7 +560,7 @@ mod tests {
         let r = Repo::new();
         let cmd = r.stub_check("echo '(fail) alpha'\nexit 1\n");
         r.write(
-            "harness.toml",
+            "enallagi.toml",
             &format!("[check]\ncommand = \"{cmd}\"\nfail_name = '\\(fail\\) (.+)$'\n"),
         );
         let (code, msg) = verify_done(&r.root, "{}");
@@ -570,7 +570,7 @@ mod tests {
 
         let cmd = r.stub_check("exit 0\n");
         r.write(
-            "harness.toml",
+            "enallagi.toml",
             &format!("[check]\ncommand = \"{cmd}\"\nfail_name = '\\(fail\\) (.+)$'\n"),
         );
         let (code, msg) = verify_done(&r.root, "{}");
@@ -582,7 +582,7 @@ mod tests {
     fn the_skills_contract_lists_every_declared_skill() {
         let r = Repo::new();
         r.write(
-            "harness.toml",
+            "enallagi.toml",
             "[[skill]]\nid = \"tdd\"\nsource = \"path:skills/tdd\"\npath = \"skills/tdd\"\ngate = \"verdict\"\nwhy = \"forces a failing test first\"\n",
         );
         let (code, _) = skills_contract(&r.root);
@@ -594,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn skills_contract_prints_nothing_for_no_declared_skills() {
+    fn skills_contract_is_empty_without_skills() {
         let r = Repo::new();
         let (code, msg) = skills_contract(&r.root);
         assert_eq!(code, 0);

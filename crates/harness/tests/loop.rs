@@ -1,8 +1,8 @@
 //! The launcher: the dry plan, the halts, the run log and the budget, with stub agents in place of a coding agent.
 
-use harness::events::{Event, Kind};
-use harness::fixture::Repo;
-use harness::pipeline::{self, Digest, RunOpts};
+use enallagi::events::{Event, Kind};
+use enallagi::fixture::Repo;
+use enallagi::pipeline::{self, Digest, RunOpts};
 use std::sync::{Arc, Mutex};
 
 const TASKS: &str = "\
@@ -43,6 +43,18 @@ criteria:
   - it happens
 ";
 
+const LEVELLED_TASK: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.ts
+rows: none — harness
+status: ready
+model: m-task
+effort: e-task
+criteria:
+  - it happens
+";
+
 const QUIET: &str = "echo '{\"total_cost_usd\":0.5}'\n";
 
 fn script(repo: &Repo, rel: &str, body: &str) -> String {
@@ -78,7 +90,7 @@ stages = ["verify"]
 [[pipeline]]
 name = "task"
 when = "queue.takeable"
-stages = ["implement", "verify"]
+stages = ["implement", "verify", "adjudicate"]
 
 [[pipeline]]
 name = "discover"
@@ -107,13 +119,13 @@ turns = 5
 name = "adjudicate"
 role = "adjudicator"
 turns = 5
-post = ["commit-round", "adjudicator-halt", "dry-round"]
+post = ["commit-round", "queue-intact", "adjudicator-halt", "dry-round"]
 {extra}
 "#
     )
 }
 
-// Every fixture config must carry the `path:` skills `repo()` wrote: rewriting harness.toml with
+// Every fixture config must carry the `path:` skills `repo()` wrote: rewriting enallagi.toml with
 // base_toml alone falls back to the shipped `[[skill]]` table, whose sources are github clones, and
 // the test then reaches the network.
 fn write_toml(r: &Repo, toml: &str) {
@@ -124,12 +136,12 @@ fn write_toml(r: &Repo, toml: &str) {
         !full.contains(remote) && !full.contains("source = \"git+"),
         "a fixture config may not name a remote skill source:\n{full}"
     );
-    r.write("harness.toml", &full);
+    r.write("enallagi.toml", &full);
 }
 
 fn repo(toml: &str, tasks: &str) -> Repo {
     let repo = Repo::new();
-    // what `harness init` ignores under the harness dir; vendored skills and roles are committed
+    // what `enallagi init` ignores under the harness dir; vendored skills and roles are committed
     repo.write(
         ".enallagi/.gitignore",
         "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\n",
@@ -159,7 +171,7 @@ fn implementer(repo: &Repo, extra: &str) -> String {
              git add -A >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     )
 }
@@ -170,7 +182,7 @@ fn verifier(repo: &Repo) -> String {
         "src/fakeverify.sh",
         &format!(
             "{bin} tasks set-status T-001 done 'stub verified'\n{QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     )
 }
@@ -220,7 +232,7 @@ fn ends(events: &[Event]) -> Vec<&Kind> {
 }
 
 fn plan_of(repo: &Repo) -> String {
-    let cfg = harness::config::load(&repo.root).expect("load");
+    let cfg = enallagi::config::load(&repo.root).expect("load");
     pipeline::plan(&repo.root, &cfg).expect("plan")
 }
 
@@ -234,20 +246,62 @@ fn a_dry_iteration_plans_implement_and_verify() {
     assert!(plan.contains("commit-verdict"), "{plan}");
 }
 
+// base_toml opens [agent] once, so a default level goes inside that table rather than after it
+fn with_agent_levels(toml: &str) -> String {
+    toml.replace(
+        "preset = \"custom\"",
+        "preset = \"custom\"\nmodel = \"m-agent\"\neffort = \"e-agent\"",
+    )
+}
+
 #[test]
-fn the_launcher_spawns_the_configured_agent_not_a_hardcoded_one() {
+fn a_dry_stage_line_names_model_and_effort() {
+    let with_task = repo(&with_agent_levels(&base_toml("")), LEVELLED_TASK);
+    let plan = plan_of(&with_task);
+    assert!(
+        plan.contains("implement as role implementer via ./src/fakeagent.sh (turns: 5, model: m-task, effort: e-task)"),
+        "{plan}"
+    );
+    assert!(
+        plan.contains("verify as role verifier via ./src/fakeagent.sh (turns: 5, model: m-task, effort: e-task)"),
+        "{plan}"
+    );
+
+    let empty = repo(&with_agent_levels(&base_toml("")), "");
+    let plan = plan_of(&empty);
+    assert!(
+        plan.contains("scout as role scout via ./src/fakeagent.sh (turns: 5, model: m-agent, effort: e-agent)"),
+        "{plan}"
+    );
+    assert!(
+        plan.contains("adjudicate as role adjudicator via ./src/fakeagent.sh (turns: 5, model: m-agent, effort: e-agent)"),
+        "{plan}"
+    );
+}
+
+#[test]
+fn a_dry_stage_line_says_default_with_no_level() {
+    let plan = plan_of(&repo(&base_toml(""), TASKS));
+    assert!(
+        plan.contains("(turns: 5, model: default, effort: default)"),
+        "{plan}"
+    );
+}
+
+#[test]
+fn the_launcher_spawns_the_configured_agent() {
     let r = repo(&base_toml(""), TASKS);
     assert!(plan_of(&r).contains("via ./src/fakeagent.sh"));
 }
 
 #[test]
-fn the_implement_stage_points_the_agent_at_its_role_file() {
+fn the_implement_stage_names_its_role_file() {
     let r = repo(&base_toml(""), TASKS);
     assert!(plan_of(&r).contains(".enallagi/run/roles/implementer.md"));
 }
 
 #[test]
-fn a_role_with_its_own_agent_command_is_spawned_with_it() {
+fn a_roles_own_agent_command_is_used() {
     let extra =
         "\n[agent.verifier]\ncommand = [\"./src/fakeverifier.sh\", \"{prompt}\", \"{turns}\"]\n";
     let r = repo(&base_toml(extra), TASKS);
@@ -255,7 +309,7 @@ fn a_role_with_its_own_agent_command_is_spawned_with_it() {
 }
 
 #[test]
-fn a_role_with_no_agent_command_falls_back_to_the_default() {
+fn a_role_with_no_agent_falls_back() {
     let extra =
         "\n[agent.verifier]\ncommand = [\"./src/fakeverifier.sh\", \"{prompt}\", \"{turns}\"]\n";
     let r = repo(&base_toml(extra), TASKS);
@@ -263,7 +317,7 @@ fn a_role_with_no_agent_command_falls_back_to_the_default() {
 }
 
 #[test]
-fn a_preset_argv_carries_the_harness_directory_and_the_context_file() {
+fn a_preset_argv_carries_dir_and_context() {
     let extra = "\n[agent.scout]\ncommand = [\"./src/fakeargs.sh\", \"{prompt}\", \"{harness_dir}\", \"{context_file}\"]\n";
     let r = repo(&base_toml(extra), "");
     script(
@@ -298,7 +352,7 @@ fn a_bare_clarification_marker_halts_the_loop() {
 }
 
 #[test]
-fn a_backticked_marker_in_the_template_does_not_halt_it() {
+fn a_backticked_marker_does_not_halt() {
     let r = repo(&base_toml(""), TASKS);
     r.write(
         "SPEC.md",
@@ -316,7 +370,7 @@ fn a_backticked_marker_in_the_template_does_not_halt_it() {
 }
 
 #[test]
-fn every_spawned_stage_appends_one_record_to_the_run_log() {
+fn every_stage_appends_a_run_log_record() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -329,7 +383,7 @@ fn every_spawned_stage_appends_one_record_to_the_run_log() {
 }
 
 #[test]
-fn and_the_record_carries_the_role_the_seconds_and_the_reported_cost() {
+fn the_record_carries_role_seconds_cost() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -362,7 +416,7 @@ fn and_the_record_carries_the_role_the_seconds_and_the_reported_cost() {
 }
 
 #[test]
-fn the_loop_stops_before_a_stage_that_would_exceed_the_budget() {
+fn the_loop_stops_before_the_budget() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -413,7 +467,7 @@ fn a_config_naming_an_unknown_gate_is_refused() {
 }
 
 #[test]
-fn a_stage_on_a_preset_with_no_turn_cap_and_no_timeout_is_refused() {
+fn an_uncapped_untimed_stage_is_refused() {
     let toml = base_toml("").replace(
         "preset = \"custom\"\ncommand = [\"./src/fakeagent.sh\", \"{prompt}\", \"{turns}\"]",
         "preset = \"aider\"",
@@ -425,7 +479,7 @@ fn a_stage_on_a_preset_with_no_turn_cap_and_no_timeout_is_refused() {
 }
 
 #[test]
-fn a_stage_refuses_to_start_on_an_unresolved_skill_under_frozen() {
+fn an_unresolved_skill_refuses_a_stage() {
     let r = repo(&base_toml(""), TASKS);
     r.write(
         ".enallagi/roles/implementer.md",
@@ -447,9 +501,9 @@ fn a_stage_refuses_to_start_on_an_unresolved_skill_under_frozen() {
 #[test]
 fn a_command_stage_runs_with_the_harness_environment() {
     let toml = base_toml("").replace(
-        "stages = [\"implement\", \"verify\"]",
+        "stages = [\"implement\", \"verify\", \"adjudicate\"]",
         "stages = [\"note\"]",
-    ) + "\n[[stage]]\nname = \"note\"\ncommand = \"printf '%s %s %s' \\\"$HARNESS_TASK\\\" \\\"$HARNESS_STAGE\\\" \\\"$HARNESS_ITERATION\\\" >env.txt\"\nturns = 1\n";
+    ) + "\n[[stage]]\nname = \"note\"\ncommand = \"printf '%s %s %s' \\\"$ENALLAGI_TASK\\\" \\\"$ENALLAGI_STAGE\\\" \\\"$ENALLAGI_ITERATION\\\" >env.txt\"\nturns = 1\n";
     let r = repo(&toml, TASKS);
     go(&r, &opts(1));
     let seen = std::fs::read_to_string(r.root.join("env.txt")).expect("the command stage ran");
@@ -457,7 +511,7 @@ fn a_command_stage_runs_with_the_harness_environment() {
 }
 
 #[test]
-fn queue_empty_fails_closed_on_an_unparseable_tasks_file() {
+fn queue_empty_fails_closed_on_a_bad_queue() {
     let toml = r#"
 [agent]
 preset = "custom"
@@ -517,11 +571,11 @@ fn a_new_needs_spec_halts() {
         &r,
         &format!(
             "{bin} tasks set-status T-001 needs-spec 'the contract does not answer it'\n",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let toml = base_toml(&role_commands(&implement, "./src/fakeagent.sh")).replace(
-        "stages = [\"implement\", \"verify\"]",
+        "stages = [\"implement\", \"verify\", \"adjudicate\"]",
         "stages = [\"implement\"]",
     );
     write_toml(&r, &toml);
@@ -547,7 +601,7 @@ fn two_dry_rounds_end_the_run() {
 }
 
 #[test]
-fn harness_run_without_a_tty_prints_one_line_per_event_and_exits_0() {
+fn run_without_a_tty_prints_one_line_per_event() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -556,13 +610,13 @@ fn harness_run_without_a_tty_prints_one_line_per_event_and_exits_0() {
     r.commit_all("stubs");
 
     // this asserts what a tty-less run prints; CI would make the run --frozen and refuse the
-    // fixture's unvendored skills, which is `a_stage_refuses_to_start_on_an_unresolved_skill_under_frozen`
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_harness"))
+    // fixture's unvendored skills, which is `an_unresolved_skill_refuses_a_stage`
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["run", "--no-tui", "--iterations", "1"])
         .current_dir(&r.root)
         .env_remove("CI")
         .output()
-        .expect("run harness run");
+        .expect("run enallagi run");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{stdout}");
     assert_eq!(
@@ -578,11 +632,11 @@ fn harness_run_exits_2_on_a_refused_config() {
         &base_toml("").replace("\"commit-round\"", "\"nope\""),
         TASKS,
     );
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_harness"))
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["run", "--no-tui", "--iterations", "1"])
         .current_dir(&r.root)
         .output()
-        .expect("run harness run");
+        .expect("run enallagi run");
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("nope"));
 }
@@ -597,9 +651,9 @@ why = "the failing test is written first"
 "#;
 
 #[test]
-fn rendering_a_role_never_eats_the_source_it_rendered_from() {
+fn rendering_a_role_keeps_its_source() {
     let toml = base_toml(SKILL).replace(
-        "stages = [\"implement\", \"verify\"]",
+        "stages = [\"implement\", \"verify\", \"adjudicate\"]",
         "stages = [\"implement\"]",
     );
     let r = repo(&toml, TASKS);
@@ -654,7 +708,7 @@ path = \"roles\"
 // task back to ready even though the implementer and verifier committed everything in their scope.
 // a declared role rides the same commit, and the scope gate exempts it like a fresh skill.
 #[test]
-fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
+fn a_fetched_skill_commits_before_its_stage() {
     let toml = base_toml(SKILL_DECL);
     let r = repo(&toml, SKILL_TASKS);
     r.write("vendor/tdd/SKILL.md", "# tdd\n\nWrite the test first.\n");
@@ -673,7 +727,7 @@ fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
              git add -- src/a.ts PROGRESS.md TASKS.md >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let verify = script(
@@ -684,7 +738,7 @@ fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
              git add -- TASKS.md >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'verify: T-001 verdict' >/dev/null 2>&1\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let skills = r.local_skills(&toml);
@@ -726,13 +780,13 @@ fn a_fetched_skill_is_committed_before_the_stage_that_needs_it() {
     assert!(ls.contains("harness.lock"), "{ls}");
     assert!(ls.contains(".enallagi/skills/tdd/SKILL.md"), "{ls}");
     assert!(ls.contains(".enallagi/roles/implementer.md"), "{ls}");
-    let lock = harness::skills::read_lock(&r.root, ".enallagi").expect("lock");
+    let lock = enallagi::skills::read_lock(&r.root, ".enallagi").expect("lock");
     assert_eq!(lock.role.len(), 1, "{lock:?}");
     assert_eq!(lock.role[0].id, "implementer");
 }
 
 #[test]
-fn a_red_check_that_names_nothing_is_a_finding_not_an_error() {
+fn an_unnamed_red_check_is_a_finding() {
     let r = repo(&base_toml(""), "");
     script(&r, "src/fakecheck.sh", "echo boom\nexit 1\n");
     r.write("TASKS.md", "# queue\n");
@@ -744,17 +798,14 @@ fn a_red_check_that_names_nothing_is_a_finding_not_an_error() {
 }
 
 #[test]
-fn a_block_left_proposed_whose_fix_names_the_contract_halts() {
+fn a_proposed_fix_naming_the_contract_halts() {
     let r = repo("", "");
-    let adjudicate = script(
+    let scout = script(
         &r,
-        "src/fakeadj.sh",
+        "src/fakescout.sh",
         "printf '\\n## [T-002] the schema is wrong\\nstatus: proposed\\nprobe: spec-untested\\noutput: SPEC.md does not say which store\\n' >>TASKS.md\n",
     );
-    let extra = format!(
-        "\n[agent.adjudicator]\ncommand = [\"{adjudicate}\", \"{{prompt}}\", \"{{turns}}\"]\n"
-    );
-    write_toml(&r, &base_toml(&extra));
+    write_toml(&r, &base_toml(&role_command("scout", &scout)));
     r.write("TASKS.md", "# queue\n");
     r.commit_all("stubs");
 
@@ -770,9 +821,9 @@ fn a_block_left_proposed_whose_fix_names_the_contract_halts() {
 }
 
 #[test]
-fn a_stages_output_reaches_the_sink_while_the_stage_is_still_running() {
+fn stage_output_streams_to_the_sink() {
     let toml = base_toml("").replace(
-        "stages = [\"implement\", \"verify\"]",
+        "stages = [\"implement\", \"verify\", \"adjudicate\"]",
         "stages = [\"implement\"]",
     );
     let r = repo(&toml, TASKS);
@@ -813,13 +864,13 @@ fn a_stages_output_reaches_the_sink_while_the_stage_is_still_running() {
 }
 
 #[test]
-fn the_implementer_marking_its_own_task_done_skips_the_verify_stage() {
+fn an_implementer_done_skips_verify() {
     let r = repo("", "");
     let implement = implementer(
         &r,
         &format!(
             "{bin} tasks set-status T-001 done 'I verified myself'\n",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let verify = script(&r, "src/fakeverify.sh", "touch verify-ran\n");
@@ -842,13 +893,13 @@ fn the_implementer_marking_its_own_task_done_skips_the_verify_stage() {
 }
 
 #[test]
-fn an_implementer_that_stops_short_of_review_skips_the_verify_stage() {
+fn stopping_short_of_review_skips_verify() {
     let r = repo("", "");
     let implement = implementer(
         &r,
         &format!(
             "{bin} tasks set-status T-001 blocked 'the fixture is missing'\n",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let verify = script(&r, "src/fakeverify.sh", "touch verify-ran\n");
@@ -885,7 +936,7 @@ fn with_verifier(r: &Repo, verify: &str) {
 }
 
 #[test]
-fn a_task_stranded_at_review_gets_its_verify_stage_on_the_next_run() {
+fn a_stranded_review_verifies_next_run() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = verifier(&r);
     with_verifier(&r, &verify);
@@ -907,10 +958,10 @@ fn a_task_stranded_at_review_gets_its_verify_stage_on_the_next_run() {
     }
 
     let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    let blocks = harness::queue::parse(&text).expect("parse");
+    let blocks = enallagi::queue::parse(&text).expect("parse");
     let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
     assert_eq!(
-        harness::queue::field(t001, "status").as_deref(),
+        enallagi::queue::field(t001, "status").as_deref(),
         Some("done")
     );
     assert_eq!(digest.landed, vec!["T-001".to_string()]);
@@ -925,7 +976,7 @@ fn entries(r: &Repo) -> usize {
 }
 
 #[test]
-fn a_verify_only_iteration_leaves_one_progress_entry_written_by_the_launcher() {
+fn a_verify_only_iteration_leaves_one_entry() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = verifier(&r);
     with_verifier(&r, &verify);
@@ -950,13 +1001,13 @@ fn a_verify_only_iteration_leaves_one_progress_entry_written_by_the_launcher() {
     assert!(text.contains("review pipeline"), "{text}");
     assert!(text.contains("\nfriction: none\n"), "{text}");
     assert!(
-        harness::git::porcelain(&r.root).is_empty(),
+        enallagi::git::porcelain(&r.root).is_empty(),
         "the entry is committed"
     );
 }
 
 #[test]
-fn and_an_iteration_whose_implementer_wrote_one_gets_no_second_entry() {
+fn an_implementer_entry_gets_no_second() {
     let r = repo("", "");
     let implement = implementer(&r, "echo '## stub entry' >>PROGRESS.md\n");
     let verify = verifier(&r);
@@ -982,7 +1033,7 @@ fn and_an_iteration_whose_implementer_wrote_one_gets_no_second_entry() {
 }
 
 #[test]
-fn a_task_at_review_wins_over_one_ready_for_the_pipeline_choice() {
+fn review_wins_over_ready() {
     let r = repo(&base_toml(""), REVIEW_AND_READY_TASKS);
     let verify = verifier(&r);
     with_verifier(&r, &verify);
@@ -1000,22 +1051,22 @@ fn a_task_at_review_wins_over_one_ready_for_the_pipeline_choice() {
     );
 
     let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    let blocks = harness::queue::parse(&text).expect("parse");
+    let blocks = enallagi::queue::parse(&text).expect("parse");
     let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
     let t002 = blocks.iter().find(|b| b.id == "T-002").expect("T-002");
     assert_eq!(
-        harness::queue::field(t001, "status").as_deref(),
+        enallagi::queue::field(t001, "status").as_deref(),
         Some("done")
     );
     assert_eq!(
-        harness::queue::field(t002, "status").as_deref(),
+        enallagi::queue::field(t002, "status").as_deref(),
         Some("ready"),
         "T-002 is untouched: the task pipeline never ran"
     );
 }
 
 #[test]
-fn the_run_archives_the_task_it_landed_in_its_last_iteration() {
+fn the_run_archives_the_task_it_landed() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = verifier(&r);
     with_verifier(&r, &verify);
@@ -1061,20 +1112,20 @@ fn verifier_noting(r: &Repo, note: &str, proposed: &str) -> String {
              printf 'notes: {note}\\n' >>TASKS.md\n\
              printf '%s' '{proposed}' >>TASKS.md\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     )
 }
 
 fn t001_status(r: &Repo) -> Option<String> {
     let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    let blocks = harness::queue::parse(&text).expect("parse");
+    let blocks = enallagi::queue::parse(&text).expect("parse");
     let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
-    harness::queue::field(t001, "status")
+    enallagi::queue::field(t001, "status")
 }
 
 #[test]
-fn a_verdict_that_defers_a_finding_in_notes_with_no_proposed_block_is_refused() {
+fn a_deferred_finding_with_no_block_is_refused() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = deferring_verifier(&r, "");
     with_verifier(&r, &verify);
@@ -1092,13 +1143,13 @@ fn a_verdict_that_defers_a_finding_in_notes_with_no_proposed_block_is_refused() 
     assert_eq!(t001_status(&r).as_deref(), Some("review"));
     assert!(digest.landed.is_empty(), "{:?}", digest.landed);
     assert!(
-        harness::git::porcelain(&r.root).is_empty(),
+        enallagi::git::porcelain(&r.root).is_empty(),
         "the refused verdict is committed, not left in the tree"
     );
 }
 
 #[test]
-fn and_the_same_verdict_with_the_finding_proposed_is_committed() {
+fn the_same_verdict_proposed_is_committed() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = deferring_verifier(
         &r,
@@ -1142,7 +1193,7 @@ fn a_verdict_saying_nothing_minor_is_committed() {
 }
 
 #[test]
-fn a_verdict_saying_no_findings_minor_or_otherwise_is_committed() {
+fn a_verdict_of_no_findings_is_committed() {
     a_verdict_noting("VERIFIED. No findings, minor or otherwise.");
 }
 
@@ -1166,14 +1217,14 @@ fn a_clean_verdict_after_the_implementer(r: &Repo, implement: &str) {
 }
 
 #[test]
-fn an_implementer_note_saying_minor_is_not_read_as_the_verdicts() {
+fn an_implementer_minor_is_not_the_verdict() {
     let r = repo("", "");
     let implement = implementer(&r, IMPLEMENTER_NOTE);
     a_clean_verdict_after_the_implementer(&r, &implement);
 }
 
 #[test]
-fn an_uncommitted_implementer_note_saying_minor_is_not_read_as_the_verdicts() {
+fn an_uncommitted_minor_is_not_the_verdict() {
     let r = repo("", "");
     let implement = script(
         &r,
@@ -1184,14 +1235,14 @@ fn an_uncommitted_implementer_note_saying_minor_is_not_read_as_the_verdicts() {
              git add -A >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {IMPLEMENTER_NOTE}{QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     a_clean_verdict_after_the_implementer(&r, &implement);
 }
 
 #[test]
-fn a_root_layout_repository_lands_a_task_through_one_stub_iteration() {
+fn a_root_layout_lands_a_stub_task() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -1204,11 +1255,11 @@ fn a_root_layout_repository_lands_a_task_through_one_stub_iteration() {
     let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
     assert!(tasks.contains("status: done"), "{tasks}");
     assert!(!r.root.join(".enallagi/TASKS.md").exists());
-    assert!(harness::git::porcelain(&r.root).is_empty());
+    assert!(enallagi::git::porcelain(&r.root).is_empty());
 }
 
 #[test]
-fn a_harness_directory_layout_lands_a_task_through_one_stub_iteration() {
+fn a_nested_layout_lands_a_stub_task() {
     let r = Repo::new();
     r.write(
         ".enallagi/.gitignore",
@@ -1229,13 +1280,13 @@ fn a_harness_directory_layout_lands_a_task_through_one_stub_iteration() {
              git add -A >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let verify = verifier(&r);
     let toml = base_toml(&role_commands(&implement, &verify));
     r.write(
-        ".enallagi/harness.toml",
+        ".enallagi/enallagi.toml",
         &format!("{toml}{}", r.local_skills(&toml)),
     );
     r.commit_all("stubs");
@@ -1249,7 +1300,7 @@ fn a_harness_directory_layout_lands_a_task_through_one_stub_iteration() {
         "PROGRESS.md",
         "DECISIONS.md",
         "SPEC.md",
-        "harness.toml",
+        "enallagi.toml",
         "harness.lock",
     ] {
         assert!(
@@ -1258,15 +1309,15 @@ fn a_harness_directory_layout_lands_a_task_through_one_stub_iteration() {
         );
     }
     assert!(r.root.join(".enallagi/harness.lock").is_file());
-    assert!(harness::git::porcelain(&r.root).is_empty());
+    assert!(enallagi::git::porcelain(&r.root).is_empty());
 }
 
 #[test]
-fn an_installed_repository_lands_a_task_and_changes_nothing_outside_the_harness_directory() {
+fn an_install_lands_a_task_and_touches_nothing_else() {
     let r = Repo::new();
-    harness::init::install(
+    enallagi::init::install(
         &r.root,
-        &harness::init::InitOpts {
+        &enallagi::init::InitOpts {
             adapter: Some("claude".to_string()),
             ..Default::default()
         },
@@ -1284,23 +1335,23 @@ fn an_installed_repository_lands_a_task_and_changes_nothing_outside_the_harness_
              git add -A >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let verify = verifier(&r);
     let toml = base_toml(&role_commands(&implement, &verify));
     r.write(
-        ".enallagi/harness.toml",
+        ".enallagi/enallagi.toml",
         &format!("{toml}{}", r.local_skills(&toml)),
     );
     r.write(".enallagi/TASKS.md", TASKS);
     r.commit_all("installed");
-    let base = harness::git::git(&r.root, &["rev-parse", "HEAD"]).expect("HEAD");
+    let base = enallagi::git::git(&r.root, &["rev-parse", "HEAD"]).expect("HEAD");
 
     let (digest, events) = go(&r, &opts(1));
     assert_eq!(digest.landed, vec!["T-001".to_string()], "{events:#?}");
     let changed =
-        harness::git::git(&r.root, &["diff", "--name-only", &base, "HEAD"]).expect("diff");
+        enallagi::git::git(&r.root, &["diff", "--name-only", &base, "HEAD"]).expect("diff");
     assert!(changed.lines().any(|p| p == "src/thing.ts"), "{changed}");
     for path in changed.lines() {
         assert!(
@@ -1312,20 +1363,20 @@ fn an_installed_repository_lands_a_task_and_changes_nothing_outside_the_harness_
         "TASKS.md",
         "PROGRESS.md",
         "SPEC.md",
-        "harness.toml",
+        "enallagi.toml",
         "harness.lock",
     ] {
         assert!(!r.root.join(name).exists(), "{name} is at the root");
     }
-    assert!(harness::git::porcelain(&r.root).is_empty());
+    assert!(enallagi::git::porcelain(&r.root).is_empty());
 }
 
 #[test]
-fn a_nested_claude_install_lands_a_task_and_writes_nothing_under_dot_claude() {
+fn a_claude_install_writes_nothing_under_dot_claude() {
     let r = Repo::new();
-    harness::init::install(
+    enallagi::init::install(
         &r.root,
-        &harness::init::InitOpts {
+        &enallagi::init::InitOpts {
             adapter: Some("claude".to_string()),
             ..Default::default()
         },
@@ -1343,7 +1394,7 @@ fn a_nested_claude_install_lands_a_task_and_writes_nothing_under_dot_claude() {
              git add src/thing.ts >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let verify = verifier(&r);
@@ -1353,7 +1404,7 @@ fn a_nested_claude_install_lands_a_task_and_writes_nothing_under_dot_claude() {
     );
     assert!(toml.contains("preset = \"claude\""));
     r.write(
-        ".enallagi/harness.toml",
+        ".enallagi/enallagi.toml",
         &format!("{toml}{}", r.local_skills(&toml)),
     );
     r.write(".enallagi/TASKS.md", TASKS);
@@ -1366,11 +1417,11 @@ fn a_nested_claude_install_lands_a_task_and_writes_nothing_under_dot_claude() {
         .join(".enallagi/adapters/claude/skills/tdd/SKILL.md")
         .is_file());
     assert!(!r.root.join(".claude").exists());
-    assert!(harness::git::porcelain(&r.root).is_empty());
+    assert!(enallagi::git::porcelain(&r.root).is_empty());
 }
 
 fn in_dir(dir: &std::path::Path, args: &[&str]) -> String {
-    harness::git::git(dir, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+    enallagi::git::git(dir, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
 }
 
 // the harness directory is its own repository, ignored by the product's
@@ -1398,13 +1449,13 @@ fn nested(check: &str, implement_extra: &str) -> Repo {
              git add src/thing.ts >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
-            bin = env!("CARGO_BIN_EXE_harness"),
+            bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
     let verify = verifier(&r);
     let toml = base_toml(&role_commands(&implement, &verify));
     r.write(
-        ".enallagi/harness.toml",
+        ".enallagi/enallagi.toml",
         &format!("{toml}{}", r.local_skills(&toml)),
     );
     r.commit_all("stubs");
@@ -1422,13 +1473,13 @@ fn nested(check: &str, implement_extra: &str) -> Repo {
 
 fn nested_status(r: &Repo) -> Option<String> {
     let text = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
-    let blocks = harness::queue::parse(&text).expect("parse");
+    let blocks = enallagi::queue::parse(&text).expect("parse");
     let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
-    harness::queue::field(t001, "status")
+    enallagi::queue::field(t001, "status")
 }
 
 #[test]
-fn a_nested_harness_repository_forces_a_done_the_check_does_not_support_back_to_ready() {
+fn an_unsupported_done_is_forced_back_to_ready() {
     let r = nested("echo '(fail) alpha'\nexit 1\n", "");
 
     let (digest, events) = go(&r, &opts(1));
@@ -1438,14 +1489,14 @@ fn a_nested_harness_repository_forces_a_done_the_check_does_not_support_back_to_
     assert!(
         state_log
             .lines()
-            .any(|s| s.starts_with("chore(T-001): harness gate rejected a false VERIFIED at ")),
+            .any(|s| s.starts_with("chore(T-001): enallagi gate rejected a false VERIFIED at ")),
         "{state_log}"
     );
     assert!(in_dir(&r.root.join(".enallagi"), &["status", "--porcelain"]).is_empty());
 }
 
 #[test]
-fn a_nested_harness_repository_refuses_a_check_baseline_that_grew() {
+fn a_nested_install_refuses_a_grown_baseline() {
     let r = nested("exit 0\n", "echo alpha >>.enallagi/.check-baseline\n");
 
     let (digest, events) = go(&r, &opts(1));
@@ -1465,7 +1516,7 @@ fn a_nested_harness_repository_refuses_a_check_baseline_that_grew() {
 }
 
 #[test]
-fn a_landed_iteration_leaves_no_instance_path_in_the_product_history() {
+fn a_landed_iteration_leaves_no_instance_path() {
     let r = nested("exit 0\n", "");
     let before = in_dir(&r.root, &["rev-parse", "HEAD"]);
 
@@ -1500,5 +1551,369 @@ fn a_landed_iteration_leaves_no_instance_path_in_the_product_history() {
         "{subjects}"
     );
     assert!(in_dir(&state, &["status", "--porcelain"]).is_empty());
-    assert!(harness::git::porcelain(&r.root).is_empty());
+    assert!(enallagi::git::porcelain(&r.root).is_empty());
+}
+
+// A drain round needs a block filed this iteration; the verifier files one when its rejection turns
+// something up, which is where every finding this session came from.
+const FILED: &str = "\n## [T-009] the fence scan reads one language only\n\nscope: src/thing.ts\nrows: none — harness\nstatus: proposed\ncriteria:\n  - the scan reads every fence\n";
+
+const RESTATED: &str = "\n## [T-009] the check was red at HEAD\n\nscope: src/thing.ts\nrows: none — harness\nstatus: proposed\ncriteria:\n  - the check was red at HEAD\n";
+
+const REJECTION: &str = "the check was red at HEAD";
+
+const NOTED_REJECTION: &str =
+    "the fence scan reads one language only and nothing in the queue says so";
+
+const NOTED_RESTATED: &str = "\n## [T-009] the fence scan reads one language only\n\nscope: src/thing.ts\nrows: none — harness\nstatus: proposed\ncriteria:\n  - the fence scan reads one language only and nothing in the queue says so\n";
+
+const ATTENDED_TASKS: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.ts
+rows: none — harness
+status: ready
+criteria:
+  - it happens
+
+## [T-002] the one a human runs
+
+scope: src/other.ts
+rows: none — harness
+status: ready
+attended: true
+criteria:
+  - it happens
+";
+
+fn role_command(role: &str, path: &str) -> String {
+    format!("\n[agent.{role}]\ncommand = [\"{path}\", \"{{prompt}}\", \"{{turns}}\"]\n")
+}
+
+fn rejecting_verifier(r: &Repo) -> String {
+    script(
+        r,
+        "src/fakeverify.sh",
+        &format!(
+            "{bin} tasks set-status T-001 ready '{REJECTION}'\n\
+             cat src/filed.md >>TASKS.md\n\
+             {QUIET}",
+            bin = env!("CARGO_BIN_EXE_enallagi"),
+        ),
+    )
+}
+
+// the role prompt has the verifier edit the block and append `REJECTED` to notes; only set-status writes a `gate:` line
+fn verifier_rejecting_in_notes(r: &Repo) -> String {
+    script(
+        r,
+        "src/fakeverify.sh",
+        &format!(
+            "sed -i.bak 's/^status: review$/status: ready/' TASKS.md\n\
+             rm -f TASKS.md.bak\n\
+             printf 'notes: Verifier: REJECTED on criterion 1. {NOTED_REJECTION}. Re-run it.\\n' >>TASKS.md\n\
+             cat src/filed.md >>TASKS.md\n\
+             {QUIET}"
+        ),
+    )
+}
+
+fn adjudicator(r: &Repo, body: &str) -> String {
+    script(r, "src/fakeadj.sh", &format!("{body}{QUIET}"))
+}
+
+fn promotes(id: &str) -> String {
+    format!(
+        "{bin} tasks set-status {id} ready 'promoted'\n",
+        bin = env!("CARGO_BIN_EXE_enallagi"),
+    )
+}
+
+// one repo whose verifier rejects, files `filed`, and whose adjudicator runs `body`
+fn draining(r: &Repo, filed: &str, body: &str) {
+    let verify = rejecting_verifier(r);
+    draining_with(r, &verify, filed, body);
+}
+
+fn draining_with(r: &Repo, verify: &str, filed: &str, body: &str) {
+    let implement = implementer(r, "");
+    let adj = adjudicator(r, body);
+    let roles = format!(
+        "{}{}",
+        role_commands(&implement, verify),
+        role_command("adjudicator", &adj)
+    );
+    write_toml(r, &base_toml(&roles));
+    r.write("TASKS.md", TASKS);
+    r.write("src/filed.md", filed);
+    r.commit_all("stubs");
+}
+
+fn stages_started(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            Kind::StageStart { stage, .. } => Some(stage.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn status_of(r: &Repo, id: &str) -> Option<String> {
+    let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    let blocks = enallagi::queue::parse(&text).expect("parse");
+    blocks
+        .iter()
+        .find(|b| b.id == id)
+        .and_then(|b| enallagi::queue::field(b, "status"))
+}
+
+#[test]
+fn adjudicate_follows_a_rejection_in_one_round() {
+    let r = repo("", "");
+    draining(&r, FILED, &promotes("T-009"));
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(
+        stages_started(&events),
+        vec!["implement", "verify", "adjudicate"],
+        "{events:#?}"
+    );
+    assert_eq!(status_of(&r, "T-001").as_deref(), Some("ready"));
+    assert!(
+        digest.promoted.contains(&"T-009".to_string()),
+        "{:?}",
+        digest.promoted
+    );
+}
+
+#[test]
+fn a_verdict_filing_nothing_skips_adjudicate() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    let adj = adjudicator(&r, "touch adjudicate-ran\n");
+    let roles = format!(
+        "{}{}",
+        role_commands(&implement, &verify),
+        role_command("adjudicator", &adj)
+    );
+    write_toml(&r, &base_toml(&roles));
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(
+        stages_started(&events),
+        vec!["implement", "verify"],
+        "{events:#?}"
+    );
+    assert!(!r.root.join("adjudicate-ran").exists());
+    assert_eq!(digest.landed, vec!["T-001".to_string()]);
+}
+
+#[test]
+fn the_adjudicate_gates_run_in_a_task_round() {
+    let r = repo("", "");
+    draining(&r, FILED, &promotes("T-009"));
+
+    let (_, events) = go(&r, &opts(1));
+    let at = events
+        .iter()
+        .position(|e| matches!(&e.kind, Kind::StageStart { stage, .. } if stage == "adjudicate"))
+        .expect("the adjudicate stage started");
+    let gates: Vec<&str> = events[at..]
+        .iter()
+        .filter_map(|e| match &e.kind {
+            Kind::Gate { gate, .. } => Some(gate.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        gates,
+        vec![
+            "commit-round",
+            "queue-intact",
+            "adjudicator-halt",
+            "dry-round"
+        ],
+        "{events:#?}"
+    );
+}
+
+#[test]
+fn a_promotion_repeating_a_rejection_is_refused() {
+    let r = repo("", "");
+    draining(&r, RESTATED, &promotes("T-009"));
+
+    let (digest, _) = go(&r, &opts(1));
+    assert_eq!(status_of(&r, "T-009").as_deref(), Some("proposed"));
+    assert!(
+        !digest.promoted.contains(&"T-009".to_string()),
+        "{:?}",
+        digest.promoted
+    );
+    let named = digest
+        .warnings
+        .iter()
+        .find(|w| w.contains("T-009") && w.contains("T-001") && w.contains(REJECTION));
+    assert!(named.is_some(), "{:?}", digest.warnings);
+}
+
+#[test]
+fn no_scout_still_reaches_the_adjudicator() {
+    let r = repo("", "");
+    draining(&r, FILED, &promotes("T-009"));
+    let toml = std::fs::read_to_string(r.root.join("enallagi.toml")).expect("enallagi.toml");
+    let toml = toml
+        .replace(
+            "[[pipeline]]\nname = \"discover\"\nwhen = \"!queue.takeable\"\nstages = [\"scout\", \"adjudicate\"]\nend_after_dry_rounds = 2\n",
+            "",
+        )
+        .replace("[[stage]]\nname = \"scout\"\nrole = \"scout\"\nturns = 5\n", "");
+    assert!(!toml.contains("scout"), "{toml}");
+    r.write("enallagi.toml", &toml);
+    r.commit_all("no scout");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert!(
+        stages_started(&events).contains(&"adjudicate".to_string()),
+        "{events:#?}"
+    );
+    assert!(
+        digest.promoted.contains(&"T-009".to_string()),
+        "{:?}",
+        digest.promoted
+    );
+}
+
+#[test]
+fn a_stage_that_exits_records_what_it_promoted() {
+    let r = repo("", "");
+    draining(&r, FILED, &format!("{}exit 1\n", promotes("T-009")));
+
+    let (digest, _) = go(&r, &opts(1));
+    assert!(
+        digest.promoted.contains(&"T-009".to_string()),
+        "{:?}",
+        digest.promoted
+    );
+    assert!(
+        digest
+            .halts
+            .iter()
+            .any(|h| h.contains("adjudicate exited 1")),
+        "{:?}",
+        digest.halts
+    );
+}
+
+#[test]
+fn the_dry_plan_names_adjudicate_after_verify() {
+    let r = repo(&base_toml(""), TASKS);
+    let plan = plan_of(&r);
+    let at = plan
+        .find("=== pipeline task (queue.takeable) ===")
+        .unwrap_or_else(|| panic!("{plan}"));
+    let section = &plan[at..];
+    let section = &section[..section[1..]
+        .find("=== pipeline ")
+        .map(|i| i + 1)
+        .unwrap_or(section.len())];
+    let verify = section.find("would spawn: verify").expect(section);
+    let adjudicate = section.find("would spawn: adjudicate").expect(section);
+    assert!(verify < adjudicate, "{section}");
+}
+
+#[test]
+fn the_shipped_task_pipeline_adjudicates() {
+    let r = Repo::new();
+    r.write("enallagi.toml", "[check]\ncommand = \"true\"\n");
+    let cfg = enallagi::config::load(&r.root).expect("load");
+    let task = cfg
+        .pipeline
+        .iter()
+        .find(|p| p.name == "task")
+        .expect("the task pipeline");
+    assert_eq!(task.stages, vec!["implement", "verify", "adjudicate"]);
+}
+
+#[test]
+fn an_attended_block_waits_for_a_scout_round() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    let scout = script(&r, "src/fakescout.sh", QUIET);
+    let roles = format!(
+        "{}{}",
+        role_commands(&implement, &verify),
+        role_command("scout", &scout)
+    );
+    write_toml(&r, &base_toml(&roles));
+    r.write("TASKS.md", ATTENDED_TASKS);
+    r.commit_all("stubs");
+
+    let (digest, events) = go(&r, &opts(2));
+    assert!(
+        stages_started(&events).contains(&"scout".to_string()),
+        "{events:#?}"
+    );
+    assert!(
+        !digest
+            .halts
+            .iter()
+            .any(|h| h.contains("A human has to run it")),
+        "{:?}",
+        digest.halts
+    );
+}
+
+#[test]
+fn the_adjudicator_prompt_names_the_filed_ids() {
+    let r = repo("", "");
+    draining(&r, FILED, "printf '%s' \"$1\" >adjudicate-prompt\n");
+
+    go(&r, &opts(1));
+    let prompt = std::fs::read_to_string(r.root.join("adjudicate-prompt")).expect("the prompt");
+    assert!(prompt.contains("T-009"), "{prompt}");
+}
+
+#[test]
+fn a_task_round_does_not_spend_the_discovery_budget() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    let scout = script(&r, "src/fakescout.sh", QUIET);
+    let roles = format!(
+        "{}{}",
+        role_commands(&implement, &verify),
+        role_command("scout", &scout)
+    );
+    write_toml(&r, &base_toml(&roles));
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    // one task round, then the discover pipeline's two dry rounds: the task round is not one of them
+    let (digest, _) = go(&r, &opts(5));
+    assert_eq!(digest.iterations, 3, "{digest:#?}");
+}
+
+#[test]
+fn a_promotion_repeating_a_noted_verdict_is_refused() {
+    let r = repo("", "");
+    let verify = verifier_rejecting_in_notes(&r);
+    draining_with(&r, &verify, NOTED_RESTATED, &promotes("T-009"));
+
+    let (digest, _) = go(&r, &opts(1));
+    assert_eq!(status_of(&r, "T-009").as_deref(), Some("proposed"));
+    assert!(
+        !digest.promoted.contains(&"T-009".to_string()),
+        "{:?}",
+        digest.promoted
+    );
+    let named = digest
+        .warnings
+        .iter()
+        .find(|w| w.contains("T-009") && w.contains("T-001") && w.contains(NOTED_REJECTION));
+    assert!(named.is_some(), "{:?}", digest.warnings);
 }

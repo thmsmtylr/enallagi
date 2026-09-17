@@ -1,9 +1,9 @@
-//! The one probe that drives the built artifact instead of reading text. Off unless `layout.driver_command` is set and `HARNESS_DRIVER=1`.
+//! The one probe that drives the built artifact instead of reading text. Off unless `layout.driver_command` is set and `ENALLAGI_DRIVER=1`.
 
 use super::{common, ProbeCtx, ProbeResult};
 use std::process::Command;
 
-pub const OFF: &str = "no driver_command in harness.toml, or HARNESS_DRIVER is unset. Nothing here exercised the built artifact.";
+pub const OFF: &str = "no driver_command in enallagi.toml, or ENALLAGI_DRIVER is unset. Nothing here exercised the built artifact.";
 
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
     let command = &ctx.cfg.layout.driver_command;
@@ -23,7 +23,7 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
             child.env(key, value);
         }
     }
-    child.env("HARNESS_ROOT", ctx.root);
+    child.env("ENALLAGI_ROOT", ctx.root);
 
     let out = match child.output() {
         Ok(out) => out,

@@ -271,7 +271,7 @@ fn roll_progress(
     let archive_prefix = match fs::read_to_string(&archive_path) {
         Ok(existing) => format!("{}\n\n", existing.trim_end()),
         Err(_) => "# PROGRESS (archive)\n\nEntries rolled out of PROGRESS.md by \
-                   `harness run`, oldest first.\nThe loop does not read this file. It \
+                   `enallagi run`, oldest first.\nThe loop does not read this file. It \
                    exists so the record stays whole.\n\n"
             .to_string(),
     };
@@ -350,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn a_quoted_block_is_not_archived_and_the_next_task_survives() {
+    fn a_quoted_block_is_not_archived() {
         let r = Repo::new();
         r.write(
             "TASKS.md",
@@ -382,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn progress_rolls_the_oldest_entries_and_keeps_the_format_header() {
+    fn progress_rolls_and_keeps_its_header() {
         let r = Repo::new();
         let header = "# PROGRESS\n\n\
              The loop's own record, one entry per iteration, newest last.\n\n\
@@ -432,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_to_rewrite_under_a_live_loop_that_is_not_us() {
+    fn refuses_to_rewrite_under_another_loop() {
         let r = Repo::new();
         r.write("TASKS.md", "# TASKS\n\n## [T-001] x\nstatus: done\n");
         r.commit_all("seed tasks");

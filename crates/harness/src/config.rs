@@ -10,7 +10,16 @@ use crate::agent::{Presets, TurnCap};
 pub const DEFAULT_TOML: &str = include_str!("../harness.default.toml");
 
 // read when layout.harness_dir is unset and the default directory is absent, so installs made before the rename keep running
-const LEGACY_HARNESS_DIR: &str = ".harness";
+const LEGACY_DIR: &str = ".harness";
+
+pub const CONFIG: &str = "enallagi.toml";
+pub const ENV: &str = "ENALLAGI_";
+pub const DIR_TOKEN: &str = "__ENALLAGI_DIR__";
+
+// the names installs and templates written before the rename still carry
+pub const LEGACY_CONFIG: &str = "harness.toml";
+pub const LEGACY_ENV: &str = "HARNESS_";
+pub const LEGACY_DIR_TOKEN: &str = "__HARNESS_DIR__";
 
 pub const ROLE_NAMES: &[&str] = &[
     "scout",
@@ -105,6 +114,7 @@ pub struct AgentConfig {
     pub preset: String,
     pub command: Option<Vec<String>>,
     pub model: Option<String>,
+    pub effort: Option<String>,
     pub usage: Option<UsagePaths>,
     pub rate_limit_pattern: String,
     #[serde(flatten)]
@@ -117,6 +127,7 @@ pub struct AgentOverride {
     pub preset: Option<String>,
     pub command: Option<Vec<String>>,
     pub model: Option<String>,
+    pub effort: Option<String>,
     pub usage: Option<UsagePaths>,
 }
 
@@ -296,9 +307,37 @@ pub fn instance_path(root: &Path, harness_dir: &str, name: &str) -> PathBuf {
     root.join(instance_rel(root, harness_dir, name))
 }
 
+// an ENALLAGI_-less HARNESS_ variable is read by nothing, so a run configured with it would look green and honour none of it
+pub fn legacy_env() -> Option<String> {
+    let mut names: Vec<String> = std::env::vars_os()
+        .filter_map(|(key, _)| key.into_string().ok())
+        .filter(|key| key.starts_with(LEGACY_ENV))
+        .filter(|key| std::env::var_os(renamed(key)).is_none())
+        .collect();
+    names.sort();
+    let name = names.first()?;
+    Some(format!(
+        "enallagi: {name} is no longer read; set {} instead",
+        renamed(name)
+    ))
+}
+
+// the launcher refuses a legacy variable for itself, so it may not hand one to a child either
+pub fn drop_legacy_env(cmd: &mut std::process::Command) {
+    for (key, _) in std::env::vars() {
+        if key.starts_with(LEGACY_ENV) {
+            cmd.env_remove(key);
+        }
+    }
+}
+
+fn renamed(legacy: &str) -> String {
+    format!("{ENV}{}", &legacy[LEGACY_ENV.len()..])
+}
+
 // honoured only inside the root, so a fixture or other repository a lane's child process opens never inherits it
 fn env_harness_dir(root: &Path) -> Option<String> {
-    let dir = std::env::var_os("HARNESS_DIR")?;
+    let dir = std::env::var_os("ENALLAGI_DIR")?;
     let root = std::fs::canonicalize(root).ok()?;
     let dir = std::fs::canonicalize(root.join(dir)).ok()?;
     let rel = dir.strip_prefix(&root).ok()?.to_str()?;
@@ -314,8 +353,8 @@ fn unconfigured_harness_dir(root: &Path) -> Result<(String, bool), ConfigError> 
         .as_str()
         .unwrap_or_default()
         .to_string();
-    if !root.join(&default).exists() && root.join(LEGACY_HARNESS_DIR).is_dir() {
-        return Ok((LEGACY_HARNESS_DIR.to_string(), true));
+    if !root.join(&default).exists() && root.join(LEGACY_DIR).is_dir() {
+        return Ok((LEGACY_DIR.to_string(), true));
     }
     Ok((default, false))
 }
@@ -335,18 +374,31 @@ pub fn config_path(root: &Path) -> PathBuf {
     let dir = unconfigured_harness_dir(root)
         .map(|(dir, _)| dir)
         .unwrap_or_default();
-    let path = instance_path(root, &dir, "harness.toml");
-    let at_root = instance_path(root, "", "harness.toml");
-    if path.is_file() || !at_root.is_file() {
-        return path;
+    let found = [
+        (dir.as_str(), CONFIG),
+        (dir.as_str(), LEGACY_CONFIG),
+        ("", CONFIG),
+        ("", LEGACY_CONFIG),
+    ]
+    .into_iter()
+    .map(|(at, name)| (name, instance_path(root, at, name)))
+    .find(|(_, path)| path.is_file());
+    let Some((name, path)) = found else {
+        return instance_path(root, &dir, CONFIG);
+    };
+    if name == LEGACY_CONFIG {
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| eprintln!("enallagi: reading {LEGACY_CONFIG}; rename it to {CONFIG}"));
     }
-    static WARNED: std::sync::Once = std::sync::Once::new();
-    WARNED.call_once(|| {
-        eprintln!(
-            "harness: reading harness.toml at the repository root; `harness init --move` moves it to {dir}/"
-        )
-    });
-    at_root
+    if path != instance_path(root, &dir, name) {
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            eprintln!(
+                "enallagi: reading {name} at the repository root; `enallagi init --move` moves it to {dir}/"
+            )
+        });
+    }
+    path
 }
 
 pub fn load(root: &Path) -> Result<Config, ConfigError> {
@@ -356,7 +408,7 @@ pub fn load(root: &Path) -> Result<Config, ConfigError> {
     let mut dir_configured = false;
     if path.is_file() {
         let text = std::fs::read_to_string(&path)?;
-        let user: toml::Value = parse_toml(&text, "harness.toml")?;
+        let user: toml::Value = parse_toml(&text, CONFIG)?;
         dir_configured = user
             .get("layout")
             .and_then(|l| l.get("harness_dir"))
@@ -389,7 +441,7 @@ pub fn load(root: &Path) -> Result<Config, ConfigError> {
             static WARNED: std::sync::Once = std::sync::Once::new();
             WARNED.call_once(|| {
                 eprintln!(
-                    "harness: using the legacy {LEGACY_HARNESS_DIR}/ directory; `harness init --move` moves it to {default}/"
+                    "enallagi: using the legacy {LEGACY_DIR}/ directory; `enallagi init --move` moves it to {default}/"
                 )
             });
         }
@@ -397,7 +449,7 @@ pub fn load(root: &Path) -> Result<Config, ConfigError> {
     let mut cfg: Config = base
         .try_into()
         .map_err(|e: toml::de::Error| ConfigError::Parse {
-            path: "harness.toml".to_string(),
+            path: CONFIG.to_string(),
             message: e.to_string(),
         })?;
     if cfg.layout.context_file.is_empty() {
@@ -608,13 +660,14 @@ pub fn validate(
 }
 
 pub fn subst(text: &str, cfg: &Config) -> String {
+    let text = text.replace(LEGACY_DIR_TOKEN, DIR_TOKEN);
     let l = &cfg.layout;
     let cap = l.learnings_cap.to_string();
     let mut tokens: Vec<(&str, &str)> = vec![
         ("__CHECK__", &cfg.check.command),
         ("__CHECK_FORCE__", &cfg.check.force),
         ("__SPEC__", &l.spec),
-        ("__HARNESS_DIR__", &l.harness_dir),
+        (DIR_TOKEN, &l.harness_dir),
         ("__CONTEXT_FILE__", &l.context_file),
         ("__CONTRACT_FILE__", &l.contract_file),
         ("__SKILL_INVOCATION__", &l.skill_invocation),
@@ -628,9 +681,9 @@ pub fn subst(text: &str, cfg: &Config) -> String {
     if let Some(dir) = l.skills_dir.as_deref() {
         tokens.push(("__SKILLS_DIR__", dir));
     }
-    tokens.iter().fold(text.to_string(), |acc, (token, value)| {
-        acc.replace(token, value)
-    })
+    tokens
+        .iter()
+        .fold(text, |acc, (token, value)| acc.replace(token, value))
 }
 
 pub fn migrate_json(json: &str) -> Result<(String, Vec<String>), ConfigError> {
@@ -889,13 +942,13 @@ mod tests {
         "DECISIONS.md",
         ".check-baseline",
         "test-hashes.json",
-        "harness.toml",
+        "enallagi.toml",
         "evals/README.md",
         "STOP",
     ];
 
     #[test]
-    fn every_instance_file_resolves_under_the_harness_directory() {
+    fn every_instance_file_is_under_the_dir() {
         let d = tempfile::tempdir().unwrap();
         let root = d.path();
         let cfg = load(root).unwrap();
@@ -917,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn a_root_tasks_file_keeps_every_instance_file_at_the_root() {
+    fn a_root_queue_keeps_the_root_layout() {
         let d = tempfile::tempdir().unwrap();
         let root = d.path();
         std::fs::write(instance_path(root, "", "TASKS.md"), "# TASKS\n").unwrap();
@@ -940,23 +993,44 @@ mod tests {
     }
 
     #[test]
-    fn a_root_harness_toml_is_read_when_the_harness_directory_has_none() {
+    fn the_new_config_name_wins_over_the_legacy_one() {
         let d = tempfile::tempdir().unwrap();
         let root = d.path();
+        std::fs::create_dir(root.join(".enallagi")).unwrap();
+        std::fs::write(root.join(".enallagi/TASKS.md"), "").unwrap();
+        assert_eq!(config_path(root), root.join(".enallagi/enallagi.toml"));
+
         std::fs::write(
-            instance_path(root, "", "harness.toml"),
+            root.join(".enallagi/harness.toml"),
             "[check]\ncommand='make'\n",
         )
         .unwrap();
+        assert_eq!(config_path(root), root.join(".enallagi/harness.toml"));
+        assert_eq!(load(root).unwrap().check.command, "make");
+
+        std::fs::write(
+            root.join(".enallagi/enallagi.toml"),
+            "[check]\ncommand='just'\n",
+        )
+        .unwrap();
+        assert_eq!(config_path(root), root.join(".enallagi/enallagi.toml"));
+        assert_eq!(load(root).unwrap().check.command, "just");
+    }
+
+    #[test]
+    fn a_root_config_is_read_when_the_dir_has_none() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        std::fs::write(instance_path(root, "", CONFIG), "[check]\ncommand='make'\n").unwrap();
         assert_eq!(load(root).unwrap().check.command, "make");
 
         std::fs::create_dir(root.join(".enallagi")).unwrap();
         std::fs::write(
-            instance_path(root, ".enallagi", "harness.toml"),
+            instance_path(root, ".enallagi", CONFIG),
             "[check]\ncommand='just'\n",
         )
         .unwrap();
-        assert_eq!(config_path(root), root.join(".enallagi/harness.toml"));
+        assert_eq!(config_path(root), root.join(".enallagi/enallagi.toml"));
         assert_eq!(load(root).unwrap().check.command, "just");
     }
 
@@ -1003,7 +1077,7 @@ mod tests {
     }
 
     #[test]
-    fn a_typoed_probe_name_is_refused_before_any_stage_runs() {
+    fn a_typoed_probe_name_is_refused() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
         c.pipeline[0].when = "probe.typoed".into();
         let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
@@ -1029,7 +1103,7 @@ mod tests {
     }
 
     #[test]
-    fn a_skill_id_or_path_that_escapes_its_directory_is_refused() {
+    fn an_escaping_skill_id_or_path_is_refused() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
         c.skill[0].id = "..".into();
         c.skill[1].path = "../x".into();
@@ -1068,7 +1142,7 @@ mod tests {
     fn subst_replaces_tokens() {
         let c = load(tempfile::tempdir().unwrap().path()).unwrap();
         assert_eq!(
-            subst("run __CHECK__ in __HARNESS_DIR__", &c),
+            subst("run __CHECK__ in __ENALLAGI_DIR__", &c),
             "run bun run check in .enallagi"
         );
     }
@@ -1090,10 +1164,10 @@ mod tests {
         let c = load(tempfile::tempdir().unwrap().path()).unwrap();
         let roles = |_: &str| Some(String::new());
         assert!(validate(&c, &crate::agent::presets(), &roles).is_ok());
-        assert_eq!(c.skill.len(), 7);
+        assert_eq!(c.skill.len(), 8);
         assert_eq!(c.layout.learnings_cap, 12);
         assert_eq!(c.layout.skills_dir, None);
-        assert_eq!(c.stage[2].env["HARNESS_DRIVER"], "1");
+        assert_eq!(c.stage[2].env["ENALLAGI_DRIVER"], "1");
         assert_eq!(c.pipeline[2].end_after_dry_rounds, 2);
     }
 
@@ -1118,7 +1192,7 @@ mod tests {
     }
 
     #[test]
-    fn a_repository_with_only_the_legacy_harness_directory_keeps_it() {
+    fn a_lone_legacy_directory_is_kept() {
         let d = tempfile::tempdir().unwrap();
         std::fs::create_dir(d.path().join(".harness")).unwrap();
         assert_eq!(load(d.path()).unwrap().layout.harness_dir, ".harness");
@@ -1263,7 +1337,7 @@ mod tests {
     #[test]
     fn subst_covers_every_token() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
-        let text = "__CHECK__|__CHECK_FORCE__|__SPEC__|__HARNESS_DIR__|__SKILLS_DIR__|\
+        let text = "__CHECK__|__CHECK_FORCE__|__SPEC__|__ENALLAGI_DIR__|__SKILLS_DIR__|\
                     __CONTEXT_FILE__|__CONTRACT_FILE__|__SKILL_INVOCATION__|__DRIVER_COMMAND__|\
                     __ROWS_HEADING__|__ROWS_END_HEADING__|__SOURCE_ROOT__|__LEARNINGS_CAP__";
         let mut out = subst(text, &c);
@@ -1413,7 +1487,7 @@ mod tests {
     }
 
     #[test]
-    fn a_role_declaration_is_refused_when_malformed_or_unused() {
+    fn a_malformed_or_unused_role_is_refused() {
         let d = tempfile::tempdir().unwrap();
         write_config(
             d.path(),
@@ -1439,7 +1513,7 @@ mod tests {
 
     // the vendored file does not exist before the first fetch, so a declared role can't be a missing one
     #[test]
-    fn a_declared_role_is_not_missing_before_it_is_fetched() {
+    fn an_unfetched_declared_role_is_not_missing() {
         let d = tempfile::tempdir().unwrap();
         write_config(
             d.path(),

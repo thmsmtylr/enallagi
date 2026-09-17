@@ -5,7 +5,7 @@ use std::process::Command;
 
 use crate::config::Config;
 use crate::events::{Kind, Writer};
-use crate::git::{self, diff_names, git, head, porcelain};
+use crate::git::{self, git, head, porcelain};
 use crate::queue::{self, Queue};
 use crate::skills::LockEntry;
 
@@ -331,7 +331,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
             "ready",
             &reason,
             &format!(
-                "chore({task}): harness gate rejected a done verdict with work off the branch"
+                "chore({task}): enallagi gate rejected a done verdict with work off the branch"
             ),
             &format!("{task} was forced back to ready: done with {left} uncommitted path(s)."),
         );
@@ -359,11 +359,44 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         &task,
         "ready",
         &reason,
-        &format!("chore({task}): harness gate rejected a false VERIFIED"),
+        &format!("chore({task}): enallagi gate rejected a false VERIFIED"),
         &format!(
             "{task} was forced back to ready by the gate: the verifier said done, the gate was red.\ncheck tail:\n{tail8}"
         ),
     )
+}
+
+fn diff_range(root: &Path, base: &str, filter: &str) -> Vec<String> {
+    let flag = format!("--diff-filter={filter}");
+    let mut args = vec!["diff", "--name-only"];
+    if !filter.is_empty() {
+        args.push(&flag);
+    }
+    args.extend([base, "HEAD"]);
+    git(root, &args)
+        .map(|s| {
+            s.lines()
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// the iteration's files: the product repository's, and in a nested install the harness
+// directory's under its own prefix. filter is a git --diff-filter value, empty for every change
+fn range_files(ctx: &GateCtx, base: &str, filter: &str) -> Vec<String> {
+    let dir = &ctx.cfg.layout.harness_dir;
+    let state = git::state_root(ctx.root, dir);
+    let mut files = diff_range(ctx.root, base, filter);
+    if let Some(state_base) = ctx.state_base.as_deref().filter(|_| state != ctx.root) {
+        files.extend(
+            diff_range(&state, state_base, filter)
+                .into_iter()
+                .map(|f| format!("{dir}/{f}")),
+        );
+    }
+    files
 }
 
 // diffs the iteration's own commits against the task's scope: globs; also routes the three loops via rows: none — harness
@@ -392,18 +425,22 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let added_skills = added_ids(&base_lock.skill, &head_lock.skill);
     let added_roles = added_ids(&base_lock.role, &head_lock.role);
 
+    // a locked id re-vendored leaves harness.lock byte-identical, so added_skills never names it
+    let locked_skills: Vec<String> = head_lock
+        .skill
+        .iter()
+        .map(|e| format!("{skills_dir}/{}/", e.id))
+        .collect();
+
     let mut out_of: Vec<String> = Vec::new();
     let mut harness_hit: Vec<String> = Vec::new();
-    let mut changed = diff_names(ctx.root, &base);
-    let dir = &ctx.cfg.layout.harness_dir;
-    let state = git::state_root(ctx.root, dir);
-    if let Some(state_base) = ctx.state_base.as_deref().filter(|_| state != ctx.root) {
-        changed.extend(
-            diff_names(&state, state_base)
-                .into_iter()
-                .map(|f| format!("{dir}/{f}")),
-        );
-    }
+    let changed = range_files(ctx, &base, "");
+    let added = range_files(ctx, &base, "A");
+    // cargo rewrites Cargo.lock from a manifest the range changed, and a commit without it leaves
+    // the tree dirty after the next build; the manifest still has to be on the scope: line
+    let manifest_in_scope = changed
+        .iter()
+        .any(|f| f.ends_with("Cargo.toml") && in_scope(f, &pats));
     for f in changed {
         if bookkeeping.contains(&f) || f == lock {
             continue;
@@ -413,6 +450,14 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
             .any(|id| f.starts_with(&format!("{skills_dir}/{id}/")))
             || added_roles.iter().any(|id| f == role_file(ctx.cfg, id))
         {
+            continue;
+        }
+        // a file the range ADDS under a locked id is that id's re-vendoring; one it rewrites is a
+        // hand edit, which the scope: line still has to name
+        if added.contains(&f) && locked_skills.iter().any(|d| f.starts_with(d)) {
+            continue;
+        }
+        if manifest_in_scope && (f == "Cargo.lock" || f.ends_with("/Cargo.lock")) {
             continue;
         }
         // test-hashes.json is exempt when every re-cut key (present at base too, with a new value)
@@ -616,6 +661,7 @@ fn is_harness_path(cfg: &Config, f: &str) -> bool {
         || matches!(
             f,
             ".check-baseline"
+                | "enallagi.toml"
                 | "harness.toml"
                 | "harness.json"
                 | "harness.lock"
@@ -909,11 +955,11 @@ mod tests {
             repo.write(".enallagi/.gitignore", "events.jsonl\n*.log\nlogs/\n");
             let cmd = repo.stub_check(check_body);
             repo.write(
-                "harness.toml",
+                "enallagi.toml",
                 &format!("[check]\ncommand = \"{cmd}\"\nfail_name = '\\(fail\\) (.+)$'\n"),
             );
             repo.commit_all("harness");
-            let cfg = crate::config::load(&repo.root).expect("load harness.toml");
+            let cfg = crate::config::load(&repo.root).expect("load enallagi.toml");
             let writer = Writer::new(Log::open(&repo.root.join(".enallagi")));
             Env {
                 repo,
@@ -1067,7 +1113,7 @@ mod tests {
             "{text}"
         );
         assert!(env.log().contains(
-            "chore(T-001): harness gate rejected a done verdict with work off the branch"
+            "chore(T-001): enallagi gate rejected a done verdict with work off the branch"
         ));
         assert_eq!(env.warnings.len(), 1);
         let events = env.events();
@@ -1092,7 +1138,7 @@ mod tests {
         assert!(env.tasks_text().contains("status: ready"));
         assert!(env
             .log()
-            .contains("chore(T-001): harness gate rejected a false VERIFIED"));
+            .contains("chore(T-001): enallagi gate rejected a false VERIFIED"));
         assert_eq!(env.warnings.len(), 1);
         assert!(env.warnings[0].contains("boom"), "{}", env.warnings[0]);
         assert!(
@@ -1123,7 +1169,7 @@ mod tests {
     }
 
     #[test]
-    fn a_task_id_that_left_the_queue_without_reaching_decisions_halts_the_run() {
+    fn a_task_id_lost_from_the_queue_halts() {
         let mut env = Env::new("exit 0\n");
         env.repo.write(
             "TASKS.md",
@@ -1147,7 +1193,7 @@ mod tests {
     }
 
     #[test]
-    fn and_the_same_id_archived_to_decisions_is_not_a_loss() {
+    fn an_archived_id_is_not_a_loss() {
         let mut env = Env::new("exit 0\n");
         env.repo.write(
             "TASKS.md",
@@ -1226,7 +1272,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_rejects_a_baseline_that_grew_even_under_a_harness_task() {
+    fn scope_rejects_a_grown_baseline() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", ".check-baseline", "none — harness");
         env.repo.write(".check-baseline", "alpha\n");
@@ -1250,7 +1296,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_exempts_a_hash_recut_for_a_file_on_the_scope_line() {
+    fn scope_exempts_an_in_scope_hash_recut() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo
@@ -1278,6 +1324,61 @@ mod tests {
     }
 
     #[test]
+    fn scope_exempts_a_lock_beside_an_in_scope_manifest() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", "crates/**", "§11 row 1");
+        env.repo
+            .write("crates/a/Cargo.toml", "[package]\nname = \"old\"\n");
+        env.repo
+            .write("Cargo.lock", "[[package]]\nname = \"old\"\n");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo
+            .write("crates/a/Cargo.toml", "[package]\nname = \"new\"\n");
+        env.repo
+            .write("Cargo.lock", "[[package]]\nname = \"new\"\n");
+        env.repo.commit_all("rename the package");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
+    fn scope_rejects_a_lock_with_no_manifest_change() {
+        let mut alone = Env::new("exit 0\n");
+        alone.queue("done", "crates/**", "§11 row 1");
+        alone
+            .repo
+            .write("Cargo.lock", "[[package]]\nname = \"old\"\n");
+        alone.repo.commit_all("verdict");
+        let base = alone.head();
+        alone
+            .repo
+            .write("Cargo.lock", "[[package]]\nname = \"new\"\n");
+        alone.repo.commit_all("lock alone");
+        let out = run("scope", &mut alone.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(out.reason.contains("Cargo.lock"), "{}", out.reason);
+
+        let mut off = Env::new("exit 0\n");
+        off.queue("done", "crates/**", "§11 row 1");
+        off.repo
+            .write("vendor/b/Cargo.toml", "[package]\nname = \"old\"\n");
+        off.repo
+            .write("Cargo.lock", "[[package]]\nname = \"old\"\n");
+        off.repo.commit_all("verdict");
+        let base = off.head();
+        off.repo
+            .write("vendor/b/Cargo.toml", "[package]\nname = \"new\"\n");
+        off.repo
+            .write("Cargo.lock", "[[package]]\nname = \"new\"\n");
+        off.repo.commit_all("rename an off-scope package");
+        let out = run("scope", &mut off.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(out.reason.contains("Cargo.lock"), "{}", out.reason);
+    }
+
+    #[test]
     fn implementer_not_done_forces_back_and_skips_rest() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
@@ -1296,7 +1397,7 @@ mod tests {
     }
 
     #[test]
-    fn an_implementer_stopping_short_of_review_skips_the_rest() {
+    fn stopping_short_of_review_skips_the_rest() {
         for status in ["blocked", "needs-spec", "deferred", "ready"] {
             let mut env = Env::new("exit 0\n");
             env.queue(status, "src/a.ts", "§11 row 1");
@@ -1445,7 +1546,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_exempts_a_freshly_vendored_role_outside_scope() {
+    fn scope_exempts_a_vendored_role() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/**", "§11 row 1");
         env.repo.commit_all("verdict");
@@ -1481,7 +1582,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_exempts_a_freshly_added_lock_key_outside_scope() {
+    fn scope_exempts_a_new_lock_key() {
         let mut env = Env::new("exit 0\n");
         env.queue(
             "done",
@@ -1577,7 +1678,50 @@ mod tests {
     }
 
     #[test]
-    fn scope_rejects_an_unrelated_file_dropped_under_the_skills_dir() {
+    fn scope_exempts_a_revendored_locked_skill() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", "src/**", "§11 row 1");
+        env.repo
+            .write("harness.lock", &lock_toml(&[("demo", "aaa")]));
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        // the id is already locked, so the re-vendoring leaves harness.lock byte-identical
+        env.repo
+            .write(".enallagi/adapters/claude/skills/demo/SKILL.md", "# demo\n");
+        env.repo.commit_all("chore(vendor): demo");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
+    fn scope_rejects_a_rewritten_vendored_skill() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", "src/**", "§11 row 1");
+        env.repo
+            .write("harness.lock", &lock_toml(&[("demo", "aaa")]));
+        env.repo
+            .write(".enallagi/adapters/claude/skills/demo/SKILL.md", "# demo\n");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write(
+            ".enallagi/adapters/claude/skills/demo/SKILL.md",
+            "# demo, by hand\n",
+        );
+        env.repo.commit_all("hand edit under the skills dir");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(
+            out.reason
+                .contains(".enallagi/adapters/claude/skills/demo/SKILL.md"),
+            "{}",
+            out.reason
+        );
+    }
+
+    #[test]
+    fn scope_rejects_a_stray_file_in_skills() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/**", "§11 row 1");
         env.repo.commit_all("verdict");
@@ -1600,7 +1744,7 @@ mod tests {
     }
 
     #[test]
-    fn skills_dir_falls_back_from_layout_to_preset_to_harness_dir() {
+    fn skills_dir_falls_back_layout_preset_dir() {
         let mut cfg = Config::default();
         cfg.layout.harness_dir = ".enallagi".to_string();
         assert_eq!(skills_dir_for(&cfg), ".enallagi/skills");
@@ -1615,12 +1759,12 @@ mod tests {
         let repo = Repo::new();
         let cmd = repo.stub_check("echo \"$1\" >> ran.txt\nexit 0\n");
         repo.write(
-            "harness.toml",
+            "enallagi.toml",
             &format!(
                 "[check]\ncommand = \"{cmd} plain\"\nforce = \"{cmd} forced\"\nfail_name = '\\(fail\\) (.+)$'\n"
             ),
         );
-        let cfg = crate::config::load(&repo.root).expect("load harness.toml");
+        let cfg = crate::config::load(&repo.root).expect("load enallagi.toml");
         check_delta(&repo.root, &cfg, true);
         assert_eq!(
             std::fs::read_to_string(repo.root.join("ran.txt")).expect("ran.txt"),

@@ -20,7 +20,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "harness",
+    name = "enallagi",
     version,
     about = "An autonomous task loop for a coding agent, installed into any git repository."
 )]
@@ -31,7 +31,9 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Install the harness into this repository: seed the documents, write harness.toml, wire the adapter
+    /// Install into this repository
+    ///
+    /// Seeds the documents, writes enallagi.toml, and wires the adapter named by --adapter.
     Init {
         /// Agent preset whose hook and instruction files to write (claude, codex, gemini, copilot, cursor, qwen, …)
         #[arg(long)]
@@ -43,7 +45,9 @@ pub enum Command {
         #[arg(long = "move")]
         move_files: bool,
     },
-    /// Remove the harness from this repository: the harness directory, the untracked entry points init wrote, and the exclude block
+    /// Remove from this repository and leave no trace
+    ///
+    /// Removes the harness directory, the untracked entry points init wrote, and the exclude block.
     Eject {
         /// Print what would be removed and remove nothing
         #[arg(long)]
@@ -52,7 +56,10 @@ pub enum Command {
         #[arg(long)]
         keep_record: Option<std::path::PathBuf>,
     },
-    /// Run the pipelines: a takeable task is implemented then verified; a task at review is verified; an empty queue runs the scout and adjudicator
+    /// Run the pipelines in this checkout
+    ///
+    /// A takeable task is implemented then verified. A task at review is verified. An empty queue
+    /// runs the scout and the adjudicator.
     Run {
         /// Iterations to run; a run also ends after two discovery rounds that leave nothing takeable
         #[arg(short = 'n', long = "iterations", default_value_t = 3)]
@@ -78,12 +85,17 @@ pub enum Command {
     },
     /// Attach read-only to a running loop's event log and queue
     Watch,
-    /// Run the probes and print PROBE and FINDING lines; exit 2 if any probe could not run
+    /// Run the probes and print PROBE and FINDING lines
+    ///
+    /// Exits 2 if any probe could not run.
     Probe {
         /// Probes to run; empty runs all of them
         names: Vec<String>,
     },
-    /// Build a pull-request branch off the upstream default branch holding only the product commits whose subject names the tasks
+    /// Build a pull-request branch for the named tasks
+    ///
+    /// Branches off the upstream default branch and carries only the product commits whose subject
+    /// names one of the tasks.
     Pr {
         /// Done task ids; several build one branch, for tasks that cannot land apart
         #[arg(required = true)]
@@ -92,7 +104,9 @@ pub enum Command {
         #[arg(long)]
         push: bool,
     },
-    /// Print the product commit a task was queued against, the base its diff is measured from
+    /// Print the product commit a task was queued against
+    ///
+    /// That commit is the base a gate measures the task's diff from.
     Base {
         /// Task id whose base to print
         task: String,
@@ -107,27 +121,38 @@ pub enum Command {
         #[arg(long)]
         base: Option<String>,
     },
-    /// Agent lifecycle hook entry point; reads the tool's JSON on stdin, exits 2 to refuse
+    /// Agent lifecycle hook entry point
+    ///
+    /// Reads the tool's JSON on stdin and exits 2 to refuse.
     Hook {
         /// Hook to run (immutable, one-writer, verify-done, skills)
         name: String,
     },
-    /// Resolve declared skills: check (frozen), sync (fetch), list
+    /// Resolve the declared skills: check, sync, list
+    ///
+    /// check verifies the vendored content against harness.lock and never fetches. sync fetches.
+    /// list prints each declared skill with its source and its locked commit or hash.
     Skills {
         /// Which operation to perform
         cmd: SkillsCmd,
-        /// Refuse a stage whose skills are not already vendored and locked; never fetch
-        #[arg(long)]
+        // `check` is this flag: `sync --frozen` and `check` take the same arm. Hidden here, and
+        // accepted for one release so a caller written against the old spelling still runs.
+        #[arg(long, hide = true)]
         frozen: bool,
     },
-    /// Query or edit TASKS.md: list, ready, ids-at, block, field, set-status, unblock, rejections
+    /// Query or edit TASKS.md
+    ///
+    /// Subcommands: list, ready, ready-unattended, ids-at, block, field, set-status, unblock,
+    /// rejections, archive.
     Tasks {
         /// Subcommand to run
         cmd: String,
         /// Arguments for the subcommand
         args: Vec<String>,
     },
-    /// Run evals; --gate runs the three-condition admission check for a candidate rule
+    /// Run the evals
+    ///
+    /// --gate runs the three-condition admission check for a candidate rule instead.
     Eval {
         /// Rule name to run the admission gate against, instead of a plain eval run
         #[arg(long)]
@@ -213,5 +238,134 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             json,
         }),
         Command::Worktree { n } => worktree::run(&worktree::Args { n }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    // include_str!, not a runtime read: a document a test reads is a declared cache input
+    const README: &str = include_str!("../../../../README.md");
+    const CI: &str = include_str!("../../../../.github/workflows/ci.yml");
+    const RELEASE: &str = include_str!("../../../../.github/workflows/release.yml");
+
+    const SUBCOMMANDS: [&str; 14] = [
+        "init", "eject", "run", "watch", "probe", "pr", "base", "gate", "hook", "skills", "tasks",
+        "eval", "events", "worktree",
+    ];
+
+    const FLAGS: [&str; 19] = [
+        "init --adapter",
+        "init --dry-run",
+        "init --move",
+        "eject --dry-run",
+        "eject --keep-record",
+        "run --iterations",
+        "run --budget-usd",
+        "run --budget-seconds",
+        "run --budget-tokens",
+        "run --no-tui",
+        "run --dry-run",
+        "run --frozen",
+        "pr --push",
+        "gate --base",
+        "eval --gate",
+        "events --role",
+        "events --task",
+        "events --since",
+        "events --json",
+    ];
+
+    fn visible_flags() -> Vec<String> {
+        let cmd = Cli::command();
+        let mut found = Vec::new();
+        for sub in cmd.get_subcommands() {
+            for arg in sub.get_arguments() {
+                let Some(long) = arg.get_long() else { continue };
+                if arg.is_hide_set() || long == "help" || long == "version" {
+                    continue;
+                }
+                found.push(format!("{} --{long}", sub.get_name()));
+            }
+        }
+        found
+    }
+
+    // the job id, then every line from its `steps:` to the next job; the job's own `name:` is left
+    // out so a display name cannot stand in for what the job runs
+    fn job_steps(workflow: &str) -> Vec<(String, String)> {
+        let mut jobs = Vec::new();
+        let mut in_jobs = false;
+        for line in workflow.lines() {
+            if line == "jobs:" {
+                in_jobs = true;
+            } else if !line.starts_with(' ') && !line.trim().is_empty() {
+                in_jobs = false;
+            } else if in_jobs {
+                if let Some(id) = line.strip_prefix("  ").and_then(|l| l.strip_suffix(':')) {
+                    if !id.starts_with(' ') && !id.starts_with('#') {
+                        jobs.push((id.to_string(), String::new()));
+                        continue;
+                    }
+                }
+                if let Some((_, steps)) = jobs.last_mut() {
+                    if line.starts_with("    steps:") || !steps.is_empty() {
+                        steps.push_str(&line.to_lowercase());
+                        steps.push('\n');
+                    }
+                }
+            }
+        }
+        jobs
+    }
+
+    #[test]
+    fn the_subcommand_set_is_the_reviewed_fourteen() {
+        let cmd = Cli::command();
+        let names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
+        assert_eq!(names, SUBCOMMANDS);
+
+        let listed = README.split("## Commands").nth(1).expect("## Commands");
+        for name in names {
+            assert!(listed.contains(&format!("`{name}`")), "README omits {name}");
+        }
+
+        let mut jobs: Vec<String> = cmd
+            .get_subcommands()
+            .map(|s| s.get_about().expect("about").to_string())
+            .collect();
+        jobs.sort();
+        let before = jobs.len();
+        jobs.dedup();
+        assert_eq!(before, jobs.len(), "two subcommands state one job");
+    }
+
+    #[test]
+    fn every_flag_is_in_the_reviewed_vocabulary() {
+        assert_eq!(visible_flags(), FLAGS);
+    }
+
+    #[test]
+    fn no_help_line_runs_past_one_hundred_columns() {
+        let help = Cli::command().render_help().to_string();
+        let wide: Vec<&str> = help.lines().filter(|l| l.chars().count() > 100).collect();
+        assert!(wide.is_empty(), "past 100 columns: {wide:#?}");
+        let lines = help.lines().count();
+        assert!(lines <= 24, "--help is {lines} lines");
+    }
+
+    #[test]
+    fn every_ci_job_id_names_what_it_runs() {
+        let mut jobs = job_steps(CI);
+        jobs.extend(job_steps(RELEASE));
+        assert_eq!(jobs.len(), 8, "jobs found: {:?}", jobs);
+        for (id, steps) in &jobs {
+            assert!(!steps.is_empty(), "{id} has no steps");
+            for word in id.split('-') {
+                assert!(steps.contains(word), "{id}: no step says `{word}`");
+            }
+        }
     }
 }

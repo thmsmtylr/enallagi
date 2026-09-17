@@ -17,7 +17,7 @@ pub enum SkillError {
     BadId { id: String },
     #[error("skill {id}: path `{path}` must be relative and free of `..`")]
     BadPath { id: String, path: String },
-    #[error("skill {id} is not declared in harness.toml")]
+    #[error("skill {id} is not declared in enallagi.toml")]
     Undeclared { id: String },
     #[error("skill {id} is unresolved: {why}")]
     Unresolved { id: String, why: String },
@@ -655,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hash_mismatch_refuses_under_frozen_and_refetches_otherwise() {
+    fn a_hash_mismatch_refuses_under_frozen() {
         let repo = Repo::new();
         let rel = source_dir(&repo, "vendor/tdd");
         let cfg = config(&format!("path:{rel}"), "", None);
@@ -762,7 +762,7 @@ mod tests {
     }
 
     #[test]
-    fn a_configured_skills_dir_names_the_skill_without_the_plugin() {
+    fn a_configured_dir_drops_the_plugin_name() {
         let repo = Repo::new();
         let rel = source_dir(&repo, "vendor/tdd");
         let mut cfg = config(&format!("path:{rel}"), "", None);
@@ -816,7 +816,7 @@ mod tests {
     }
 
     #[test]
-    fn an_id_that_is_not_a_plain_name_is_refused_before_it_becomes_a_path() {
+    fn an_id_that_is_not_a_plain_name_is_refused() {
         assert!(valid_id("tdd-2") && !valid_id("Tdd") && !valid_id("") && !valid_id(".."));
         assert!(valid_path("skills/x") && valid_path("") && !valid_path("../x"));
         assert!(!valid_path("a/../../b") && !valid_path("/abs"));
@@ -838,7 +838,7 @@ mod tests {
     }
 
     #[test]
-    fn a_path_that_escapes_its_directory_is_refused_before_it_becomes_a_join() {
+    fn an_escaping_path_is_refused() {
         let repo = Repo::new();
         let cfg = config("path:vendor/tdd", "../escape", None);
         let mut w = writer(&repo.root);
@@ -855,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn two_urls_sharing_their_last_segments_do_not_share_a_cache() {
+    fn two_similar_urls_do_not_share_a_cache() {
         let home = tempfile::TempDir::new().expect("tempdir");
         let a = bare_source(home.path(), "a/sub/repo.git", "A body\n");
         let b = bare_source(home.path(), "b/sub/repo.git", "B body\n");

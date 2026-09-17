@@ -82,13 +82,13 @@ fn first_chars(s: &str, n: usize) -> String {
 mod tests {
 
     #[test]
-    fn a_thinking_only_message_renders_nothing_not_raw_json() {
+    fn a_thinking_only_message_renders_nothing() {
         let line = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"","signature":"abc"}]}}"#;
         assert_eq!(parse_chunk(line), Vec::<String>::new());
     }
 
     #[test]
-    fn thinking_with_text_renders_a_think_line_and_the_text() {
+    fn thinking_with_text_renders_both() {
         let line = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"weighing the two\nmore"},{"type":"text","text":"done"}]}}"#;
         assert_eq!(
             parse_chunk(line),
