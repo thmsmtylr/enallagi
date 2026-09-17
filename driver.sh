@@ -93,7 +93,7 @@ TOML
     # The role prompts name skills by `{{skill:id}}`; declare them from local directories so the
     # resolve runs with nothing to fetch. CI forces --frozen, which refuses a stage whose skills are
     # not already vendored and locked, so `skills sync` runs before the loop does.
-    for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming; do
+    for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming caveman-commit; do
       mkdir -p "vendor/$id"
       printf '# %s\n' "$id" >"vendor/$id/SKILL.md"
       printf '\n[[skill]]\nid = "%s"\nsource = "path:vendor/%s"\npath = ""\ngate = "none"\nwhy = "the driver fixture"\n' \

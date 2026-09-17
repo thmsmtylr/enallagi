@@ -97,6 +97,10 @@ fn the_lane_worktree_is_named_for_watch() {
     .expect("config");
     std::fs::write(r.root.join(".enallagi/TASKS.md"), "# TASKS\n").expect("queue");
     let state = r.root.join(".enallagi");
+    // the nested state repo is created by init with no identity, and a CI runner has no global one
+    for (key, value) in [("user.email", "t@t"), ("user.name", "t")] {
+        git(&state, &["config", key, value]);
+    }
     git(&state, &["add", "-A"]);
     git(
         &state,
