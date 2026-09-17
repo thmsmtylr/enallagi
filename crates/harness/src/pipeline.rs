@@ -653,8 +653,11 @@ impl<'a> Loop<'a> {
         if let Some(cost) = result.usage.cost {
             self.digest.cost = round4(self.digest.cost + cost);
         }
-        let spent_tokens =
-            result.usage.input_tokens.unwrap_or(0) + result.usage.output_tokens.unwrap_or(0);
+        // the provider bills cached reads and cache writes as their own lanes, disjoint from input_tokens
+        let spent_tokens = result.usage.input_tokens.unwrap_or(0)
+            + result.usage.output_tokens.unwrap_or(0)
+            + result.usage.cache_creation_input_tokens.unwrap_or(0)
+            + result.usage.cache_read_input_tokens.unwrap_or(0);
         // cost_missing is read by over_budget() at the next boundary; a budget over unreported cost can't be enforced
         if role.is_some() {
             if self.opts.budget_usd.is_some() && result.usage.cost.is_none() {
@@ -676,6 +679,8 @@ impl<'a> Loop<'a> {
             cost: result.usage.cost,
             input_tokens: result.usage.input_tokens,
             output_tokens: result.usage.output_tokens,
+            cache_creation_input_tokens: result.usage.cache_creation_input_tokens,
+            cache_read_input_tokens: result.usage.cache_read_input_tokens,
             turns: result.usage.turns,
         });
 
