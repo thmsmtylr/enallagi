@@ -147,6 +147,49 @@ pub struct Digest {
 #[error("{0}")]
 pub struct Refused(pub String);
 
+// the two probes that answer "would this lane be told the wrong check?"
+const PREFLIGHT: [&str; 2] = ["check-unnamed", "install-stale"];
+
+/// Refuses before the first stage when the installed files or the context file have drifted from
+/// the configured check. A probe that could not run refuses too: its zero is not a pass.
+pub fn preflight(root: &Path) -> anyhow::Result<()> {
+    let cfg = config::load(root).map_err(|e| Refused(e.to_string()))?;
+    // Some(..) keeps run_all from running the check itself; neither of these probes reads it
+    let check = CheckOutcome {
+        ran: false,
+        red: false,
+        output: String::new(),
+    };
+    let ctx = ProbeCtx {
+        root,
+        cfg: &cfg,
+        check: Some(&check),
+        driver: false,
+    };
+    let names: Vec<String> = PREFLIGHT.iter().map(|n| n.to_string()).collect();
+    let mut lines = Vec::new();
+    for (name, result) in probes::run_all(&ctx, &names) {
+        match result {
+            probes::ProbeResult::Count(found) => lines.extend(
+                found
+                    .iter()
+                    .map(|f| format!("{name} {}:{} {}", f.path, f.line, f.message)),
+            ),
+            probes::ProbeResult::Error(reason) => lines.push(format!("{name} ERROR {reason}")),
+            probes::ProbeResult::Off(_) => {}
+        }
+    }
+    if lines.is_empty() {
+        return Ok(());
+    }
+    Err(Refused(format!(
+        "the install does not match enallagi.toml, so every lane would be told the wrong check. \
+         Run `enallagi init`, then run again.\n{}",
+        lines.join("\n")
+    ))
+    .into())
+}
+
 fn queue_blocks(root: &Path, cfg: &Config) -> Vec<queue::Block> {
     std::fs::read_to_string(config::instance_path(
         root,

@@ -27,6 +27,12 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         Ok(top) => std::path::PathBuf::from(top),
         Err(_) => cwd,
     };
+    if !args.dry_run {
+        if let Err(err) = pipeline::preflight(&root) {
+            eprintln!("enallagi run: {err}");
+            return Ok(2);
+        }
+    }
     let tui = !args.no_tui && !args.dry_run && std::io::stdout().is_terminal();
     // flags set here win: with_env_budgets only fills a field still None
     let opts = RunOpts {

@@ -137,6 +137,10 @@ post = ["commit-round", "queue-intact", "adjudicator-halt", "dry-round"]
 // base_toml alone falls back to the shipped `[[skill]]` table, whose sources are github clones, and
 // the test then reaches the network.
 fn write_toml(r: &Repo, toml: &str) {
+    write_toml_at(r, "enallagi.toml", toml);
+}
+
+fn write_toml_at(r: &Repo, rel: &str, toml: &str) {
     let full = format!("{toml}{}", r.local_skills(toml));
     // built, never written literally: the floor test greps this tree for the literal
     let remote = concat!("source = \"", "github:");
@@ -144,7 +148,7 @@ fn write_toml(r: &Repo, toml: &str) {
         !full.contains(remote) && !full.contains("source = \"git+"),
         "a fixture config may not name a remote skill source:\n{full}"
     );
-    r.write("enallagi.toml", &full);
+    r.write(rel, &full);
 }
 
 fn repo(toml: &str, tasks: &str) -> Repo {
@@ -659,6 +663,7 @@ fn run_without_a_tty_prints_one_line_per_event() {
     let verify = verifier(&r);
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
     r.write("TASKS.md", TASKS);
+    installed(&r);
     r.commit_all("stubs");
 
     // this asserts what a tty-less run prints; CI would make the run --frozen and refuse the
@@ -684,6 +689,7 @@ fn harness_run_exits_2_on_a_refused_config() {
         &base_toml("").replace("\"commit-round\"", "\"nope\""),
         TASKS,
     );
+    installed(&r);
     let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["run", "--no-tui", "--iterations", "1"])
         .current_dir(&r.root)
@@ -691,6 +697,54 @@ fn harness_run_exits_2_on_a_refused_config() {
         .expect("run enallagi run");
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("nope"));
+}
+
+// the binary refuses a tree whose install does not match enallagi.toml, so a fixture it drives is installed
+fn installed(r: &Repo) {
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+}
+
+fn harness(root: &std::path::Path, args: &[&str]) -> (i32, String) {
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(args)
+        .current_dir(root)
+        // CI freezes the run, which refuses the fixture's skills before the stage
+        .env_remove("CI")
+        .output()
+        .expect("run enallagi");
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.code().unwrap_or(-1), text)
+}
+
+// the first external run's shape: enallagi.toml's check was edited and no one re-ran init
+#[test]
+fn a_stale_install_refuses_the_run_until_init() {
+    let r = Repo::new();
+    script(&r, "src/fakecheck.sh", "exit 0\n");
+    script(&r, "src/fakeagent.sh", QUIET);
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+
+    write_toml_at(&r, ".enallagi/enallagi.toml", &base_toml(""));
+    r.write(".enallagi/TASKS.md", TASKS);
+    r.commit_all("a check the install has not seen");
+
+    let (code, out) = harness(&r.root, &["run", "--no-tui", "--iterations", "1"]);
+    assert_ne!(code, 0, "{out}");
+    assert!(
+        out.contains("check-unnamed") || out.contains("install-stale"),
+        "{out}"
+    );
+    assert!(out.contains("enallagi init"), "{out}");
+    let log = std::fs::read_to_string(r.root.join(".enallagi/events.jsonl")).unwrap_or_default();
+    assert!(!log.contains("stage.start"), "{log}");
+
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+    let (_, out) = harness(&r.root, &["run", "--no-tui", "--iterations", "1"]);
+    assert!(out.contains("stage.start"), "{out}");
 }
 
 const SKILL: &str = r#"
@@ -2220,6 +2274,7 @@ fn sleeping_agent() -> Repo {
         "echo $$ >agent.pid\nsleep 120 &\necho $! >child.pid\nsleep 120\n",
     );
     r.commit_all("a sleeping agent");
+    installed(&r);
     r
 }
 
