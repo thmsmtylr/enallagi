@@ -6,10 +6,6 @@ agent presets and adds the parts that are tool-specific: `.claude/agents/` and
 (`codex`, `gemini`, `copilot`, `cursor`, `qwen`), that file, merged with one that already exists;
 for any other preset, nothing.
 
-`bun-turbo` is not an agent and not a `enallagi init --adapter` value. Its files
-(`adapters/bun-turbo/`: the five-stage `check.ts` floor and the turbo-aware coverage gate) are
-copied in by hand — see `adapters/bun-turbo/README.md` — and wired up as `check.command`.
-
 ## Configuring another agent
 
 `[agent]` in `enallagi.toml` names the preset: `claude`, `codex`, `gemini`, `opencode`, `copilot`,
