@@ -86,7 +86,7 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: main tracks no instance file
+      - name: the published package tracks no instance file
         run: cargo test -p enallagi --test floor -- --include-ignored --exact main_tracks_no_instance_file
 
   # The vendored skills are not in the tree: `sync` fetches them from harness.lock and `check`
@@ -166,7 +166,7 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: '0.13.0'
-      - name: cargo-zigbuild
+      - name: cargo-zigbuild is the cross-build linker
         run: cargo install cargo-zigbuild --locked
       - name: x86_64-unknown-linux-musl
         run: cargo zigbuild --release --target x86_64-unknown-linux-musl
