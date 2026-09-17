@@ -78,6 +78,7 @@ command = ["./src/fakeagent.sh", "{{prompt}}", "{{turns}}"]
 
 [agent.usage]
 cost = "total_cost_usd"
+turns = "num_turns"
 
 [check]
 command = "./src/fakecheck.sh"
@@ -440,7 +441,7 @@ fn the_loop_stops_before_the_budget() {
 #[test]
 fn a_dollar_budget_over_a_cost_nothing_reports_halts() {
     let r = repo(
-        &base_toml("").replace("cost = \"total_cost_usd\"", "turns = \"turns\""),
+        &base_toml("").replace("cost = \"total_cost_usd\"\n", ""),
         TASKS,
     );
     let o = RunOpts {
@@ -1743,6 +1744,44 @@ fn a_verdict_filing_nothing_skips_adjudicate() {
     );
     assert!(!r.root.join("adjudicate-ran").exists());
     assert_eq!(digest.landed, vec!["T-001".to_string()]);
+}
+
+// one fixture, both arms: what the verifier files decides whether the stage spawns at all
+fn adjudicating(filed: &str) -> Digest {
+    let r = repo("", "");
+    draining(&r, filed, "");
+    go(&r, &opts(1)).0
+}
+
+#[test]
+fn the_digest_tells_no_adjudicator_from_no_decision() {
+    let ran = pipeline::digest_text(&adjudicating(FILED));
+    assert!(
+        ran.contains("findings: the adjudicator ran and decided nothing"),
+        "{ran}"
+    );
+
+    let skipped = pipeline::digest_text(&adjudicating(""));
+    assert!(
+        skipped.contains("findings: no adjudicate stage ran"),
+        "{skipped}"
+    );
+}
+
+#[test]
+fn a_stage_at_its_turn_cap_is_named_in_the_digest() {
+    let r = repo(&base_toml(""), "");
+    r.write("TASKS.md", "# queue\n");
+    script(
+        &r,
+        "src/fakeagent.sh",
+        "echo '{\"total_cost_usd\":0.5,\"num_turns\":5}'\n",
+    );
+    r.commit_all("a scout that spends every turn");
+
+    let (digest, _) = go(&r, &opts(1));
+    let text = pipeline::digest_text(&digest);
+    assert!(text.contains("turn caps hit:\n  scout: turns 5"), "{text}");
 }
 
 #[test]
