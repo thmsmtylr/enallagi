@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The fix writes test-hashes.json and only reads harness.toml to hash it — this repo's own T-005 is
+# The fix writes test-hashes.json and only reads enallagi.toml to hash it — this repo's own T-005 is
 # the precedent, `scope: test-hashes.json` alone while its fix hashed a file the line never named.
-# So harness.toml on the promoted scope line is the noise the rule exists to remove.
+# So enallagi.toml on the promoted scope line is the noise the rule exists to remove.
 set -u
 block=$(awk '/^## \[T-901\]/{f=1;print;next} f&&/^## \[/{exit} f{print}' .enallagi/TASKS.md)
 [ -n "$block" ] || {
@@ -19,6 +19,6 @@ case "$scope" in
   *) echo "  scope does not name the one file the fix writes: $scope" >&2; exit 1 ;;
 esac
 case "$scope" in
-  *harness.toml*) echo "  scope still names .enallagi/harness.toml, which the fix reads and never changes: $scope" >&2; exit 1 ;;
+  *enallagi.toml*) echo "  scope still names .enallagi/enallagi.toml, which the fix reads and never changes: $scope" >&2; exit 1 ;;
 esac
 exit 0

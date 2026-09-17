@@ -11,7 +11,7 @@ into `.enallagi/TASKS.md` with `status: ready`.
 ## Settled
 
 - A `ponytail:` marker is an exception to the comment rule, recorded in AGENTS.md § Style on
-  2026-09-16. It names a ceiling and its upgrade path, `harness probe ponytail-ceiling` reports
+  2026-09-16. It names a ceiling and its upgrade path, `enallagi probe ponytail-ceiling` reports
   it until a kill line settles it, and it stays in the source. The six markers stay where they
   are: init.rs:366, agent.rs:413, probes/friction_repeat.rs:38 and :65,
   probes/plain_record.rs:148, probes/check_unnamed.rs:3.
@@ -36,7 +36,7 @@ blockedBy:
 status: ready
 rows: none — harness
 criteria:
-  - a ceiling is recorded in the queue, not in the source: `harness probe ponytail-ceiling` reads task blocks and their `notes:` lines, and a marker left in a `.rs` file is itself reported as a finding naming the block it belongs in
+  - a ceiling is recorded in the queue, not in the source: `enallagi probe ponytail-ceiling` reads task blocks and their `notes:` lines, and a marker left in a `.rs` file is itself reported as a finding naming the block it belongs in
   - the six markers counted below are migrated, each to the block whose work would raise the ceiling, and `grep -rn 'ponytail:' crates --include='*.rs'` prints nothing
   - AGENTS.md § Style states the single rule for a comment in one line, and says where a ceiling goes instead
   - a kill line in `DECISIONS.md § Rejected findings` still settles a ceiling, by its text, exactly as it does today

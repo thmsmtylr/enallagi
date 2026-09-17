@@ -1,4 +1,4 @@
-# Intent: what the harness is for
+# Intent: what enallagi is for
 
 Author: Thomas Taylor. Status: accepted 2026-09-04. Format: Stage 1 of the AI-native SDLC playbook
 (References).
@@ -19,7 +19,7 @@ This repository is that exercise, narrowed to the half of the loop where the gat
 **A runnable implementation of Stages 3 through 6 of the AI-native SDLC, proven by building
 itself.**
 
-The harness takes an accepted specification and runs Build, Test, Deploy and Maintain without a
+enallagi takes an accepted specification and runs Build, Test, Deploy and Maintain without a
 person in the invocation path. The playbook's controls are code:
 
 | Playbook control | Enforced here by |
@@ -86,7 +86,7 @@ engineer reading the repository cold.
 
 ## Constraints
 
-- **Plan and Design stay human.** The harness starts where an accepted specification exists. This
+- **Plan and Design stay human.** enallagi starts where an accepted specification exists. This
   is a refusal, recorded so its absence is not read as an oversight.
 - **Every claim carries the command that produces it** (`citable`). No number lands that was not run
   and stamped (`measure-first`).

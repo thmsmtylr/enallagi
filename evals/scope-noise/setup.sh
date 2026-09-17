@@ -25,20 +25,20 @@ RULE
 fi
 
 # the block quotes a run, never a remembered line number: the adjudicator kills a figure it cannot re-derive
-finding=$(harness probe | grep '^FINDING hash-uncovered ')
+finding=$(enallagi probe | grep '^FINDING hash-uncovered ')
 [ -n "$finding" ] || {
-  echo "  setup.sh: harness probe emitted no hash-uncovered FINDING, so the proposal would be killed as unreproducible" >&2
+  echo "  setup.sh: enallagi probe emitted no hash-uncovered FINDING, so the proposal would be killed as unreproducible" >&2
   exit 1
 }
 {
   printf '\n## [T-901] %s\n' "${finding#FINDING hash-uncovered }"
-  printf 'scope: .enallagi/test-hashes.json, .enallagi/harness.toml\n'
+  printf 'scope: .enallagi/test-hashes.json, .enallagi/enallagi.toml\n'
   printf 'blockedBy: none\n'
   printf 'status: proposed\n'
   printf 'probe: hash-uncovered\n'
   printf 'rows: none — harness\n'
   # shellcheck disable=SC2016  # the backticks are markdown in the task block, not a command
-  printf 'command: `harness probe`\n'
+  printf 'command: `enallagi probe`\n'
   printf 'output: |\n  %s\n' "$finding"
   printf 'notes: proposed from the output above.\n'
 } >>.enallagi/TASKS.md

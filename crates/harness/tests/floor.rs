@@ -159,7 +159,7 @@ fn the_write_path_gate_installs_with_the_rules() {
     let repo = Repo::new();
     repo.init_harness("");
     let readme = read(&repo.root.join(".enallagi/evals/README.md"));
-    assert!(readme.contains("harness eval --gate"), "{readme:.400}");
+    assert!(readme.contains("enallagi eval --gate"), "{readme:.400}");
 
     // reachable, not merely documented: the gate must refuse this repo's own candidate rule
     let (code, _, stderr) = harness(&repo.root, &["eval", "--gate", "a-candidate-rule"]);
@@ -600,6 +600,32 @@ fn no_shipped_file_carries_rhetorical_filler() {
                 "{}: {:?}",
                 file.display(),
                 filler.find(&text).map(|m| m.as_str())
+            );
+        }
+    }
+}
+
+#[test]
+fn no_shipped_document_calls_the_binary_harness() {
+    // `harness` survives as a common noun, a path the tree holds and a key the source reads; the
+    // binary, the config and the prompt token are `enallagi`
+    let old = re(
+        r"harness (init|eject|run|watch|probe|pr|base|gate|hook|skills|tasks|eval|events|worktree)\b|harness\.toml|__HARNESS_DIR__|HARNESS_[A-Z]",
+    );
+    assert!(old.is_match("harness probe"), "the scan cannot report");
+
+    let root = repo_root();
+    for dir in ["roles", "templates", "skills", "evals", "adapters", "docs"] {
+        let at = root.join(dir);
+        for rel in walk(&at) {
+            let Ok(text) = fs::read_to_string(at.join(&rel)) else {
+                continue;
+            };
+            assert!(
+                !old.is_match(&text),
+                "{dir}/{}: {:?}",
+                rel.display(),
+                old.find(&text).map(|m| m.as_str())
             );
         }
     }

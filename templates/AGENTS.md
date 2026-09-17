@@ -7,14 +7,14 @@
 
 - Verify, and this is what done means: `__CHECK__`
 - Uncached, for any number you quote to a human: `__CHECK_FORCE__`
-- One loop iteration: `harness run --iterations 1`; `touch STOP` halts it
-- What the tree says about itself: `harness probe`
+- One loop iteration: `enallagi run --iterations 1`; `touch STOP` halts it
+- What the tree says about itself: `enallagi probe`
 
 ## How work moves
 
-`__SPEC__` is what we build. **__HARNESS_DIR__/TASKS.md** is the queue, **__HARNESS_DIR__/PROGRESS.md** the loop's record one
-iteration at a time, **__HARNESS_DIR__/LEARNINGS.md** the mistakes already paid for, **__HARNESS_DIR__/DECISIONS.md** the archive.
-Read __HARNESS_DIR__/LEARNINGS.md at the start of every task.
+`__SPEC__` is what we build. **__ENALLAGI_DIR__/TASKS.md** is the queue, **__ENALLAGI_DIR__/PROGRESS.md** the loop's record one
+iteration at a time, **__ENALLAGI_DIR__/LEARNINGS.md** the mistakes already paid for, **__ENALLAGI_DIR__/DECISIONS.md** the archive.
+Read __ENALLAGI_DIR__/LEARNINGS.md at the start of every task.
 
 A task is `proposed` → `ready` → `review` → `done`. The scout proposes only from a `FINDING` line,
 the adjudicator promotes or kills, the implementer sets `review` and never `done`, the verifier
@@ -24,7 +24,7 @@ on the task's `scope:` line; an out-of-scope need is a note and a stop.
 ## The rails
 
 Named, never numbered, and each names what enforces it.
-The full table is `__HARNESS_DIR__/RAILS.md`. The five that decide most reviews:
+The full table is `__ENALLAGI_DIR__/RAILS.md`. The five that decide most reviews:
 
 - `green` — done means `__CHECK__` passes, verified on **delta** against `.check-baseline`, which
   only ever shrinks. Never weaken a test or a lint rule to get there.

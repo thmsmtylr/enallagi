@@ -4,11 +4,11 @@ The loop's own record, one entry per iteration, newest last. Required by the `on
 it at the end of every iteration; re-read its **tail** — with __SPEC__ and `git log --oneline -20` —
 at the start of the next.
 
-__HARNESS_DIR__/TASKS.md holds the task's record in its `notes:`. This file holds the run's: what a fresh process
+__ENALLAGI_DIR__/TASKS.md holds the task's record in its `notes:`. This file holds the run's: what a fresh process
 needs in order not to repeat the last one.
 
 **Keep entries short and keep the newest `next:` true.** This file grows without bound and the
-loop reads only its tail; anything a future iteration must not lose belongs in __HARNESS_DIR__/LEARNINGS.md or in
+loop reads only its tail; anything a future iteration must not lose belongs in __ENALLAGI_DIR__/LEARNINGS.md or in
 the task's own `notes:`, not buried here.
 
 ## Entry format
@@ -27,6 +27,6 @@ next: <what the following iteration inherits>
 output.
 
 `friction:` is the harness loop's only intake. The first occurrence of something is evidence and
-stays here. The **second** occurrence of the same thing becomes a line in __HARNESS_DIR__/LEARNINGS.md.
+stays here. The **second** occurrence of the same thing becomes a line in __ENALLAGI_DIR__/LEARNINGS.md.
 
 ---

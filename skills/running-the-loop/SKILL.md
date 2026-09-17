@@ -1,6 +1,6 @@
 ---
 name: running-the-loop
-description: Use when working in a repository that has a __HARNESS_DIR__ directory - explains the task queue, the four roles and their authority, what "done" means here, and the rails a change has to survive. Invoke before taking a task from __HARNESS_DIR__/TASKS.md, before marking anything done, and before proposing new work.
+description: Use when working in a repository that has a __ENALLAGI_DIR__ directory - explains the task queue, the four roles and their authority, what "done" means here, and the rails a change has to survive. Invoke before taking a task from __ENALLAGI_DIR__/TASKS.md, before marking anything done, and before proposing new work.
 ---
 
 # Running the loop
@@ -10,8 +10,8 @@ a fresh session, and every claim is gated on a command someone else can run.
 
 ## Before you touch anything
 
-Read `__CONTEXT_FILE__`, `__HARNESS_DIR__/LEARNINGS.md`, and the task's own block in `__HARNESS_DIR__/TASKS.md`. Read the **tail** of
-`__HARNESS_DIR__/PROGRESS.md` — it is append-only and newest-last, so reading it from the top gives you the oldest
+Read `__CONTEXT_FILE__`, `__ENALLAGI_DIR__/LEARNINGS.md`, and the task's own block in `__ENALLAGI_DIR__/TASKS.md`. Read the **tail** of
+`__ENALLAGI_DIR__/PROGRESS.md` — it is append-only and newest-last, so reading it from the top gives you the oldest
 entries and none of the handoff.
 
 Restate the task's acceptance criteria in one sentence before writing code. If you cannot, the task
@@ -23,12 +23,12 @@ Each role has one job and one thing it may never do:
 
 | Role | Does | May never |
 | --- | --- | --- |
-| scout | turns `FINDING` lines from `harness probe` into `status: proposed` blocks | have a finding of its own, promote, or fix |
+| scout | turns `FINDING` lines from `enallagi probe` into `status: proposed` blocks | have a finding of its own, promote, or fix |
 | adjudicator | promotes a proposal to `ready` with runnable criteria, or kills it with the command that refutes it | write a proposal, or edit a file a block names |
 | implementer | one task, inside its `scope:` globs, test first | mark anything `done` |
 | verifier | fresh session, adversarial, promotes to `done` or rejects with reproducible reasons | fix code |
 
-The full prompts are in `__HARNESS_DIR__/roles/`. Read the one for the role you are playing.
+The full prompts are in `__ENALLAGI_DIR__/roles/`. Read the one for the role you are playing.
 
 ## What done means
 
@@ -50,15 +50,15 @@ Stopping with `BLOCKED` and a written reason is a success, not a failure.
 
 ## The round's question
 
-Every iteration's `__HARNESS_DIR__/PROGRESS.md` entry ends with `friction:` — one thing that cost time and a rule or
+Every iteration's `__ENALLAGI_DIR__/PROGRESS.md` entry ends with `friction:` — one thing that cost time and a rule or
 a check could prevent, or `none`. The first occurrence is evidence and stays there. The **second**
-occurrence of the same thing is decided: a line in `__HARNESS_DIR__/LEARNINGS.md`, which `harness eval --gate` must
-admit, or a dated kill line in `__HARNESS_DIR__/DECISIONS.md` quoting the `--gate` run that refused the rule.
-`harness probe` → `friction-repeat` keeps emitting it until one of the two is written.
+occurrence of the same thing is decided: a line in `__ENALLAGI_DIR__/LEARNINGS.md`, which `enallagi eval --gate` must
+admit, or a dated kill line in `__ENALLAGI_DIR__/DECISIONS.md` quoting the `--gate` run that refused the rule.
+`enallagi probe` → `friction-repeat` keeps emitting it until one of the two is written.
 
 ## The rails
 
-`__HARNESS_DIR__/RAILS.md` has all of them with their enforcement. The ones that decide most
+`__ENALLAGI_DIR__/RAILS.md` has all of them with their enforcement. The ones that decide most
 reviews: `green`, `citable` (every claim carries its source), `measure-first` (no number that was
 not run and stamped), `one-scope` (only the files the task names), `blocked-is-allowed`.
 

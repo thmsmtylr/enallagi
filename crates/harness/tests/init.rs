@@ -715,7 +715,7 @@ fn dry_run_writes_nothing_and_says_so() {
     assert!(report.wrote.contains(&".enallagi/RAILS.md".to_string()));
     let planned = init::planned_files(&repo.root, &InitOpts::default()).expect("plan");
     assert!(planned.iter().any(|(p, c)| p == ".enallagi/roles/scout.md"
-        && c.contains("harness probe")
+        && c.contains("enallagi probe")
         && !c.contains("__ENALLAGI_DIR__/hooks")));
 }
 
