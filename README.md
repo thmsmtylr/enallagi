@@ -83,9 +83,13 @@ With none named, every pipeline in `.enallagi/enallagi.toml` is eligible.
 
 `.enallagi/enallagi.toml` holds the whole configuration.
 
+`enallagi init` writes only the keys whose value differs from the embedded defaults.
+A key left out takes its default. A re-run names every key that still equals one.
+
 - `agent.preset` names the CLI to drive, or `custom` with your own `agent.command`.
 - `agent.model` and `agent.effort` set defaults. A role or a task can override both.
 - `check.command` is the single command that decides green.
+- `check.force` runs the same check uncached. Left out, it follows `check.command`.
 - `check.timeout` bounds it and defaults to `30m`. A check that runs past it halts the run.
 - `queue.drain` is how many standing `proposed` blocks the adjudicator takes a round. Default `3`.
 - `queue.turns_per_block` is the turns added to that stage per block. Default `25`.

@@ -383,6 +383,80 @@ fn a_drifted_install_is_reported() {
     assert_eq!(stale(&repo), Vec::new());
 }
 
+fn seeded(repo: &Repo, text: &str) {
+    repo.write(".enallagi/enallagi.toml", text);
+}
+
+fn config(repo: &Repo) -> toml::Value {
+    toml::from_str(&read(repo, ".enallagi/enallagi.toml")).expect("toml")
+}
+
+#[test]
+fn a_seeded_config_writes_no_key_equal_to_its_default() {
+    let repo = Repo::new();
+    install(&repo);
+    let text = read(&repo, ".enallagi/enallagi.toml");
+    assert!(text.contains("harness.default.toml"), "{text}");
+    assert!(
+        config(&repo).as_table().expect("table").is_empty(),
+        "{text}"
+    );
+
+    let migrated = Repo::new();
+    migrated.write(
+        "harness.json",
+        r#"{"check": "make check", "harnessDir": ".enallagi"}"#,
+    );
+    install(&migrated);
+    let default: toml::Value =
+        toml::from_str(enallagi::config::DEFAULT_TOML).expect("harness.default.toml");
+    let written = config(&migrated);
+    for (table, keys) in written.as_table().expect("table") {
+        for (key, value) in keys.as_table().expect("table") {
+            assert_ne!(
+                Some(value),
+                default.get(table).and_then(|t| t.get(key)),
+                "{table}.{key} equals its default"
+            );
+        }
+    }
+    assert_eq!(written["check"]["command"].as_str(), Some("make check"));
+    assert!(written.get("layout").is_none(), "{written}");
+}
+
+#[test]
+fn a_fully_seeded_config_reports_its_default_keys() {
+    let repo = Repo::new();
+    seeded(&repo, enallagi::config::DEFAULT_TOML);
+    let report = install(&repo);
+    let note = report
+        .notes
+        .iter()
+        .find(|n| n.contains("equal their default"))
+        .unwrap_or_else(|| panic!("{:?}", report.notes));
+    assert!(note.contains("check.command"), "{note}");
+    assert_eq!(
+        read(&repo, ".enallagi/enallagi.toml"),
+        enallagi::config::DEFAULT_TOML
+    );
+}
+
+#[test]
+fn a_stale_force_is_reported_against_the_command() {
+    let repo = Repo::new();
+    seeded(
+        &repo,
+        &enallagi::config::DEFAULT_TOML
+            .replace("command = \"bun run check\"", "command = \"make check\""),
+    );
+    let report = install(&repo);
+    assert!(
+        report.notes.iter().any(|n| n.contains("check.force")),
+        "{:?}",
+        report.notes
+    );
+}
+
 #[test]
 fn init_migrates_harness_json_keys() {
     let repo = Repo::new();

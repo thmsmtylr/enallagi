@@ -516,6 +516,50 @@ fn parse_toml(text: &str, path: &str) -> Result<toml::Value, ConfigError> {
     })
 }
 
+/// The one line a written enallagi.toml carries above its keys.
+pub const DEFAULTS_NOTE: &str =
+    "# Keys left out take their value from harness.default.toml, the embedded defaults.\n";
+
+/// Drops every key that already equals the embedded default and names each one it dropped.
+pub fn prune_defaults(text: &str) -> Result<(String, Vec<String>), ConfigError> {
+    let default = parse_toml(DEFAULT_TOML, "harness.default.toml")?;
+    let mut user: toml::Value = parse_toml(text, CONFIG)?;
+    let mut dropped = Vec::new();
+    strip(&mut user, &default, "", &mut dropped);
+    dropped.sort();
+    let body = toml::to_string(&user).map_err(|e: toml::ser::Error| ConfigError::Parse {
+        path: CONFIG.to_string(),
+        message: e.to_string(),
+    })?;
+    Ok((format!("{DEFAULTS_NOTE}{body}"), dropped))
+}
+
+fn strip(user: &mut toml::Value, default: &toml::Value, at: &str, dropped: &mut Vec<String>) {
+    let (Some(user), Some(default)) = (user.as_table_mut(), default.as_table()) else {
+        return;
+    };
+    user.retain(|key, value| {
+        let path = if at.is_empty() {
+            key.to_string()
+        } else {
+            format!("{at}.{key}")
+        };
+        let Some(other) = default.get(key) else {
+            return true;
+        };
+        // recursed first, so a table equal to its default is reported leaf by leaf and not as one name
+        if value.is_table() && other.is_table() {
+            strip(value, other, &path, dropped);
+            return value.as_table().is_none_or(|t| !t.is_empty());
+        }
+        if value == other {
+            dropped.push(path);
+            return false;
+        }
+        true
+    });
+}
+
 fn merge(base: &mut toml::Value, over: &toml::Value) {
     match (base, over) {
         (toml::Value::Table(b), toml::Value::Table(o)) => {
@@ -1256,6 +1300,33 @@ mod tests {
         std::fs::create_dir(d.path().join(".harness")).unwrap();
         std::fs::create_dir(d.path().join(".enallagi")).unwrap();
         assert_eq!(load(d.path()).unwrap().layout.harness_dir, ".enallagi");
+    }
+
+    #[test]
+    fn an_omitted_force_follows_the_configured_command() {
+        let d = tempfile::tempdir().unwrap();
+        write_config(d.path(), "[check]\ncommand = \"npm test\"\n");
+        assert_eq!(load(d.path()).unwrap().check.force, "npm test");
+    }
+
+    #[test]
+    fn prune_defaults_keeps_only_what_differs() {
+        let (text, took) = prune_defaults(DEFAULT_TOML).unwrap();
+        assert!(text.contains("harness.default.toml"), "{text}");
+        assert_eq!(
+            toml::from_str::<toml::Value>(&text).unwrap(),
+            toml::Value::Table(Default::default())
+        );
+        assert!(took.contains(&"check.command".to_string()), "{took:?}");
+        assert!(took.contains(&"pipeline".to_string()), "{took:?}");
+
+        let mine = DEFAULT_TOML.replace("command = \"bun run check\"", "command = \"make check\"");
+        let (text, took) = prune_defaults(&mine).unwrap();
+        let kept: toml::Value = toml::from_str(&text).unwrap();
+        assert_eq!(kept["check"]["command"].as_str(), Some("make check"));
+        assert_eq!(kept.as_table().unwrap().len(), 1, "{text}");
+        assert!(!took.contains(&"check.command".to_string()), "{took:?}");
+        assert!(took.contains(&"check.force".to_string()), "{took:?}");
     }
 
     #[test]

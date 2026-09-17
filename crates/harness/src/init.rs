@@ -401,7 +401,9 @@ fn seed_config(
     plan: &mut Vec<Planned>,
     report: &mut InitReport,
 ) -> Result<Option<String>, InitError> {
-    if has_content(&config::config_path(root)) {
+    let path = config::config_path(root);
+    if has_content(&path) {
+        audit_config(root, &path, report)?;
         return Ok(None);
     }
     let json = root.join("harness.json");
@@ -417,11 +419,35 @@ fn seed_config(
     } else {
         report
             .notes
-            .push("no enallagi.toml — seeding the defaults. Edit it, then re-run.".to_string());
+            .push("no enallagi.toml — writing only the keys that differ from the defaults. Edit it, then re-run.".to_string());
         config::DEFAULT_TOML.to_string()
     };
+    let (text, _) = config::prune_defaults(&text)?;
     plan.push(write(config_rel(root), text.clone()));
     Ok(Some(text))
+}
+
+// an older init wrote every default into the file, so a later edit to check.command left force behind
+fn audit_config(root: &Path, path: &Path, report: &mut InitReport) -> Result<(), InitError> {
+    let text = fs::read_to_string(path).map_err(io(path.display()))?;
+    let (_, dropped) = config::prune_defaults(&text)?;
+    let rel = config_rel(root);
+    if dropped.is_empty() {
+        return Ok(());
+    }
+    report.notes.push(format!(
+        "{rel}: {} keys equal their default ({}). Delete them and the defaults apply.",
+        dropped.len(),
+        dropped.join(" ")
+    ));
+    let stale_force = dropped.iter().any(|key| key == "check.force")
+        && !dropped.iter().any(|key| key == "check.command");
+    if stale_force {
+        report.notes.push(format!(
+            "{rel}: check.force is the default and check.command is not. Delete force and it follows command."
+        ));
+    }
+    Ok(())
 }
 
 fn config_rel(root: &Path) -> String {
