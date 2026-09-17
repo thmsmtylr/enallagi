@@ -798,6 +798,39 @@ fn an_unnamed_red_check_is_a_finding() {
 }
 
 #[test]
+fn a_check_past_its_timeout_halts_the_run() {
+    let toml = base_toml(&role_commands("./src/fakeimpl.sh", "./src/fakeverify.sh")).replace(
+        "command = \"./src/fakecheck.sh\"",
+        "command = \"./src/fakecheck.sh\"\ntimeout = \"2s\"",
+    );
+    let r = repo(&toml, REVIEW_TASK);
+    implementer(&r, "");
+    verifier(&r);
+    script(&r, "src/fakecheck.sh", "sleep 30\n");
+    r.commit_all("a hanging check");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert!(
+        digest.halts.iter().any(|h| h.contains("2s")),
+        "{:?}",
+        digest.halts
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(&e.kind, Kind::Halt { reason, .. } if reason.contains("2s"))),
+        "no halt event"
+    );
+    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md"))
+        .or_else(|_| std::fs::read_to_string(r.root.join("TASKS.md")))
+        .expect("TASKS.md");
+    assert!(
+        tasks.contains("status: done"),
+        "a hang overturned the verdict"
+    );
+}
+
+#[test]
 fn a_proposed_fix_naming_the_contract_halts() {
     let r = repo("", "");
     let scout = script(

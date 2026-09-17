@@ -92,6 +92,8 @@ pub enum ConfigError {
     UnusedRole(String),
     #[error("stage {stage}: timeout `{value}` is not <n>s, <n>m or <n>h")]
     BadTimeout { stage: String, value: String },
+    #[error("[check] timeout `{0}` is not <n>s, <n>m or <n>h")]
+    BadCheckTimeout(String),
     #[error("pipeline {pipeline}: when references probe `{probe}`, not one of {}", crate::probes::NAMES.join(", "))]
     UnknownProbe { pipeline: String, probe: String },
 }
@@ -138,6 +140,35 @@ pub struct CheckConfig {
     /// The check with its cache defeated. Follows `command` unless pinned.
     pub force: String,
     pub fail_name: String,
+    /// `<n>s`, `<n>m` or `<n>h`; empty means `DEFAULT_CHECK_TIMEOUT`.
+    pub timeout: String,
+}
+
+/// The bound on `command` and `force` when `[check] timeout` is unset.
+pub const DEFAULT_CHECK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+impl CheckConfig {
+    pub fn timeout_duration(&self) -> Result<Duration, ConfigError> {
+        let value = self.timeout.trim();
+        if value.is_empty() {
+            return Ok(DEFAULT_CHECK_TIMEOUT);
+        }
+        parse_timeout(value).ok_or_else(|| ConfigError::BadCheckTimeout(value.to_string()))
+    }
+}
+
+// `18446744073709551615h` is a config typo, not a duration.
+fn parse_timeout(value: &str) -> Option<Duration> {
+    // char, not byte: a multibyte last char must be refused, not split mid-scalar
+    let unit = value.chars().last()?;
+    let scale: u64 = match unit {
+        's' => 1,
+        'm' => 60,
+        'h' => 3600,
+        _ => return None,
+    };
+    let n: u64 = value[..value.len() - unit.len_utf8()].parse().ok()?;
+    Some(Duration::from_secs(n.checked_mul(scale)?))
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -208,24 +239,12 @@ impl Stage {
             return Ok(None);
         };
         let value = raw.trim();
-        let bad = || ConfigError::BadTimeout {
-            stage: self.name.clone(),
-            value: value.to_string(),
-        };
-        // char, not byte: a multibyte last char like `30м` must be refused, not split mid-scalar
-        let unit = value.chars().last().ok_or_else(bad)?;
-        let scale: u64 = match unit {
-            's' => 1,
-            'm' => 60,
-            'h' => 3600,
-            _ => return Err(bad()),
-        };
-        let digits = &value[..value.len() - unit.len_utf8()];
-        let n: u64 = digits.parse().map_err(|_| bad())?;
-        // `18446744073709551615h` is a config typo, not a duration.
-        Ok(Some(Duration::from_secs(
-            n.checked_mul(scale).ok_or_else(bad)?,
-        )))
+        parse_timeout(value)
+            .map(Some)
+            .ok_or(ConfigError::BadTimeout {
+                stage: self.name.clone(),
+                value: value.to_string(),
+            })
     }
 }
 
@@ -558,6 +577,9 @@ pub fn validate(
                 path: sk.path.clone(),
             });
         }
+    }
+    if let Err(e) = cfg.check.timeout_duration() {
+        errs.push(e);
     }
     let mut declared_roles: BTreeSet<&str> = BTreeSet::new();
     for r in &cfg.role {
@@ -1247,6 +1269,29 @@ mod tests {
             st.timeout = Some(bad.into());
             assert!(st.timeout_duration().is_err(), "{bad} should not parse");
         }
+    }
+
+    #[test]
+    fn the_check_timeout_defaults_to_half_an_hour() {
+        let cfg = load(tempfile::tempdir().unwrap().path()).unwrap();
+        assert_eq!(
+            cfg.check.timeout_duration().unwrap(),
+            Duration::from_secs(1800)
+        );
+    }
+
+    #[test]
+    fn a_check_timeout_in_no_unit_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        write_config(d.path(), "[check]\ntimeout='30'\n");
+        let cfg = load(d.path()).unwrap();
+        assert!(cfg.check.timeout_duration().is_err());
+        let errs = validate(&cfg, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.to_string().contains("[check] timeout")),
+            "{errs:?}"
+        );
     }
 
     #[test]

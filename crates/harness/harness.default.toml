@@ -10,6 +10,8 @@ rate_limit_pattern = "hit your session limit"
 command = "bun run check"
 force = "bun run check -- --force"
 fail_name = '\(fail\) (.+?)(?: \[[0-9.]+m?s\])?$'
+# timeout bounds both forms; a check that runs past it is killed with its process group and halts the run.
+timeout = "30m"
 
 [layout]
 # context_file is the file every role reads first, unset meaning AGENTS.md beside the queue; pointer_files are one-line pointers to it for tools that cannot take it on their command line.
