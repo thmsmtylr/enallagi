@@ -1989,3 +1989,105 @@ fn a_promotion_repeating_a_noted_verdict_is_refused() {
         .find(|w| w.contains("T-009") && w.contains("T-001") && w.contains(NOTED_REJECTION));
     assert!(named.is_some(), "{:?}", digest.warnings);
 }
+
+fn standing(n: u32) -> String {
+    format!("\n## [T-{n}] a standing proposal\n\nscope: src/thing.ts\nrows: none — harness\nstatus: proposed\ncriteria:\n  - it happens\n")
+}
+
+#[test]
+fn a_standing_pile_drains_oldest_first() {
+    let r = repo("", "");
+    let verify = rejecting_verifier(&r);
+    let implement = implementer(&r, "");
+    let adj = adjudicator(
+        &r,
+        "printf '%s' \"$1\" >adjudicate-prompt\nprintf '%s' \"$2\" >adjudicate-turns\n",
+    );
+    let roles = format!(
+        "{}{}",
+        role_commands(&implement, &verify),
+        role_command("adjudicator", &adj)
+    );
+    write_toml(
+        &r,
+        &base_toml(&format!("{roles}\n[queue]\nproposed_rounds = 100\n")),
+    );
+    r.write("TASKS.md", TASKS);
+    r.write("src/filed.md", FILED);
+    r.commit_all("stubs");
+
+    // one commit each, oldest first: the state commit that added a heading is what orders the pile
+    for n in 101..=110 {
+        let mut tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+        tasks.push_str(&standing(n));
+        r.write("TASKS.md", &tasks);
+        r.commit_all(&format!("file T-{n}"));
+    }
+
+    go(&r, &opts(1));
+    let prompt = std::fs::read_to_string(r.root.join("adjudicate-prompt")).expect("the prompt");
+    assert!(prompt.contains("T-009"), "{prompt}");
+    for n in 101..=103 {
+        assert!(
+            prompt.contains(&format!("T-{n}")),
+            "T-{n} missing: {prompt}"
+        );
+    }
+    for n in 104..=110 {
+        assert!(
+            !prompt.contains(&format!("T-{n}")),
+            "T-{n} handed: {prompt}"
+        );
+    }
+
+    let turns = std::fs::read_to_string(r.root.join("adjudicate-turns")).expect("the turns");
+    assert_eq!(turns, "105");
+}
+
+#[test]
+fn the_dry_plan_prints_the_adjudicate_cap() {
+    let tasks = format!("{TASKS}{}{}", standing(101), standing(102));
+    let r = repo(&base_toml(""), &tasks);
+    let plan = plan_of(&r);
+    assert!(
+        plan.contains("adjudicate as role adjudicator via ./src/fakeagent.sh (turns: 55,"),
+        "{plan}"
+    );
+}
+
+#[test]
+fn the_digest_counts_standing_and_expired() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    let roles = role_commands(&implement, &verify);
+    write_toml(
+        &r,
+        &base_toml(&format!(
+            "{roles}\n[queue]\ndrain = 0\nproposed_rounds = 20\n"
+        )),
+    );
+    r.write("TASKS.md", &format!("{TASKS}{}", standing(100)));
+    r.commit_all("stubs");
+
+    // far more commits than proposed_rounds, so only T-100 is past the bound whatever the round commits
+    for n in 1..=30 {
+        r.write("filler.txt", &n.to_string());
+        r.commit_all(&format!("filler {n}"));
+    }
+    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    r.write(
+        "TASKS.md",
+        &format!("{tasks}{}{}", standing(101), standing(102)),
+    );
+    r.commit_all("two fresh proposals");
+
+    let (digest, _) = go(&r, &opts(1));
+    let text = pipeline::digest_text(&digest);
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("proposed: "))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(line.starts_with("proposed: 2 standing, oldest "), "{line}");
+    assert!(line.ends_with(" rounds, expired 1"), "{line}");
+}

@@ -26,7 +26,7 @@ rule is about a second operator, and it does not apply to the process that start
 
 const SCOUT: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/scout.md: read that file first and follow it exactly. Run `enallagi probe` and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop.";
 
-const ADJUDICATOR: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/adjudicator.md: read that file first and follow it exactly. Act on every block with 'status: proposed' this iteration filed, in file order. Promote it to 'status: ready' with a scope and criteria an agent that has read only __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or __CONTEXT_FILE__ is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop.";
+const ADJUDICATOR: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/adjudicator.md: read that file first and follow it exactly. Act on exactly the 'status: proposed' blocks this prompt names, in the order it names them. Promote it to 'status: ready' with a scope and criteria an agent that has read only __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or __CONTEXT_FILE__ is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop.";
 
 const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __ENALLAGI_DIR__/run/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the product paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason. Never stage or commit TASKS.md, PROGRESS.md or any other file under __ENALLAGI_DIR__: this loop commits them when your stage ends. An implementation left uncommitted is a lost iteration.";
 
@@ -135,6 +135,9 @@ pub struct Digest {
     pub turn_caps: Vec<String>,
     // an empty promoted/killed pair means nothing to decide only if the stage actually spawned
     pub adjudicated: bool,
+    pub proposed_standing: usize,
+    pub proposed_oldest: usize,
+    pub expired: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -159,6 +162,31 @@ fn plan_task(blocks: &[queue::Block], when: &Predicate) -> Option<String> {
     } else {
         queue::ready_unattended(blocks)
     }
+}
+
+// the round's own proposals, then the oldest standing ones the drain allows
+fn handed_ids(root: &Path, cfg: &Config, at_start: &[String]) -> Vec<String> {
+    let all = queue::ids_at(&queue_blocks(root, cfg), "proposed");
+    let (mut standing, fresh): (Vec<String>, Vec<String>) =
+        all.into_iter().partition(|id| at_start.contains(id));
+    let ages = archive::ages(root, cfg, &standing);
+    standing.sort_by_key(|id| std::cmp::Reverse(ages.get(id).copied().unwrap_or(0)));
+    standing.truncate(cfg.queue.drain);
+    fresh.into_iter().chain(standing).collect()
+}
+
+// a stage handed n blocks is sized for n, not for the one the config names
+fn turn_cap(cfg: &Config, stage: &config::Stage, handed: usize) -> u32 {
+    stage.turns + cfg.queue.turns_per_block * handed as u32
+}
+
+// the plan has no round behind it, so every proposed block counts as standing
+fn planned_cap(root: &Path, cfg: &Config, stage: &config::Stage) -> u32 {
+    if stage.role.as_deref() != Some("adjudicator") {
+        return stage.turns;
+    }
+    let at_start = queue::ids_at(&queue_blocks(root, cfg), "proposed");
+    turn_cap(cfg, stage, handed_ids(root, cfg, &at_start).len())
 }
 
 fn task_levels(blocks: &[queue::Block], task: Option<&str>) -> agent::Levels {
@@ -210,7 +238,7 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
                         out,
                         "  DRY_RUN would spawn: {name} as role {role} via {via} \
                          (turns: {}, model: {}, effort: {})",
-                        stage.turns,
+                        planned_cap(root, cfg, stage),
                         level_word(&resolved.levels.model),
                         level_word(&resolved.levels.effort)
                     );
@@ -384,6 +412,7 @@ impl<'a> Loop<'a> {
     fn archive(&mut self) {
         match archive::archive_done(self.root, self.cfg, false) {
             Ok(report) => {
+                self.digest.expired += report.expired.len();
                 if let Some(refused) = report.refused {
                     self.digest.warnings.push(refused);
                 }
@@ -396,6 +425,12 @@ impl<'a> Loop<'a> {
     fn finish(&mut self, iterations: u32) -> Digest {
         // the task the last iteration landed is archived by the run that landed it, not the next one
         self.archive();
+        let proposed = self.ids_at("proposed");
+        self.digest.proposed_oldest = archive::ages(self.root, self.cfg, &proposed)
+            .into_values()
+            .max()
+            .unwrap_or(0);
+        self.digest.proposed_standing = proposed.len();
         self.digest.iterations = iterations;
         self.emit(Kind::RunEnd {
             halts: self.digest.halts.clone(),
@@ -535,11 +570,17 @@ impl<'a> Loop<'a> {
             return Flow::Stop;
         }
 
-        // the per-iteration drain reads only what this round filed; a standing backlog is a separate invocation
-        if stage.role.as_deref() == Some("adjudicator") && self.newly_proposed().is_empty() {
+        let adjudicating = stage.role.as_deref() == Some("adjudicator");
+        let handed = match adjudicating {
+            true => handed_ids(self.root, self.cfg, &self.proposed_at_start),
+            false => Vec::new(),
+        };
+        // nothing filed this round and nothing standing to drain: the stage has no input at all
+        if adjudicating && handed.is_empty() {
             let stage_bases = iter_bases.clone();
             return self.gates(stage, task, iter_bases, stage_bases, String::new());
         }
+        let turns = turn_cap(self.cfg, stage, handed.len());
 
         let timeout = match stage.timeout_duration() {
             Ok(t) => t,
@@ -555,10 +596,12 @@ impl<'a> Loop<'a> {
         env.insert("ENALLAGI_ITERATION".into(), self.writer.iter.to_string());
 
         let (spawn, role) = match (&stage.role, &stage.command) {
-            (Some(role), _) => match self.role_spawn(stage, role, task.clone(), env, timeout) {
-                Ok(spawn) => (spawn, Some(role.clone())),
-                Err(flow) => return flow,
-            },
+            (Some(role), _) => {
+                match self.role_spawn(stage, role, task.clone(), env, timeout, &handed) {
+                    Ok(spawn) => (spawn, Some(role.clone())),
+                    Err(flow) => return flow,
+                }
+            }
             (None, Some(command)) => (
                 self.command_spawn(stage, command, task.clone(), env, timeout),
                 None,
@@ -602,14 +645,10 @@ impl<'a> Loop<'a> {
             }
         }
         // an agent that spent every turn it was given stopped because it ran out, not because it finished
-        if result
-            .usage
-            .turns
-            .is_some_and(|t| t >= u64::from(stage.turns))
-        {
+        if result.usage.turns.is_some_and(|t| t >= u64::from(turns)) {
             self.digest
                 .turn_caps
-                .push(format!("{}: turns {}", stage.name, stage.turns));
+                .push(format!("{}: turns {turns}", stage.name));
         }
         if let Some(cost) = result.usage.cost {
             self.digest.cost = round4(self.digest.cost + cost);
@@ -705,6 +744,7 @@ impl<'a> Loop<'a> {
         task: Option<String>,
         env: BTreeMap<String, String>,
         timeout: Option<Duration>,
+        handed: &[String],
     ) -> Result<StageSpawn<'a>, Flow> {
         let levels = task_levels(&self.blocks(), task.as_deref());
         let resolved = match agent::resolve_task(&self.cfg.agent, role, &self.presets, &levels) {
@@ -784,8 +824,8 @@ impl<'a> Loop<'a> {
             env,
             cwd: self.root,
             timeout,
-            prompt: self.stage_prompt(role),
-            turns: stage.turns,
+            prompt: self.stage_prompt(role, handed),
+            turns: turn_cap(self.cfg, stage, handed.len()),
             stage: stage.name.clone(),
             task,
             preset: resolved.preset,
@@ -1092,25 +1132,14 @@ impl<'a> Loop<'a> {
         self.ids_at("review").into_iter().next()
     }
 
-    fn newly_proposed(&self) -> Vec<String> {
-        self.ids_at("proposed")
-            .into_iter()
-            .filter(|id| !self.proposed_at_start.contains(id))
-            .collect()
-    }
-
-    // the drain's prompt carries the round's own ids, so the stage is sized for them and not for the backlog
-    fn stage_prompt(&self, role: &str) -> String {
+    // the prompt carries the ids the stage was sized for, so it decides those and no others
+    fn stage_prompt(&self, role: &str, ids: &[String]) -> String {
         let prompt = prompt_for(role, self.cfg);
-        let ids = match role {
-            "adjudicator" => self.newly_proposed(),
-            _ => Vec::new(),
-        };
         if ids.is_empty() {
             return prompt;
         }
         format!(
-            "{prompt} This iteration filed {}. Act on those blocks and leave any older proposed block alone.",
+            "{prompt} Act on exactly these blocks, in this order: {}. Leave every other proposed block alone.",
             ids.join(", ")
         )
     }
@@ -1228,6 +1257,11 @@ pub fn digest_text(digest: &Digest) -> String {
         let _ = writeln!(out, "findings promoted:{}", inline(&digest.promoted));
         listing(&mut out, "findings killed:", &digest.killed);
     }
+    let _ = writeln!(
+        out,
+        "proposed: {} standing, oldest {} rounds, expired {}",
+        digest.proposed_standing, digest.proposed_oldest, digest.expired
+    );
     if !digest.turn_caps.is_empty() {
         listing(&mut out, "turn caps hit:", &digest.turn_caps);
     }

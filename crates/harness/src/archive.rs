@@ -1,6 +1,6 @@
-//! Moves `done` task blocks out of TASKS.md into DECISIONS.md, and rolls PROGRESS.md over past a size cap.
+//! Moves `done` and expired task blocks out of TASKS.md into DECISIONS.md, and rolls PROGRESS.md over past a size cap.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -11,6 +11,10 @@ use crate::queue;
 
 const PROGRESS_MAX_DEFAULT: usize = 2000;
 const PROGRESS_KEEP_DEFAULT: usize = 200;
+const EXPIRED: &str = "## Expired findings";
+const DECISIONS_HEADER: &str = "# DECISIONS\n\nCompleted task blocks, verbatim, moved out of \
+     TASKS.md once `done`.\nThe queue stays small; the audit trail stays whole. Each block is \
+     the implementer's and\nthe verifier's own words, never summarised on the way in.\n";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ArchiveError {
@@ -26,8 +30,50 @@ pub enum ArchiveError {
 
 pub struct ArchiveReport {
     pub moved: Vec<String>,
+    pub expired: Vec<String>,
     pub progress_rolled: usize,
     pub refused: Option<String>,
+}
+
+// a block's age in state commits, counted from the one that first carried its heading
+pub(crate) fn ages(root: &Path, cfg: &Config, ids: &[String]) -> BTreeMap<String, usize> {
+    let dir = &cfg.layout.harness_dir;
+    let tasks = config::instance_rel(root, dir, "TASKS.md");
+    let (repo, inner, _) = git::locate(root, dir, &tasks);
+    let commits: Vec<String> = git::git(&repo, &["log", "--format=%H"])
+        .map(|out| out.lines().map(String::from).collect())
+        .unwrap_or_default();
+    ids.iter()
+        .map(|id| (id.clone(), age_of(&repo, &inner, &commits, id)))
+        .collect()
+}
+
+// an id no commit carries is one a hand edit just wrote, which is as new as a block gets
+fn age_of(repo: &Path, inner: &str, commits: &[String], id: &str) -> usize {
+    let block = queue::Block {
+        id: id.to_string(),
+        title: String::new(),
+        line: 0,
+        body: Vec::new(),
+    };
+    let heading = format!("^{}", regex::escape(queue::block_text(&block).trim_end()));
+    git::git(
+        repo,
+        &[
+            "log",
+            "--reverse",
+            "--format=%H",
+            "--pickaxe-regex",
+            "-S",
+            &heading,
+            "--",
+            inner,
+        ],
+    )
+    .ok()
+    .and_then(|found| found.lines().next().map(String::from))
+    .and_then(|sha| commits.iter().position(|c| *c == sha))
+    .unwrap_or(0)
 }
 
 // rewriting TASKS.md from outside a running loop's own lane races it: one checkout, one writer
@@ -101,6 +147,7 @@ pub fn archive_done_with(
     if let Some(_pid) = loop_live(root, &cfg.layout.harness_dir) {
         return Ok(ArchiveReport {
             moved: Vec::new(),
+            expired: Vec::new(),
             progress_rolled: 0,
             refused: Some(
                 "archive: an agent is running — TASKS.md is its bus, not touching it".to_string(),
@@ -117,11 +164,13 @@ pub fn archive_done_with(
     }
 
     let moved = archive_tasks(root, dir, dry_run)?;
+    let expired = expire_proposed(root, cfg, dry_run)?;
     let progress_rolled = roll_progress(root, dir, dry_run, progress_max, progress_keep)?;
 
     if dry_run {
         return Ok(ArchiveReport {
             moved,
+            expired,
             progress_rolled,
             refused: None,
         });
@@ -141,6 +190,7 @@ pub fn archive_done_with(
 
     Ok(ArchiveReport {
         moved,
+        expired,
         progress_rolled,
         refused: None,
     })
@@ -206,23 +256,103 @@ fn archive_tasks(root: &Path, dir: &str, dry_run: bool) -> Result<Vec<String>, A
 
         if !dry_run && !archived.is_empty() {
             let decisions_path = config::instance_path(root, dir, "DECISIONS.md");
-            let dec = fs::read_to_string(&decisions_path).unwrap_or_else(|_| {
-                "# DECISIONS\n\nCompleted task blocks, verbatim, moved out of TASKS.md once \
-                 `done`.\nThe queue stays small; the audit trail stays whole. Each block is the \
-                 implementer's and\nthe verifier's own words, never summarised on the way in.\n"
-                    .to_string()
-            });
+            let dec = fs::read_to_string(&decisions_path)
+                .unwrap_or_else(|_| DECISIONS_HEADER.to_string());
             let joined = archived
                 .iter()
                 .map(|(_, b)| b.as_str())
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            fs::write(&decisions_path, format!("{}\n\n{}", dec.trim_end(), joined))?;
+            fs::write(&decisions_path, with_archived(&dec, &joined))?;
             fs::write(&tasks_path, out.join("\n"))?;
         }
     }
 
     Ok(moved)
+}
+
+// the expired section is the file's last, so a `done` block always has somewhere above it to land
+fn split_at_expired(decisions: &str) -> (String, Option<String>) {
+    let lines: Vec<&str> = decisions.split('\n').collect();
+    match lines.iter().position(|l| l.trim_end() == EXPIRED) {
+        Some(i) => (lines[..i].join("\n"), Some(lines[i..].join("\n"))),
+        None => (decisions.to_string(), None),
+    }
+}
+
+fn with_archived(decisions: &str, joined: &str) -> String {
+    match split_at_expired(decisions) {
+        (head, Some(tail)) => format!(
+            "{}\n\n{}\n\n{}\n",
+            head.trim_end(),
+            joined.trim_end(),
+            tail.trim_end()
+        ),
+        (_, None) => format!("{}\n\n{}", decisions.trim_end(), joined),
+    }
+}
+
+fn with_expired(decisions: &str, blocks: &[String]) -> String {
+    let joined = blocks.join("\n\n");
+    let dec = match decisions.trim_end() {
+        "" => DECISIONS_HEADER.trim_end().to_string(),
+        text => text.to_string(),
+    };
+    if split_at_expired(&dec).1.is_some() {
+        return format!("{dec}\n\n{}\n", joined.trim_end());
+    }
+    format!(
+        "{dec}\n\n{EXPIRED}\n\nProposals no adjudicator decided in time, verbatim, moved out \
+         of TASKS.md.\n\n{}\n",
+        joined.trim_end()
+    )
+}
+
+// a proposal nobody decided stands in the way of every later one, so the queue drops the head
+fn expire_proposed(root: &Path, cfg: &Config, dry_run: bool) -> Result<Vec<String>, ArchiveError> {
+    let dir = &cfg.layout.harness_dir;
+    let tasks = config::instance_rel(root, dir, "TASKS.md");
+    let tasks_path = root.join(&tasks);
+    let src = fs::read_to_string(&tasks_path)?;
+    let blocks = queue::parse(&src)?;
+    let proposed = queue::ids_at(&blocks, "proposed");
+    if proposed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ages = ages(root, cfg, &proposed);
+    let stale: Vec<String> = proposed
+        .into_iter()
+        .filter(|id| ages.get(id).copied().unwrap_or(0) >= cfg.queue.proposed_rounds)
+        .collect();
+    if stale.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let lines: Vec<&str> = src.split('\n').collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut moved: Vec<String> = Vec::new();
+    let mut cursor = 0usize;
+    for b in &blocks {
+        let start = b.line - 1;
+        let stop = start + b.body.len() + 1;
+        out.extend(lines[cursor..start].iter().map(|s| s.to_string()));
+        let body = &lines[start..stop];
+        cursor = stop;
+        if stale.contains(&b.id) {
+            moved.push(format!("{}\n", body.join("\n").trim_end()));
+        } else {
+            out.extend(body.iter().map(|s| s.to_string()));
+        }
+    }
+    out.extend(lines[cursor..].iter().map(|s| s.to_string()));
+
+    if !dry_run {
+        let decisions_path = config::instance_path(root, dir, "DECISIONS.md");
+        let dec = fs::read_to_string(&decisions_path).unwrap_or_default();
+        fs::write(&decisions_path, with_expired(&dec, &moved))?;
+        fs::write(&tasks_path, out.join("\n"))?;
+    }
+    Ok(stale)
 }
 
 // split point snaps to the nearest entry heading so no entry is cut in half
@@ -429,6 +559,74 @@ mod tests {
             .unwrap()
             .trim();
         assert_eq!(next_heading, "## fixture entry 6");
+    }
+
+    #[test]
+    fn a_proposed_block_expires_after_its_rounds() {
+        let r = Repo::new();
+        let first = "# TASKS\n\n\
+             ## [T-001] a finding no one decided\n\
+             status: proposed\n\
+             notes: the whole block\n";
+        r.write("TASKS.md", first);
+        r.write("DECISIONS.md", "# DECISIONS\n");
+        r.commit_all("file the proposal");
+        // T-002 arrives two rounds in, so one bound covers both the expiring block and a standing one
+        for n in 1..=6 {
+            if n == 2 {
+                r.write(
+                    "TASKS.md",
+                    &format!("{first}\n## [T-002] a finding filed later\nstatus: proposed\n"),
+                );
+            }
+            r.write("PROGRESS.md", &format!("round {n}\n"));
+            r.commit_all(&format!("round {n}"));
+        }
+
+        let cfg = cfg(&r.root);
+        let report = archive_done(&r.root, &cfg, false).expect("archive_done");
+
+        assert_eq!(report.expired, vec!["T-001".to_string()]);
+
+        let tasks = read(&r, "TASKS.md");
+        assert!(!tasks.contains("T-001"), "{tasks}");
+        assert!(
+            tasks.contains("## [T-002] a finding filed later"),
+            "{tasks}"
+        );
+
+        let decisions = read(&r, "DECISIONS.md");
+        let at = decisions
+            .find("## Expired findings")
+            .unwrap_or_else(|| panic!("{decisions}"));
+        assert!(decisions[..at].contains("# DECISIONS"), "{decisions}");
+        assert!(
+            decisions[at..].contains("## [T-001] a finding no one decided"),
+            "{decisions}"
+        );
+        assert!(
+            decisions[at..].contains("notes: the whole block"),
+            "{decisions}"
+        );
+    }
+
+    #[test]
+    fn an_archived_block_lands_above_the_expired() {
+        let r = Repo::new();
+        r.write("TASKS.md", "# TASKS\n\n## [T-003] finished\nstatus: done\n");
+        r.write(
+            "DECISIONS.md",
+            "# DECISIONS\n\n## Expired findings\n\n## [T-001] expired earlier\nstatus: proposed\n",
+        );
+        r.commit_all("seed tasks");
+
+        let cfg = cfg(&r.root);
+        archive_done(&r.root, &cfg, false).expect("archive_done");
+
+        let decisions = read(&r, "DECISIONS.md");
+        let done = decisions.find("## [T-003] finished").expect(&decisions);
+        let expired = decisions.find("## Expired findings").expect(&decisions);
+        assert!(done < expired, "{decisions}");
     }
 
     #[test]

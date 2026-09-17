@@ -12,7 +12,7 @@ For each block with `status: proposed`, in file order:
 2. **Re-run the command yourself** and paste what you got. Do not trust the pasted output, and do not trust a cached green: the uncached form is `__CHECK_FORCE__`. If your run does not emit that `FINDING` line, or for `probe: verifier` does not print what the block's `output:` shows, the finding does not reproduce → kill, quoting your run.
 3. Work the kill list. It is exhaustive: a block that survives all six is promoted, and nothing not on this list is a kill.
    - **Unanchored** — no `probe:`, no `command:`, or no `output:`.
-   - **Duplicate** — the same `path:line` and message is already carried by a block at `ready`, `blocked`, `review` or `proposed`. Grep __ENALLAGI_DIR__/TASKS.md for it before anything else.
+   - **Duplicate** — the same `path:line` and message is already carried by a block at `ready`, `blocked`, `review` or `proposed`. Grep __ENALLAGI_DIR__/TASKS.md for it before anything else. A finding under `## Expired findings` in __ENALLAGI_DIR__/DECISIONS.md is not a duplicate: a probe that raises it again raises it fresh.
    - **Already refuted** — the claim is a line in `## Rejected findings`.
    - **Unreproducible number** — any figure in the block you cannot re-derive by running the command yourself. A number reasoned to rather than run is a kill even when the behaviour behind it is real (`measure-first`).
    - **Invented strategy** — a business model, sequence, price or market position no human stated (`no-invented-strategy`).

@@ -103,6 +103,7 @@ pub enum ConfigError {
 pub struct Config {
     pub agent: AgentConfig,
     pub check: CheckConfig,
+    pub queue: QueueConfig,
     pub layout: Layout,
     pub pipeline: Vec<Pipeline>,
     pub stage: Vec<Stage>,
@@ -169,6 +170,28 @@ fn parse_timeout(value: &str) -> Option<Duration> {
     };
     let n: u64 = value[..value.len() - unit.len_utf8()].parse().ok()?;
     Some(Duration::from_secs(n.checked_mul(scale)?))
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct QueueConfig {
+    /// Standing `proposed` blocks one adjudicate stage is handed, oldest first.
+    pub drain: usize,
+    /// Turns added to that stage for each block it is handed.
+    pub turns_per_block: u32,
+    /// State commits a `proposed` block may stand for before it expires.
+    pub proposed_rounds: usize,
+}
+
+// the same numbers as the `[queue]` table in harness.default.toml, for a Config built in code
+impl Default for QueueConfig {
+    fn default() -> Self {
+        QueueConfig {
+            drain: 3,
+            turns_per_block: 25,
+            proposed_rounds: 6,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
