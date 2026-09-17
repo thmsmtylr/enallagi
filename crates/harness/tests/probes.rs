@@ -700,7 +700,20 @@ fn a_note_counting_outside_a_verdict_is_reported() {
     append(
         &repo,
         "TASKS.md",
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n\n  IMPLEMENTER: the heading list was rewritten, three numbers, and the fences are stripped.\n",
+        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  IMPLEMENTER 2026-09-17: the heading list was rewritten, three numbers, and the fences are stripped.\n",
+    );
+    let found = plain_record(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("`three numbers`"), "{}", found[0]);
+}
+
+#[test]
+fn a_verified_note_after_a_rejection_is_read() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  VERIFIED (verifier, 2026-09-17). the heading list was rewritten, three numbers, and the fences are stripped.\n",
     );
     let found = plain_record(&repo, &cfg);
     assert_eq!(found.len(), 1, "{found:?}");
