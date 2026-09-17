@@ -3,6 +3,7 @@
 use crate::agent::{self, Preset};
 use crate::config::{self, Config};
 use crate::git;
+use crate::runners;
 use crate::skills;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -420,7 +421,10 @@ fn seed_config(
         report
             .notes
             .push("no enallagi.toml — writing only the keys that differ from the defaults. Edit it, then re-run.".to_string());
-        config::DEFAULT_TOML.to_string()
+        // only the fresh file is detected into; a migrated one already carries the operator's answers
+        let found = runners::detect(root);
+        report.notes.extend(runners::notes(&found));
+        runners::apply(config::DEFAULT_TOML, &found.keys)
     };
     let (text, _) = config::prune_defaults(&text)?;
     plan.push(write(config_rel(root), text.clone()));

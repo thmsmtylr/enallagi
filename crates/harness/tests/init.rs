@@ -3,6 +3,7 @@
 use enallagi::fixture::Repo;
 use enallagi::init::{self, InitOpts, InitReport};
 use enallagi::probes::{self, CheckOutcome, Finding, ProbeCtx, ProbeResult};
+use enallagi::runners;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -999,4 +1000,188 @@ fn init_move_puts_files_at_their_new_paths() {
         assert!(!repo.root.join(rel).exists(), "{rel} remains");
     }
     assert!(!repo.root.join(".harness").exists());
+}
+
+// the failing-test line each preset's fail_name is written against, captured from the runner itself
+const CAPTURED: &[(&str, &str)] = &[
+    ("bun", "a sum is wrong"),
+    ("cargo", "tests::a_sum_is_wrong"),
+    ("go", "TestSumIsWrong"),
+    ("jest", "a sum is wrong"),
+    ("node", "a sum is wrong"),
+    ("pytest", "test_a_sum_is_wrong"),
+    ("vitest", "a sum is wrong"),
+];
+
+fn fixture(runner: &str, name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/runners")
+        .join(runner)
+        .join(name);
+    fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+fn named_by(pattern: &str, output: &str) -> Vec<String> {
+    let re = regex::Regex::new(pattern).unwrap_or_else(|e| panic!("{pattern}: {e}"));
+    let mut names: Vec<String> = output
+        .lines()
+        .filter_map(|line| re.captures(line))
+        .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
+        .collect();
+    names.dedup();
+    names
+}
+
+#[test]
+fn every_runner_preset_names_its_failing_test() {
+    let presets = runners::presets();
+    let shipped: Vec<&str> = presets.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(
+        shipped,
+        CAPTURED.iter().map(|(n, _)| *n).collect::<Vec<&str>>()
+    );
+    for (runner, want) in CAPTURED {
+        let preset = presets.iter().find(|r| r.name == *runner).expect(runner);
+        assert_eq!(
+            named_by(&preset.fail_name, &fixture(runner, "fail.txt")),
+            vec![want.to_string()],
+            "{runner}"
+        );
+        let origin = fixture(runner, "origin.txt");
+        assert!(origin.contains("command: "), "{runner}: {origin}");
+        assert!(origin.contains("version: "), "{runner}: {origin}");
+    }
+}
+
+// package.json's test script, a CI workflow that runs it, and tests under tests/
+fn node_repo() -> Repo {
+    let repo = Repo::new();
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"adhd\",\n  \"scripts\": {\n    \"typecheck\": \"tsc --noEmit\",\n    \"test\": \"node --import tsx --test tests/*.test.ts\"\n  }\n}\n",
+    );
+    repo.write(
+        ".github/workflows/ci.yml",
+        "name: ci\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - run: npm run typecheck\n      - run: npm test\n",
+    );
+    repo.write("tests/date.test.ts", "test('a date parses', () => {})\n");
+    repo.commit_all("adhd");
+    repo
+}
+
+fn detected(report: &InitReport, key: &str) -> String {
+    report
+        .notes
+        .iter()
+        .find(|n| n.starts_with(&format!("detected: {key} =")))
+        .unwrap_or_else(|| panic!("{key} not detected: {:?}", report.notes))
+        .clone()
+}
+
+#[test]
+fn init_writes_the_keys_the_runner_decides() {
+    let repo = node_repo();
+    install(&repo);
+    let written: toml::Value =
+        toml::from_str(&read(&repo, ".enallagi/enallagi.toml")).expect("parse");
+    let check = &written["check"];
+    assert_eq!(
+        check["command"].as_str(),
+        Some("npm run typecheck && npm test")
+    );
+    let node = runners::presets()
+        .into_iter()
+        .find(|r| r.name == "node")
+        .expect("node preset");
+    assert_eq!(check["fail_name"].as_str(), Some(node.fail_name.as_str()));
+    let layout = &written["layout"];
+    assert_eq!(
+        layout["test_file_suffix_re"].as_str(),
+        Some(node.test_file_suffix_re.as_str())
+    );
+    assert!(layout.get("test_decl_patterns").is_some(), "{layout:?}");
+    // src/ equals the default, so T-021's pruning leaves the key out and the load resolves it
+    let loaded = enallagi::config::load(&repo.root).expect("load");
+    assert_eq!(loaded.layout.source_root, "src");
+    let prefixes = layout["allowed_prefixes"].as_array().expect("array");
+    assert!(
+        prefixes.iter().any(|p| p.as_str() == Some("tests/")),
+        "{prefixes:?}"
+    );
+    assert!(
+        prefixes.iter().any(|p| p.as_str() == Some(".enallagi/")),
+        "{prefixes:?}"
+    );
+}
+
+#[test]
+fn init_names_the_file_a_detected_value_came_from() {
+    let repo = node_repo();
+    let report = install(&repo);
+    assert!(
+        detected(&report, "check.command").contains("(.github/workflows/ci.yml:8)"),
+        "{}",
+        detected(&report, "check.command")
+    );
+    assert!(
+        detected(&report, "check.fail_name").contains("(package.json:5)"),
+        "{}",
+        detected(&report, "check.fail_name")
+    );
+    for key in [
+        "layout.test_file_suffix_re",
+        "layout.test_decl_patterns",
+        "layout.source_root",
+        "layout.allowed_prefixes",
+    ] {
+        let line = detected(&report, key);
+        assert!(
+            line.contains(".ts:") || line.contains("package.json:"),
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn two_runners_in_one_tree_write_no_keys() {
+    let repo = node_repo();
+    repo.write("Cargo.toml", "[package]\nname = \"adhd\"\n");
+    repo.commit_all("two runners");
+    let report = install(&repo);
+    let written = read(&repo, ".enallagi/enallagi.toml");
+    assert!(!written.contains("fail_name"), "{written}");
+    assert!(!written.contains("source_root"), "{written}");
+    assert!(
+        !report.notes.iter().any(|n| n.starts_with("detected: ")),
+        "{:?}",
+        report.notes
+    );
+    for name in ["cargo (Cargo.toml:1)", "node (package.json:5)"] {
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|n| n == &format!("candidate: {name}")),
+            "{name} not named: {:?}",
+            report.notes
+        );
+    }
+}
+
+#[test]
+fn a_tree_with_no_runner_keeps_the_defaults() {
+    let repo = Repo::new();
+    let report = install(&repo);
+    let written = read(&repo, ".enallagi/enallagi.toml");
+    assert!(!written.contains("fail_name"), "{written}");
+    assert!(
+        !report.notes.iter().any(|n| n.starts_with("candidate: ")),
+        "{:?}",
+        report.notes
+    );
+    assert!(
+        report.notes.iter().any(|n| n.contains("no test runner")),
+        "{:?}",
+        report.notes
+    );
 }

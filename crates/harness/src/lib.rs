@@ -15,6 +15,7 @@ pub mod pr;
 pub mod probes;
 pub mod queue;
 pub mod roles;
+pub mod runners;
 pub mod skills;
 pub mod tui;
 pub mod worktree;

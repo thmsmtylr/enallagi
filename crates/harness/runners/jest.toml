@@ -1,0 +1,10 @@
+name = "jest"
+detect_files = ["package.json", "jest.config.js", "jest.config.ts"]
+detect_re = 'jest\b'
+test_command = "npx jest"
+run_re = 'jest\b|npm (run )?test\b'
+fail_name = '^ {2}● (.+)$'
+test_file_suffix_re = '\.(test|spec)\.[cm]?[jt]sx?$'
+test_decl_patterns = ["test('{name}'", 'test("{name}"', "it('{name}'", 'it("{name}"']
+source_ext = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]
+source_roots = ["src", "lib", "app"]

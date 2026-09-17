@@ -1,0 +1,20 @@
+FAIL tests/sum.test.js
+  ● a sum is wrong
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: 2
+
+    > 1 | test("a sum is wrong", () => { expect(1 + 1).toBe(3); });
+        |                                              ^
+      2 | test("a sum is right", () => { expect(1 + 1).toBe(2); });
+      3 |
+
+      at Object.toBe (tests/sum.test.js:1:46)
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 1 passed, 2 total
+Snapshots:   0 total
+Time:        0.12 s, estimated 1 s
+Ran all test suites.

@@ -1,0 +1,3 @@
+command: npx jest --watchman=false --verbose
+version: jest 30.5.0
+captured: 2026-09-18

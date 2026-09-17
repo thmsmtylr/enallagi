@@ -1,0 +1,10 @@
+name = "go"
+detect_files = ["go.mod"]
+detect_re = ""
+test_command = "go test ./..."
+run_re = 'go test\b'
+fail_name = '^\s*--- FAIL: (\S+) \([0-9.]+m?s\)$'
+test_file_suffix_re = '_test\.go$'
+test_decl_patterns = ["func {name}("]
+source_ext = [".go"]
+source_roots = ["cmd", "internal", "pkg"]

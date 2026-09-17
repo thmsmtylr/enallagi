@@ -87,6 +87,13 @@ With none named, every pipeline in `.enallagi/enallagi.toml` is eligible.
 A key left out takes its default. A re-run names every key that still equals one.
 `enallagi init --prune-defaults` deletes those keys.
 
+A first `enallagi init` also detects the test runner from the files the repository already carries.
+Seven runners ship: cargo, node, bun, vitest, jest, pytest and go.
+Detection writes `check.command`, `check.fail_name` and the `layout` test keys.
+
+Each detected value is printed with the `file:line` it came from.
+A tree that matches no runner, or more than one, keeps the defaults and names the candidates.
+
 - `agent.preset` names the CLI to drive, or `custom` with your own `agent.command`.
 - `agent.model` and `agent.effort` set defaults. A role or a task can override both.
 - `check.command` is the single command that decides green.
