@@ -458,6 +458,24 @@ fn a_stale_force_is_reported_against_the_command() {
 }
 
 #[test]
+fn prune_defaults_keeps_only_the_changed_key() {
+    let repo = Repo::new();
+    seeded(
+        &repo,
+        &enallagi::config::DEFAULT_TOML
+            .replace("command = \"bun run check\"", "command = \"make check\""),
+    );
+    let dropped = init::prune(&repo.root, false).expect("prune");
+    assert!(dropped.contains(&"check.force".to_string()), "{dropped:?}");
+    assert_eq!(
+        config(&repo),
+        toml::from_str::<toml::Value>("[check]\ncommand = \"make check\"\n").expect("toml")
+    );
+    let cfg = enallagi::config::load(&repo.root).expect("config");
+    assert_eq!(cfg.check.force, "make check");
+}
+
+#[test]
 fn init_migrates_harness_json_keys() {
     let repo = Repo::new();
     repo.write(

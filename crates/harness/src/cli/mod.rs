@@ -44,6 +44,9 @@ pub enum Command {
         /// Move instance files at the repository root, or in a legacy .harness/, into the harness directory, and install nothing
         #[arg(long = "move")]
         move_files: bool,
+        /// Rewrite enallagi.toml without the keys that equal their default
+        #[arg(long)]
+        prune_defaults: bool,
     },
     /// Remove from this repository and leave no trace
     ///
@@ -191,10 +194,12 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             adapter,
             dry_run,
             move_files,
+            prune_defaults,
         } => init::run(&init::Args {
             adapter,
             dry_run,
             move_files,
+            prune_defaults,
         }),
         Command::Eject {
             dry_run,
@@ -261,10 +266,11 @@ mod tests {
         "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 20] = [
+    const FLAGS: [&str; 21] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
+        "init --prune-defaults",
         "eject --dry-run",
         "eject --keep-record",
         "run --iterations",

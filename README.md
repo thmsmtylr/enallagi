@@ -85,6 +85,7 @@ With none named, every pipeline in `.enallagi/enallagi.toml` is eligible.
 
 `enallagi init` writes only the keys whose value differs from the embedded defaults.
 A key left out takes its default. A re-run names every key that still equals one.
+`enallagi init --prune-defaults` deletes those keys.
 
 - `agent.preset` names the CLI to drive, or `custom` with your own `agent.command`.
 - `agent.model` and `agent.effort` set defaults. A role or a task can override both.

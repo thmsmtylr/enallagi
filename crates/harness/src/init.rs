@@ -436,7 +436,7 @@ fn audit_config(root: &Path, path: &Path, report: &mut InitReport) -> Result<(),
         return Ok(());
     }
     report.notes.push(format!(
-        "{rel}: {} keys equal their default ({}). Delete them and the defaults apply.",
+        "{rel}: {} keys equal their default ({}). `enallagi init --prune-defaults` removes them.",
         dropped.len(),
         dropped.join(" ")
     ));
@@ -448,6 +448,20 @@ fn audit_config(root: &Path, path: &Path, report: &mut InitReport) -> Result<(),
         ));
     }
     Ok(())
+}
+
+/// Drops every key in enallagi.toml that equals its embedded default, and names each one.
+pub fn prune(root: &Path, dry_run: bool) -> Result<Vec<String>, InitError> {
+    let path = config::config_path(root);
+    if !has_content(&path) {
+        return Ok(Vec::new());
+    }
+    let text = fs::read_to_string(&path).map_err(io(path.display()))?;
+    let (pruned, dropped) = config::prune_defaults(&text)?;
+    if !dry_run && !dropped.is_empty() {
+        fs::write(&path, pruned).map_err(io(path.display()))?;
+    }
+    Ok(dropped)
 }
 
 fn config_rel(root: &Path) -> String {

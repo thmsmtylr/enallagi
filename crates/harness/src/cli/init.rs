@@ -5,6 +5,7 @@ pub struct Args {
     pub adapter: Option<String>,
     pub dry_run: bool,
     pub move_files: bool,
+    pub prune_defaults: bool,
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
@@ -32,6 +33,18 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             println!("  {verb}: {old} -> {new}");
         }
         println!("\nNext: git add the old and new paths, then re-run `enallagi init`.");
+        return Ok(0);
+    }
+    if args.prune_defaults {
+        let verb = if args.dry_run {
+            "would drop"
+        } else {
+            "dropped"
+        };
+        for key in init::prune(&root, args.dry_run)? {
+            println!("  {verb}: {key}");
+        }
+        println!("\nNext: re-run `enallagi init`.");
         return Ok(0);
     }
     let report = init::install(&root, &opts)?;
