@@ -15,8 +15,6 @@ An autonomous task loop for a coding agent, in one static binary.
 - Pins every vendored skill by commit and hash.
 - No daemon and no service. Runtime needs are `git`, `sh`, and your agent CLI.
 
-
-
 ## Install
 
 ```bash
@@ -65,8 +63,6 @@ enallagi worktree 1           # or one task, in its own worktree
 enallagi watch                # attach read-only to the live loop
 enallagi pr T-001 --push      # one pull request for the landed task
 ```
-
-
 
 ## How a run works
 
