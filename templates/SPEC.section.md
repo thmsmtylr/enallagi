@@ -25,8 +25,8 @@ the check fails. Record each result with the date you checked it.
 
 ### 0.3 Forbidden by name
 
-The check greps for each of these and fails on a hit. Adapt the list to your runtime — the taxonomy
-is what ports, not the syntax.
+Each of these is a rejection when the verifier finds it in a task's diff. Adapt the list to your
+runtime. The taxonomy is what ports, not the syntax.
 
 - Editing any file listed in §11 or in §0.2 `harness-immutable`.
 - Process exit calls anywhere under the source or test tree.
@@ -42,28 +42,21 @@ and NIST CAISI's "removing pre-existing checks in the code" ([NIST, 28 Nov 2025]
 
 ### 0.4 What the check is
 
-`__CHECK__` runs these stages in order and fails closed on the first:
+`__CHECK__` is the one command this project already runs. Done means it exits 0. The harness
+supplies no stages of its own: whatever this command runs is what you wrote into it.
 
-```
-precheck   → hash-verify every immutable file
-             grep the §0.3 list
-typecheck  → the language's own type gate
-lint       → plus a complexity ceiling and a file-length cap
-test       → machine-readable output, fixed seed
-trace      → parse §11 and the test output; assert every row maps to a test that
-             ran, carries at least one assertion, and is not skipped or todo
-```
-
-`trace` is a **step after the tests, not a test inside them**. Test names in §11 are constrained to
-`[A-Za-z0-9 _:-]`.
+Read its result on delta against `__ENALLAGI_DIR__/.check-baseline`. A failure listed there is
+inherited. A failure not listed there is a rejection, and that file only ever shrinks.
 
 ---
 
 ## 11. Exit criteria
 
 Every row is one behaviour, named by the test that proves it. The loop turns rows green one at a
-time and `trace` refuses a row whose test did not run. The heading above and its terminator are
-what `__ENALLAGI_DIR__/enallagi.toml` points the probes at — rename it there if you rename it here.
+time and `enallagi probe spec-untested` reports every row whose test does not exist. A test name
+here carries no backtick, and the file name before `::` is matched against the test-file suffix
+`__ENALLAGI_DIR__/enallagi.toml` configures. The heading above and its terminator are what that
+file points the probes at — rename it there if you rename it here.
 
 | Behaviour | Test |
 | --- | --- |

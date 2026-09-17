@@ -353,6 +353,34 @@ fn the_context_file_resyncs_the_check() {
 }
 
 #[test]
+fn the_spec_resyncs_the_check() {
+    let repo = Repo::new();
+    install(&repo);
+    assert!(read(&repo, ".enallagi/SPEC.md").contains("`bun run check`"));
+    repo.write(
+        ".enallagi/enallagi.toml",
+        "[check]\ncommand = \"make check\"\n",
+    );
+    install(&repo);
+    let spec = read(&repo, ".enallagi/SPEC.md");
+    let at = spec.find("### 0.4").expect("no 0.4 heading");
+    let section = &spec[at..];
+    assert!(section.contains("`make check`"), "{section:.400}");
+    assert!(!spec.contains("`bun run check`"));
+}
+
+// the seeded spec described a five-stage check the harness never ran: adhd #49 rewrote 0.3 and 0.4 by hand
+#[test]
+fn the_seeded_spec_names_no_stage_the_check_lacks() {
+    let repo = Repo::new();
+    install(&repo);
+    let spec = read(&repo, ".enallagi/SPEC.md");
+    for claim in ["precheck", "hash-verify", "trace", "The check greps"] {
+        assert!(!spec.contains(claim), "{claim} in {spec}");
+    }
+}
+
+#[test]
 fn a_drifted_install_is_reported() {
     let repo = Repo::new();
     install(&repo);
