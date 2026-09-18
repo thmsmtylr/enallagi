@@ -210,6 +210,41 @@ fn a_claimed_row_no_criteria_row_defines_is_found() {
     );
 }
 
+const PIECE_ROWS: &str = "# SPEC\n\n## 11. Exit criteria\n\n| Behaviour | Test |\n| --- | --- |\n| a | `tests/x.test.ts::one` |\n| b | `tests/x.test.ts::two` |\n\n## 12. Notes\n";
+
+fn claiming_pieces(repo: &Repo, rows: &str) {
+    claiming(repo, rows);
+    repo.write(".enallagi/SPEC.md", PIECE_ROWS);
+}
+
+#[test]
+fn a_second_row_without_its_file_is_claimed() {
+    let (repo, cfg) = seeded();
+    claiming_pieces(&repo, "tests/x.test.ts::one, two");
+    let results = run(&repo, &cfg);
+    assert_eq!(
+        count(&results, "queue-uncovered"),
+        Some(0),
+        "{}",
+        render(&results)
+    );
+}
+
+#[test]
+fn an_undefined_piece_reports_the_whole_claim() {
+    let (repo, cfg) = seeded();
+    claiming_pieces(&repo, "tests/x.test.ts::one, nope");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "queue-uncovered");
+    let claim =
+        "T-002 claims row tests/x.test.ts::one, nope and the exit criteria define no such row";
+    assert!(
+        found.iter().any(|f| f.message.contains(claim)),
+        "{}",
+        render(&results)
+    );
+}
+
 #[test]
 fn harness_immutable_has_no_hash_key() {
     // the rail names the file that is the gate; with the launcher a binary, that file is enallagi.toml

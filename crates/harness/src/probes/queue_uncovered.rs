@@ -56,6 +56,15 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
                 continue;
             }
             let reference = (name.as_str().to_string(), test.to_string());
+            // `x.test.ts::one, two` names two rows of one file when the whole is no row and each piece is
+            let pieces: Vec<_> = test
+                .split(", ")
+                .map(|t| (reference.0.clone(), t.to_string()))
+                .collect();
+            if !defined.contains(&reference) && pieces.iter().all(|p| defined.contains(p)) {
+                claimed.extend(pieces);
+                continue;
+            }
             claimed.insert(reference.clone());
             if !defined.contains(&reference) {
                 found.push(common::finding(
