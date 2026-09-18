@@ -439,6 +439,9 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let lock = rel(ctx, "harness.lock");
     let hashes = rel(ctx, "test-hashes.json");
     let bookkeeping: Vec<String> = BOOKKEEPING.iter().map(|name| rel(ctx, name)).collect();
+    // not in BOOKKEEPING, which the launcher commits by name, but its state commit carries a STOP
+    // written mid-run into whatever task the lane held
+    let stop = rel(ctx, "STOP");
     let base_lock = lock_at(ctx, &lock, None);
     let head_lock = lock_at(ctx, &lock, Some("HEAD"));
     // ids the pipeline vendored fresh this iteration -- the task's scope: line never has to name them
@@ -462,7 +465,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         .iter()
         .any(|f| f.ends_with("Cargo.toml") && in_scope(f, &pats));
     for f in changed {
-        if bookkeeping.contains(&f) || f == lock {
+        if bookkeeping.contains(&f) || f == lock || f == stop {
             continue;
         }
         if added_skills
