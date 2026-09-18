@@ -376,6 +376,34 @@ mod tests {
         jobs
     }
 
+    // `grep -w`'s boundary: `rust` inside `rustfmt` is not the word, `build` in `cross-build` is.
+    fn says_word(steps: &str, word: &str) -> bool {
+        steps
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .any(|token| token == word)
+    }
+
+    #[test]
+    fn a_word_inside_a_longer_token_is_not_said() {
+        let workflow = "\
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - name: shellcheck is on the runner
+        run: shellcheck --version
+";
+        let jobs = job_steps(workflow);
+        assert!(
+            !says_word(&jobs[0].1, "shell"),
+            "`shell` passed on `shellcheck`"
+        );
+        assert!(
+            says_word("cross-build linker\n", "build"),
+            "a hyphen is a boundary"
+        );
+    }
+
     #[test]
     fn the_subcommand_set_is_the_reviewed_fifteen() {
         let cmd = Cli::command();
@@ -464,7 +492,7 @@ jobs:
         for (id, steps) in &jobs {
             assert!(!steps.is_empty(), "{id} has no named step");
             for word in id.split('-') {
-                assert!(steps.contains(word), "{id}: no step says `{word}`");
+                assert!(says_word(steps, word), "{id}: no step says `{word}`");
             }
         }
     }
