@@ -313,12 +313,19 @@ pub fn extract_usage(output: &str, paths: &UsagePaths) -> UsageValues {
 pub fn seconds_until_reset(notice: &str, now: jiff::Zoned) -> Option<u64> {
     static RESET: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let re = RESET.get_or_init(|| {
-        Regex::new(r"(?i)resets\s+(\d{1,2}):(\d{2})\s*([ap])\.?m\.?\s*\(([^)]+)\)")
+        // the minutes are optional: a live notice read `resets 2am` and the hour-only form must still wait
+        Regex::new(r"(?i)resets\s+(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?\s*\(([^)]+)\)")
             .expect("the reset pattern is a literal")
     });
     let caps = re.captures(notice)?;
     let hour: i8 = caps.get(1)?.as_str().parse().ok()?;
-    let minute: i8 = caps.get(2)?.as_str().parse().ok()?;
+    if !(1..=12).contains(&hour) {
+        return None;
+    }
+    let minute: i8 = match caps.get(2) {
+        Some(m) => m.as_str().parse().ok()?,
+        None => 0,
+    };
     let pm = caps.get(3)?.as_str().eq_ignore_ascii_case("p");
     let hour = hour % 12 + if pm { 12 } else { 0 };
     let zone = jiff::tz::TimeZone::get(caps.get(4)?.as_str()).ok()?;
@@ -833,8 +840,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s, 14 * 3600 + 40 * 60 + 60);
+        let hour_only = seconds_until_reset(
+            "You've hit your session limit \u{b7} resets 2am (Australia/Melbourne)",
+            now.clone(),
+        )
+        .unwrap();
+        assert_eq!(hour_only, 16 * 3600 + 60);
         assert!(seconds_until_reset("hit your session limit", now.clone()).is_none());
-        assert!(seconds_until_reset("resets 12:40am (Mars/Olympus)", now).is_none());
+        assert!(seconds_until_reset("resets 12:40am (Mars/Olympus)", now.clone()).is_none());
+        assert!(seconds_until_reset("resets 13am (UTC)", now.clone()).is_none());
+        assert!(seconds_until_reset("resets 0am (UTC)", now).is_none());
     }
 
     fn fix_now(zoned: jiff::Zoned) {
@@ -980,6 +995,69 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn a_result_line_notice_sleeps_the_stage() {
+        let r = crate::fixture::Repo::new();
+        std::fs::create_dir_all(stop_file(&r.root).parent().unwrap()).unwrap();
+        std::fs::write(stop_file(&r.root), "").unwrap();
+        fix_now(
+            jiff::civil::date(2026, 9, 7)
+                .at(22, 0, 0, 0)
+                .in_tz("UTC")
+                .unwrap(),
+        );
+        let line = r#"{"type":"result","subtype":"success","result":"hit your session limit · resets 2am (UTC)"}"#;
+        let argv = r.stub_agent(&format!("printf '%s\\n' '{line}'"));
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
+        let err = spawn(
+            &spawner(argv, &r.root),
+            &mut w,
+            &stop_file(&r.root),
+            &Regex::new("hit your session limit").unwrap(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, AgentError::Stopped));
+        assert_eq!(
+            w.log
+                .read()
+                .unwrap()
+                .iter()
+                .filter(|e| matches!(e.kind, Kind::Limit { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_out_of_range_reset_hour_does_not_sleep() {
+        let r = crate::fixture::Repo::new();
+        // the stop file and the fixed instant together: an hour read as 1am would be inside MAX_WAIT and sleep
+        std::fs::create_dir_all(stop_file(&r.root).parent().unwrap()).unwrap();
+        std::fs::write(stop_file(&r.root), "").unwrap();
+        fix_now(
+            jiff::civil::date(2026, 9, 7)
+                .at(22, 0, 0, 0)
+                .in_tz("UTC")
+                .unwrap(),
+        );
+        let argv = r.stub_agent("echo 'hit your session limit resets 13am (UTC)'");
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
+        let res = spawn(
+            &spawner(argv, &r.root),
+            &mut w,
+            &stop_file(&r.root),
+            &Regex::new("hit your session limit").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(res.exit, 0);
+        assert!(!w
+            .log
+            .read()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e.kind, Kind::Limit { .. })));
     }
 
     // reset computed at run time, not fixed: a fixed timestamp would be in the past by the second retry
