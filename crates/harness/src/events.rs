@@ -50,6 +50,11 @@ pub enum Kind {
         cost: Option<f64>,
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
+        // a log written before these lanes existed carries neither key and still parses
+        #[serde(default)]
+        cache_creation_input_tokens: Option<u64>,
+        #[serde(default)]
+        cache_read_input_tokens: Option<u64>,
         turns: Option<u64>,
     },
     #[serde(rename = "gate")]
@@ -300,6 +305,8 @@ mod tests {
             cost: Some(0.5),
             input_tokens: None,
             output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
             turns: None,
         });
         let j = serde_json::to_string(&e).unwrap();
@@ -317,6 +324,26 @@ mod tests {
             });
         }
         assert_eq!(w.log.read_since(2).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn render_line_prints_the_cache_token_lanes() {
+        let mut w = Writer::new(Log::open(tempfile::tempdir().unwrap().path()));
+        let e = w.emit(Kind::StageEnd {
+            stage: "implement".into(),
+            task: None,
+            seconds: 1,
+            exit: 0,
+            cost: None,
+            input_tokens: Some(22),
+            cache_creation_input_tokens: Some(54825),
+            cache_read_input_tokens: Some(505740),
+            output_tokens: Some(6233),
+            turns: None,
+        });
+        let l = render_line(&e);
+        assert!(l.contains("cache_creation_input_tokens=54825"), "{l}");
+        assert!(l.contains("cache_read_input_tokens=505740"), "{l}");
     }
 
     #[test]
