@@ -11,9 +11,8 @@ An autonomous task loop for a coding agent, in one static binary.
 - Splits the work across five roles that cannot grade each other.
 - Re-derives every `done` from the tree instead of trusting a claim.
 - Runs each lane in its own git worktree and fast-forwards on success.
-- Wraps any headless agent CLI. Thirteen presets ship.
+- Wraps any headless agent CLI, with thirteen presets shipped.
 - Pins every vendored skill by commit and hash.
-- No daemon and no service. Runtime needs are `git`, `sh`, and your agent CLI.
 
 ## Install
 
@@ -22,6 +21,8 @@ curl -LO https://github.com/thmsmtylr/enallagi/releases/latest/download/enallagi
 chmod +x enallagi-aarch64-apple-darwin
 sudo mv enallagi-aarch64-apple-darwin /usr/local/bin/enallagi
 ```
+
+Runtime needs `git`, `sh` and your agent CLI.
 
 Releases carry four targets. Pick `x86_64` or `aarch64`, and `apple-darwin` or `unknown-linux-musl`.
 
@@ -53,7 +54,7 @@ The block quotes the issue in `notes:`. It stays `proposed` until you write what
 
 Or write a task into `.enallagi/TASKS.md` by hand:
 
-```
+```markdown
 ## [T-001] the date parser drops a timezone
 scope: src/date.ts, src/date.test.ts
 blockedBy:
@@ -93,7 +94,9 @@ With none named, every pipeline in `.enallagi/enallagi.toml` is eligible.
 `.enallagi/enallagi.toml` holds the whole configuration.
 
 `enallagi init` writes only the keys whose value differs from the embedded defaults.
-A key left out takes its default. A re-run names every key that still equals one.
+A key left out takes its default.
+
+A re-run names every key that still equals one.
 `enallagi init --prune-defaults` deletes those keys.
 
 A first `enallagi init` also detects the test runner from the files the repository already carries.
@@ -106,9 +109,9 @@ A tree that matches no runner, or more than one, keeps the defaults and names th
 - `agent.preset` names the CLI to drive, or `custom` with your own `agent.command`.
 - `agent.model` and `agent.effort` set defaults. A role or a task can override both.
 - `agent.dangerously_skip_permissions` adds the preset's bypass flag to every lane. Default `false`.
-  `enallagi run --dangerously-skip-permissions` does the same for one run.
+- `enallagi run --dangerously-skip-permissions` does the same for one run.
   A preset that declares no bypass flag refuses the run.
-  `run.start` records the choice as `permissions_skipped`, and `enallagi events` prints it.
+- `run.start` records the choice as `permissions_skipped`, and `enallagi events` prints it.
 - `check.command` is the single command that decides green.
 - `check.force` runs the same check uncached. Left out, it follows `check.command`.
 - `check.timeout` bounds it and defaults to `30m`. A check that runs past it halts the run.
@@ -133,6 +136,7 @@ Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGE
 
 `enallagi pr --push` reads the target's contribution guide first.
 A sentence there that refuses or conditions generated changes stops the push.
+
 Pass `--policy-read` once you have read it. The description file records either outcome.
 
 Run `enallagi <command> --help` for the flags.

@@ -309,7 +309,7 @@ fn the_shipped_documents_describe_and_do_not_argue() {
     let mut offences = Vec::new();
 
     let readme = read("README.md");
-    if readme.lines().count() >= 200 {
+    if readme.lines().count() >= 150 {
         offences.push(format!("README.md is {} lines", readme.lines().count()));
     }
     let mut sections: Vec<&str> = Vec::new();
@@ -885,85 +885,118 @@ fn a_legacy_config_name_warns_about_the_rename() {
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
 }
 
-#[test]
-fn every_readme_command_runs_or_is_named() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
-    let unrunnable = [
-        (
-            "curl -LO https://github.com/thmsmtylr/enallagi/releases/latest/download/enallagi-aarch64-apple-darwin",
-            "downloads a release asset over the network",
-        ),
-        (
-            "chmod +x enallagi-aarch64-apple-darwin",
-            "the asset the curl line downloads is not in the tree",
-        ),
-        (
-            "sudo mv enallagi-aarch64-apple-darwin /usr/local/bin/enallagi",
-            "installs system-wide as root",
-        ),
-        (
-            "$EDITOR .enallagi/enallagi.toml",
-            "opens an interactive editor",
-        ),
-        (
-            "enallagi run --pipeline task --iterations 1",
-            "spawns the agent CLI, which no test may call",
-        ),
-        (
-            "enallagi issue owner/repo#12",
-            "reads a GitHub issue over the network with gh",
-        ),
-        ("$EDITOR .enallagi/TASKS.md", "opens an interactive editor"),
-        (
-            "cargo install --locked --git https://github.com/thmsmtylr/enallagi enallagi",
-            "builds from the network and installs outside the tree",
-        ),
-        (
-            "enallagi worktree 1",
-            "spawns the agent CLI in a worktree, which no test may call",
-        ),
-        ("enallagi watch", "attaches a live view and does not exit on its own"),
-        (
-            "enallagi pr T-001 --push",
-            "pushes a branch and opens a pull request",
-        ),
-    ];
+const README_UNRUNNABLE: [(&str, &str); 11] = [
+    (
+        "curl -LO https://github.com/thmsmtylr/enallagi/releases/latest/download/enallagi-aarch64-apple-darwin",
+        "downloads a release asset over the network",
+    ),
+    (
+        "chmod +x enallagi-aarch64-apple-darwin",
+        "the asset the curl line downloads is not in the tree",
+    ),
+    (
+        "sudo mv enallagi-aarch64-apple-darwin /usr/local/bin/enallagi",
+        "installs system-wide as root",
+    ),
+    (
+        "$EDITOR .enallagi/enallagi.toml",
+        "opens an interactive editor",
+    ),
+    (
+        "enallagi run --pipeline task --iterations 1",
+        "spawns the agent CLI, which no test may call",
+    ),
+    (
+        "enallagi issue owner/repo#12",
+        "reads a GitHub issue over the network with gh",
+    ),
+    ("$EDITOR .enallagi/TASKS.md", "opens an interactive editor"),
+    (
+        "cargo install --locked --git https://github.com/thmsmtylr/enallagi enallagi",
+        "builds from the network and installs outside the tree",
+    ),
+    (
+        "enallagi worktree 1",
+        "spawns the agent CLI in a worktree, which no test may call",
+    ),
+    ("enallagi watch", "attaches a live view and does not exit on its own"),
+    (
+        "enallagi pr T-001 --push",
+        "pushes a branch and opens a pull request",
+    ),
+];
 
+// A fence is commands whatever its tag, so `sh`, `console` and an untagged fence all run.
+fn readme_commands(readme: &str) -> Vec<String> {
     let mut fenced: Vec<String> = Vec::new();
-    let mut in_bash = false;
+    let mut inside = false;
+    let mut data = false;
     for line in readme.lines() {
         if let Some(lang) = line.strip_prefix("```") {
-            in_bash = lang == "bash";
+            inside = !inside;
+            data = matches!(lang.trim(), "markdown" | "toml" | "text");
             continue;
         }
         let cmd = line.split_once(" #").map_or(line, |(c, _)| c).trim();
-        if in_bash && !cmd.is_empty() {
+        if inside && !data && !cmd.is_empty() {
             fenced.push(cmd.to_string());
         }
     }
-    assert!(fenced.len() > 8, "README fenced commands: {fenced:?}");
-    for (cmd, _) in &unrunnable {
-        assert!(
-            fenced.iter().any(|f| f == cmd),
-            "no README command reads {cmd}"
-        );
-    }
+    fenced
+}
 
+fn readme_command_failures(readme: &str) -> Vec<String> {
     let repo = enallagi::fixture::Repo::new();
-    for cmd in &fenced {
-        if unrunnable.iter().any(|(named, _)| named == cmd) {
+    let mut failures = Vec::new();
+    for cmd in readme_commands(readme) {
+        if README_UNRUNNABLE.iter().any(|(named, _)| *named == cmd) {
             continue;
         }
         let args: Vec<&str> = cmd.split_whitespace().collect();
-        assert_eq!(args[0], "enallagi", "{cmd} has no runner and no reason");
+        if args[0] != "enallagi" {
+            failures.push(format!("{cmd} has no runner and no reason"));
+            continue;
+        }
         let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
             .args(&args[1..])
             .current_dir(&repo.root)
             .output()
             .unwrap_or_else(|e| panic!("{cmd}: {e}"));
-        assert_eq!(out.status.code(), Some(0), "{cmd}: {out:?}");
+        if out.status.code() != Some(0) {
+            failures.push(format!("{cmd}: {out:?}"));
+        }
     }
+    failures
+}
+
+#[test]
+fn every_readme_command_runs_or_is_named() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
+    let fenced = readme_commands(&readme);
+    assert!(fenced.len() > 8, "README fenced commands: {fenced:?}");
+    for (cmd, _) in &README_UNRUNNABLE {
+        assert!(
+            fenced.iter().any(|f| f == cmd),
+            "no README command reads {cmd}"
+        );
+    }
+    let failures = readme_command_failures(&readme);
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn a_failing_sh_fence_fails_the_readme_run() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
+    let appended = format!("{readme}\n```sh\nenallagi tasks nope\n```\n");
+    let failures = readme_command_failures(&appended);
+    assert!(
+        failures
+            .iter()
+            .any(|f| f.starts_with("enallagi tasks nope")),
+        "{failures:#?}"
+    );
 }
 
 struct IssueRepo {
