@@ -377,6 +377,34 @@ fn the_reference_tables_live_in_docs() {
 }
 
 #[test]
+fn the_gate_table_names_every_gate() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let gates =
+        std::fs::read_to_string(root.join("crates/harness/src/gates.rs")).expect("gates.rs");
+    let reference =
+        std::fs::read_to_string(root.join("docs/reference.md")).expect("docs/reference.md");
+    let body = gates
+        .split("let outcome = match name {")
+        .nth(1)
+        .and_then(|rest| rest.split("other =>").next())
+        .expect("run() in gates.rs matches on name");
+    let arm = regex::Regex::new(r#"(?m)^\s*"([a-z-]+)" =>"#).unwrap();
+    let names: Vec<&str> = arm
+        .captures_iter(body)
+        .map(|c| c.get(1).unwrap().as_str())
+        .collect();
+    assert!(!names.is_empty(), "no gate arm read from gates.rs");
+    for gate in names {
+        assert!(
+            reference
+                .lines()
+                .any(|l| l.starts_with(&format!("| `{gate}`"))),
+            "docs/reference.md has no row for the gate {gate}"
+        );
+    }
+}
+
+#[test]
 fn readme_links_the_three_guides() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
