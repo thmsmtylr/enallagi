@@ -13,7 +13,7 @@ notes: <what a reviewer should scrutinise; the implementer's and the verifier's 
 
 | Field | Meaning |
 | --- | --- |
-| `scope:` | comma-separated globs. The `one-scope` rail: touching anything outside them is a rejection. An out-of-scope need is a note on the task and a stop, never a quiet edit. |
+| `scope:` | comma-separated globs. A directory is written `dir/**`, since a bare `dir` matches none of its files. The `one-scope` rail: touching anything outside them is a rejection. An out-of-scope need is a note on the task and a stop, never a quiet edit. |
 | `blockedBy:` | empty, `none`, or comma-separated task ids. The launcher will not select a task whose blockers are not all `done`. |
 | `status:` | `proposed` (the scout's, inert to the loop) · `ready` · `blocked` · `review` (the implementer's last act) · `done` (the verifier's, and the launcher re-runs the gate behind it) · `needs-spec` (the contract does not answer a question the task hit). |
 | `rows:` | the exit-criteria rows the task turns green, copied character for character, or `none — harness` / `none — measurement`. This is how the one-row rail binds without a second queue. |

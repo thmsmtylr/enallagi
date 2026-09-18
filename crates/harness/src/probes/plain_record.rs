@@ -112,11 +112,15 @@ fn notes(ctx: &ProbeCtx, rules: &Rules, found: &mut Vec<Finding>) -> Res<()> {
     let tasks = common::instance(ctx, "TASKS.md");
     let fence = common::re(r"^\s*```")?;
     let quoted = common::re("`[^`]*`")?;
+    let verdict = common::re(r"^\s*REJECTED\b")?;
+    // a notes: field carries no blank line, so the verifier's paragraph ends where the next author signs
+    let author = common::re(r"^\s*(IMPLEMENTER|VERIFIED|VERIFIER|OPERATOR)\b")?;
     for block in common::task_blocks(ctx)? {
         let Some((start, _)) = common::field(&block, "notes") else {
             continue;
         };
         let mut fenced = false;
+        let mut rejected = false;
         for (at, text) in block.body.iter().filter(|(at, _)| *at >= start) {
             if fence.is_match(text) {
                 fenced = !fenced;
@@ -124,6 +128,15 @@ fn notes(ctx: &ProbeCtx, rules: &Rules, found: &mut Vec<Finding>) -> Res<()> {
             }
             // a note is required to paste its command and its output, so only the prose around them is read
             if fenced {
+                continue;
+            }
+            if verdict.is_match(text) {
+                rejected = true;
+            } else if author.is_match(text) || text.trim().is_empty() {
+                rejected = false;
+            }
+            // the verifier wrote the rejection and the paragraph under it; an implementer cannot clear someone else's words
+            if rejected {
                 continue;
             }
             if let Some(clause) = rules.commentary(&quoted.replace_all(text, " ")) {

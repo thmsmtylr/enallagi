@@ -352,6 +352,8 @@ mod tests {
                 cost: Some(0.61),
                 input_tokens: None,
                 output_tokens: None,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
                 turns: None,
             }),
             w.emit(Kind::Gate {

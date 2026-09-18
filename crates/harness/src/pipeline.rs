@@ -614,8 +614,11 @@ impl<'a> Loop<'a> {
         if let Some(cost) = result.usage.cost {
             self.digest.cost = round4(self.digest.cost + cost);
         }
-        let spent_tokens =
-            result.usage.input_tokens.unwrap_or(0) + result.usage.output_tokens.unwrap_or(0);
+        // the provider bills cached reads and cache writes as their own lanes, disjoint from input_tokens
+        let spent_tokens = result.usage.input_tokens.unwrap_or(0)
+            + result.usage.output_tokens.unwrap_or(0)
+            + result.usage.cache_creation_input_tokens.unwrap_or(0)
+            + result.usage.cache_read_input_tokens.unwrap_or(0);
         // cost_missing is read by over_budget() at the next boundary; a budget over unreported cost can't be enforced
         if role.is_some() {
             if self.opts.budget_usd.is_some() && result.usage.cost.is_none() {
@@ -637,6 +640,8 @@ impl<'a> Loop<'a> {
             cost: result.usage.cost,
             input_tokens: result.usage.input_tokens,
             output_tokens: result.usage.output_tokens,
+            cache_creation_input_tokens: result.usage.cache_creation_input_tokens,
+            cache_read_input_tokens: result.usage.cache_read_input_tokens,
             turns: result.usage.turns,
         });
 
@@ -1385,18 +1390,13 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
 // `ran` means the check STARTED, not that it named what failed --
 // reporting ran:false there would turn a real finding into an ERROR
 fn check_outcome(root: &Path, cfg: &Config) -> CheckOutcome {
-    let report = gates::check_delta(root, cfg, true);
-    let started = !report.output.starts_with(NEVER_RAN)
-        // nested under turbo the check would recurse, so it is not run at all
-        && std::env::var_os("TURBO_HASH").is_none();
-    CheckOutcome {
-        ran: started,
-        red: report.red,
-        output: report.output,
+    let mut outcome = gates::check_delta(root, cfg, true).outcome();
+    // nested under turbo the check would recurse, so it is not run at all
+    if std::env::var_os("TURBO_HASH").is_some() {
+        outcome.ran = false;
     }
+    outcome
 }
-
-const NEVER_RAN: &str = "the check could not be run:";
 
 fn config_sha256(root: &Path) -> String {
     let mut hasher = Sha256::new();
