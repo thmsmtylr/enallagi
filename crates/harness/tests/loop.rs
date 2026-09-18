@@ -1890,6 +1890,29 @@ fn a_stage_at_its_turn_cap_is_named_in_the_digest() {
 }
 
 #[test]
+fn digest_and_probe_agree_past_the_turn_cap() {
+    use enallagi::probes::telemetry::{turns_exhausted, ProbeResult};
+    let r = repo(&base_toml(""), "");
+    r.write("TASKS.md", "# queue\n");
+    script(
+        &r,
+        "src/fakeagent.sh",
+        "echo '{\"total_cost_usd\":0.5,\"num_turns\":6}'\n",
+    );
+    r.commit_all("a scout reporting one turn past its cap");
+
+    let (digest, _) = go(&r, &opts(1));
+    let in_digest = pipeline::digest_text(&digest).contains("scout: turns 5");
+    let cfg = enallagi::config::load(&r.root).expect("config");
+    let log = enallagi::events::Log::open(&r.root.join(".enallagi"));
+    let ProbeResult::Count(findings) = turns_exhausted(&log, &cfg) else {
+        panic!("turns_exhausted could not read the log");
+    };
+    let in_probe = findings.iter().any(|f| f.message.contains("stage scout"));
+    assert_eq!(in_digest, in_probe, "digest {in_digest}, probe {in_probe}");
+}
+
+#[test]
 fn the_adjudicate_gates_run_in_a_task_round() {
     let r = repo("", "");
     draining(&r, FILED, &promotes("T-009"));

@@ -714,7 +714,11 @@ impl<'a> Loop<'a> {
             }
         }
         // an agent that spent every turn it was given stopped because it ran out, not because it finished
-        if result.usage.turns.is_some_and(|t| t >= u64::from(turns)) {
+        if result
+            .usage
+            .turns
+            .is_some_and(|t| config::spent_turn_cap(turns, t))
+        {
             self.digest
                 .turn_caps
                 .push(format!("{}: turns {turns}", stage.name));

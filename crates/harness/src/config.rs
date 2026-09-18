@@ -280,6 +280,11 @@ impl Stage {
     }
 }
 
+// the digest and the turns-exhausted probe both read a cap through this, so one run never reads two ways
+pub fn spent_turn_cap(cap: u32, turns: u64) -> bool {
+    turns >= u64::from(cap)
+}
+
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SkillDecl {
