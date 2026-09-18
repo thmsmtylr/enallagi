@@ -784,3 +784,84 @@ fn a_printed_em_dash_aside_is_reported() {
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(found[0].contains("src/report.ts:1"), "{}", found[0]);
 }
+
+fn rejection_stale(repo: &Repo, cfg: &Config) -> Vec<String> {
+    render(&run(repo, cfg))
+        .lines()
+        .filter(|l| l.starts_with("FINDING rejection-stale "))
+        .map(String::from)
+        .collect()
+}
+
+fn reviewed_block(id: &str, status: &str, verdicts: &str) -> String {
+    format!("\n## [{id}] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: {status}\nnotes: the review record.\n{verdicts}")
+}
+
+const REJECTION: &str =
+    "  REJECTED: the quoted figure does not reproduce (verifier, 2026-09-17).\n";
+
+// the shape T-064 carried: a verdict quoted in a later paragraph is a reference, not a verdict
+const QUOTED: &str = "  Named and not a rejection point: two citations sit inside this block's `REJECTED:` records.\n";
+
+#[test]
+fn an_unanswered_rejection_is_reported() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        &reviewed_block(
+            "T-002",
+            "review",
+            &format!("  IMPLEMENTER 2026-09-17: the change is committed.\n{REJECTION}"),
+        ),
+    );
+    let found = rejection_stale(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("T-002"), "{}", found[0]);
+}
+
+#[test]
+fn an_answered_rejection_is_quiet_at_review() {
+    let (repo, cfg) = seeded();
+    for (id, answer) in [
+        ("T-002", "VERIFIED"),
+        ("T-003", "Passed"),
+        ("T-004", "IMPLEMENTER"),
+    ] {
+        append(
+            &repo,
+            "TASKS.md",
+            &reviewed_block(
+                id,
+                "review",
+                &format!(
+                    "{REJECTION}  {answer} 2026-09-17: the rejection point is answered.\n{QUOTED}"
+                ),
+            ),
+        );
+    }
+    assert_eq!(rejection_stale(&repo, &cfg), Vec::<String>::new());
+}
+
+#[test]
+fn an_answered_rejection_is_quiet_at_done() {
+    let (repo, cfg) = seeded();
+    for (id, answer) in [
+        ("T-002", "VERIFIED"),
+        ("T-003", "Passed"),
+        ("T-004", "IMPLEMENTER"),
+    ] {
+        append(
+            &repo,
+            "TASKS.md",
+            &reviewed_block(
+                id,
+                "done",
+                &format!(
+                    "{REJECTION}  {answer} 2026-09-17: the rejection point is answered.\n{QUOTED}"
+                ),
+            ),
+        );
+    }
+    assert_eq!(rejection_stale(&repo, &cfg), Vec::<String>::new());
+}
