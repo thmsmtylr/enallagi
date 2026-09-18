@@ -737,6 +737,50 @@ fn in_harness(root: &std::path::Path, args: &[&str]) -> std::process::Output {
 }
 
 #[test]
+fn prune_defaults_prints_no_install_header() {
+    let r = enallagi::fixture::Repo::new();
+    let init = in_harness(&r.root, &["init"]);
+    assert_eq!(init.status.code(), Some(0), "{init:?}");
+    assert!(
+        String::from_utf8_lossy(&init.stdout).contains("installing the harness into"),
+        "{init:?}"
+    );
+    let prune = in_harness(&r.root, &["init", "--prune-defaults"]);
+    assert_eq!(prune.status.code(), Some(0), "{prune:?}");
+    assert!(
+        !String::from_utf8_lossy(&prune.stdout).contains("installing the harness into"),
+        "{prune:?}"
+    );
+}
+
+#[test]
+fn prune_defaults_without_config_exits_1() {
+    let r = enallagi::fixture::Repo::new();
+    let out = in_harness(&r.root, &["init", "--prune-defaults"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("enallagi.toml not found"),
+        "{out:?}"
+    );
+    assert!(!r.root.join(".enallagi").exists(), "{out:?}");
+}
+
+#[test]
+fn prune_defaults_says_when_nothing_dropped() {
+    let r = enallagi::fixture::Repo::new();
+    let init = in_harness(&r.root, &["init"]);
+    assert_eq!(init.status.code(), Some(0), "{init:?}");
+    let config = enallagi::config::config_path(&r.root);
+    std::fs::write(&config, "[check]\ncommand = \"make check\"\n").expect("write config");
+    let out = in_harness(&r.root, &["init", "--prune-defaults"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("no key equals its default"),
+        "{out:?}"
+    );
+}
+
+#[test]
 fn gate_scope_refuses_a_grown_nested_baseline() {
     let r = enallagi::fixture::Repo::new();
     let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");

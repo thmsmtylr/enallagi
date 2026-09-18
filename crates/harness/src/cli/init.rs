@@ -18,6 +18,27 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         adapter: args.adapter.clone(),
         dry_run: args.dry_run,
     };
+    if args.prune_defaults {
+        let verb = if args.dry_run {
+            "would drop"
+        } else {
+            "dropped"
+        };
+        let path = config::config_path(&root);
+        if !path.is_file() {
+            eprintln!("{} not found, nothing pruned", path.display());
+            return Ok(1);
+        }
+        let dropped = init::prune(&root, args.dry_run)?;
+        if dropped.is_empty() {
+            println!("  no key equals its default, nothing dropped");
+        }
+        for key in dropped {
+            println!("  {verb}: {key}");
+        }
+        println!("\nNext: re-run `enallagi init`.");
+        return Ok(0);
+    }
     println!(
         "installing the harness into {}{}",
         root.display(),
@@ -33,18 +54,6 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             println!("  {verb}: {old} -> {new}");
         }
         println!("\nNext: git add the old and new paths, then re-run `enallagi init`.");
-        return Ok(0);
-    }
-    if args.prune_defaults {
-        let verb = if args.dry_run {
-            "would drop"
-        } else {
-            "dropped"
-        };
-        for key in init::prune(&root, args.dry_run)? {
-            println!("  {verb}: {key}");
-        }
-        println!("\nNext: re-run `enallagi init`.");
         return Ok(0);
     }
     let report = init::install(&root, &opts)?;
