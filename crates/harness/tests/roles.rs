@@ -226,3 +226,22 @@ fn immutable_refuses_an_edit_to_a_role() {
     let (code, msg) = hooks::immutable(&repo.root, &input(".enallagi/roles/verifier.md"));
     assert_eq!(code, 0, "{msg}");
 }
+
+// the arm lives on step 7 itself, so the assertion reads that line and not the whole prompt
+#[test]
+fn step_seven_has_an_already_committed_arm() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/implementer.md");
+    let text = fs::read_to_string(&source).expect("read roles/implementer.md");
+    let step = text
+        .lines()
+        .find(|line| line.starts_with("7. "))
+        .expect("roles/implementer.md has a step 7");
+    for want in [
+        "git status --porcelain",
+        "already committed at",
+        "no commit",
+        "status: review",
+    ] {
+        assert!(step.contains(want), "step 7 wants {want}: {step}");
+    }
+}
