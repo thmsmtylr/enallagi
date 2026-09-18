@@ -112,6 +112,9 @@ pub enum Command {
         /// Push the branch and open the pull request with gh when it is installed; never merges
         #[arg(long)]
         push: bool,
+        /// Push past a contribution guide that conditions generated changes, once you have read it
+        #[arg(long)]
+        policy_read: bool,
     },
     /// Print the product commit a task was queued against
     ///
@@ -234,7 +237,15 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         }),
         Command::Watch => watch::run(),
         Command::Probe { names } => probe::run(&probe::Args { names }),
-        Command::Pr { tasks, push } => pr::run(&pr::Args { tasks, push }),
+        Command::Pr {
+            tasks,
+            push,
+            policy_read,
+        } => pr::run(&pr::Args {
+            tasks,
+            push,
+            policy_read,
+        }),
         Command::Base { task } => base::run(&base::Args { task }),
         Command::Gate { which, task, base } => gate::run(&gate::Args { which, task, base }),
         Command::Hook { name } => hook::run(&hook::Args { name }),
@@ -271,7 +282,7 @@ mod tests {
         "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 22] = [
+    const FLAGS: [&str; 23] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
@@ -288,6 +299,7 @@ mod tests {
         "run --frozen",
         "run --dangerously-skip-permissions",
         "pr --push",
+        "pr --policy-read",
         "gate --base",
         "eval --gate",
         "events --role",

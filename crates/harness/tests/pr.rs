@@ -382,3 +382,65 @@ fn pr_refuses_a_done_task_no_round_commit_names() {
     assert!(out.contains("T-004") && out.contains("no commit"), "{out}");
     assert!(git(&f.root, &["branch", "--list", "task/*"]).is_empty());
 }
+
+const REFUSAL: &str = "We do not accept pull requests written by AI tools.";
+
+fn guarded() -> (Fixture, PathBuf) {
+    let (f, _) = landed("exit 0\n");
+    commit(
+        &f.root,
+        "CONTRIBUTING.md",
+        &format!("# Contributing\n\nRun the tests.\n{REFUSAL}\n"),
+        "docs: contribution guide",
+    );
+    let log = f.tools.join("gh.log");
+    exec(
+        &f.tools.join("gh"),
+        &format!("printf '%s\\n' \"$@\" >{}\n", log.display()),
+    );
+    (f, log)
+}
+
+#[test]
+fn push_refuses_a_guide_refusing_generated_work() {
+    let (f, log) = guarded();
+    let (code, out) = f.harness(&["pr", "T-001", "--push"]);
+    assert_ne!(code, 0, "{out}");
+    assert!(
+        out.contains(REFUSAL) && out.contains("CONTRIBUTING.md:4"),
+        "{out}"
+    );
+    assert!(out.contains("--policy-read"), "{out}");
+    assert!(f.remote_branches().lines().all(|b| !b.contains("task/")));
+    assert!(!log.exists(), "gh ran");
+    let text = fs::read_to_string(f.root.join(".enallagi/pr/T-001.md")).expect("description");
+    let policy = text.split("## Contribution policy").nth(1).expect("policy");
+    assert!(
+        policy.contains(REFUSAL) && policy.contains("refused"),
+        "{text}"
+    );
+
+    let (code, out) = f.harness(&["pr", "T-001", "--push", "--policy-read"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(f.remote_branches().contains("task/T-001"));
+    assert!(log.exists(), "gh did not run");
+    let text = fs::read_to_string(f.root.join(".enallagi/pr/T-001.md")).expect("description");
+    let policy = text.split("## Contribution policy").nth(1).expect("policy");
+    assert!(
+        policy.contains(REFUSAL) && policy.contains("--policy-read"),
+        "{text}"
+    );
+}
+
+#[test]
+fn pr_without_push_prints_the_policy_finding() {
+    let (f, log) = guarded();
+    let (code, out) = f.harness(&["pr", "T-001"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains(REFUSAL) && out.contains("CONTRIBUTING.md:4"),
+        "{out}"
+    );
+    assert!(git(&f.root, &["branch", "--list", "task/T-001"]).contains("task/T-001"));
+    assert!(!log.exists(), "gh ran");
+}

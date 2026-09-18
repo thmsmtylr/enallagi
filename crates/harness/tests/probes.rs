@@ -96,7 +96,7 @@ fn probes_exit_0_every_probe_ran() {
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     assert_eq!(errors(&results), Vec::<&str>::new());
-    assert_eq!(results.len(), 22, "{}", render(&results));
+    assert_eq!(results.len(), 23, "{}", render(&results));
 }
 
 #[test]
@@ -1012,4 +1012,74 @@ fn check_red_says_nothing_for_a_timed_out_check() {
     let results = probes::run_all(&ctx, &["check-red".to_string()]);
     assert_eq!(count(&results, "check-red"), None);
     assert_eq!(errors(&results), vec!["check-red"]);
+}
+
+const GUIDE: &str = "# Contributing\n\nOpen an issue first. Run the tests before you push.\nWe use AI to label new issues.\n\nWe do not accept pull requests written by AI\ntools or LLMs. Such pull requests will be closed.\n";
+
+fn policy(repo: &Repo, cfg: &Config) -> Vec<probes::Finding> {
+    let ctx = ProbeCtx {
+        root: &repo.root,
+        cfg,
+        check: Some(&GREEN),
+        driver: false,
+    };
+    let results = probes::run_all(&ctx, &["contribution-policy".to_string()]);
+    findings(&results, "contribution-policy").to_vec()
+}
+
+#[test]
+fn a_guide_refusing_generated_work_is_reported() {
+    let (repo, cfg) = seeded();
+    assert_eq!(policy(&repo, &cfg), Vec::new());
+
+    repo.write("CONTRIBUTING.md", GUIDE);
+    let found = policy(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].path, "CONTRIBUTING.md");
+    assert_eq!(found[0].line, 6);
+    assert!(
+        found[0]
+            .message
+            .contains("We do not accept pull requests written by AI tools or LLMs."),
+        "{}",
+        found[0].message
+    );
+}
+
+#[test]
+fn a_guide_without_a_refusal_reports_nothing() {
+    let (repo, cfg) = seeded();
+    repo.write(
+        ".github/CONTRIBUTING.md",
+        "# Contributing\n\nWe use AI to label new issues. Run the tests.\n",
+    );
+    repo.write(
+        ".github/PULL_REQUEST_TEMPLATE.md",
+        "Describe the change. Do not skip the tests.\n",
+    );
+    assert_eq!(policy(&repo, &cfg), Vec::new());
+}
+
+#[test]
+fn every_policy_file_is_read() {
+    let (repo, cfg) = seeded();
+    for file in [
+        "CONTRIBUTING.md",
+        ".github/CONTRIBUTING.md",
+        "AI_POLICY.md",
+        ".github/PULL_REQUEST_TEMPLATE.md",
+    ] {
+        repo.write(file, "LLM-generated changes must be disclosed.\n");
+    }
+    let found = policy(&repo, &cfg);
+    let paths: Vec<&str> = found.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            "CONTRIBUTING.md",
+            ".github/CONTRIBUTING.md",
+            "AI_POLICY.md",
+            ".github/PULL_REQUEST_TEMPLATE.md",
+        ]
+    );
 }

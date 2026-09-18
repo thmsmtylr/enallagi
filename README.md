@@ -121,6 +121,10 @@ Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGE
 - `probe` reports findings. `gate` runs one gate. `hook` is the agent's lifecycle entry point.
 - `skills` resolves declared skills. `eval` runs the evals. `pr` builds a pull request.
 
+`enallagi pr --push` reads the target's contribution guide first.
+A sentence there that refuses or conditions generated changes stops the push.
+Pass `--policy-read` once you have read it. The description file records either outcome.
+
 Run `enallagi <command> --help` for the flags.
 
 ## License

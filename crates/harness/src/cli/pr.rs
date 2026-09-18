@@ -3,17 +3,22 @@ use crate::pr::{self, PrError, PrOpts};
 pub struct Args {
     pub tasks: Vec<String>,
     pub push: bool,
+    pub policy_read: bool,
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
     let root = std::env::current_dir()?;
-    let opts = PrOpts { push: args.push };
+    let opts = PrOpts {
+        push: args.push,
+        policy_read: args.policy_read,
+    };
     let report = match pr::build(&root, &args.tasks, &opts) {
         Ok(report) => report,
         Err(
             err @ (PrError::Refused(_)
             | PrError::Conflict { .. }
             | PrError::Check(_)
+            | PrError::Policy { .. }
             | PrError::Gh(_)),
         ) => {
             eprintln!("{err}");
@@ -23,6 +28,9 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     };
     println!("  branch: {}", report.branch);
     println!("  description: {}", report.description.display());
+    for f in &report.policy {
+        println!("  contribution policy: {}", pr::cite(f));
+    }
     if let Some(opened) = &report.opened {
         println!("  pushed: {opened}");
     }

@@ -1,6 +1,7 @@
 //! What the tree says about itself. A probe REPORTS, never gates; one that could not run says ERROR, not a claim of zero.
 
 pub mod common;
+pub mod contribution_policy;
 pub mod telemetry;
 
 mod check_red;
@@ -70,6 +71,7 @@ pub const NAMES: &[&str] = &[
     "litter",
     "plain-record",
     "install-stale",
+    "contribution-policy",
     "verdict-flip",
     "rejection-repeat",
     "stage-outlier",
@@ -80,7 +82,7 @@ pub const NAMES: &[&str] = &[
 
 type ProbeFn = fn(&ProbeCtx) -> ProbeResult;
 
-fn registry() -> [(&'static str, ProbeFn); 22] {
+fn registry() -> [(&'static str, ProbeFn); 23] {
     [
         ("spec-untested", spec_untested::probe),
         ("queue-uncovered", queue_uncovered::probe),
@@ -98,6 +100,7 @@ fn registry() -> [(&'static str, ProbeFn); 22] {
         ("litter", litter::probe),
         ("plain-record", plain_record::probe),
         ("install-stale", install_stale::probe),
+        ("contribution-policy", contribution_policy::probe),
         ("verdict-flip", telemetry_probe::verdict_flip),
         ("rejection-repeat", telemetry_probe::rejection_repeat),
         ("stage-outlier", telemetry_probe::stage_outlier),

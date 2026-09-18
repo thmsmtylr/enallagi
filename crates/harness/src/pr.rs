@@ -1,5 +1,6 @@
 //! Builds a pull-request branch off the upstream default branch from the product commits whose subject names a landed task.
 
+use crate::probes::{contribution_policy, Finding};
 use crate::{config, gates, git, queue};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,6 +9,7 @@ use std::process::Command;
 #[derive(Debug, Default)]
 pub struct PrOpts {
     pub push: bool,
+    pub policy_read: bool,
 }
 
 #[derive(Debug)]
@@ -16,6 +18,7 @@ pub struct PrReport {
     pub description: PathBuf,
     /// The pull request's URL, or why none was opened, when `--push` ran.
     pub opened: Option<String>,
+    pub policy: Vec<Finding>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -26,6 +29,11 @@ pub enum PrError {
     Conflict { base: String, files: Vec<String> },
     #[error("the check failed in the task worktree, nothing was pushed:\n{0}")]
     Check(String),
+    #[error("enallagi pr --push refused, the contribution guide conditions generated changes; nothing was pushed:\n  {}\nread the guide, then pass --policy-read to push. The refusal is recorded in {}", .sentences.join("\n  "), .description.display())]
+    Policy {
+        sentences: Vec<String>,
+        description: PathBuf,
+    },
     #[error("the branch is pushed, and gh pr create failed: {0}")]
     Gh(String),
     #[error("{path}: {source}")]
@@ -134,22 +142,56 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
         .join("pr")
         .join(format!("{}.md", ids.join("-")));
     let stat = git::git(root, &["diff", "--stat", &base, &branch])?;
-    let text = describe(root, &dir, &tasks, &picked, &stat)?;
+    let policy = contribution_policy::find(root).map_err(|e| PrError::Refused(vec![e]))?;
+    let refused = opts.push && !opts.policy_read && !policy.is_empty();
+    let mut text = describe(root, &dir, &tasks, &picked, &stat)?;
+    text.push_str(&policy_section(&policy, opts, refused));
     if let Some(parent) = description.parent() {
         fs::create_dir_all(parent).map_err(io(parent.display()))?;
     }
     fs::write(&description, text).map_err(io(description.display()))?;
 
+    if refused {
+        git::git(root, &["branch", "-D", &branch])?;
+        return Err(PrError::Policy {
+            sentences: policy.iter().map(cite).collect(),
+            description,
+        });
+    }
+
     let mut report = PrReport {
         branch,
         description,
         opened: None,
+        policy,
     };
     if opts.push {
         git::git(root, &["push", "-q", "origin", &report.branch])?;
         report.opened = Some(open(root, &default, &report)?);
     }
     Ok(report)
+}
+
+pub fn cite(f: &Finding) -> String {
+    format!("{}:{} {}", f.path, f.line, f.message)
+}
+
+fn policy_section(policy: &[Finding], opts: &PrOpts, refused: bool) -> String {
+    if policy.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n## Contribution policy\n\n");
+    for f in policy {
+        out.push_str(&format!("- {}\n", cite(f)));
+    }
+    out.push_str(if refused {
+        "\nrefused: `enallagi pr --push` without `--policy-read`, nothing was pushed.\n"
+    } else if opts.push {
+        "\npushed with `--policy-read`: the operator read the sentences above.\n"
+    } else {
+        "\nnot pushed: `enallagi pr` ran without `--push`.\n"
+    });
+    out
 }
 
 fn parse(text: &str) -> Result<Vec<queue::Block>, PrError> {
