@@ -520,13 +520,15 @@ fn a_slashed_row_resolves_under_source_root() {
 }
 
 #[test]
-fn only_an_open_block_needs_a_scope_file() {
+fn only_a_review_block_needs_a_scope_file() {
     let (repo, cfg) = seeded();
     append(
         &repo,
         "TASKS.md",
-        "\n## [T-002] the finished one, whose files a later cleanup deleted\nscope: src/gone.rs\nblockedBy: none\nstatus: done\n\n## [T-003] the open one nobody can take\nscope: src/missing.rs\nblockedBy: none\nstatus: ready\n",
+        "\n## [T-002] the finished one, whose files a later cleanup deleted\nscope: src/gone.rs\nblockedBy: none\nstatus: done\n\n## [T-003] the reviewed one whose file never landed\nscope: src/missing.rs\nblockedBy: none\nstatus: review\n",
     );
+    repo.write("src/other.rs", "");
+    repo.commit_all("feat: T-003 touches another file");
     let results = run(&repo, &cfg);
     let found = findings(&results, "queue-hygiene");
     assert_eq!(found.len(), 1, "{}", render(&results));
@@ -534,6 +536,23 @@ fn only_an_open_block_needs_a_scope_file() {
         found[0].message.contains("src/missing.rs"),
         "{}",
         found[0].message
+    );
+}
+
+#[test]
+fn a_ready_block_may_name_a_file_it_creates() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        "\n## [T-002] the one that adds two files\nscope: src/packs/core.ts, tests/cli.test.ts\nblockedBy: none\nstatus: ready\n",
+    );
+    let results = run(&repo, &cfg);
+    assert_eq!(
+        count(&results, "queue-hygiene"),
+        Some(0),
+        "{}",
+        render(&results)
     );
 }
 
