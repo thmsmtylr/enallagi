@@ -856,7 +856,7 @@ fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result
             timed_out = true;
             break match exited {
                 Some(status) => {
-                    signal("KILL", &format!("-{pgid}"));
+                    signal(libc::SIGKILL, pgid);
                     status
                 }
                 None => kill_group(&mut child, pgid)?,
@@ -892,8 +892,7 @@ fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result
 }
 
 fn kill_group(child: &mut std::process::Child, pgid: u32) -> std::io::Result<ExitStatus> {
-    let group = format!("-{pgid}");
-    signal("TERM", &group);
+    signal(libc::SIGTERM, pgid);
     let deadline = Instant::now() + GRACE;
     let status = loop {
         if let Some(status) = child.try_wait()? {
@@ -905,17 +904,14 @@ fn kill_group(child: &mut std::process::Child, pgid: u32) -> std::io::Result<Exi
         std::thread::sleep(POLL);
     };
     // the shell exiting says nothing about a grandchild it left behind
-    signal("KILL", &group);
+    signal(libc::SIGKILL, pgid);
     Ok(status)
 }
 
-// a group already gone prints `No such process` on stderr, which is not the loop's output to carry
-fn signal(name: &str, group: &str) {
-    let _ = Command::new("kill")
-        .args([&format!("-{name}"), group])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+// `kill -TERM -<pgid>` is not portable: a GNU userland reads the negative pgid as a signal number
+fn signal(sig: i32, pgid: u32) -> bool {
+    let group = -i32::try_from(pgid).unwrap_or(i32::MAX);
+    unsafe { libc::kill(group, sig) == 0 }
 }
 
 fn drain<R: Read + Send + 'static>(
@@ -1301,9 +1297,10 @@ mod tests {
         let mut env = Env::timed("sleep 10\n", "2s");
         let started = Instant::now();
         let r = check_delta(&env.repo.root, &env.cfg, false);
+        let waited = started.elapsed();
         assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "the gate waited"
+            waited < Duration::from_secs(5),
+            "the gate waited {waited:?}"
         );
         assert!(r.timed_out.is_some(), "{r:?}");
         assert!(!r.red && !r.accepts(), "{r:?}");
@@ -1331,9 +1328,10 @@ mod tests {
         let r = check_delta(&env.repo.root, &env.cfg, false);
         assert!(r.timed_out.is_some(), "{r:?}");
         // a grandchild still holding the pipe would hold the gate for its own 30 seconds
+        let waited = started.elapsed();
         assert!(
-            started.elapsed() < Duration::from_secs(10),
-            "the gate waited"
+            waited < Duration::from_secs(10),
+            "the gate waited {waited:?}"
         );
         let pid = std::fs::read_to_string(env.repo.root.join("child.pid"))
             .expect("the check wrote its child's pid")
@@ -1351,9 +1349,10 @@ mod tests {
         let env = Env::timed("sleep 25 & exit 0\n", "2s");
         let started = Instant::now();
         let r = check_delta(&env.repo.root, &env.cfg, false);
+        let waited = started.elapsed();
         assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "the gate waited"
+            waited < Duration::from_secs(5),
+            "the gate waited {waited:?}"
         );
         let reason = r.timed_out.as_deref().unwrap_or_default();
         assert!(reason.contains("2s"), "{r:?}");
@@ -1365,9 +1364,10 @@ mod tests {
         let env = Env::timed("perl -e 'use POSIX; setsid(); sleep 12' & exit 0\n", "2s");
         let started = Instant::now();
         let r = check_delta(&env.repo.root, &env.cfg, false);
+        let waited = started.elapsed();
         assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "the gate waited"
+            waited < Duration::from_secs(5),
+            "the gate waited {waited:?}"
         );
         let reason = r.timed_out.as_deref().unwrap_or_default();
         assert!(reason.contains("2s"), "{r:?}");

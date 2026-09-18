@@ -496,6 +496,7 @@ dependencies = [
  "crossterm",
  "globset",
  "jiff",
+ "libc",
  "ratatui",
  "regex",
  "serde",
