@@ -258,18 +258,41 @@ fn the_tree_has_no_litter() {
     assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
 }
 
+// `skills sync` refuses a role whose skill token has no entry, so a fixture declares all eight
+const IDS: [&str; 8] = [
+    "tdd",
+    "ponytail",
+    "debugging",
+    "review-received",
+    "verify-before-done",
+    "review-requested",
+    "brainstorming",
+    "caveman-commit",
+];
+
+// a path: source under src/ keeps the fixture off the network and off the litter list
+fn vendored_skills(repo: &Repo) -> String {
+    let mut toml = String::new();
+    for id in IDS {
+        repo.write(&format!("src/vendor/{id}/SKILL.md"), "body\n");
+        toml.push_str(&format!(
+            "\n[[skill]]\nid = \"{id}\"\nsource = \"path:src/vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"fixture\"\n"
+        ));
+    }
+    toml
+}
+
+fn skills_sync(repo: &Repo) {
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["skills", "sync"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("run enallagi skills sync");
+    assert!(out.status.success(), "{out:?}");
+}
+
 // the conventions a repository already carries, then the install, then what `skills sync` writes
 fn conventional() -> (Repo, Config) {
-    const IDS: [&str; 8] = [
-        "tdd",
-        "ponytail",
-        "debugging",
-        "review-received",
-        "verify-before-done",
-        "review-requested",
-        "brainstorming",
-        "caveman-commit",
-    ];
     let repo = Repo::new();
     for name in [
         "docs/guide.md",
@@ -287,13 +310,7 @@ fn conventional() -> (Repo, Config) {
     let mut toml = String::from(
         "[check]\ncommand = \"true\"\n\n[layout]\nallowed_prefixes = [\"src/\", \"docs/\", \"bench/\", \".enallagi/\", \".claude/\", \".github/\"]\n",
     );
-    for id in IDS {
-        // a path: source under src/ keeps the fixture off the network and off the litter list
-        repo.write(&format!("src/vendor/{id}/SKILL.md"), "body\n");
-        toml.push_str(&format!(
-            "\n[[skill]]\nid = \"{id}\"\nsource = \"path:src/vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"fixture\"\n"
-        ));
-    }
+    toml.push_str(&vendored_skills(&repo));
     // a tracked harness directory keeps the install in the product's history, so what it writes is tracked
     repo.write(".enallagi/enallagi.toml", &toml);
     repo.commit_all("conventions");
@@ -301,12 +318,7 @@ fn conventional() -> (Repo, Config) {
     enallagi::init::install(&repo.root, &enallagi::init::InitOpts::default()).expect("install");
     repo.commit_all("harness");
 
-    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
-        .args(["skills", "sync"])
-        .current_dir(&repo.root)
-        .output()
-        .expect("run enallagi skills sync");
-    assert!(out.status.success(), "{out:?}");
+    skills_sync(&repo);
     repo.commit_all("skills");
     let tracked =
         enallagi::git::git(&repo.root, &["ls-files", "--", ".enallagi/harness.lock"]).expect("ls");
@@ -319,6 +331,29 @@ fn conventional() -> (Repo, Config) {
 #[test]
 fn a_repository_of_conventions_has_no_litter() {
     let (repo, cfg) = conventional();
+    let results = run(&repo, &cfg);
+    assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
+}
+
+#[test]
+fn a_root_layout_lock_is_not_litter() {
+    let repo = Repo::new();
+    // a tracked TASKS.md at the root and none under the harness directory is the root layout
+    repo.write("src/main.rs", "fn main() {}\n");
+    repo.write("TASKS.md", "# TASKS\n");
+    let toml = format!(
+        "[check]\ncommand = \"true\"\n\n[layout]\nallowed_prefixes = [\"src/\", \".enallagi/\", \".claude/\"]\n{}",
+        vendored_skills(&repo)
+    );
+    repo.write("enallagi.toml", &toml);
+    repo.commit_all("product");
+
+    skills_sync(&repo);
+    repo.commit_all("skills");
+    let tracked = enallagi::git::git(&repo.root, &["ls-files", "--", "harness.lock"]).expect("ls");
+    assert!(!tracked.is_empty(), "harness.lock is untracked");
+
+    let cfg = config::load(&repo.root).expect("config");
     let results = run(&repo, &cfg);
     assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
 }
