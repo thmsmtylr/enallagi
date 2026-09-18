@@ -756,6 +756,77 @@ fn gate_scope_rejects_a_rewritten_vendored_skill() {
     );
 }
 
+// a nested install with T-900 verified done; `product` rides the work commit and `state` the
+// verify commit, the way the launcher's state commit carries a STOP written mid-run
+fn verified_t900(product: &[&str], state: &[&str]) -> (enallagi::fixture::Repo, String) {
+    let r = enallagi::fixture::Repo::new();
+    let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
+    let out = in_harness(&r.root, &["init"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    git(
+        &r.root,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "install",
+        ],
+    );
+    let queued = git(&r.root, &["rev-parse", "HEAD"]);
+    let state_dir = r.root.join(".enallagi");
+    // CI runners have no global git identity, so the nested repository needs its own
+    git(&state_dir, &["config", "user.name", "t"]);
+    git(&state_dir, &["config", "user.email", "t@t"]);
+    let commit_state = |msg: &str| {
+        git(&state_dir, &["add", "-A"]);
+        git(
+            &state_dir,
+            &["-c", "commit.gpgsign=false", "commit", "-qm", msg],
+        );
+    };
+    let tasks = std::fs::read_to_string(state_dir.join("TASKS.md")).expect("TASKS.md");
+    let block = "\n## [T-900] halt\nscope: a.txt\nstatus: review\n";
+    r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
+    commit_state(&format!("queue at {queued}"));
+
+    r.write("a.txt", "work\n");
+    for f in product {
+        r.write(f, "work\n");
+    }
+    r.commit_all("T-900 work");
+    let worked = git(&r.root, &["rev-parse", "HEAD"]);
+    for f in state {
+        r.write(f, "");
+    }
+    let done = block.replace("status: review", "status: done");
+    r.write(".enallagi/TASKS.md", &format!("{tasks}{done}"));
+    commit_state(&format!("verify T-900 at {worked}"));
+    (r, queued)
+}
+
+#[test]
+fn gate_scope_exempts_the_halt_marker() {
+    let (r, queued) = verified_t900(&[], &[".enallagi/STOP"]);
+    let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("T-900 stayed inside its scope."),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn gate_scope_rejects_a_file_off_the_scope_line() {
+    let (r, queued) = verified_t900(&["b.txt"], &[".enallagi/STOP"]);
+    let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("b.txt"), "{out:?}");
+    assert!(!stdout.contains("STOP"), "{out:?}");
+}
+
 #[test]
 fn tasks_ready_prefers_the_harness_dir_queue() {
     let r = enallagi::fixture::Repo::new();
