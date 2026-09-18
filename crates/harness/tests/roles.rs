@@ -246,3 +246,18 @@ fn step_seven_names_both_commit_arms() {
         assert!(step.contains(want), "step 7 wants {want}: {step}");
     }
 }
+
+// plain_record.rs closes a rejection region only at an author marker, so step 6 must ask for one
+#[test]
+fn step_six_requires_the_author_marker() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/implementer.md");
+    let text = fs::read_to_string(&source).expect("read roles/implementer.md");
+    let step = text
+        .lines()
+        .find(|line| line.starts_with("6. "))
+        .expect("roles/implementer.md has a step 6");
+    assert!(
+        step.contains("IMPLEMENTER"),
+        "step 6 wants IMPLEMENTER: {step}"
+    );
+}
