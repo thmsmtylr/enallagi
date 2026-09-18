@@ -540,6 +540,71 @@ fn prune_defaults_keeps_only_the_changed_key() {
 }
 
 #[test]
+fn prune_keeps_the_comments_of_kept_keys() {
+    let repo = Repo::new();
+    seeded(
+        &repo,
+        "# my own note: this command is set by CI\n[check]\ncommand = \"make check\"\n# the default timeout is fine, keep it explicit\ntimeout = \"30m\"\n",
+    );
+    let dropped = init::prune(&repo.root, false).expect("prune");
+    assert_eq!(dropped, ["check.timeout"]);
+    let text = read(&repo, ".enallagi/enallagi.toml");
+    assert!(!text.contains("timeout"), "{text}");
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines.contains(&"# my own note: this command is set by CI"),
+        "{text}"
+    );
+    assert!(lines.contains(&"command = \"make check\""), "{text}");
+    assert!(!text.contains("keep it explicit"), "{text}");
+}
+
+#[test]
+fn prune_drops_every_line_of_a_multiline_array() {
+    let default = enallagi::config::DEFAULT_TOML;
+    let start = default.find("harness_files = [").expect("harness_files");
+    let end = start + default[start..].find("\n]\n").expect("array end") + 2;
+    let array = &default[start..end];
+    assert!(array.lines().count() > 2, "{array}");
+    let repo = Repo::new();
+    seeded(
+        &repo,
+        &format!("[layout]\n{array}\nsource_root = \"lib/\"\n"),
+    );
+    let dropped = init::prune(&repo.root, false).expect("prune");
+    assert_eq!(dropped, ["layout.harness_files"]);
+    let text = read(&repo, ".enallagi/enallagi.toml");
+    for line in array.lines() {
+        assert!(!text.lines().any(|l| l == line), "{line:?} in {text}");
+    }
+    assert!(
+        text.lines().any(|l| l == "source_root = \"lib/\""),
+        "{text}"
+    );
+}
+
+#[test]
+fn prune_twice_writes_the_defaults_note_once() {
+    let repo = Repo::new();
+    seeded(
+        &repo,
+        "[check]\ncommand = \"make check\"\ntimeout = \"30m\"\nfail_name = \"\"\n",
+    );
+    init::prune(&repo.root, false).expect("prune");
+    seeded(
+        &repo,
+        &format!(
+            "{}timeout = \"30m\"\n",
+            read(&repo, ".enallagi/enallagi.toml")
+        ),
+    );
+    init::prune(&repo.root, false).expect("prune");
+    let text = read(&repo, ".enallagi/enallagi.toml");
+    let note = enallagi::config::DEFAULTS_NOTE.trim_end();
+    assert_eq!(text.lines().filter(|l| *l == note).count(), 1, "{text}");
+}
+
+#[test]
 fn init_migrates_harness_json_keys() {
     let repo = Repo::new();
     repo.write(

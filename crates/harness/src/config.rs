@@ -549,11 +549,107 @@ pub fn prune_defaults(text: &str) -> Result<(String, Vec<String>), ConfigError> 
     let mut dropped = Vec::new();
     strip(&mut user, &default, "", &mut dropped);
     dropped.sort();
+    let body = drop_lines(text, &dropped);
+    let note = if body.lines().any(|l| l == DEFAULTS_NOTE.trim_end()) {
+        ""
+    } else {
+        DEFAULTS_NOTE
+    };
+    // a key the line walk cannot place (an inline table, a quoted dotted key) falls back to the serializer
+    if parse_toml(&body, CONFIG).ok().as_ref() == Some(&user) {
+        return Ok((format!("{note}{body}"), dropped));
+    }
     let body = toml::to_string(&user).map_err(|e: toml::ser::Error| ConfigError::Parse {
         path: CONFIG.to_string(),
         message: e.to_string(),
     })?;
     Ok((format!("{DEFAULTS_NOTE}{body}"), dropped))
+}
+
+// removes each dropped key's lines and the comment lines directly above it, so every other line survives
+fn drop_lines(text: &str, dropped: &[String]) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut keep = vec![true; lines.len()];
+    let mut table = String::new();
+    let mut whole = false;
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i].trim();
+        if line.starts_with('[') {
+            let inner = line.trim_start_matches('[');
+            table = key_path(&inner[..inner.find(']').unwrap_or(inner.len())]);
+            whole = dropped.contains(&table);
+            if whole {
+                cut(&lines, &mut keep, i, i + 1);
+            }
+            i += 1;
+            continue;
+        }
+        let Some((key, _)) = line.split_once('=').filter(|_| !line.starts_with('#')) else {
+            if whole {
+                keep[i] = false;
+            }
+            i += 1;
+            continue;
+        };
+        let mut end = i + 1;
+        while end < lines.len() && toml::from_str::<toml::Value>(&lines[i..end].join("\n")).is_err()
+        {
+            end += 1;
+        }
+        let path = match key_path(key) {
+            leaf if table.is_empty() => leaf,
+            leaf => format!("{table}.{leaf}"),
+        };
+        if whole || dropped.contains(&path) {
+            cut(&lines, &mut keep, i, end);
+        }
+        i = end;
+    }
+    drop_empty_tables(&lines, &mut keep);
+    let mut out = String::new();
+    let mut blank = true;
+    for (line, _) in lines.iter().zip(&keep).filter(|(_, k)| **k) {
+        if line.trim().is_empty() && blank {
+            continue;
+        }
+        blank = line.trim().is_empty();
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn key_path(raw: &str) -> String {
+    raw.split('.')
+        .map(|part| part.trim().trim_matches('"').trim_matches('\''))
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+fn cut(lines: &[&str], keep: &mut [bool], from: usize, to: usize) {
+    keep[from..to].iter_mut().for_each(|k| *k = false);
+    let mut above = from;
+    while above > 0 && lines[above - 1].trim().starts_with('#') {
+        above -= 1;
+        keep[above] = false;
+    }
+}
+
+// a `[table]` header whose keys were all dropped would otherwise parse as an empty table
+fn drop_empty_tables(lines: &[&str], keep: &mut [bool]) {
+    for i in 0..lines.len() {
+        let line = lines[i].trim();
+        if !keep[i] || !line.starts_with('[') || line.starts_with("[[") {
+            continue;
+        }
+        let body_empty = (i + 1..lines.len())
+            .take_while(|&j| !lines[j].trim().starts_with('['))
+            .all(|j| !keep[j] || lines[j].trim().is_empty() || lines[j].trim().starts_with('#'));
+        if body_empty {
+            cut(lines, keep, i, i + 1);
+        }
+    }
 }
 
 fn strip(user: &mut toml::Value, default: &toml::Value, at: &str, dropped: &mut Vec<String>) {
