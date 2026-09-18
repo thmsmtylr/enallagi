@@ -25,6 +25,7 @@ notes: <what a reviewer should scrutinise; the implementer's and the verifier's 
 
 Keep the example above unnumbered: `enallagi tasks ready` scans for `## [T-<digits>]` and does not
 know a code fence from a block. `blockedBy:` is empty, `none`, or a comma-separated list of ids.
+A directory in `scope:` is written `dir/**`. A bare `dir` matches only itself, never a file beneath it.
 `attended: true` marks a task needing a human credential and no launcher auto-selects it.
 
 ---

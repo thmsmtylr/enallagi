@@ -132,6 +132,8 @@ mod tests {
             cost: None,
             input_tokens: None,
             output_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
             turns: None,
         });
         let (pairs, _) = w.log.read_lines().unwrap();

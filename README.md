@@ -88,6 +88,7 @@ becomes `needs-spec` and halts the run.
 - `[[skill]]` declares a skill to vendor, with its `rev` and the gate that enforces it.
 
 Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGET_TOKENS`.
+`BUDGET_TOKENS` counts every token lane `[agent.usage]` names, cached reads and cache writes included.
 
 ## Commands
 

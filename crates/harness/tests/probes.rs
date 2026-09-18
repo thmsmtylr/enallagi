@@ -705,6 +705,28 @@ fn a_ready_block_may_name_a_file_it_creates() {
     );
 }
 
+#[test]
+fn a_scope_directory_is_reported_as_matching_none() {
+    let (repo, cfg) = seeded();
+    repo.write("evals/verifier/setup.sh", "");
+    append(
+        &repo,
+        "TASKS.md",
+        "\n## [T-002] the eval that adds files under a directory\nscope: evals/verifier, evals/other/new.sh\nblockedBy: none\nstatus: ready\n",
+    );
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "queue-hygiene");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0]
+            .message
+            .contains("evals/verifier names a directory")
+            && found[0].message.contains("`evals/verifier/**`"),
+        "{}",
+        found[0].message
+    );
+}
+
 // the two subjects the criteria name, taken from this repository's own history
 const COMMENTARY_SUBJECT: &str = "fix(ci): four failures, four causes, none of them the same";
 const RECORD_SUBJECT: &str = "queue: T-036 ready, docs/demo.sh joins the scope";
@@ -848,6 +870,44 @@ fn a_printed_em_dash_aside_is_reported() {
     let found = plain_record(&repo, &cfg);
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(found[0].contains("src/report.ts:1"), "{}", found[0]);
+}
+
+// a verifier writes its verdict into notes:, and an implementer cannot clear someone else's words
+#[test]
+fn a_rejection_verdict_in_a_note_is_exempt() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  the heading list was rewritten, three numbers, and the fences are stripped.\n",
+    );
+    assert_eq!(plain_record(&repo, &cfg), Vec::<String>::new());
+}
+
+#[test]
+fn a_note_counting_outside_a_verdict_is_reported() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  IMPLEMENTER 2026-09-17: the heading list was rewritten, three numbers, and the fences are stripped.\n",
+    );
+    let found = plain_record(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("`three numbers`"), "{}", found[0]);
+}
+
+#[test]
+fn a_verified_note_after_a_rejection_is_read() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  VERIFIED (verifier, 2026-09-17). the heading list was rewritten, three numbers, and the fences are stripped.\n",
+    );
+    let found = plain_record(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("`three numbers`"), "{}", found[0]);
 }
 
 fn rejection_stale(repo: &Repo, cfg: &Config) -> Vec<String> {
