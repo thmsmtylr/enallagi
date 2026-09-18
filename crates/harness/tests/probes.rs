@@ -1303,3 +1303,65 @@ fn a_check_not_on_path_could_not_be_run() {
         "{out}"
     );
 }
+
+fn criterion(repo: &Repo, status: &str, tokens: &str) {
+    append(
+        repo,
+        "TASKS.md",
+        &format!("\n## [T-002] the block whose criteria name tests\nscope: src/a.rs\nblockedBy: none\nstatus: {status}\nrows: none — harness\ncriteria:\n  - `{tokens}` passes\n  - the check exits 0\nnotes: none\n"),
+    );
+}
+
+fn renamed(repo: &Repo) {
+    repo.write("src/a.rs", "fn the_old_test_name() {}\n");
+    repo.commit_all("old");
+    repo.write("src/a.rs", "fn the_new_test_name() {}\n");
+    repo.commit_all("new");
+}
+
+#[test]
+fn a_criterion_naming_a_removed_test_is_found() {
+    let (repo, cfg) = seeded_with("[layout]\nsource_root = \"src\"\n");
+    renamed(&repo);
+    criterion(&repo, "ready", "the_old_test_name");
+    let results = run(&repo, &cfg);
+    let found: Vec<_> = findings(&results, "queue-uncovered")
+        .iter()
+        .filter(|f| f.message.contains("T-002"))
+        .collect();
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0].message.contains("the_old_test_name"),
+        "{}",
+        found[0].message
+    );
+    assert_eq!(found[0].path, ".enallagi/TASKS.md");
+}
+
+#[test]
+fn a_criterion_naming_a_live_or_new_test_is_quiet() {
+    let (repo, cfg) = seeded_with("[layout]\nsource_root = \"src\"\n");
+    renamed(&repo);
+    criterion(&repo, "ready", "the_new_test_name` and `the_unwritten_test");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "queue-uncovered");
+    assert!(
+        found.iter().all(|f| !f.message.contains("T-002")),
+        "{}",
+        render(&results)
+    );
+}
+
+#[test]
+fn a_done_block_naming_a_removed_test_is_quiet() {
+    let (repo, cfg) = seeded_with("[layout]\nsource_root = \"src\"\n");
+    renamed(&repo);
+    criterion(&repo, "done", "the_old_test_name");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "queue-uncovered");
+    assert!(
+        found.iter().all(|f| !f.message.contains("T-002")),
+        "{}",
+        render(&results)
+    );
+}
