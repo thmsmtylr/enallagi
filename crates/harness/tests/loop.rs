@@ -562,6 +562,64 @@ fn a_token_budget_counts_the_cache_lanes() {
     assert_eq!(ends(&events).len(), 1, "{events:#?}");
 }
 
+// the result line of CACHED with its two cache lanes gone
+const UNCACHED: &str =
+    "echo '{\"total_cost_usd\":0.5,\"usage\":{\"input_tokens\":22,\"output_tokens\":6233}}'\n";
+
+#[test]
+fn an_unreported_declared_lane_halts_the_budget() {
+    let r = repo(&base_toml(""), TASKS);
+    script(&r, "src/fakeagent.sh", UNCACHED);
+    r.commit_all("uncached usage");
+    let o = RunOpts {
+        budget_tokens: Some(100_000),
+        ..opts(1)
+    };
+    let (digest, events) = go(&r, &o);
+    assert!(
+        digest.halts.iter().any(|h| h
+            .contains("[agent.usage].cache_creation_input_tokens and .cache_read_input_tokens")),
+        "{:?}",
+        digest.halts
+    );
+    assert_eq!(ends(&events).len(), 1, "{events:#?}");
+}
+
+#[test]
+fn a_two_lane_usage_table_enforces_the_budget() {
+    let toml = base_toml("")
+        .replace(
+            "cache_creation_input_tokens = \"usage.cache_creation_input_tokens\"\n",
+            "",
+        )
+        .replace(
+            "cache_read_input_tokens = \"usage.cache_read_input_tokens\"\n",
+            "",
+        );
+    let r = repo(&toml, TASKS);
+    script(&r, "src/fakeagent.sh", UNCACHED);
+    r.commit_all("two-lane usage");
+    let o = RunOpts {
+        budget_tokens: Some(1_000),
+        ..opts(1)
+    };
+    let (digest, events) = go(&r, &o);
+    assert!(
+        digest.halts.iter().any(|h| h.contains("6255 tokens")),
+        "{:?}",
+        digest.halts
+    );
+    assert!(
+        !digest
+            .halts
+            .iter()
+            .any(|h| h.contains("cannot be enforced")),
+        "{:?}",
+        digest.halts
+    );
+    assert_eq!(ends(&events).len(), 1, "{events:#?}");
+}
+
 #[test]
 fn a_config_naming_an_unknown_gate_is_refused() {
     let r = repo(

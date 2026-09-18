@@ -378,7 +378,7 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         },
         digest: Digest::default(),
         cost_missing: false,
-        tokens_missing: false,
+        tokens_missing: Vec::new(),
         spent_tokens: 0,
         needs_spec_at_start: Vec::new(),
         proposed_at_start: Vec::new(),
@@ -408,7 +408,8 @@ struct Loop<'a> {
     writer: Writer,
     digest: Digest,
     cost_missing: bool,
-    tokens_missing: bool,
+    // the declared [agent.usage] lanes the last stage left unreported
+    tokens_missing: Vec<&'static str>,
     spent_tokens: u64,
     needs_spec_at_start: Vec<String>,
     proposed_at_start: Vec<String>,
@@ -744,10 +745,31 @@ impl<'a> Loop<'a> {
             if self.opts.budget_usd.is_some() && result.usage.cost.is_none() {
                 self.cost_missing = true;
             }
-            if self.opts.budget_tokens.is_some()
-                && (result.usage.input_tokens.is_none() || result.usage.output_tokens.is_none())
-            {
-                self.tokens_missing = true;
+            if self.opts.budget_tokens.is_some() {
+                let declared = &spawn.preset.usage;
+                let u = &result.usage;
+                // input and output stay required so a preset with no usage table still halts
+                let missing: Vec<&'static str> = [
+                    ("input_tokens", true, u.input_tokens),
+                    ("output_tokens", true, u.output_tokens),
+                    (
+                        "cache_creation_input_tokens",
+                        declared.cache_creation_input_tokens.is_some(),
+                        u.cache_creation_input_tokens,
+                    ),
+                    (
+                        "cache_read_input_tokens",
+                        declared.cache_read_input_tokens.is_some(),
+                        u.cache_read_input_tokens,
+                    ),
+                ]
+                .into_iter()
+                .filter(|(_, required, value)| *required && value.is_none())
+                .map(|(lane, _, _)| lane)
+                .collect();
+                if !missing.is_empty() {
+                    self.tokens_missing = missing;
+                }
             }
         }
         self.spent_tokens += spent_tokens;
@@ -1034,8 +1056,8 @@ impl<'a> Loop<'a> {
         if self.cost_missing {
             return Some("BUDGET_USD is set and the last stage reported no cost, so the budget cannot be enforced. The agent command must print a cost [agent.usage].cost can read (claude: add --output-format json), or unset BUDGET_USD.".to_string());
         }
-        if self.tokens_missing {
-            return Some("BUDGET_TOKENS is set and the last stage reported no tokens, so the budget cannot be enforced. The agent command must print the counts [agent.usage].input_tokens and .output_tokens can read, or unset BUDGET_TOKENS.".to_string());
+        if !self.tokens_missing.is_empty() {
+            return Some(format!("BUDGET_TOKENS is set and the last stage left a declared token lane unreported, so the budget cannot be enforced. The agent command must print the counts [agent.usage].{} can read, or unset BUDGET_TOKENS.", self.tokens_missing.join(" and .")));
         }
         if let Some(budget) = self.opts.budget_seconds.filter(|b| *b > 0) {
             if self.digest.seconds >= budget {
