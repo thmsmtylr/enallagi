@@ -854,6 +854,15 @@ fn gate_scope_rejects_a_rewritten_vendored_skill() {
 // a nested install with T-900 verified done; `product` rides the work commit and `state` the
 // verify commit, the way the launcher's state commit carries a STOP written mid-run
 fn verified_t900(product: &[&str], state: &[&str]) -> (enallagi::fixture::Repo, String) {
+    verified_t900_as(product, state, "scope: a.txt\nstatus: done\n")
+}
+
+// `verdict` is the block's body as the verifier leaves it, so a test can widen its scope: line
+fn verified_t900_as(
+    product: &[&str],
+    state: &[&str],
+    verdict: &str,
+) -> (enallagi::fixture::Repo, String) {
     let r = enallagi::fixture::Repo::new();
     let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
     let out = in_harness(&r.root, &["init"]);
@@ -895,7 +904,7 @@ fn verified_t900(product: &[&str], state: &[&str]) -> (enallagi::fixture::Repo, 
     for f in state {
         r.write(f, "");
     }
-    let done = block.replace("status: review", "status: done");
+    let done = format!("\n## [T-900] halt\n{verdict}");
     r.write(".enallagi/TASKS.md", &format!("{tasks}{done}"));
     commit_state(&format!("verify T-900 at {worked}"));
     (r, queued)
@@ -920,6 +929,36 @@ fn gate_scope_rejects_a_file_off_the_scope_line() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("b.txt"), "{out:?}");
     assert!(!stdout.contains("STOP"), "{out:?}");
+}
+
+#[test]
+fn gate_scope_rejects_a_silent_widening() {
+    let verdict = "scope: a.txt, b.txt\nstatus: done\n";
+    let (r, queued) = verified_t900_as(&["b.txt"], &[], verdict);
+    let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("widened scope: with b.txt"), "{out:?}");
+    assert!(stdout.contains("a `widened:` line"), "{out:?}");
+    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
+    let block = &tasks[tasks.find("## [T-900]").expect("T-900")..];
+    assert!(block.contains("status: ready"), "{block}");
+    assert!(
+        block.contains("gate: ") && block.contains("widened scope: with b.txt"),
+        "{block}"
+    );
+}
+
+#[test]
+fn gate_scope_names_a_widening_with_a_reason() {
+    let verdict = "scope: a.txt, b.txt\nwidened: b.txt declares the flag\nstatus: done\n";
+    let (r, queued) = verified_t900_as(&["b.txt"], &[], verdict);
+    let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("T-900 stayed inside its scope."), "{out:?}");
+    assert!(stdout.contains("widened scope: with b.txt"), "{out:?}");
+    assert!(stdout.contains("b.txt declares the flag"), "{out:?}");
 }
 
 #[test]

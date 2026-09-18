@@ -141,6 +141,16 @@ fn field_of(ctx: &GateCtx, task: &str, key: &str) -> String {
         .unwrap_or_default()
 }
 
+// the field as TASKS.md held it at a revision, the base when rev is None, the way lock_at reads
+fn field_at(ctx: &GateCtx, task: &str, key: &str, rev: Option<&str>) -> Option<String> {
+    let text = show_at(ctx, &rel(ctx, "TASKS.md"), rev)?;
+    queue::parse(&text)
+        .ok()?
+        .iter()
+        .find(|b| b.id == task)
+        .and_then(|b| queue::field(b, key))
+}
+
 fn unreadable(ctx: &mut GateCtx, task: &str) -> GateOutcome {
     ctx.warnings.push(format!(
         "{task}: TASKS.md could not be read; the gate did not run."
@@ -440,7 +450,19 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         return pass("no base");
     }
 
-    let pats = scope_globs(&field_of(ctx, &task, "scope"));
+    // the lane edits the block it is graded against, so a path the line gained since the queue
+    // passes only with a `widened:` reason, and the verdict names it
+    let head_block = |key: &str| {
+        field_at(ctx, &task, key, Some("HEAD")).unwrap_or_else(|| field_of(ctx, &task, key))
+    };
+    let pats = scope_globs(&head_block("scope"));
+    let queued = field_at(ctx, &task, "scope", None).map(|line| scope_globs(&line));
+    let gained: Vec<String> = queued
+        .map(|q| pats.iter().filter(|p| !q.contains(p)).cloned().collect())
+        .unwrap_or_default();
+    let widened = head_block("widened");
+    let widening =
+        (!gained.is_empty()).then(|| format!("widened scope: with {}", gained.join(" ")));
     let skills_dir = skills_dir_for(ctx.cfg);
     let lock = rel(ctx, "harness.lock");
     let hashes = rel(ctx, "test-hashes.json");
@@ -555,11 +577,20 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         })
         .unwrap_or(false);
 
-    if out_of.is_empty() && harness_hit.is_empty() && !grew {
-        return pass(format!("{task} stayed inside its scope."));
+    let unexplained = widening.is_some() && widened.is_empty();
+    if out_of.is_empty() && harness_hit.is_empty() && !grew && !unexplained {
+        return pass(match widening {
+            Some(w) => format!("{task} stayed inside its scope. It {w}: {widened}"),
+            None => format!("{task} stayed inside its scope."),
+        });
     }
 
     let mut parts: Vec<String> = Vec::new();
+    if let Some(w) = widening.filter(|_| unexplained) {
+        parts.push(format!(
+            "{w} since it was queued, and the block carries no reason; write it as a `widened:` line"
+        ));
+    }
     if !out_of.is_empty() {
         parts.push(format!(
             "touched {}, which the scope line does not name",
