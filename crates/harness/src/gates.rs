@@ -812,6 +812,8 @@ struct Run {
 const POLL: Duration = Duration::from_millis(100);
 // how long a SIGTERM gets to be honoured before the group is killed outright
 const GRACE: Duration = Duration::from_secs(10);
+// how long a killed group's pipes get to close before an unfinished reader is left detached
+const DRAIN: Duration = Duration::from_secs(1);
 
 // the check gets its own process group so a build tool's children die with it, not with the shell alone
 fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result<Run> {
@@ -862,7 +864,12 @@ fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result
         }
         std::thread::sleep(POLL);
     };
-    for reader in readers {
+    // a process that left the group with setsid never got the KILL and can hold the pipe forever
+    let drained = Instant::now();
+    while !readers.iter().all(|r| r.is_finished()) && drained.elapsed() < DRAIN {
+        std::thread::sleep(POLL);
+    }
+    for reader in readers.into_iter().filter(|r| r.is_finished()) {
         let _ = reader.join();
     }
     let output = match buffer.lock() {
@@ -956,7 +963,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
     } = run;
     if timed_out {
         let reason = format!(
-            "the check ran past {}s and was killed with its process group: `{command}`",
+            "the check ran past {}s and its process group was killed: `{command}`",
             timeout.as_secs()
         );
         return CheckReport {
@@ -1342,6 +1349,20 @@ mod tests {
     #[test]
     fn a_grandchild_on_the_pipe_is_bound_by_timeout() {
         let env = Env::timed("sleep 25 & exit 0\n", "2s");
+        let started = Instant::now();
+        let r = check_delta(&env.repo.root, &env.cfg, false);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the gate waited"
+        );
+        let reason = r.timed_out.as_deref().unwrap_or_default();
+        assert!(reason.contains("2s"), "{r:?}");
+        assert!(!r.red && !r.accepts(), "{r:?}");
+    }
+
+    #[test]
+    fn a_grandchild_outside_the_group_is_bound() {
+        let env = Env::timed("perl -e 'use POSIX; setsid(); sleep 12' & exit 0\n", "2s");
         let started = Instant::now();
         let r = check_delta(&env.repo.root, &env.cfg, false);
         assert!(
