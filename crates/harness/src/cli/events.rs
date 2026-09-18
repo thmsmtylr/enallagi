@@ -152,12 +152,14 @@ mod tests {
             task: "T-1".into(),
             pass: true,
             reason: "ok".into(),
+            tally: None,
         });
         w.emit(Kind::Gate {
             gate: "scope".into(),
             task: "T-2".into(),
             pass: true,
             reason: "ok".into(),
+            tally: None,
         });
         let all = w.log.read().unwrap();
         let filter = Filter {

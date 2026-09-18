@@ -66,6 +66,9 @@ pub enum Kind {
         task: String,
         pass: bool,
         reason: String,
+        // only a gate that ran the check carries one, and a log written before the field still parses
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tally: Option<Tally>,
     },
     #[serde(rename = "task.status")]
     TaskStatus {
@@ -96,6 +99,15 @@ pub enum Kind {
         count: Option<u64>,
         error: Option<String>,
     },
+}
+
+// summed over every `test result:` line: line 1 of fourteen is one binary, not the total
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tally {
+    pub passed: u64,
+    pub failed: u64,
+    pub ignored: u64,
+    pub lines: u64,
 }
 
 pub fn stage_of(k: &Kind) -> Option<&str> {
@@ -351,6 +363,36 @@ mod tests {
     }
 
     #[test]
+    fn render_line_prints_the_tally() {
+        let mut w = Writer::new(Log::open(tempfile::tempdir().unwrap().path()));
+        let e = w.emit(Kind::Gate {
+            gate: "verdict".into(),
+            task: "T-1".into(),
+            pass: true,
+            reason: "ok".into(),
+            tally: Some(Tally {
+                passed: 476,
+                failed: 0,
+                ignored: 5,
+                lines: 14,
+            }),
+        });
+        let l = render_line(&e);
+        assert!(
+            l.contains(r#"tally={"passed":476,"failed":0,"ignored":5,"lines":14}"#),
+            "{l}"
+        );
+    }
+
+    #[test]
+    fn a_gate_without_a_tally_still_parses() {
+        let line = r#"{"ts":"t","run":"r","iter":0,"seq":1,"kind":"gate","gate":"scope","task":"T-1","pass":true,"reason":"ok"}"#;
+        let e: Event = serde_json::from_str(line).unwrap();
+        assert!(matches!(e.kind, Kind::Gate { tally: None, .. }));
+        assert!(!serde_json::to_string(&e).unwrap().contains("tally"));
+    }
+
+    #[test]
     fn render_line_is_one_line() {
         let mut w = Writer::new(Log::open(tempfile::tempdir().unwrap().path()));
         let e = w.emit(Kind::Gate {
@@ -358,6 +400,7 @@ mod tests {
             task: "T-1".into(),
             pass: false,
             reason: "touched x".into(),
+            tally: None,
         });
         let l = render_line(&e);
         assert!(l.contains("gate "));

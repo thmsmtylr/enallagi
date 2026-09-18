@@ -362,6 +362,7 @@ mod tests {
                 task: "T-001".into(),
                 pass: true,
                 reason: "ok".into(),
+                tally: None,
             }),
             w.emit(Kind::StageStart {
                 stage: "verify".into(),

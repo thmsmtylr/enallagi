@@ -54,6 +54,29 @@ fn events_prints_whether_permissions_were_skipped() {
 }
 
 #[test]
+fn events_renders_the_gate_tally() {
+    let dir = tempfile::tempdir().unwrap();
+    let harness_dir = dir.path().join(".enallagi");
+    std::fs::create_dir_all(&harness_dir).unwrap();
+    std::fs::write(
+        harness_dir.join("events.jsonl"),
+        r#"{"ts":"2026-09-18T00:00:00Z","run":"r","iter":1,"seq":1,"kind":"gate","gate":"verdict","task":"T-1","pass":true,"reason":"ok","tally":{"passed":476,"failed":0,"ignored":5,"lines":14}}"#.to_string() + "\n",
+    )
+    .unwrap();
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .arg("events")
+        .current_dir(dir.path())
+        .output()
+        .expect("run enallagi events");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(r#"tally={"passed":476,"failed":0,"ignored":5,"lines":14}"#),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn run_rejects_a_bare_iteration_count() {
     let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["run", "7"])

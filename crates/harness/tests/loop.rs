@@ -395,6 +395,57 @@ fn every_stage_appends_a_run_log_record() {
 }
 
 #[test]
+fn the_verdict_gate_records_the_check_tally() {
+    let r = repo("", "");
+    script(
+        &r,
+        "src/fakecheck.sh",
+        "echo 'test result: ok. 237 passed; 0 failed; 0 ignored'\n\
+         echo 'test result: ok. 239 passed; 0 failed; 5 ignored'\n",
+    );
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let (digest, events) = go(&r, &opts(1));
+    let tally = events.iter().find_map(|e| match &e.kind {
+        Kind::Gate { gate, tally, .. } if gate == "verdict" => *tally,
+        _ => None,
+    });
+    let tally = tally.unwrap_or_else(|| panic!("no verdict tally: {events:#?}"));
+    assert_eq!((tally.passed, tally.ignored, tally.lines), (476, 5, 2));
+    assert!(
+        !digest.warnings.iter().any(|w| w.contains("test result:")),
+        "{:?}",
+        digest.warnings
+    );
+}
+
+#[test]
+fn a_check_with_no_count_warns_in_the_digest() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let (digest, _) = go(&r, &opts(1));
+    assert!(
+        digest
+            .warnings
+            .iter()
+            .any(|w| w == "the check printed no `test result:` line: `./src/fakecheck.sh`"),
+        "{:?}",
+        digest.warnings
+    );
+    let text = enallagi::pipeline::digest_text(&digest);
+    assert!(text.contains("./src/fakecheck.sh"), "{text}");
+}
+
+#[test]
 fn the_record_carries_role_seconds_cost() {
     let r = repo("", "");
     let implement = implementer(&r, "");

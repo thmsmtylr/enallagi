@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::config::Config;
-use crate::events::{Kind, Writer};
+use crate::events::{Kind, Tally, Writer};
 use crate::git::{self, git, head, porcelain};
 use crate::queue::{self, Queue};
 use crate::skills::LockEntry;
@@ -41,6 +41,7 @@ pub struct GateOutcome {
     pub reason: String,
     pub skip_rest: bool,
     pub halt: bool,
+    pub tally: Option<Tally>,
 }
 
 fn pass(reason: impl Into<String>) -> GateOutcome {
@@ -78,6 +79,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         task,
         pass: outcome.pass,
         reason: outcome.reason.clone(),
+        tally: outcome.tally,
     });
     outcome
 }
@@ -354,8 +356,12 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
     if let Some(halt) = hung(ctx, &report) {
         return halt;
     }
+    let tally = counted(ctx, &report);
     if report.accepts() {
-        return pass("done, and the gate agrees.");
+        return GateOutcome {
+            tally,
+            ..pass("done, and the gate agrees.")
+        };
     }
     let sha = head(ctx.root).unwrap_or_default();
     let named = if report.unforgiven.is_empty() {
@@ -369,7 +375,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         report.exit
     );
     let tail8 = report.tail(8).join("\n");
-    force_back(
+    let outcome = force_back(
         ctx,
         "verdict",
         &task,
@@ -379,7 +385,8 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         &format!(
             "{task} was forced back to ready by the gate: the verifier said done, the gate was red.\ncheck tail:\n{tail8}"
         ),
-    )
+    );
+    GateOutcome { tally, ..outcome }
 }
 
 // word boundaries, so one id never matches a longer id it prefixes
@@ -803,6 +810,7 @@ pub struct CheckReport {
     pub exit: i32,
     /// The halt reason when the check ran past `[check] timeout`. Neither red nor green.
     pub timed_out: Option<String>,
+    pub tally: Tally,
 }
 
 impl CheckReport {
@@ -817,6 +825,21 @@ impl CheckReport {
             red: self.red,
             output: self.output.clone(),
         }
+    }
+
+    // a failure the exit hid, or a check that ran and printed no count, is a number nobody can quote
+    pub fn tally_warning(&self, command: &str) -> Option<String> {
+        if self.timed_out.is_some() || self.output.starts_with(NEVER_RAN) {
+            return None;
+        }
+        let t = self.tally;
+        if t.failed > 0 && self.exit == 0 {
+            return Some(format!(
+                "the check exited 0 with {} failed over {} `test result:` lines: `{command}`",
+                t.failed, t.lines
+            ));
+        }
+        (t.lines == 0).then(|| format!("the check printed no `test result:` line: `{command}`"))
     }
 
     // the last n non-empty lines of output, so a rejection can show what the check actually saw
@@ -961,6 +984,34 @@ fn drain<R: Read + Send + 'static>(
     })
 }
 
+pub fn tally(output: &str) -> Tally {
+    let mut t = Tally::default();
+    for line in output.lines().filter(|l| l.starts_with("test result:")) {
+        t.lines += 1;
+        let words: Vec<&str> = line.split_whitespace().collect();
+        for pair in words.windows(2) {
+            let Ok(n) = pair[0].parse::<u64>() else {
+                continue;
+            };
+            match pair[1].trim_end_matches([';', ',']) {
+                "passed" => t.passed += n,
+                "failed" => t.failed += n,
+                "ignored" => t.ignored += n,
+                _ => {}
+            }
+        }
+    }
+    t
+}
+
+// the gate's copy of the tally, and the digest's warning when the tally contradicts the exit
+fn counted(ctx: &mut GateCtx, report: &CheckReport) -> Option<Tally> {
+    if let Some(warning) = report.tally_warning(&ctx.cfg.check.command) {
+        ctx.warnings.push(warning);
+    }
+    Some(report.tally)
+}
+
 pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
     let command = if force {
         &cfg.check.force
@@ -988,6 +1039,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         output,
         timed_out,
     } = run;
+    let tally = tally(&output);
     if timed_out {
         let reason = format!(
             "the check ran past {}s and its process group was killed: `{command}`",
@@ -997,6 +1049,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
             output: format!("{reason}\n{output}"),
             exit,
             timed_out: Some(reason),
+            tally,
             ..CheckReport::default()
         };
     }
@@ -1004,6 +1057,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         return CheckReport {
             output,
             exit,
+            tally,
             ..CheckReport::default()
         };
     }
@@ -1035,6 +1089,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         output,
         exit,
         timed_out: None,
+        tally,
     }
 }
 
@@ -1078,6 +1133,7 @@ fn hung(ctx: &mut GateCtx, report: &CheckReport) -> Option<GateOutcome> {
         reason,
         skip_rest: true,
         halt: true,
+        tally: None,
     })
 }
 
@@ -1086,6 +1142,14 @@ fn check_gate(ctx: &mut GateCtx) -> GateOutcome {
     if let Some(halt) = hung(ctx, &report) {
         return halt;
     }
+    let tally = counted(ctx, &report);
+    GateOutcome {
+        tally,
+        ..judged(&report)
+    }
+}
+
+fn judged(report: &CheckReport) -> GateOutcome {
     if report.accepts() {
         return pass(if report.red {
             format!(
@@ -1127,6 +1191,7 @@ fn adjudicator_halt(ctx: &mut GateCtx) -> GateOutcome {
         reason,
         skip_rest: true,
         halt: true,
+        tally: None,
     }
 }
 
@@ -1429,6 +1494,99 @@ mod tests {
         );
     }
 
+    // line 1 says 237; the fourteen lines sum to 471
+    fn fourteen_result_lines() -> String {
+        let mut out = String::from(
+            "running 237 tests\ntest result: ok. 237 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s\n",
+        );
+        for i in 0..13 {
+            let ignored = if i == 4 { 5 } else { 0 };
+            out.push_str(&format!(
+                "\nrunning 18 tests\ntest result: ok. 18 passed; 0 failed; {ignored} ignored; 0 measured; 0 filtered out; finished in 0.01s\n"
+            ));
+        }
+        out
+    }
+
+    #[test]
+    fn tally_sums_every_test_result_line() {
+        let t = tally(&fourteen_result_lines());
+        assert_eq!(
+            t,
+            Tally {
+                passed: 471,
+                failed: 0,
+                ignored: 5,
+                lines: 14
+            }
+        );
+    }
+
+    #[test]
+    fn check_delta_fills_the_tally() {
+        let env = Env::new(&format!(
+            "cat <<'EOF'\n{}EOF\nexit 0\n",
+            fourteen_result_lines()
+        ));
+        let r = check_delta(&env.repo.root, &env.cfg, false);
+        assert_eq!(r.exit, 0, "{}", r.output);
+        assert_eq!(r.tally.passed, 471);
+        assert_eq!(r.tally.lines, 14);
+    }
+
+    #[test]
+    fn check_gate_event_carries_the_tally() {
+        let mut env = Env::new(&format!(
+            "cat <<'EOF'\n{}EOF\nexit 0\n",
+            fourteen_result_lines()
+        ));
+        let out = run("check-delta", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert!(env.warnings.is_empty(), "{:?}", env.warnings);
+        let tally = env.events().iter().find_map(|e| match &e.kind {
+            Kind::Gate { gate, tally, .. } if gate == "check-delta" => *tally,
+            _ => None,
+        });
+        assert_eq!(tally.map(|t| (t.passed, t.lines)), Some((471, 14)));
+    }
+
+    #[test]
+    fn failed_tally_on_exit_zero_warns() {
+        let mut env = Env::new(
+            "echo 'test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out'\nexit 0\n",
+        );
+        run("check-delta", &mut env.ctx(Some("T-001"), None));
+        let cmd = env.cfg.check.command.clone();
+        assert_eq!(
+            env.warnings,
+            vec![format!(
+                "the check exited 0 with 1 failed over 1 `test result:` lines: `{cmd}`"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_check_with_no_result_line_warns() {
+        let mut env = Env::new("echo built\nexit 0\n");
+        run("check-delta", &mut env.ctx(Some("T-001"), None));
+        let cmd = env.cfg.check.command.clone();
+        assert_eq!(
+            env.warnings,
+            vec![format!("the check printed no `test result:` line: `{cmd}`")]
+        );
+    }
+
+    #[test]
+    fn a_check_that_never_ran_does_not_warn() {
+        let report = CheckReport {
+            output: format!("{NEVER_RAN} no such file"),
+            exit: -1,
+            red: true,
+            ..CheckReport::default()
+        };
+        assert_eq!(report.tally_warning("x"), None);
+    }
+
     #[test]
     fn tail_skips_blank_lines_and_keeps_the_last_n() {
         let report = CheckReport {
@@ -1467,7 +1625,9 @@ mod tests {
 
     #[test]
     fn verdict_forces_back_a_done_with_a_red_check() {
-        let mut env = Env::new("echo boom\necho 'error: something'\necho done\nexit 101\n");
+        let mut env = Env::new(
+            "echo boom\necho 'error: something'\necho 'test result: FAILED. 0 passed; 1 failed; 0 ignored'\necho done\nexit 101\n",
+        );
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.commit_all("verdict");
 
@@ -1493,7 +1653,7 @@ mod tests {
 
     #[test]
     fn verdict_agrees_with_a_clean_green_done() {
-        let mut env = Env::new("exit 0\n");
+        let mut env = Env::new("echo 'test result: ok. 1 passed; 0 failed; 0 ignored'\nexit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.commit_all("verdict");
 
