@@ -48,6 +48,21 @@ pub(crate) fn ages(root: &Path, cfg: &Config, ids: &[String]) -> BTreeMap<String
         .collect()
 }
 
+// a root commit installed TASKS.md whole, so a heading it carries records no round it was filed in
+fn root_ages(root: &Path, cfg: &Config) -> HashSet<usize> {
+    let dir = &cfg.layout.harness_dir;
+    let tasks = config::instance_rel(root, dir, "TASKS.md");
+    let (repo, _, _) = git::locate(root, dir, &tasks);
+    let commits = git::git(&repo, &["log", "--format=%H"]).unwrap_or_default();
+    let roots = git::git(&repo, &["rev-list", "--max-parents=0", "HEAD"]).unwrap_or_default();
+    commits
+        .lines()
+        .enumerate()
+        .filter(|(_, c)| roots.lines().any(|r| r == *c))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 // an id no commit carries is one a hand edit just wrote, which is as new as a block gets
 fn age_of(repo: &Path, inner: &str, commits: &[String], id: &str) -> usize {
     let block = queue::Block {
@@ -320,9 +335,13 @@ fn expire_proposed(root: &Path, cfg: &Config, dry_run: bool) -> Result<Vec<Strin
         return Ok(Vec::new());
     }
     let ages = ages(root, cfg, &proposed);
+    let roots = root_ages(root, cfg);
     let stale: Vec<String> = proposed
         .into_iter()
-        .filter(|id| ages.get(id).copied().unwrap_or(0) >= cfg.queue.proposed_rounds)
+        .filter(|id| {
+            let age = ages.get(id).copied().unwrap_or(0);
+            age >= cfg.queue.proposed_rounds && !roots.contains(&age)
+        })
         .collect();
     if stale.is_empty() {
         return Ok(Vec::new());
@@ -607,6 +626,52 @@ mod tests {
         assert!(
             decisions[at..].contains("notes: the whole block"),
             "{decisions}"
+        );
+    }
+
+    #[test]
+    fn a_root_carried_proposal_does_not_expire() {
+        let r = Repo::new();
+        let first = "# TASKS\n\n\
+             ## [T-001] a finding the reinstall carried\n\
+             status: proposed\n";
+        r.write("TASKS.md", first);
+        git::git(&r.root, &["add", "-A"]).unwrap();
+        git::git(
+            &r.root,
+            &[
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "--amend",
+                "--no-edit",
+            ],
+        )
+        .unwrap();
+        // T-002 arrives late enough to stand, so an empty `expired` speaks for T-001 alone
+        for n in 1..=10 {
+            if n == 8 {
+                r.write(
+                    "TASKS.md",
+                    &format!("{first}\n## [T-002] a finding filed later\nstatus: proposed\n"),
+                );
+            }
+            r.write("PROGRESS.md", &format!("round {n}\n"));
+            r.commit_all(&format!("round {n}"));
+        }
+
+        let cfg = cfg(&r.root);
+        let ids = vec!["T-001".to_string(), "T-002".to_string()];
+        let aged = ages(&r.root, &cfg, &ids);
+        assert!(aged["T-001"] > aged["T-002"], "{aged:?}");
+
+        let report = archive_done(&r.root, &cfg, false).expect("archive_done");
+        assert!(report.expired.is_empty(), "{:?}", report.expired);
+        let tasks = read(&r, "TASKS.md");
+        assert!(
+            tasks.contains("## [T-001] a finding the reinstall carried"),
+            "{tasks}"
         );
     }
 
