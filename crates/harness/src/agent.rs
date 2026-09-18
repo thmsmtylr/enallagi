@@ -68,7 +68,7 @@ pub enum AgentError {
     CustomWithoutCommand,
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("stopped: STOP file appeared during a rate-limit wait")]
+    #[error("stopped: a STOP file or a signal arrived during a rate-limit wait")]
     Stopped,
     #[error("the agent command is empty")]
     EmptyCommand,
@@ -511,14 +511,13 @@ pub fn spawn(
     }
 }
 
-fn sleep_until(mut left: u64, stop_file: &Path) -> Result<(), AgentError> {
-    while left > 0 {
-        if stop_file.exists() {
+fn sleep_until(seconds: u64, stop_file: &Path) -> Result<(), AgentError> {
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+        if stop_file.exists() || stop_signal().is_some() {
             return Err(AgentError::Stopped);
         }
-        let chunk = left.min(60);
-        std::thread::sleep(Duration::from_secs(chunk));
-        left -= chunk;
+        std::thread::sleep(left.min(POLL));
     }
     Ok(())
 }

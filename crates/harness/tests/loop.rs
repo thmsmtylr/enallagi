@@ -2572,6 +2572,71 @@ fn a_sigterm_stops_a_running_check() {
     );
 }
 
+#[test]
+fn a_sigterm_ends_the_limit_wait() {
+    let r = repo(&base_toml(""), TASKS);
+    let reset = jiff::Zoned::now()
+        .with_time_zone(jiff::tz::TimeZone::UTC)
+        .checked_add(jiff::Span::new().minutes(3))
+        .expect("three minutes ahead")
+        .strftime("%I:%M%p")
+        .to_string();
+    script(
+        &r,
+        "src/fakeagent.sh",
+        &format!("echo 'hit your session limit resets {reset} (UTC)'\n"),
+    );
+    r.commit_all("a limited agent");
+    installed(&r);
+    let mut launcher = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["run", "--iterations", "1", "--no-tui"])
+        .current_dir(&r.root)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("enallagi run");
+    let read = || {
+        enallagi::events::Log::open(&r.root.join(".enallagi"))
+            .read()
+            .unwrap_or_default()
+    };
+    let limits = |log: &[Event]| {
+        log.iter()
+            .filter(|e| matches!(e.kind, Kind::Limit { .. }))
+            .count()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while limits(&read()) == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(limits(&read()), 1, "no limit wait began: {:#?}", read());
+
+    let sent = std::process::Command::new("kill")
+        .args(["-TERM", &launcher.id().to_string()])
+        .status()
+        .expect("signal the launcher");
+    assert!(sent.success(), "TERM was not delivered");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while launcher.try_wait().expect("poll the launcher").is_none()
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let exited = launcher.try_wait().expect("poll the launcher").is_some();
+    if !exited {
+        let _ = launcher.kill();
+        let _ = launcher.wait();
+    }
+    assert!(exited, "the launcher outlived the signal by 10s");
+
+    let log = read();
+    assert_eq!(limits(&log), 1, "{log:#?}");
+    assert!(
+        matches!(log.last().map(|e| &e.kind), Some(Kind::RunEnd { .. })),
+        "{log:#?}"
+    );
+}
+
 fn claude_args_repo(key: &str) -> Repo {
     let toml = base_toml("").replacen(
         "preset = \"custom\"\ncommand = [\"./src/fakeagent.sh\", \"{prompt}\", \"{turns}\"]",
