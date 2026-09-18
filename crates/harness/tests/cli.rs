@@ -722,7 +722,7 @@ fn vendored_demo(at_base: bool) -> (enallagi::fixture::Repo, String) {
     commit_state(&format!("queue at {queued}"));
 
     r.write(skill, "# demo, re-vendored\n");
-    commit_state("chore(vendor): demo");
+    commit_state("chore(vendor): T-900 demo");
 
     r.write("a.txt", "work\n");
     r.commit_all("T-900 work");

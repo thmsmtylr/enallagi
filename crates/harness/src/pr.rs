@@ -1,6 +1,6 @@
 //! Builds a pull-request branch off the upstream default branch from the product commits whose subject names a landed task.
 
-use crate::{config, git, queue};
+use crate::{config, gates, git, queue};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -88,7 +88,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
             {
                 continue;
             }
-            if !names(&landed, &blocker) {
+            if !gates::names_task(&landed, &blocker) {
                 refusals.push(format!(
                     "{} is blocked by {blocker}, whose product change is not on {base}",
                     task.id
@@ -102,7 +102,10 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
 
     let picked = commits(root, &range, ids)?;
     for id in ids {
-        if !picked.iter().any(|(_, subject)| names(subject, id)) {
+        if !picked
+            .iter()
+            .any(|(_, subject)| gates::names_task(subject, id))
+        {
             refusals.push(format!(
                 "{id}: no commit on {range} names it, so it has no product change"
             ));
@@ -168,11 +171,6 @@ fn default_branch(root: &Path) -> Result<String, PrError> {
         .ok_or_else(|| PrError::Refused(vec!["origin names no default branch".to_string()]))
 }
 
-// word boundaries, so one id never matches a longer id it prefixes
-fn names(text: &str, id: &str) -> bool {
-    regex::Regex::new(&format!(r"\b{}\b", regex::escape(id))).is_ok_and(|re| re.is_match(text))
-}
-
 fn commits(root: &Path, range: &str, ids: &[String]) -> Result<Vec<(String, String)>, PrError> {
     let log = git::git(
         root,
@@ -181,7 +179,7 @@ fn commits(root: &Path, range: &str, ids: &[String]) -> Result<Vec<(String, Stri
     Ok(log
         .lines()
         .filter_map(|l| l.split_once(' '))
-        .filter(|(_, subject)| ids.iter().any(|id| names(subject, id)))
+        .filter(|(_, subject)| ids.iter().any(|id| gates::names_task(subject, id)))
         .map(|(sha, subject)| (sha.to_string(), subject.to_string()))
         .collect())
 }
@@ -312,11 +310,13 @@ fn describe(
             criteria.join("\n")
         ));
         out.push_str("\n### Iterations\n\n");
-        let product = picked.iter().filter(|(_, s)| names(s, &task.id));
+        let product = picked
+            .iter()
+            .filter(|(_, s)| gates::names_task(s, &task.id));
         let state_log = recorded
             .lines()
             .filter_map(|l| l.split_once(' '))
-            .filter(|(_, s)| names(s, &task.id));
+            .filter(|(_, s)| gates::names_task(s, &task.id));
         for (sha, subject) in product {
             out.push_str(&format!("- {sha} {subject}\n"));
         }

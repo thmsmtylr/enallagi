@@ -1,5 +1,24 @@
+//! A rejection nothing has answered: the last verdict in a block's `notes:` is REJECTED and the status is not `ready`. A block parked at `needs-spec` is reported too.
+
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
+
+// every verdict and answer is written into notes: in turn, so only the last one is still open
+const VERDICTS: [&str; 5] = ["REJECTED", "VERIFIED", "VERIFIER", "IMPLEMENTER", "Passed"];
+
+// a later paragraph quotes an earlier verdict as `REJECTED:`, so only bare text is read
+fn outside_code(notes: &str) -> String {
+    notes.split('`').step_by(2).collect::<Vec<_>>().join(" ")
+}
+
+fn latest_verdict(notes: &str) -> Option<&'static str> {
+    let text = outside_code(notes);
+    VERDICTS
+        .iter()
+        .filter_map(|word| text.rfind(word).map(|at| (at, *word)))
+        .max_by_key(|(at, _)| *at)
+        .map(|(_, word)| word)
+}
 
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
     common::result(find(ctx))
@@ -20,11 +39,14 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             .map(|(_, text)| text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        if notes.contains("REJECTED") && status != "ready" {
+        if latest_verdict(&notes) == Some("REJECTED") && status != "ready" {
             found.push(common::finding(
                 &tasks,
                 line,
-                format!("{} notes carry REJECTED while status is {status}", block.id),
+                format!(
+                    "{} carries an unanswered REJECTED while status is {status}",
+                    block.id
+                ),
             ));
         }
         if status == "needs-spec" {

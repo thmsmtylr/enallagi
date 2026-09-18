@@ -147,6 +147,52 @@ fn the_seeded_criterion_is_untested() {
     assert_eq!(count(&run(&repo, &cfg), "queue-uncovered"), Some(1));
 }
 
+const COMMA_ROWS: &str = "# SPEC\n\n## 11. Exit criteria\n\n| Behaviour | Test |\n| --- | --- |\n| a | `tests/x.test.ts::the frames FRAMES held, in order` |\n| b | `tests/x.test.ts::the packs a core pack holds, named` |\n\n## 12. Notes\n";
+
+fn claiming(repo: &Repo, rows: &str) {
+    repo.write(".enallagi/SPEC.md", COMMA_ROWS);
+    append(
+        repo,
+        "TASKS.md",
+        &format!("\n## [T-002] the block that claims them\nscope: src/tests/x.test.ts\nblockedBy: none\nstatus: ready\nrows: {rows}\n"),
+    );
+}
+
+#[test]
+fn a_claimed_row_name_keeps_its_comma() {
+    let (repo, cfg) = seeded();
+    claiming(
+        &repo,
+        "tests/x.test.ts::the frames FRAMES held, in order, tests/x.test.ts::the packs a core pack holds, named",
+    );
+    let results = run(&repo, &cfg);
+    assert_eq!(
+        count(&results, "queue-uncovered"),
+        Some(0),
+        "{}",
+        render(&results)
+    );
+}
+
+#[test]
+fn a_claimed_row_no_criteria_row_defines_is_found() {
+    let (repo, cfg) = seeded();
+    claiming(
+        &repo,
+        "tests/x.test.ts::the frames FRAMES held, in order, tests/x.test.ts::the packs a core pack holds, named, tests/x.test.ts::no row defines this",
+    );
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "queue-uncovered");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0].message.contains(
+            "T-002 claims row tests/x.test.ts::no row defines this and the exit criteria define no such row"
+        ),
+        "{}",
+        found[0].message
+    );
+}
+
 #[test]
 fn harness_immutable_has_no_hash_key() {
     // the rail names the file that is the gate; with the launcher a binary, that file is enallagi.toml
@@ -193,6 +239,109 @@ fn the_tree_has_no_litter() {
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
+}
+
+// the conventions a repository already carries, then the install, then what `skills sync` writes
+fn conventional() -> (Repo, Config) {
+    const IDS: [&str; 8] = [
+        "tdd",
+        "ponytail",
+        "debugging",
+        "review-received",
+        "verify-before-done",
+        "review-requested",
+        "brainstorming",
+        "caveman-commit",
+    ];
+    let repo = Repo::new();
+    for name in [
+        "docs/guide.md",
+        "bench/run.ts",
+        "package-lock.json",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        "CODE_OF_CONDUCT.md",
+        "CHANGELOG.md",
+    ] {
+        repo.write(name, "x\n");
+    }
+
+    // docs/ and bench/ are this repository's own, so they are named per repository and not by the defaults
+    let mut toml = String::from(
+        "[layout]\nallowed_prefixes = [\"src/\", \"docs/\", \"bench/\", \".enallagi/\", \".claude/\", \".github/\"]\n",
+    );
+    for id in IDS {
+        // a path: source under src/ keeps the fixture off the network and off the litter list
+        repo.write(&format!("src/vendor/{id}/SKILL.md"), "body\n");
+        toml.push_str(&format!(
+            "\n[[skill]]\nid = \"{id}\"\nsource = \"path:src/vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"fixture\"\n"
+        ));
+    }
+    // a tracked harness directory keeps the install in the product's history, so what it writes is tracked
+    repo.write(".enallagi/enallagi.toml", &toml);
+    repo.commit_all("conventions");
+
+    enallagi::init::install(&repo.root, &enallagi::init::InitOpts::default()).expect("install");
+    repo.commit_all("harness");
+
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["skills", "sync"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("run enallagi skills sync");
+    assert!(out.status.success(), "{out:?}");
+    repo.commit_all("skills");
+    let tracked =
+        enallagi::git::git(&repo.root, &["ls-files", "--", ".enallagi/harness.lock"]).expect("ls");
+    assert!(!tracked.is_empty(), "harness.lock is untracked");
+
+    let cfg = config::load(&repo.root).expect("config");
+    (repo, cfg)
+}
+
+#[test]
+fn a_repository_of_conventions_has_no_litter() {
+    let (repo, cfg) = conventional();
+    let results = run(&repo, &cfg);
+    assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
+}
+
+#[test]
+fn a_file_added_after_the_install_is_litter() {
+    let (repo, cfg) = conventional();
+    repo.write("scratch.md", "x\n");
+    repo.commit_all("scratch");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "litter");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, "scratch.md");
+}
+
+#[test]
+fn no_adapter_install_reports_its_own_files() {
+    for name in enallagi::agent::presets().keys() {
+        let repo = Repo::new();
+        // tracked before the install, so everything the install writes lands in the product's history
+        repo.write(".enallagi/enallagi.toml", "");
+        repo.commit_all("harness dir");
+        enallagi::init::install(
+            &repo.root,
+            &enallagi::init::InitOpts {
+                adapter: Some(name.clone()),
+                dry_run: false,
+            },
+        )
+        .expect("install");
+        repo.commit_all("harness");
+        let cfg = config::load(&repo.root).expect("config");
+        let results = run(&repo, &cfg);
+        assert_eq!(
+            count(&results, "litter"),
+            Some(0),
+            "{name}\n{}",
+            render(&results)
+        );
+    }
 }
 
 #[test]
@@ -520,13 +669,15 @@ fn a_slashed_row_resolves_under_source_root() {
 }
 
 #[test]
-fn only_an_open_block_needs_a_scope_file() {
+fn only_a_review_block_needs_a_scope_file() {
     let (repo, cfg) = seeded();
     append(
         &repo,
         "TASKS.md",
-        "\n## [T-002] the finished one, whose files a later cleanup deleted\nscope: src/gone.rs\nblockedBy: none\nstatus: done\n\n## [T-003] the open one nobody can take\nscope: src/missing.rs\nblockedBy: none\nstatus: ready\n",
+        "\n## [T-002] the finished one, whose files a later cleanup deleted\nscope: src/gone.rs\nblockedBy: none\nstatus: done\n\n## [T-003] the reviewed one whose file never landed\nscope: src/missing.rs\nblockedBy: none\nstatus: review\n",
     );
+    repo.write("src/other.rs", "");
+    repo.commit_all("feat: T-003 touches another file");
     let results = run(&repo, &cfg);
     let found = findings(&results, "queue-hygiene");
     assert_eq!(found.len(), 1, "{}", render(&results));
@@ -534,6 +685,23 @@ fn only_an_open_block_needs_a_scope_file() {
         found[0].message.contains("src/missing.rs"),
         "{}",
         found[0].message
+    );
+}
+
+#[test]
+fn a_ready_block_may_name_a_file_it_creates() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        "\n## [T-002] the one that adds two files\nscope: src/packs/core.ts, tests/cli.test.ts\nblockedBy: none\nstatus: ready\n",
+    );
+    let results = run(&repo, &cfg);
+    assert_eq!(
+        count(&results, "queue-hygiene"),
+        Some(0),
+        "{}",
+        render(&results)
     );
 }
 
@@ -680,4 +848,85 @@ fn a_printed_em_dash_aside_is_reported() {
     let found = plain_record(&repo, &cfg);
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(found[0].contains("src/report.ts:1"), "{}", found[0]);
+}
+
+fn rejection_stale(repo: &Repo, cfg: &Config) -> Vec<String> {
+    render(&run(repo, cfg))
+        .lines()
+        .filter(|l| l.starts_with("FINDING rejection-stale "))
+        .map(String::from)
+        .collect()
+}
+
+fn reviewed_block(id: &str, status: &str, verdicts: &str) -> String {
+    format!("\n## [{id}] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: {status}\nnotes: the review record.\n{verdicts}")
+}
+
+const REJECTION: &str =
+    "  REJECTED: the quoted figure does not reproduce (verifier, 2026-09-17).\n";
+
+// the shape T-064 carried: a verdict quoted in a later paragraph is a reference, not a verdict
+const QUOTED: &str = "  Named and not a rejection point: two citations sit inside this block's `REJECTED:` records.\n";
+
+#[test]
+fn an_unanswered_rejection_is_reported() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        &reviewed_block(
+            "T-002",
+            "review",
+            &format!("  IMPLEMENTER 2026-09-17: the change is committed.\n{REJECTION}"),
+        ),
+    );
+    let found = rejection_stale(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("T-002"), "{}", found[0]);
+}
+
+#[test]
+fn an_answered_rejection_is_quiet_at_review() {
+    let (repo, cfg) = seeded();
+    for (id, answer) in [
+        ("T-002", "VERIFIED"),
+        ("T-003", "Passed"),
+        ("T-004", "IMPLEMENTER"),
+    ] {
+        append(
+            &repo,
+            "TASKS.md",
+            &reviewed_block(
+                id,
+                "review",
+                &format!(
+                    "{REJECTION}  {answer} 2026-09-17: the rejection point is answered.\n{QUOTED}"
+                ),
+            ),
+        );
+    }
+    assert_eq!(rejection_stale(&repo, &cfg), Vec::<String>::new());
+}
+
+#[test]
+fn an_answered_rejection_is_quiet_at_done() {
+    let (repo, cfg) = seeded();
+    for (id, answer) in [
+        ("T-002", "VERIFIED"),
+        ("T-003", "Passed"),
+        ("T-004", "IMPLEMENTER"),
+    ] {
+        append(
+            &repo,
+            "TASKS.md",
+            &reviewed_block(
+                id,
+                "done",
+                &format!(
+                    "{REJECTION}  {answer} 2026-09-17: the rejection point is answered.\n{QUOTED}"
+                ),
+            ),
+        );
+    }
+    assert_eq!(rejection_stale(&repo, &cfg), Vec::<String>::new());
 }
