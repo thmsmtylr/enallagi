@@ -405,7 +405,7 @@ fn the_spec_resyncs_the_check() {
     assert!(!spec.contains(&unset));
 }
 
-// the seeded spec described a five-stage check the harness never ran: adhd #49 rewrote 0.3 and 0.4 by hand
+// the seeded spec must not name a check stage the configured check never runs
 #[test]
 fn the_seeded_spec_names_no_stage_the_check_lacks() {
     let repo = Repo::new();
