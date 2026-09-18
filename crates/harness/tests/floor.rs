@@ -681,6 +681,23 @@ fn no_identifier_runs_past_fifty_characters() {
     assert!(long.is_empty(), "{} over {CAP}: {long:#?}", long.len());
 }
 
+#[test]
+fn one_matcher_answers_both_commit_callers() {
+    let copies: Vec<String> = crate_sources()
+        .into_iter()
+        .filter(|(rel, text)| {
+            matches!(rel.to_str(), Some("gates.rs") | Some("pr.rs")) && text.contains(r"\b{}\b")
+        })
+        .map(|(rel, _)| rel.display().to_string())
+        .collect();
+    assert_eq!(copies, ["gates.rs"], "the task-id matcher is copied");
+    let pr = read(&repo_root().join("crates/harness/src/pr.rs"));
+    assert!(
+        pr.contains("gates::names_task"),
+        "pr does not call the shared matcher"
+    );
+}
+
 // main ships the package; what `enallagi init` writes lives only on dogfood/* branches
 #[test]
 #[ignore = "main only: ci.yml runs it on main and on pull requests into main"]

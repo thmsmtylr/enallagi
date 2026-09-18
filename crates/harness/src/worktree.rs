@@ -89,6 +89,15 @@ fn create_worktree(
     Err(WorktreeError::Create(last_dir))
 }
 
+// an untracked file is the operator's own and a lane never sees it, so it is named and not refused
+fn untracked_notice(paths: &[String]) -> String {
+    format!(
+        "worktree: {} untracked path(s) stay in the parent: {}",
+        paths.len(),
+        paths.join(" ")
+    )
+}
+
 // what happens next is decided by the worktrees' own committed state, never run's exit status
 pub fn lane(
     root: &Path,
@@ -100,20 +109,31 @@ pub fn lane(
         return Err(WorktreeError::Detached);
     }
 
-    // a lane branches from the parent's HEAD, so work uncommitted there is work it never sees
+    // a lane branches from the parent's HEAD, so tracked work uncommitted there is work it never sees
     let state_root = git::state_root(root, &cfg.layout.harness_dir);
     let mut parents = vec![root.to_path_buf()];
     if state_root != root {
         parents.insert(0, state_root);
     }
+    let mut untracked: Vec<String> = Vec::new();
     for repo in parents {
-        let files = git::porcelain(&repo);
-        if !files.is_empty() {
+        let (tracked, loose): (Vec<String>, Vec<String>) = git::porcelain(&repo)
+            .into_iter()
+            .partition(|l| !l.starts_with("??"));
+        if !tracked.is_empty() {
             return Err(WorktreeError::Dirty {
                 repo,
-                files: files.join(", "),
+                files: tracked.join(", "),
             });
         }
+        untracked.extend(loose.into_iter().map(|l| {
+            repo.join(l.trim_start_matches("??").trim_start())
+                .display()
+                .to_string()
+        }));
+    }
+    if !untracked.is_empty() {
+        eprintln!("{}", untracked_notice(&untracked));
     }
 
     let ts = jiff::Timestamp::now().strftime("%Y%m%d-%H%M%S").to_string();
@@ -373,7 +393,9 @@ mod tests {
     fn a_dirty_product_parent_refuses_the_lane() {
         let r = nested_repo();
         let cfg = cfg(&r);
-        r.write("scratch.txt", "an operator's uncommitted work");
+        r.write("tracked.txt", "committed");
+        commit_in(&r.root, "a tracked file to edit");
+        r.write("tracked.txt", "an operator's uncommitted work");
 
         let mut ran = false;
         let err = lane(&r.root, &cfg, &mut |_wt| {
@@ -385,10 +407,41 @@ mod tests {
 
         assert!(!ran, "the lane ran against a dirty parent");
         let msg = err.to_string();
-        assert!(msg.contains("scratch.txt"), "{msg}");
+        assert!(msg.contains("tracked.txt"), "{msg}");
         assert!(msg.contains(&r.root.display().to_string()), "{msg}");
         let listed = git::git(&r.root, &["worktree", "list"]).expect("worktree list");
         assert!(!listed.contains("/worktrees/lane-"), "{listed}");
+    }
+
+    #[test]
+    fn an_untracked_parent_file_does_not_block_a_lane() {
+        let r = nested_repo();
+        let cfg = cfg(&r);
+        r.write("scratch.txt", "an operator's scratch file");
+
+        let mut ran = false;
+        let report = lane(&r.root, &cfg, &mut |_wt| {
+            ran = true;
+            Ok(())
+        })
+        .expect("the lane ran");
+
+        assert!(ran, "the lane was refused over an untracked file");
+        assert!(report.merged, "reason: {}", report.reason);
+        assert_eq!(
+            std::fs::read_to_string(r.root.join("scratch.txt")).expect("scratch.txt"),
+            "an operator's scratch file"
+        );
+    }
+
+    #[test]
+    fn the_untracked_notice_names_every_path_once() {
+        let notice = untracked_notice(&["a/one.txt".to_string(), "b/two.txt".to_string()]);
+        assert!(!notice.trim_end().contains('\n'), "{notice}");
+        assert!(
+            notice.contains("a/one.txt") && notice.contains("b/two.txt"),
+            "{notice}"
+        );
     }
 
     #[test]
