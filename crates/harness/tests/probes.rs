@@ -1258,6 +1258,30 @@ fn every_policy_file_is_read() {
     );
 }
 
+#[test]
+fn a_refusal_in_a_heading_is_reported() {
+    let (repo, cfg) = seeded();
+    repo.write(
+        "CONTRIBUTING.md",
+        "# Contributing\n\n## No AI-generated pull requests\n\nThey will be closed.\n",
+    );
+    let found = policy(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].line, 3);
+    assert!(
+        !found[0].message.contains("Contributing") && !found[0].message.contains("closed"),
+        "{}",
+        found[0].message
+    );
+}
+
+#[test]
+fn a_heading_lends_no_terms_to_its_body() {
+    let (repo, cfg) = seeded();
+    repo.write("CONTRIBUTING.md", "# AI\nWe welcome every pull request.\n");
+    assert_eq!(policy(&repo, &cfg), Vec::new());
+}
+
 const TEST_GLOB: &str = "[layout]\ntest_glob = [\"tests/*.rs\"]\n";
 
 fn unsubstituted(repo: &Repo, cfg: &Config) -> Vec<probes::Finding> {

@@ -49,6 +49,10 @@ fn sentences(text: &str) -> Vec<(usize, String)> {
             if !current.is_empty() {
                 out.push((start, std::mem::take(&mut current)));
             }
+            let heading = line.trim_start_matches('#').trim();
+            if !heading.is_empty() {
+                out.push((index + 1, heading.to_string()));
+            }
             continue;
         }
         let mut rest = line;
