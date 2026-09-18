@@ -705,6 +705,28 @@ fn a_ready_block_may_name_a_file_it_creates() {
     );
 }
 
+#[test]
+fn a_scope_directory_is_reported_as_matching_none() {
+    let (repo, cfg) = seeded();
+    repo.write("evals/verifier/setup.sh", "");
+    append(
+        &repo,
+        "TASKS.md",
+        "\n## [T-002] the eval that adds files under a directory\nscope: evals/verifier, evals/other/new.sh\nblockedBy: none\nstatus: ready\n",
+    );
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "queue-hygiene");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0]
+            .message
+            .contains("evals/verifier names a directory")
+            && found[0].message.contains("`evals/verifier/**`"),
+        "{}",
+        found[0].message
+    );
+}
+
 // the two subjects the criteria name, taken from this repository's own history
 const COMMENTARY_SUBJECT: &str = "fix(ci): four failures, four causes, none of them the same";
 const RECORD_SUBJECT: &str = "queue: T-036 ready, docs/demo.sh joins the scope";
