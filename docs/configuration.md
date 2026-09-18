@@ -56,7 +56,7 @@ vitest, a line in vitest's default reporter format, not run here:
 
 jest, a line in jest's failure summary format, not run here:
 
-- fail_name: `^ {2}● (.+)$`
+- fail_name: `^ {2}● (C|Co|Con|Cons|Conso|Consol|(?:[^C]|C[^o]|Co[^n]|Con[^s]|Cons[^o]|Conso[^l]|Consol[^e]|Console.).*)$`
 - failing line: `  ● date › parses a date`
 - captures: `date › parses a date`
 

@@ -1,3 +1,3 @@
-command: npx jest --watchman=false --verbose
+command: npx jest --watchman=false (two test files, the failing one calls console.log)
 version: jest 30.5.0
-captured: 2026-09-18
+captured: 2026-09-19

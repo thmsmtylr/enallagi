@@ -3,7 +3,8 @@ detect_files = ["package.json", "jest.config.js", "jest.config.ts"]
 detect_re = 'jest\b'
 test_command = "npx jest"
 run_re = 'jest\b|npm (run )?test\b'
-fail_name = '^ {2}● (.+)$'
+# jest heads a failing file's console output `  ● Console`; the regex crate has no lookaround to drop it
+fail_name = '^ {2}● (C|Co|Con|Cons|Conso|Consol|(?:[^C]|C[^o]|Co[^n]|Con[^s]|Cons[^o]|Conso[^l]|Consol[^e]|Console.).*)$'
 test_file_suffix_re = '\.(test|spec)\.[cm]?[jt]sx?$'
 test_decl_patterns = ["test('{name}'", 'test("{name}"', "it('{name}'", 'it("{name}"']
 source_ext = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]
