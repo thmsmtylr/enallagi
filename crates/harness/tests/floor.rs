@@ -1084,3 +1084,55 @@ fn each_fail_name_example_captures_its_line() {
         assert_eq!(caught, Some(captures), "{}: {failing}", runner.name);
     }
 }
+
+fn string_values(value: &toml::Value, out: &mut Vec<String>) {
+    match value {
+        toml::Value::String(s) => out.push(s.clone()),
+        toml::Value::Array(a) => a.iter().for_each(|v| string_values(v, out)),
+        toml::Value::Table(t) => t.values().for_each(|v| string_values(v, out)),
+        _ => {}
+    }
+}
+
+fn runner_words(defaults: &str) -> Vec<String> {
+    let mut names: Vec<String> = ["pnpm", "yarn", "bunx", "bunfig"]
+        .map(String::from)
+        .to_vec();
+    for runner in enallagi::runners::presets() {
+        names.push(runner.name.clone());
+        names.extend(
+            runner
+                .test_command
+                .split_whitespace()
+                .next()
+                .map(String::from),
+        );
+    }
+    let mut values = Vec::new();
+    string_values(&toml::from_str(defaults).expect("defaults"), &mut values);
+    let word = re(r"\w+");
+    let mut hits: Vec<String> = values
+        .iter()
+        .filter(|v| {
+            word.find_iter(v)
+                .any(|w| names.iter().any(|n| n == w.as_str()))
+        })
+        .cloned()
+        .collect();
+    hits.dedup();
+    hits
+}
+
+#[test]
+fn no_default_names_a_runner() {
+    assert_eq!(
+        runner_words(enallagi::config::DEFAULT_TOML),
+        Vec::<String>::new()
+    );
+    let bun = "[check]\ncommand = \"bun run check\"\n[layout]\ndocs = [\"bun.lock\"]\n";
+    assert_eq!(runner_words(bun), vec!["bun run check", "bun.lock"]);
+    assert_eq!(
+        runner_words("[x]\ny = \"node_modules\"\n"),
+        Vec::<String>::new()
+    );
+}

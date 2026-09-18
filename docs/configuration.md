@@ -19,9 +19,9 @@ Re-run `enallagi init` after every edit, as [setup.md](setup.md) says.
 
 ## `[check]`
 
-- `check.command`: the one command that decides green. Default `"bun run check"`, which init replaces when it detects a runner.
-- `check.force`: the same check with its cache defeated. Default `"bun run check -- --force"`. Left out of `enallagi.toml`, it follows `check.command`.
-- `check.fail_name`: a regex over the check's output whose group 1 is a failing test's name. Default is bun's pattern below.
+- `check.command`: the one command that decides green. Empty by default, and init sets it when it detects a runner. A run refuses to start while it is empty.
+- `check.force`: the same check with its cache defeated. Empty by default. Left out of `enallagi.toml`, it follows `check.command`.
+- `check.fail_name`: a regex over the check's output whose group 1 is a failing test's name. Empty by default, and init writes the detected runner's pattern below.
 - `check.timeout`: `<n>s`, `<n>m` or `<n>h`. Default `"30m"`. A check that runs past it halts the run.
 
 ### `check.fail_name`
@@ -99,18 +99,18 @@ The spec and its exit criteria:
 
 The source and its tests, which init sets when it detects a runner:
 
-- `layout.source_root`: the product source. Default `"src"`.
+- `layout.source_root`: the product source. Empty by default, and init sets it when it detects a runner.
 - `layout.source_ext`: extensions the probes read as source. Default `[".ts", ".tsx", ".js", ".mjs", ".cjs", ".sh", ".py"]`.
-- `layout.test_file_suffix_re`: a regex naming a test file. Default `'\.test\.ts'`.
-- `layout.test_decl_patterns`: how a test is declared, with `{name}` for its name. Default `["test('{name}'", 'test("{name}"']`.
+- `layout.test_file_suffix_re`: a regex naming a test file. Empty by default, and init writes the detected runner's.
+- `layout.test_decl_patterns`: how a test is declared, with `{name}` for its name. Empty by default, and init writes the detected runner's.
 
 The allowlists the `litter` and `rail-unenforced` probes read:
 
-- `layout.harness_files`: build files that can run a rail's enforcement. Default `package.json`, `turbo.json`, `check.ts`, `bunfig.toml`, `Makefile` and `pyproject.toml`.
+- `layout.harness_files`: build files that can run a rail's enforcement. Default `package.json`, `turbo.json`, `check.ts`, `Makefile` and `pyproject.toml`.
 - `layout.harness_globs`: globs for more of the same. Default `["packages/*/package.json"]`.
 - `layout.allowed_prefixes`: path prefixes a tracked file may sit under. Default `src/`, `packages/`, `evals/`, `.enallagi/` and one directory per agent CLI.
 - `layout.docs`: file names that are documents, not litter. Default is the 25 names in `harness.default.toml`, from `.check-baseline` to `test-hashes.json`.
-- `layout.harness_allow`: build files that are not litter. Default is the 11 names in `harness.default.toml`, from `package.json` to `pyproject.toml`.
+- `layout.harness_allow`: build files that are not litter. Default is the 9 names in `harness.default.toml`, from `package.json` to `pyproject.toml`.
 - `layout.machinery`: path parts that are build output or scratch. Default `.DS_Store`, `.check`, `.turbo`, `.venv`, `STOP`, `__pycache__`, `build`, `dist`, `node_modules`, `out` and `target`.
 
 ## `[[pipeline]]`

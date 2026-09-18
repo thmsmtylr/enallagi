@@ -11,10 +11,14 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let check = &ctx.cfg.check.command;
-    if check.is_empty() {
-        return Ok(vec![]);
-    }
     let file = &ctx.cfg.layout.context_file;
+    if check.is_empty() {
+        return Ok(vec![common::finding(
+            file,
+            0,
+            "enallagi.toml sets no check.command, so the context file names no check; set it, then run `enallagi init`",
+        )]);
+    }
     if !common::exists(ctx.root, file) {
         return Ok(vec![common::finding(
             file,

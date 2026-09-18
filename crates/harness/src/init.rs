@@ -202,6 +202,14 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         cfg.layout.context_file = config::instance_rel(root, &dir, "AGENTS.md");
     }
     config::root_layout_skills(root, &mut cfg);
+    let missing = config::unset_keys(&cfg);
+    if !missing.is_empty() {
+        report.notes.push(format!(
+            "unset: {} — set each in {} before a lane runs.",
+            missing.join(" "),
+            config_rel(root)
+        ));
+    }
     let at = |name: &str| config::instance_rel(root, &dir, name);
     let toml = config_rel(root);
     // before subst, which would put a root-layout queue under the harness directory
@@ -616,18 +624,30 @@ fn resync(
     check: &config::CheckConfig,
 ) -> Option<String> {
     let (command, force) = defaults?;
+    let rendered = |value: &str, unset: &str| match value.is_empty() {
+        true => unset.to_string(),
+        false => value.to_string(),
+    };
     let mut out = text.to_string();
-    for (default, configured) in [(command, &check.command), (force, &check.force)] {
-        if default != configured {
+    for (default, configured) in [
+        (command, rendered(&check.command, config::UNSET_CHECK)),
+        (force, rendered(&check.force, config::UNSET_FORCE)),
+    ] {
+        // an empty default would match every empty pair in the document, fences included
+        if !default.is_empty() && *default != configured {
             out = out.replace(&format!("`{default}`"), &format!("`{configured}`"));
         }
     }
     (out != text).then_some(out)
 }
 
+// the rendered form, so a document seeded with no check resyncs from the text it was seeded with
 fn default_check() -> Option<(String, String)> {
     let cfg = config_from("").ok()?;
-    Some((cfg.check.command, cfg.check.force))
+    Some((
+        config::subst("__CHECK__", &cfg),
+        config::subst("__CHECK_FORCE__", &cfg),
+    ))
 }
 
 // Claude Code doesn't read AGENTS.md natively; the @ import is its documented workaround
@@ -913,16 +933,24 @@ mod tests {
     #[test]
     fn an_unreadable_default_rewrites_nothing() {
         let cfg = config_from("[check]\ncommand = \"make check\"\n").expect("config");
-        let text = "- Verify, and this is what done means: `bun run check`\n";
-        assert_eq!(resync(text, None, &cfg.check), None);
-
-        let defaults = (
-            "bun run check".to_string(),
-            "bun run check -- --force".to_string(),
+        let text = format!(
+            "- Verify, and this is what done means: `{}`\n",
+            config::UNSET_CHECK
         );
+        assert_eq!(resync(&text, None, &cfg.check), None);
+
+        let defaults = default_check().expect("defaults");
         assert_eq!(
-            resync(text, Some(&defaults), &cfg.check).as_deref(),
+            resync(&text, Some(&defaults), &cfg.check).as_deref(),
             Some("- Verify, and this is what done means: `make check`\n")
         );
+    }
+
+    #[test]
+    fn an_empty_default_replaces_no_pair() {
+        let cfg = config_from("[check]\ncommand = \"make check\"\n").expect("config");
+        let text = "```sh\necho ``\n```\n";
+        let empty = (String::new(), String::new());
+        assert_eq!(resync(text, Some(&empty), &cfg.check), None);
     }
 }

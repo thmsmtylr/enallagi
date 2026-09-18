@@ -112,7 +112,7 @@ fn no_probe_errored() {
 
 #[test]
 fn check_unnamed_reads_the_nested_context_file() {
-    let (repo, cfg) = seeded();
+    let (repo, cfg) = seeded_with("[check]\ncommand = \"true\"\n");
     assert_eq!(cfg.layout.context_file, ".enallagi/AGENTS.md");
     assert!(!repo.root.join("AGENTS.md").exists());
     assert_eq!(count(&run(&repo, &cfg), "check-unnamed"), Some(0));
@@ -122,6 +122,23 @@ fn check_unnamed_reads_the_nested_context_file() {
     let found = findings(&results, "check-unnamed");
     assert_eq!(found.len(), 1, "{}", render(&results));
     assert_eq!(found[0].path, ".enallagi/AGENTS.md");
+}
+
+#[test]
+fn check_unnamed_reports_an_unset_check() {
+    let (repo, cfg) = seeded();
+    assert_eq!(cfg.check.command, "");
+    let context = fs::read_to_string(repo.root.join(".enallagi/AGENTS.md")).expect("read");
+    assert!(context.contains(config::UNSET_CHECK), "{context:.400}");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "check-unnamed");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, ".enallagi/AGENTS.md");
+    assert!(
+        found[0].message.contains("check.command"),
+        "{}",
+        found[0].message
+    );
 }
 
 #[test]
@@ -268,7 +285,7 @@ fn conventional() -> (Repo, Config) {
 
     // docs/ and bench/ are this repository's own, so they are named per repository and not by the defaults
     let mut toml = String::from(
-        "[layout]\nallowed_prefixes = [\"src/\", \"docs/\", \"bench/\", \".enallagi/\", \".claude/\", \".github/\"]\n",
+        "[check]\ncommand = \"true\"\n\n[layout]\nallowed_prefixes = [\"src/\", \"docs/\", \"bench/\", \".enallagi/\", \".claude/\", \".github/\"]\n",
     );
     for id in IDS {
         // a path: source under src/ keeps the fixture off the network and off the litter list

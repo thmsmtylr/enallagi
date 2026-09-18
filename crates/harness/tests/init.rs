@@ -341,7 +341,8 @@ fn documents_with_content_are_kept() {
 fn the_context_file_resyncs_the_check() {
     let repo = Repo::new();
     install(&repo);
-    assert!(read(&repo, ".enallagi/AGENTS.md").contains("`bun run check`"));
+    let unset = format!("`{}`", enallagi::config::UNSET_CHECK);
+    assert!(read(&repo, ".enallagi/AGENTS.md").contains(&unset));
     repo.write(
         ".enallagi/enallagi.toml",
         "[check]\ncommand = \"make check\"\n",
@@ -349,14 +350,49 @@ fn the_context_file_resyncs_the_check() {
     install(&repo);
     let context = read(&repo, ".enallagi/AGENTS.md");
     assert!(context.contains("`make check`"), "{context:.400}");
-    assert!(!context.contains("`bun run check`"));
+    assert!(!context.contains(&unset));
+}
+
+#[test]
+fn init_names_the_keys_left_unset() {
+    let repo = Repo::new();
+    let report = install(&repo);
+    let note = report
+        .notes
+        .iter()
+        .find(|n| n.contains("before a lane runs"))
+        .unwrap_or_else(|| panic!("{:?}", report.notes));
+    for key in [
+        "check.command",
+        "check.force",
+        "check.fail_name",
+        "layout.source_root",
+        "layout.test_file_suffix_re",
+        "layout.test_decl_patterns",
+    ] {
+        assert!(note.contains(key), "{note}");
+    }
+    assert!(!read(&repo, ".enallagi/AGENTS.md").contains("``"));
+
+    repo.write(
+        ".enallagi/enallagi.toml",
+        "[check]\ncommand = \"make check\"\n",
+    );
+    let note = install(&repo)
+        .notes
+        .into_iter()
+        .find(|n| n.contains("before a lane runs"))
+        .expect("a note");
+    assert!(!note.contains("check.command"), "{note}");
+    assert!(note.contains("check.fail_name"), "{note}");
 }
 
 #[test]
 fn the_spec_resyncs_the_check() {
     let repo = Repo::new();
     install(&repo);
-    assert!(read(&repo, ".enallagi/SPEC.md").contains("`bun run check`"));
+    let unset = format!("`{}`", enallagi::config::UNSET_CHECK);
+    assert!(read(&repo, ".enallagi/SPEC.md").contains(&unset));
     repo.write(
         ".enallagi/enallagi.toml",
         "[check]\ncommand = \"make check\"\n",
@@ -366,7 +402,7 @@ fn the_spec_resyncs_the_check() {
     let at = spec.find("### 0.4").expect("no 0.4 heading");
     let section = &spec[at..];
     assert!(section.contains("`make check`"), "{section:.400}");
-    assert!(!spec.contains("`bun run check`"));
+    assert!(!spec.contains(&unset));
 }
 
 // the seeded spec described a five-stage check the harness never ran: adhd #49 rewrote 0.3 and 0.4 by hand
@@ -475,8 +511,7 @@ fn a_stale_force_is_reported_against_the_command() {
     let repo = Repo::new();
     seeded(
         &repo,
-        &enallagi::config::DEFAULT_TOML
-            .replace("command = \"bun run check\"", "command = \"make check\""),
+        &enallagi::config::DEFAULT_TOML.replace("\ncommand = \"\"", "\ncommand = \"make check\""),
     );
     let report = install(&repo);
     let note = report
@@ -492,8 +527,7 @@ fn prune_defaults_keeps_only_the_changed_key() {
     let repo = Repo::new();
     seeded(
         &repo,
-        &enallagi::config::DEFAULT_TOML
-            .replace("command = \"bun run check\"", "command = \"make check\""),
+        &enallagi::config::DEFAULT_TOML.replace("\ncommand = \"\"", "\ncommand = \"make check\""),
     );
     let dropped = init::prune(&repo.root, false).expect("prune");
     assert!(dropped.contains(&"check.force".to_string()), "{dropped:?}");

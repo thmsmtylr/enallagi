@@ -203,7 +203,7 @@ fn skills_sync_works_under_a_custom_preset() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let mut toml = String::from(
-        "[agent]\npreset = \"custom\"\ncommand = [\"./lane.sh\", \"{prompt}\", \"{turns}\"]\n\n",
+        "[check]\ncommand = \"true\"\n\n[agent]\npreset = \"custom\"\ncommand = [\"./lane.sh\", \"{prompt}\", \"{turns}\"]\n\n",
     );
     for id in [
         "tdd",
@@ -248,7 +248,7 @@ fn skills_check_refuses_what_sync_then_locks() {
         "brainstorming",
         "caveman-commit",
     ];
-    let mut toml = String::new();
+    let mut toml = String::from("[check]\ncommand = \"true\"\n\n");
     for id in IDS {
         toml.push_str(&format!(
             "[[skill]]\nid = \"{id}\"\nsource = \"path:vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"x\"\n\n"
@@ -296,6 +296,32 @@ fn skills_check_refuses_what_sync_then_locks() {
             .any(|l| l.starts_with("tdd  path:vendor/tdd  sha256:")),
         "{listed}"
     );
+}
+
+#[test]
+fn run_refuses_an_unset_check() {
+    let repo = enallagi::fixture::Repo::new();
+    let harness = |args: &[&str]| {
+        enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+            .args(args)
+            .current_dir(&repo.root)
+            .output()
+            .expect("run enallagi")
+    };
+    let out = harness(&["init"]);
+    assert!(out.status.success(), "{out:?}");
+
+    let out = harness(&["run", "--no-tui", "--iterations", "1"]);
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l.contains("check.command") && l.contains("enallagi init")),
+        "{stderr}"
+    );
+    let log = std::fs::read_to_string(repo.root.join(".enallagi/events.jsonl")).unwrap_or_default();
+    assert!(!log.contains("stage.start"), "{log}");
 }
 
 #[test]

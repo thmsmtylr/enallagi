@@ -20,6 +20,9 @@ pub const DIR_TOKEN: &str = "__ENALLAGI_DIR__";
 pub const LEGACY_CONFIG: &str = "harness.toml";
 pub const LEGACY_ENV: &str = "HARNESS_";
 pub const LEGACY_DIR_TOKEN: &str = "__HARNESS_DIR__";
+// what a seeded document says in place of an unset check, never an empty pair a resync would match everywhere
+pub const UNSET_CHECK: &str = "check.command is unset";
+pub const UNSET_FORCE: &str = "check.force is unset";
 
 pub const ROLE_NAMES: &[&str] = &[
     "scout",
@@ -74,7 +77,7 @@ pub enum ConfigError {
         "agent preset {0} declares no bypass flag, so dangerously_skip_permissions cannot apply"
     )]
     NoBypassFlag(String),
-    #[error("check.command is empty")]
+    #[error("check.command is empty: set it in enallagi.toml, then run `enallagi init`")]
     EmptyCheck,
     #[error("[agent.{role}] is not a role ({})", ROLE_NAMES.join(", "))]
     UnknownRole { role: String },
@@ -761,13 +764,38 @@ pub fn validate(
     }
 }
 
+/// The keys a repository must set before a lane runs that still have no value.
+pub fn unset_keys(cfg: &Config) -> Vec<&'static str> {
+    let (c, l) = (&cfg.check, &cfg.layout);
+    [
+        ("check.command", c.command.is_empty()),
+        ("check.force", c.force.is_empty()),
+        ("check.fail_name", c.fail_name.is_empty()),
+        ("layout.source_root", l.source_root.is_empty()),
+        (
+            "layout.test_file_suffix_re",
+            l.test_file_suffix_re.is_empty(),
+        ),
+        ("layout.test_decl_patterns", l.test_decl_patterns.is_empty()),
+    ]
+    .into_iter()
+    .filter_map(|(key, unset)| unset.then_some(key))
+    .collect()
+}
+
 pub fn subst(text: &str, cfg: &Config) -> String {
     let text = text.replace(LEGACY_DIR_TOKEN, DIR_TOKEN);
     let l = &cfg.layout;
     let cap = l.learnings_cap.to_string();
+    let or = |value: &str, unset: &str| match value.is_empty() {
+        true => unset.to_string(),
+        false => value.to_string(),
+    };
+    let check = or(&cfg.check.command, UNSET_CHECK);
+    let force = or(&cfg.check.force, UNSET_FORCE);
     let mut tokens: Vec<(&str, &str)> = vec![
-        ("__CHECK__", &cfg.check.command),
-        ("__CHECK_FORCE__", &cfg.check.force),
+        ("__CHECK__", &check),
+        ("__CHECK_FORCE__", &force),
         ("__SPEC__", &l.spec),
         (DIR_TOKEN, &l.harness_dir),
         ("__CONTEXT_FILE__", &l.context_file),
@@ -1030,6 +1058,13 @@ fn toml_string(s: &str) -> String {
 mod tests {
     use super::*;
 
+    // the defaults carry no check, and validate refuses one
+    fn checked() -> Config {
+        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        c.check.command = "true".into();
+        c
+    }
+
     fn write_config(root: &Path, text: &str) {
         let path = config_path(root);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1140,7 +1175,7 @@ mod tests {
     fn defaults_load_when_no_file() {
         let d = tempfile::tempdir().unwrap();
         let c = load(d.path()).unwrap();
-        assert_eq!(c.check.command, "bun run check");
+        assert_eq!(c.check.command, "");
         assert_eq!(c.pipeline.len(), 3);
         assert_eq!(c.stage[0].turns, 120);
     }
@@ -1196,7 +1231,7 @@ mod tests {
 
     #[test]
     fn a_skip_with_no_bypass_flag_is_refused() {
-        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        let mut c = checked();
         c.agent.dangerously_skip_permissions = true;
         assert!(validate(&c, &crate::agent::presets(), &|_| Some(String::new())).is_ok());
         c.agent.roles.insert(
@@ -1265,7 +1300,7 @@ mod tests {
         let c = load(tempfile::tempdir().unwrap().path()).unwrap();
         assert_eq!(
             subst("run __CHECK__ in __ENALLAGI_DIR__", &c),
-            "run bun run check in .enallagi"
+            "run check.command is unset in .enallagi"
         );
     }
 
@@ -1285,7 +1320,12 @@ mod tests {
     fn the_defaults_validate() {
         let c = load(tempfile::tempdir().unwrap().path()).unwrap();
         let roles = |_: &str| Some(String::new());
-        assert!(validate(&c, &crate::agent::presets(), &roles).is_ok());
+        let errs = validate(&c, &crate::agent::presets(), &roles).unwrap_err();
+        assert!(
+            matches!(errs.as_slice(), [ConfigError::EmptyCheck]),
+            "{errs:?}"
+        );
+        assert!(validate(&checked(), &crate::agent::presets(), &roles).is_ok());
         assert_eq!(c.skill.len(), 8);
         assert_eq!(c.layout.learnings_cap, 12);
         assert_eq!(c.layout.skills_dir, None);
@@ -1353,7 +1393,7 @@ mod tests {
         assert!(took.contains(&"check.command".to_string()), "{took:?}");
         assert!(took.contains(&"pipeline".to_string()), "{took:?}");
 
-        let mine = DEFAULT_TOML.replace("command = \"bun run check\"", "command = \"make check\"");
+        let mine = DEFAULT_TOML.replace("\ncommand = \"\"", "\ncommand = \"make check\"");
         let (text, took) = prune_defaults(&mine).unwrap();
         let kept: toml::Value = toml::from_str(&text).unwrap();
         assert_eq!(kept["check"]["command"].as_str(), Some("make check"));
@@ -1434,7 +1474,12 @@ mod tests {
             .map(|e| e.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("check.command is empty"), "{text}");
+        assert!(
+            text.contains(
+                "check.command is empty: set it in enallagi.toml, then run `enallagi init`"
+            ),
+            "{text}"
+        );
         assert!(text.contains("is not a predicate"), "{text}");
         assert!(text.contains("ghost"), "{text}");
         assert!(text.contains("exactly one of role or command"), "{text}");
@@ -1449,7 +1494,7 @@ mod tests {
 
     #[test]
     fn a_role_override_picks_its_own_preset() {
-        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        let mut c = checked();
         c.agent.roles.insert(
             "verifier".into(),
             AgentOverride {
@@ -1467,7 +1512,7 @@ mod tests {
 
     #[test]
     fn a_time_capped_preset_needs_a_timeout() {
-        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        let mut c = checked();
         c.agent.roles.insert(
             "verifier".into(),
             AgentOverride {
@@ -1485,7 +1530,7 @@ mod tests {
 
     #[test]
     fn custom_without_a_command_is_refused() {
-        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        let mut c = checked();
         c.agent.preset = "custom".into();
         let roles = |_: &str| Some(String::new());
         assert!(validate(&c, &crate::agent::presets(), &roles).is_err());
@@ -1495,7 +1540,7 @@ mod tests {
 
     #[test]
     fn declared_skills_satisfy_their_tokens() {
-        let c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        let c = checked();
         let roles = |_: &str| {
             Some("use {{skill:tdd}} then {{skill:tdd}} and {{skill:ponytail}}".to_string())
         };
@@ -1566,7 +1611,8 @@ mod tests {
             c.agent.usage.as_ref().unwrap().cost.as_deref(),
             Some("total_cost_usd")
         );
-        assert_eq!(c.check.force, "bun run check -- --force");
+        assert_eq!(c.check.command, "");
+        assert_eq!(c.check.force, "");
         assert_eq!(c.check.fail_name, r".*\(fail\) (.+)$");
         assert_eq!(c.layout.skills_dir.as_deref(), Some(".claude/skills"));
         assert_eq!(c.layout.learnings_cap, 12);
@@ -1577,7 +1623,11 @@ mod tests {
         assert_eq!(c.skill[6].gate, "queue-uncovered");
         assert_eq!(c.stage.len(), 4);
         let roles = |_: &str| Some(String::new());
-        assert!(validate(&c, &crate::agent::presets(), &roles).is_ok());
+        let errs = validate(&c, &crate::agent::presets(), &roles).unwrap_err();
+        assert!(
+            matches!(errs.as_slice(), [ConfigError::EmptyCheck]),
+            "{errs:?}"
+        );
     }
 
     #[test]
@@ -1600,7 +1650,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         write_config(
             d.path(),
-            "[agent]\npreset = 'goose'\n\n[agent.usage]\ncost = 'c'\n\n\
+            "[check]\ncommand = 'true'\n\n[agent]\npreset = 'goose'\n\n[agent.usage]\ncost = 'c'\n\n\
              [agent.verifier]\npreset = 'gemini'\nmodel = 'g'\n",
         );
         let c = load(d.path()).unwrap();
@@ -1689,7 +1739,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         write_config(
             d.path(),
-            "[[role]]\nname = 'implementer'\nsource = 'path:x'\n",
+            "[check]\ncommand = 'true'\n\n[[role]]\nname = 'implementer'\nsource = 'path:x'\n",
         );
         let c = load(d.path()).unwrap();
         let files = |role: &str| (role != "implementer").then(String::new);
