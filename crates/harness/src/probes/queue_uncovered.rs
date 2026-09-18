@@ -13,7 +13,7 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let row_ref = common::re(&format!(
-        r"([\w./-]+{})::([^`,\n]+)",
+        r"([\w./-]+{})::",
         ctx.cfg.layout.test_file_suffix_re
     ))?;
     let defined: BTreeSet<(String, String)> = common::spec_rows(ctx)?
@@ -33,18 +33,27 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         if !OPEN_STATUS.contains(&status.as_str()) {
             continue;
         }
-        for m in row_ref.captures_iter(&rows) {
-            let (Some(name), Some(test)) = (m.get(1), m.get(2)) else {
+        let refs: Vec<_> = row_ref.captures_iter(&rows).collect();
+        for (at, m) in refs.iter().enumerate() {
+            let (Some(name), Some(whole)) = (m.get(1), m.get(0)) else {
                 continue;
             };
-            let reference = (
-                name.as_str().to_string(),
-                test.as_str()
-                    .trim()
-                    .trim_end_matches('`')
-                    .trim()
-                    .to_string(),
-            );
+            // a test name may hold a comma, so a claim runs to the next reference, not to the next comma
+            let stop = refs
+                .get(at + 1)
+                .and_then(|next| next.get(0))
+                .map_or(rows.len(), |g| g.start());
+            let test = rows[whole.end()..stop]
+                .split(['`', '\n'])
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .trim_end_matches(',')
+                .trim();
+            if test.is_empty() {
+                continue;
+            }
+            let reference = (name.as_str().to_string(), test.to_string());
             claimed.insert(reference.clone());
             if !defined.contains(&reference) {
                 found.push(common::finding(

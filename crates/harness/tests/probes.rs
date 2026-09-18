@@ -147,6 +147,52 @@ fn the_seeded_criterion_is_untested() {
     assert_eq!(count(&run(&repo, &cfg), "queue-uncovered"), Some(1));
 }
 
+const COMMA_ROWS: &str = "# SPEC\n\n## 11. Exit criteria\n\n| Behaviour | Test |\n| --- | --- |\n| a | `tests/x.test.ts::the frames FRAMES held, in order` |\n| b | `tests/x.test.ts::the packs a core pack holds, named` |\n\n## 12. Notes\n";
+
+fn claiming(repo: &Repo, rows: &str) {
+    repo.write(".enallagi/SPEC.md", COMMA_ROWS);
+    append(
+        repo,
+        "TASKS.md",
+        &format!("\n## [T-002] the block that claims them\nscope: src/tests/x.test.ts\nblockedBy: none\nstatus: ready\nrows: {rows}\n"),
+    );
+}
+
+#[test]
+fn a_claimed_row_name_keeps_its_comma() {
+    let (repo, cfg) = seeded();
+    claiming(
+        &repo,
+        "tests/x.test.ts::the frames FRAMES held, in order, tests/x.test.ts::the packs a core pack holds, named",
+    );
+    let results = run(&repo, &cfg);
+    assert_eq!(
+        count(&results, "queue-uncovered"),
+        Some(0),
+        "{}",
+        render(&results)
+    );
+}
+
+#[test]
+fn a_claimed_row_no_criteria_row_defines_is_found() {
+    let (repo, cfg) = seeded();
+    claiming(
+        &repo,
+        "tests/x.test.ts::the frames FRAMES held, in order, tests/x.test.ts::the packs a core pack holds, named, tests/x.test.ts::no row defines this",
+    );
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "queue-uncovered");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0].message.contains(
+            "T-002 claims row tests/x.test.ts::no row defines this and the exit criteria define no such row"
+        ),
+        "{}",
+        found[0].message
+    );
+}
+
 #[test]
 fn harness_immutable_has_no_hash_key() {
     // the rail names the file that is the gate; with the launcher a binary, that file is enallagi.toml
