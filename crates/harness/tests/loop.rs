@@ -2570,16 +2570,16 @@ criteria:
   - it happens
 ";
 
-// runs the diff the rendered prompt names, so a pathspec that covers nothing lets the tautology through
+// runs only the diff the rendered prompt names, so a pathspec that misses lets the tautology through
 fn diff_reading_verifier(r: &Repo) -> String {
     script(
         r,
         "src/fakeverify.sh",
         &format!(
             "role=.enallagi/run/roles/verifier.md\n\
-             specs=$(grep 'assertion macro' \"$role\" | grep -o 'git diff \\$BASE -- [^`]*' | sed 's/^git diff \\$BASE -- //')\n\
+             specs=$(grep 'Tests weakened' \"$role\" | grep -o 'git diff \\$BASE -- [^`]*' | sed 's/^git diff \\$BASE -- //')\n\
              base=$(git rev-list --max-parents=0 HEAD)\n\
-             if eval \"git diff $base -- $specs\" | grep -q '^+.*assert!(true)'; then\n\
+             if [ -n \"$specs\" ] && eval \"git diff $base -- $specs\" | grep -q '^+.*assert!(true)'; then\n\
              {bin} tasks set-status T-001 ready 'REJECTED: assert!(true) replaced an assertion'\n\
              else\n\
              {bin} tasks set-status T-001 done 'stub verified'\n\
@@ -2623,10 +2623,10 @@ fn a_tautologised_test_does_not_reach_done() {
     go(&r, &opts(1));
     let thing = std::fs::read_to_string(r.root.join("src/thing.rs")).expect("thing.rs");
     assert!(thing.contains("assert!(true);"), "{thing}");
-    let role = std::fs::read_to_string(r.root.join(".enallagi/run/roles/verifier.md"))
-        .expect("the rendered verifier role");
-    assert!(role.contains("git diff $BASE -- 'src/*.rs'"), "{role}");
     let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
     assert!(!tasks.contains("status: done"), "{tasks}");
     assert!(tasks.contains("REJECTED: assert!(true)"), "{tasks}");
+    let role = std::fs::read_to_string(r.root.join(".enallagi/run/roles/verifier.md"))
+        .expect("the rendered verifier role");
+    assert!(role.contains("git diff $BASE -- 'src/*.rs'"), "{role}");
 }
