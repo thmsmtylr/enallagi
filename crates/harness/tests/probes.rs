@@ -1009,6 +1009,38 @@ fn an_answered_rejection_is_quiet_at_done() {
 }
 
 #[test]
+fn a_verdict_word_inside_a_rejection_is_not_read() {
+    let (repo, cfg) = seeded();
+    for (id, rejection) in [
+        (
+            "T-002",
+            "  REJECTED: only three of the five criteria Passed (verifier, 2026-09-17).\n",
+        ),
+        (
+            "T-003",
+            "  REJECTED: the IMPLEMENTER left the tree dirty (verifier, 2026-09-17).\n",
+        ),
+    ] {
+        append(&repo, "TASKS.md", &reviewed_block(id, "review", rejection));
+    }
+    let found = rejection_stale(&repo, &cfg);
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found[0].contains("T-002"), "{}", found[0]);
+    assert!(found[1].contains("T-003"), "{}", found[1]);
+}
+
+#[test]
+fn a_mid_line_answer_silences_a_rejection() {
+    let (repo, cfg) = seeded();
+    let block = format!(
+        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: review\nnotes: {}\n",
+        "Adjudicated 2026-09-17. REJECTED: the quoted figure does not reproduce (verifier, 2026-09-17). IMPLEMENTER 2026-09-17: the figure is re-run and stamped. VERIFIER 2026-09-17: VERIFIED."
+    );
+    append(&repo, "TASKS.md", &block);
+    assert_eq!(rejection_stale(&repo, &cfg), Vec::<String>::new());
+}
+
+#[test]
 fn check_red_says_nothing_for_a_timed_out_check() {
     let (repo, mut cfg) = seeded();
     cfg.check.force = "sleep 10".to_string();
