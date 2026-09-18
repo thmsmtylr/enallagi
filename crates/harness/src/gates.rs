@@ -398,20 +398,9 @@ pub fn names_task(subject: &str, task: &str) -> bool {
 // is an operator's or another round's and is not charged here. filter is a git --diff-filter value,
 // empty for every change
 fn commit_files(root: &Path, base: &str, task: &str, filter: &str) -> Vec<String> {
-    let range = format!("{base}..HEAD");
-    let log = git(
-        root,
-        &["log", "--reverse", "--no-merges", "--format=%h %s", &range],
-    )
-    .unwrap_or_default();
     let flag = format!("--diff-filter={filter}");
     let mut files: Vec<String> = Vec::new();
-    for sha in log
-        .lines()
-        .filter_map(|l| l.split_once(' '))
-        .filter(|(_, subject)| names_task(subject, task))
-        .map(|(sha, _)| sha.to_string())
-    {
+    for sha in task_commits(root, base, task) {
         let mut args = vec!["show", "--format=", "--name-only"];
         if !filter.is_empty() {
             args.push(&flag);
@@ -424,6 +413,20 @@ fn commit_files(root: &Path, base: &str, task: &str, filter: &str) -> Vec<String
         }
     }
     files
+}
+
+fn task_commits(root: &Path, base: &str, task: &str) -> Vec<String> {
+    let range = format!("{base}..HEAD");
+    git(
+        root,
+        &["log", "--reverse", "--no-merges", "--format=%h %s", &range],
+    )
+    .unwrap_or_default()
+    .lines()
+    .filter_map(|l| l.split_once(' '))
+    .filter(|(_, subject)| names_task(subject, task))
+    .map(|(sha, _)| sha.to_string())
+    .collect()
 }
 
 // the task's files: the product repository's, and in a nested install the harness
@@ -576,13 +579,16 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     if rows.contains("none") && rows.contains("harness") {
         harness_hit.clear();
     }
-    // the baseline only ever shrinks; a line ADDED is a red check made green by hand, whatever rows: says
-    let grew = diff_since_base(ctx, &rel(ctx, ".check-baseline"))
-        .map(|d| {
-            d.lines()
+    // the baseline only ever shrinks; a line the task's own commits ADD is a red check made green by
+    // hand, whatever rows: says
+    let grew = at_base(ctx, &rel(ctx, ".check-baseline")).is_some_and(|(repo, inner, base)| {
+        task_commits(&repo, &base, &task).iter().any(|sha| {
+            git(&repo, &["show", "--format=", sha, "--", &inner])
+                .unwrap_or_default()
+                .lines()
                 .any(|l| l.starts_with('+') && !l.starts_with("++") && !l.starts_with("+#"))
         })
-        .unwrap_or(false);
+    });
 
     let unexplained = widening.is_some() && widened.is_empty();
     if out_of.is_empty() && harness_hit.is_empty() && !grew && !unexplained {
@@ -1842,6 +1848,21 @@ mod tests {
             .log()
             .contains("chore(T-001): harness scope gate rejected a done verdict"));
         env.assert_rejection_events();
+    }
+
+    #[test]
+    fn scope_ignores_an_operator_baseline_line() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", ".check-baseline", "none — harness");
+        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write(".check-baseline", "alpha\nbeta\n");
+        env.repo.commit_all("fix: an operator baseline line");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        assert!(env.tasks_text().contains("status: done"));
     }
 
     #[test]
