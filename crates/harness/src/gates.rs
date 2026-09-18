@@ -808,7 +808,7 @@ pub struct CheckReport {
     pub unnamed: bool,
     pub output: String,
     pub exit: i32,
-    /// The halt reason when the check ran past `[check] timeout`. Neither red nor green.
+    /// The halt reason when the check ran past `[check] timeout` or a signal stopped it. Neither red nor green.
     pub timed_out: Option<String>,
     pub tally: Tally,
 }
@@ -861,6 +861,7 @@ struct Run {
     exit: i32,
     output: String,
     timed_out: bool,
+    stopped: Option<&'static str>,
 }
 
 const POLL: Duration = Duration::from_millis(100);
@@ -895,6 +896,7 @@ fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result
 
     let started = Instant::now();
     let mut timed_out = false;
+    let mut stopped = None;
     let mut exited = None;
     // the shell exiting is not the end: a grandchild holding the pipe blocks the join below
     let status = loop {
@@ -906,8 +908,9 @@ fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result
                 break status;
             }
         }
-        if started.elapsed() >= timeout {
-            timed_out = true;
+        stopped = crate::agent::stop_signal();
+        if stopped.is_some() || started.elapsed() >= timeout {
+            timed_out = stopped.is_none();
             break match exited {
                 Some(status) => {
                     signal(libc::SIGKILL, pgid);
@@ -942,6 +945,7 @@ fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result
         exit,
         output,
         timed_out,
+        stopped,
     })
 }
 
@@ -1041,13 +1045,19 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         exit,
         output,
         timed_out,
+        stopped,
     } = run;
     let tally = tally(&output);
-    if timed_out {
-        let reason = format!(
-            "the check ran past {}s and its process group was killed: `{command}`",
-            timeout.as_secs()
-        );
+    if timed_out || stopped.is_some() {
+        let reason = match stopped {
+            Some(signal) => {
+                format!("the check was stopped by {signal} and its process group was killed: `{command}`")
+            }
+            None => format!(
+                "the check ran past {}s and its process group was killed: `{command}`",
+                timeout.as_secs()
+            ),
+        };
         return CheckReport {
             output: format!("{reason}\n{output}"),
             exit,
@@ -1127,8 +1137,13 @@ fn baseline(path: &Path) -> Vec<String> {
 fn hung(ctx: &mut GateCtx, report: &CheckReport) -> Option<GateOutcome> {
     let reason = report.timed_out.clone()?;
     ctx.halts.push(reason.clone());
+    // the round's boundary would name the signal, but a halted gate never reaches it
+    let halt = match crate::agent::stop_signal() {
+        Some(_) => "signal".to_string(),
+        None => ctx.task.clone().unwrap_or_else(|| "check".to_string()),
+    };
     ctx.events.emit(Kind::Halt {
-        halt: ctx.task.clone().unwrap_or_else(|| "check".to_string()),
+        halt,
         reason: reason.clone(),
     });
     Some(GateOutcome {

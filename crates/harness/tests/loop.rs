@@ -2525,6 +2525,53 @@ fn a_stopped_stage_still_records_its_end() {
     assert!(start < end && end < run_end, "{log:#?}");
 }
 
+#[test]
+fn a_sigterm_stops_a_running_check() {
+    let r = repo(
+        &base_toml(&role_commands("./src/fakeimpl.sh", "./src/fakeverify.sh")),
+        REVIEW_TASK,
+    );
+    implementer(&r, "");
+    verifier(&r);
+    script(&r, "src/fakecheck.sh", "echo $$ >check.pid\nsleep 120\n");
+    installed(&r);
+    r.commit_all("a sleeping check");
+    let mut launcher = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["run", "--iterations", "1", "--no-tui"])
+        .current_dir(&r.root)
+        .env_remove("CI")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("enallagi run");
+    let check = pid_from(&r.root.join("check.pid"));
+
+    let sent = std::process::Command::new("kill")
+        .args(["-TERM", &launcher.id().to_string()])
+        .status()
+        .expect("signal the launcher");
+    assert!(sent.success(), "TERM was not delivered");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while alive(&check) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        !alive(&check),
+        "the check {check} outlived the signal by 5s"
+    );
+    launcher.wait().expect("the launcher exited");
+
+    let log = enallagi::events::Log::open(&r.root.join(".enallagi"))
+        .read()
+        .expect("events.jsonl");
+    assert!(
+        log.iter()
+            .any(|e| matches!(&e.kind, Kind::Halt { halt, .. } if halt == "signal")),
+        "{log:#?}"
+    );
+}
+
 fn claude_args_repo(key: &str) -> Repo {
     let toml = base_toml("").replacen(
         "preset = \"custom\"\ncommand = [\"./src/fakeagent.sh\", \"{prompt}\", \"{turns}\"]",
