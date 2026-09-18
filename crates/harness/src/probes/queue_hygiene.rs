@@ -1,4 +1,4 @@
-//! The queue read against itself: a repeated id, a missing status, an undefined blocker, or a block in review whose scope matches nothing.
+//! The queue read against itself: a repeated id, a missing status, an undefined blocker, a block in review whose scope matches nothing, or a scope entry naming a bare directory.
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
@@ -52,8 +52,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             }
         }
 
-        // before review a missing scope path is a file the task creates; after done it is history
-        if status.as_deref() != Some("review") {
+        if status.as_deref() == Some("done") {
             continue;
         }
         let Some((scope_at, scope)) = common::field(block, "scope") else {
@@ -62,6 +61,23 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         for pattern in scope.split(',') {
             let pattern = pattern.trim().trim_matches('`');
             if pattern.is_empty() {
+                continue;
+            }
+            // the scope gate's glob matches a bare directory against itself and never its files
+            let bare = pattern.trim_end_matches('/');
+            if !bare.contains(['*', '?', '[', '{']) && ctx.root.join(bare).is_dir() {
+                found.push(common::finding(
+                    &tasks,
+                    scope_at,
+                    format!(
+                        "{}'s scope {bare} names a directory and would match none of its files: write `{bare}/**`",
+                        block.id
+                    ),
+                ));
+                continue;
+            }
+            // before review a missing scope path is a file the task creates
+            if status.as_deref() != Some("review") {
                 continue;
             }
             let paths = tree.get_or_insert_with(|| common::walk(ctx.root));

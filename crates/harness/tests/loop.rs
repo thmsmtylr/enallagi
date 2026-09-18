@@ -57,6 +57,9 @@ criteria:
 
 const QUIET: &str = "echo '{\"total_cost_usd\":0.5}'\n";
 
+// one claude result line carrying all four token lanes
+const CACHED: &str = "echo '{\"total_cost_usd\":0.5,\"usage\":{\"input_tokens\":22,\"cache_creation_input_tokens\":54825,\"cache_read_input_tokens\":505740,\"output_tokens\":6233}}'\n";
+
 fn script(repo: &Repo, rel: &str, body: &str) -> String {
     repo.write(rel, &format!("#!/usr/bin/env bash\nset -u\n{body}"));
     #[cfg(unix)]
@@ -78,6 +81,10 @@ command = ["./src/fakeagent.sh", "{{prompt}}", "{{turns}}"]
 
 [agent.usage]
 cost = "total_cost_usd"
+input_tokens = "usage.input_tokens"
+output_tokens = "usage.output_tokens"
+cache_creation_input_tokens = "usage.cache_creation_input_tokens"
+cache_read_input_tokens = "usage.cache_read_input_tokens"
 turns = "num_turns"
 
 [check]
@@ -456,6 +463,50 @@ fn a_dollar_budget_over_a_cost_nothing_reports_halts() {
     );
 }
 
+fn cached_usage_repo() -> Repo {
+    let r = repo(&base_toml(""), TASKS);
+    script(&r, "src/fakeagent.sh", CACHED);
+    r.commit_all("cached usage");
+    r
+}
+
+#[test]
+fn a_stage_end_carries_the_cache_token_lanes() {
+    let r = cached_usage_repo();
+    let (_, events) = go(&r, &opts(1));
+    let lanes = events
+        .iter()
+        .find_map(|e| match &e.kind {
+            Kind::StageEnd {
+                stage,
+                cache_creation_input_tokens,
+                cache_read_input_tokens,
+                ..
+            } if stage == "implement" => {
+                Some((*cache_creation_input_tokens, *cache_read_input_tokens))
+            }
+            _ => None,
+        })
+        .expect("an implement stage.end");
+    assert_eq!(lanes, (Some(54_825), Some(505_740)));
+}
+
+#[test]
+fn a_token_budget_counts_the_cache_lanes() {
+    let r = cached_usage_repo();
+    let o = RunOpts {
+        budget_tokens: Some(100_000),
+        ..opts(1)
+    };
+    let (digest, events) = go(&r, &o);
+    assert!(
+        digest.halts.iter().any(|h| h.contains("566820 tokens")),
+        "{:?}",
+        digest.halts
+    );
+    assert_eq!(ends(&events).len(), 1, "{events:#?}");
+}
+
 #[test]
 fn a_config_naming_an_unknown_gate_is_refused() {
     let r = repo(
@@ -796,6 +847,39 @@ fn an_unnamed_red_check_is_a_finding() {
     let plan = plan_of(&r);
     assert!(plan.contains("FINDING check-red"), "{plan}");
     assert!(!plan.contains("PROBE check-red ERROR"), "{plan}");
+}
+
+#[test]
+fn a_check_past_its_timeout_halts_the_run() {
+    let toml = base_toml(&role_commands("./src/fakeimpl.sh", "./src/fakeverify.sh")).replace(
+        "command = \"./src/fakecheck.sh\"",
+        "command = \"./src/fakecheck.sh\"\ntimeout = \"2s\"",
+    );
+    let r = repo(&toml, REVIEW_TASK);
+    implementer(&r, "");
+    verifier(&r);
+    script(&r, "src/fakecheck.sh", "sleep 30\n");
+    r.commit_all("a hanging check");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert!(
+        digest.halts.iter().any(|h| h.contains("2s")),
+        "{:?}",
+        digest.halts
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(&e.kind, Kind::Halt { reason, .. } if reason.contains("2s"))),
+        "no halt event"
+    );
+    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md"))
+        .or_else(|_| std::fs::read_to_string(r.root.join("TASKS.md")))
+        .expect("TASKS.md");
+    assert!(
+        tasks.contains("status: done"),
+        "a hang overturned the verdict"
+    );
 }
 
 #[test]

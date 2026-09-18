@@ -24,6 +24,8 @@ pub struct UsagePaths {
     pub cost: Option<String>,
     pub input_tokens: Option<String>,
     pub output_tokens: Option<String>,
+    pub cache_creation_input_tokens: Option<String>,
+    pub cache_read_input_tokens: Option<String>,
     pub turns: Option<String>,
 }
 
@@ -284,6 +286,8 @@ pub struct UsageValues {
     pub cost: Option<f64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    pub cache_creation_input_tokens: Option<u64>,
+    pub cache_read_input_tokens: Option<u64>,
     pub turns: Option<u64>,
 }
 
@@ -305,6 +309,10 @@ pub fn extract_usage(output: &str, paths: &UsagePaths) -> UsageValues {
     values.cost = at(&paths.cost).and_then(serde_json::Value::as_f64);
     values.input_tokens = at(&paths.input_tokens).and_then(serde_json::Value::as_u64);
     values.output_tokens = at(&paths.output_tokens).and_then(serde_json::Value::as_u64);
+    values.cache_creation_input_tokens =
+        at(&paths.cache_creation_input_tokens).and_then(serde_json::Value::as_u64);
+    values.cache_read_input_tokens =
+        at(&paths.cache_read_input_tokens).and_then(serde_json::Value::as_u64);
     values.turns = at(&paths.turns).and_then(serde_json::Value::as_u64);
     values
 }
@@ -826,6 +834,16 @@ mod tests {
         assert_eq!(u.output_tokens, Some(5));
         let none = extract_usage("no json here\n", &presets()["claude"].usage);
         assert_eq!(none.cost, None);
+    }
+
+    #[test]
+    fn usage_carries_four_disjoint_token_lanes() {
+        let out = "{\"type\":\"result\",\"usage\":{\"input_tokens\":22,\"cache_creation_input_tokens\":54825,\"cache_read_input_tokens\":505740,\"output_tokens\":6233}}\n";
+        let u = extract_usage(out, &presets()["claude"].usage);
+        assert_eq!(u.input_tokens, Some(22));
+        assert_eq!(u.cache_creation_input_tokens, Some(54825));
+        assert_eq!(u.cache_read_input_tokens, Some(505740));
+        assert_eq!(u.output_tokens, Some(6233));
     }
 
     #[test]
