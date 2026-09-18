@@ -83,10 +83,12 @@ becomes `needs-spec` and halts the run.
 - `agent.preset` names the CLI to drive, or `custom` with your own `agent.command`.
 - `agent.model` and `agent.effort` set defaults. A role or a task can override both.
 - `check.command` is the single command that decides green.
+- `check.timeout` bounds it and defaults to `30m`. A check that runs past it halts the run.
 - `layout.*` says where the documents live.
 - `[[skill]]` declares a skill to vendor, with its `rev` and the gate that enforces it.
 
 Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGET_TOKENS`.
+`BUDGET_TOKENS` counts every token lane `[agent.usage]` names, cached reads and cache writes included.
 
 ## Commands
 
