@@ -975,6 +975,54 @@ fn the_tag_equals_the_crate_version() {
     assert_eq!(tag_mismatch(&tag, &version), None);
 }
 
+// `--exact` with a name no suite declares runs zero tests and exits 0
+fn undeclared_exact(workflow: &str, root: &Path) -> Vec<String> {
+    let step = re(r"cargo test\b.*--test\s+(\S+).*--exact\s+(\S+)");
+    let mut out = Vec::new();
+    for line in workflow.lines() {
+        let before_comment = line.split('#').next().unwrap_or("");
+        if !before_comment.contains("--exact") {
+            continue;
+        }
+        let Some(c) = step.captures(before_comment) else {
+            out.push(before_comment.trim().to_string());
+            continue;
+        };
+        let suite = root.join(format!("crates/harness/tests/{}.rs", &c[1]));
+        let declared = fs::read_to_string(&suite)
+            .is_ok_and(|text| re(&format!(r"\bfn {}\(", regex::escape(&c[2]))).is_match(&text));
+        if !declared {
+            out.push(format!("{} in {}", &c[2], suite.display()));
+        }
+    }
+    out
+}
+
+#[test]
+fn every_workflow_exact_names_a_declared_test() {
+    let root = repo_root();
+    let dir = root.join(".github/workflows");
+    let workflows: Vec<String> = walk(&dir).iter().map(|f| read(&dir.join(f))).collect();
+    let steps = workflows
+        .iter()
+        .flat_map(|w| w.lines())
+        .filter(|l| l.contains("--exact"))
+        .count();
+    assert!(steps > 0, "no --exact step in .github/workflows/");
+    for workflow in &workflows {
+        assert_eq!(undeclared_exact(workflow, &root), Vec::<String>::new());
+    }
+
+    let renamed = "      - run: cargo test -p enallagi --test floor -- --exact the_tag_equals_the_crate_versionX\n";
+    let reported = undeclared_exact(renamed, &root);
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert!(reported[0].contains("the_tag_equals_the_crate_versionX"));
+    let no_suite = "      - run: cargo test -p enallagi --test nosuch -- --exact main_tracks_no_instance_file\n";
+    assert_eq!(undeclared_exact(no_suite, &root).len(), 1);
+    let unparsed = "      - run: cargo test -- --exact main_tracks_no_instance_file\n";
+    assert_eq!(undeclared_exact(unparsed, &root).len(), 1);
+}
+
 fn default_keys() -> Vec<String> {
     let default: toml::Table = toml::from_str(enallagi::config::DEFAULT_TOML).expect("defaults");
     let mut keys = Vec::new();
