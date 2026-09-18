@@ -16,7 +16,7 @@ use crate::probes::{self, CheckOutcome, ProbeCtx};
 use crate::queue::{self, Queue};
 use crate::roles;
 use crate::skills::{self, ResolveOpts};
-use crate::{archive, git};
+use crate::{archive, git, pr};
 
 // A lane running ps to check for competing writers must ignore its parent.
 const LANE: &str = "You are this loop's own lane, spawned by the harness. There is no human in this session
@@ -90,6 +90,8 @@ pub struct RunOpts {
     pub budget_tokens: Option<u64>,
     // overrides [agent] dangerously_skip_permissions only toward true
     pub dangerously_skip_permissions: bool,
+    // overrides [pr] per_task only toward true
+    pub pr_per_task: bool,
 }
 
 impl Default for RunOpts {
@@ -104,6 +106,7 @@ impl Default for RunOpts {
             budget_usd: None,
             budget_tokens: None,
             dangerously_skip_permissions: false,
+            pr_per_task: false,
         }
     }
 }
@@ -136,6 +139,8 @@ pub struct Digest {
     pub killed: Vec<String>,
     pub halts: Vec<String>,
     pub warnings: Vec<String>,
+    // one line per landed task under --pr-per-task: its URL, or why none was opened
+    pub pulls: Vec<String>,
     pub stages_run: usize,
     pub role_seconds: BTreeMap<String, u64>,
     pub turn_caps: Vec<String>,
@@ -380,6 +385,7 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         dry_rounds: 0,
         dry_pipeline: None,
         stopped: false,
+        built: Vec::new(),
     };
     looper.go()
 }
@@ -409,6 +415,8 @@ struct Loop<'a> {
     dry_rounds: u32,
     dry_pipeline: Option<String>,
     stopped: bool,
+    // tasks whose pull-request branch this run built, in order, so a dependent task stacks on one
+    built: Vec<String>,
 }
 
 enum Flow {
@@ -1144,6 +1152,9 @@ impl<'a> Loop<'a> {
                 if let Some(rows) = rows.filter(|r| !r.is_empty()) {
                     self.digest.rows.push(format!("{task}: {rows}"));
                 }
+                if self.opts.pr_per_task || self.cfg.pr.per_task {
+                    self.open_pull(task);
+                }
             }
             other => self.digest.warnings.push(format!(
                 "{task} ended the iteration at {}, not done.",
@@ -1154,6 +1165,32 @@ impl<'a> Loop<'a> {
         // rather than warning that a role left none -- a verify-only round has no other record
         if file_len(&self.file("PROGRESS.md")) <= progress_before {
             self.progress_stub(task, pipeline, status.as_deref());
+        }
+    }
+
+    // the launcher pushes, never the lane: the lane's argv denies `git push`
+    fn open_pull(&mut self, task: &str) {
+        let opts = pr::PrOpts {
+            push: true,
+            policy_read: false,
+            stack_on: self.built.clone(),
+        };
+        match pr::build(self.root, &[task.to_string()], &opts) {
+            Ok(report) => {
+                self.built.push(task.to_string());
+                let opened = report.opened.unwrap_or_default();
+                self.digest.pulls.push(format!("{task}: {opened}"));
+            }
+            Err(err) => {
+                let reason = err.to_string();
+                let first = reason.lines().next().unwrap_or_default();
+                self.digest
+                    .pulls
+                    .push(format!("{task}: none opened, {first}"));
+                self.digest
+                    .warnings
+                    .push(format!("{task} opened no pull request: {reason}"));
+            }
         }
     }
 
@@ -1338,6 +1375,9 @@ pub fn digest_text(digest: &Digest) -> String {
     }
     let _ = writeln!(out, "tasks landed:{}", inline(&digest.landed));
     listing(&mut out, "rows turned green:", &digest.rows);
+    if !digest.pulls.is_empty() {
+        listing(&mut out, "pull requests:", &digest.pulls);
+    }
     // nothing decided reads as nothing to decide, so say which of the two states the round was in
     if digest.promoted.is_empty() && digest.killed.is_empty() {
         let state = if digest.adjudicated {

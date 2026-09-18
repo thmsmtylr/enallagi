@@ -10,11 +10,15 @@ use std::process::Command;
 pub struct PrOpts {
     pub push: bool,
     pub policy_read: bool,
+    /// Tasks whose branch this run already built, in build order; an unmerged blocker among them is the base, not a refusal.
+    pub stack_on: Vec<String>,
 }
 
 #[derive(Debug)]
 pub struct PrReport {
     pub branch: String,
+    /// The branch the pull request merges into: the default branch, or a blocker's `task/` branch.
+    pub base: String,
     pub description: PathBuf,
     /// The pull request's URL, or why none was opened, when `--push` ran.
     pub opened: Option<String>,
@@ -89,6 +93,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     let base = format!("origin/{default}");
     let range = format!("{base}..HEAD");
     let landed = git::git(root, &["log", "--format=%B", &base])?;
+    let mut stacked: Option<usize> = None;
     for task in &tasks {
         for blocker in queue::blockers(&task.block) {
             if ids.contains(&blocker)
@@ -96,7 +101,13 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
             {
                 continue;
             }
-            if !gates::names_task(&landed, &blocker) {
+            if gates::names_task(&landed, &blocker) {
+                continue;
+            }
+            // the blocker built last carries the ones built before it
+            if let Some(at) = opts.stack_on.iter().position(|id| *id == blocker) {
+                stacked = stacked.max(Some(at));
+            } else {
                 refusals.push(format!(
                     "{} is blocked by {blocker}, whose product change is not on {base}",
                     task.id
@@ -107,6 +118,13 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     if !refusals.is_empty() {
         return Err(PrError::Refused(refusals));
     }
+    let (onto, base) = match stacked {
+        Some(at) => {
+            let branch = format!("task/{}", opts.stack_on[at]);
+            (branch.clone(), branch)
+        }
+        None => (default.clone(), base),
+    };
 
     let picked = commits(root, &range, ids)?;
     for id in ids {
@@ -161,13 +179,14 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
 
     let mut report = PrReport {
         branch,
+        base: onto,
         description,
         opened: None,
         policy,
     };
     if opts.push {
         git::git(root, &["push", "-q", "origin", &report.branch])?;
-        report.opened = Some(open(root, &default, &report)?);
+        report.opened = Some(open(root, &report)?);
     }
     Ok(report)
 }
@@ -362,7 +381,7 @@ fn describe(
 }
 
 // gh missing is not a failure: the branch is pushed and the description is on disk
-fn open(root: &Path, default: &str, report: &PrReport) -> Result<String, PrError> {
+fn open(root: &Path, report: &PrReport) -> Result<String, PrError> {
     let subject = git::git(root, &["log", "-1", "--format=%s", &report.branch])?;
     let spawned = Command::new("gh")
         .current_dir(root)
@@ -370,7 +389,7 @@ fn open(root: &Path, default: &str, report: &PrReport) -> Result<String, PrError
             "pr",
             "create",
             "--base",
-            default,
+            &report.base,
             "--head",
             &report.branch,
             "--title",

@@ -18,6 +18,7 @@ pub struct Args {
     pub dry_run: bool,
     pub frozen: bool,
     pub dangerously_skip_permissions: bool,
+    pub pr_per_task: bool,
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
@@ -47,6 +48,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         budget_seconds: args.budget_seconds,
         budget_tokens: args.budget_tokens,
         dangerously_skip_permissions: args.dangerously_skip_permissions,
+        pr_per_task: args.pr_per_task,
     }
     .with_env_budgets();
 

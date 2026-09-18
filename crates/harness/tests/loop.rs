@@ -2653,3 +2653,178 @@ fn a_tautologised_test_does_not_reach_done() {
         .expect("the rendered verifier role");
     assert!(role.contains("git diff $BASE -- 'src/*.rs'"), "{role}");
 }
+
+struct Pulls {
+    repo: Repo,
+    origin: tempfile::TempDir,
+    tools: tempfile::TempDir,
+}
+
+// a bare origin at the fixture's HEAD, and a gh on PATH that records its argv and its parent's pid
+fn pulls(extra: &str, check: &str) -> Pulls {
+    let r = repo("", "");
+    script(&r, "src/fakecheck.sh", check);
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    write_toml(
+        &r,
+        &base_toml(&format!("{}{extra}", role_commands(&implement, &verify))),
+    );
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+    installed(&r);
+    r.commit_all("installed");
+    let origin = tempfile::TempDir::new().expect("tempdir");
+    let bare = origin.path().join("origin.git");
+    let git = |root: &std::path::Path, args: &[&str]| {
+        enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+    };
+    git(
+        origin.path(),
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            &r.root.display().to_string(),
+            "origin.git",
+        ],
+    );
+    git(
+        &r.root,
+        &["remote", "add", "origin", &bare.display().to_string()],
+    );
+    git(&r.root, &["fetch", "-q", "origin"]);
+    let tools = tempfile::TempDir::new().expect("tempdir");
+    let gh = tools.path().join("gh");
+    std::fs::write(
+        &gh,
+        format!(
+            "#!/usr/bin/env bash\necho $PPID >{dir}/gh.ppid\nprintf '%s\\n' \"$@\" >{dir}/gh.log\necho https://example.test/pull/1\n",
+            dir = tools.path().display()
+        ),
+    )
+    .expect("gh");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    Pulls {
+        repo: r,
+        origin,
+        tools,
+    }
+}
+
+impl Pulls {
+    fn run(&self, args: &[&str]) -> (u32, String) {
+        let path = format!(
+            "{}:{}",
+            self.tools.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let launcher = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+            .args(["run", "--iterations", "1", "--no-tui"])
+            .args(args)
+            .current_dir(&self.repo.root)
+            .env_remove("CI")
+            .env("PATH", path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("enallagi run");
+        let pid = launcher.id();
+        let out = launcher.wait_with_output().expect("the launcher exited");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (pid, text)
+    }
+
+    fn gh(&self) -> Option<String> {
+        std::fs::read_to_string(self.tools.path().join("gh.log")).ok()
+    }
+
+    fn remote_branches(&self) -> String {
+        enallagi::git::git(
+            &self.origin.path().join("origin.git"),
+            &["branch", "--list"],
+        )
+        .expect("branches")
+    }
+}
+
+#[test]
+fn pr_per_task_opens_one_from_the_launcher() {
+    let p = pulls("", "exit 0\n");
+    let (pid, out) = p.run(&["--pr-per-task"]);
+    assert!(out.contains("tasks landed: T-001"), "{out}");
+    let args = p.gh().unwrap_or_else(|| panic!("gh never ran:\n{out}"));
+    assert!(args.starts_with("pr\ncreate\n"), "{args}");
+    assert!(args.contains("--head\ntask/T-001\n"), "{args}");
+    let ppid = std::fs::read_to_string(p.tools.path().join("gh.ppid")).expect("gh.ppid");
+    assert_eq!(
+        ppid.trim(),
+        pid.to_string(),
+        "gh was not the launcher's child"
+    );
+    assert!(p.remote_branches().contains("task/T-001"), "{out}");
+    let pulls = out.split("pull requests:").nth(1).expect(&out);
+    assert!(
+        pulls.contains("T-001: https://example.test/pull/1"),
+        "{out}"
+    );
+
+    let claude = &enallagi::agent::presets()["claude"];
+    let settings = claude
+        .argv
+        .iter()
+        .position(|w| w == "--settings")
+        .expect("the lane carries deny rules");
+    assert!(claude.argv[settings + 1].contains("Bash(git push:*)"));
+}
+
+#[test]
+fn a_run_without_pr_per_task_opens_nothing() {
+    let p = pulls("", "exit 0\n");
+    let (_, out) = p.run(&[]);
+    assert!(out.contains("tasks landed: T-001"), "{out}");
+    assert!(p.gh().is_none(), "gh ran:\n{out}");
+    assert!(!p.remote_branches().contains("task/"), "{out}");
+    assert!(!out.contains("pull requests:"), "{out}");
+}
+
+#[test]
+fn pr_per_task_config_opens_one() {
+    let p = pulls("\n[pr]\nper_task = true\n", "exit 0\n");
+    let (_, out) = p.run(&[]);
+    assert!(p.gh().is_some(), "gh never ran:\n{out}");
+    assert!(out.contains("T-001: https://example.test/pull/1"), "{out}");
+}
+
+#[test]
+fn a_red_task_branch_opens_no_pr() {
+    // green in the checkout, red in the replayed worktree: the marker is excluded, never committed
+    let p = pulls("", "test -f green.marker\n");
+    p.repo.write("green.marker", "");
+    let exclude = enallagi::git::git(&p.repo.root, &["rev-parse", "--git-path", "info/exclude"])
+        .expect("exclude");
+    let exclude = p.repo.root.join(exclude);
+    let text = std::fs::read_to_string(&exclude).unwrap_or_default();
+    std::fs::write(&exclude, format!("{text}green.marker\n")).expect("exclude");
+
+    let (_, out) = p.run(&["--pr-per-task"]);
+    assert!(out.contains("tasks landed: T-001"), "{out}");
+    assert!(p.gh().is_none(), "gh ran:\n{out}");
+    assert!(!p.remote_branches().contains("task/"), "{out}");
+    let pulls = out.split("pull requests:").nth(1).expect(&out);
+    assert!(pulls.contains("T-001: none opened"), "{out}");
+    let warnings = out.split("warnings:").nth(1).expect(&out);
+    assert!(
+        warnings.contains("T-001 opened no pull request")
+            && warnings.contains("the check failed in the task worktree"),
+        "{out}"
+    );
+}

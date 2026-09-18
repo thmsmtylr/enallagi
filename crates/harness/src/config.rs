@@ -111,6 +111,7 @@ pub struct Config {
     pub agent: AgentConfig,
     pub check: CheckConfig,
     pub queue: QueueConfig,
+    pub pr: PrConfig,
     pub layout: Layout,
     pub pipeline: Vec<Pipeline>,
     pub stage: Vec<Stage>,
@@ -200,6 +201,13 @@ impl Default for QueueConfig {
             proposed_rounds: 6,
         }
     }
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrConfig {
+    /// `enallagi run` opens one pull request per landed task, as `--pr-per-task` does.
+    pub per_task: bool,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]

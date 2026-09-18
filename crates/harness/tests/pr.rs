@@ -463,3 +463,43 @@ fn pr_without_push_prints_the_policy_finding() {
     assert!(git(&f.root, &["branch", "--list", "task/T-001"]).contains("task/T-001"));
     assert!(!log.exists(), "gh ran");
 }
+
+#[test]
+fn a_blocker_built_this_run_is_the_base() {
+    let (f, _) = landed("exit 0\n");
+    let tasks = DONE_AND_REJECTED.replace(
+        "blockedBy: none\nstatus: ready\nnotes: verifier: rejected, it shouts\n",
+        "blockedBy: T-001\nstatus: done\n",
+    );
+    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    let first = enallagi::pr::build(
+        &f.root,
+        &["T-001".to_string()],
+        &enallagi::pr::PrOpts::default(),
+    )
+    .expect("T-001 builds off origin");
+    assert_eq!(first.base, "main");
+
+    let unstacked = enallagi::pr::build(
+        &f.root,
+        &["T-002".to_string()],
+        &enallagi::pr::PrOpts::default(),
+    );
+    assert!(unstacked.is_err(), "{unstacked:?}");
+
+    let opts = enallagi::pr::PrOpts {
+        stack_on: vec!["T-001".to_string()],
+        ..enallagi::pr::PrOpts::default()
+    };
+    let second = enallagi::pr::build(&f.root, &["T-002".to_string()], &opts).expect("T-002 stacks");
+    assert_eq!(second.base, "task/T-001");
+    assert_eq!(
+        git(&f.root, &["rev-parse", "task/T-002^"]),
+        git(&f.root, &["rev-parse", "task/T-001"])
+    );
+    let thing = git(&f.root, &["show", "task/T-002:src/thing.txt"]);
+    assert!(
+        thing.contains("two two\n") && thing.contains("FIVE\n"),
+        "{thing}"
+    );
+}

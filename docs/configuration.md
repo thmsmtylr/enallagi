@@ -78,6 +78,10 @@ go test, from go1.26.2:
 - `queue.turns_per_block`: turns added to that stage for each block. Default `25`.
 - `queue.proposed_rounds`: how many state commits a `proposed` block stands before it expires. Default `6`.
 
+## `[pr]`
+
+- `pr.per_task`: `enallagi run` opens one pull request per landed task, as `--pr-per-task` does. Default `false`.
+
 ## `[layout]`
 
 Where the documents live:

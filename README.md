@@ -74,7 +74,10 @@ enallagi run --pipeline task --iterations 1   # one task, in this checkout
 enallagi worktree 1                          # or one task, in its own worktree
 enallagi watch                               # attach read-only to the live loop
 enallagi pr T-001 --push                     # one pull request for the landed task
+enallagi run --pr-per-task --iterations 3    # or one pull request per task, opened as each lands
 ```
+
+`--pr-per-task` stacks a task on the branch of a blocker landed earlier in the same run.
 
 ## How a run works
 

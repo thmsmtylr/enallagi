@@ -11,6 +11,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     let opts = PrOpts {
         push: args.push,
         policy_read: args.policy_read,
+        stack_on: Vec::new(),
     };
     let report = match pr::build(&root, &args.tasks, &opts) {
         Ok(report) => report,

@@ -93,6 +93,9 @@ pub enum Command {
         /// Add the agent preset's bypass flag to every lane, as [agent] dangerously_skip_permissions does
         #[arg(long)]
         dangerously_skip_permissions: bool,
+        /// Push each landed task to its own branch and open its pull request, as [pr] per_task does
+        #[arg(long)]
+        pr_per_task: bool,
     },
     /// Attach read-only to a running loop's event log and queue
     Watch,
@@ -236,6 +239,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             dry_run,
             frozen,
             dangerously_skip_permissions,
+            pr_per_task,
         } => run::run(&run::Args {
             iterations,
             pipelines: pipeline,
@@ -246,6 +250,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             dry_run,
             frozen,
             dangerously_skip_permissions,
+            pr_per_task,
         }),
         Command::Watch => watch::run(),
         Command::Probe { names } => probe::run(&probe::Args { names }),
@@ -295,7 +300,7 @@ mod tests {
         "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 24] = [
+    const FLAGS: [&str; 25] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
@@ -311,6 +316,7 @@ mod tests {
         "run --dry-run",
         "run --frozen",
         "run --dangerously-skip-permissions",
+        "run --pr-per-task",
         "pr --push",
         "pr --policy-read",
         "issue --dry-run",

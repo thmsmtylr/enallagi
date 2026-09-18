@@ -30,6 +30,7 @@ fn run_help_mentions_iterations_and_budget_usd() {
         stdout.contains("--dangerously-skip-permissions"),
         "{stdout}"
     );
+    assert!(stdout.contains("--pr-per-task"), "{stdout}");
 }
 
 #[test]
@@ -1066,7 +1067,7 @@ fn a_legacy_config_name_warns_about_the_rename() {
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
 }
 
-const DOC_UNRUNNABLE: [(&str, &str); 12] = [
+const DOC_UNRUNNABLE: [(&str, &str); 13] = [
     (
         "curl -LO https://github.com/thmsmtylr/enallagi/releases/latest/download/enallagi-aarch64-apple-darwin",
         "downloads a release asset over the network",
@@ -1085,6 +1086,10 @@ const DOC_UNRUNNABLE: [(&str, &str); 12] = [
     ),
     (
         "enallagi run --pipeline task --iterations 1",
+        "spawns the agent CLI, which no test may call",
+    ),
+    (
+        "enallagi run --pr-per-task --iterations 3",
         "spawns the agent CLI, which no test may call",
     ),
     (

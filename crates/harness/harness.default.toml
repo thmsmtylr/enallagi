@@ -21,6 +21,10 @@ drain = 3
 turns_per_block = 25
 proposed_rounds = 6
 
+# per_task has enallagi run push each landed task to its own branch and open its pull request, as --pr-per-task does.
+[pr]
+per_task = false
+
 [layout]
 # context_file is the file every role reads first, unset meaning AGENTS.md beside the queue; pointer_files are one-line pointers to it for tools that cannot take it on their command line.
 pointer_files = ["CLAUDE.md", "GEMINI.md", "QWEN.md", ".github/copilot-instructions.md"]
