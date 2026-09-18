@@ -293,11 +293,14 @@ mod tests {
         found
     }
 
-    // the job id, then every line from its `steps:` to the next job; the job's own `name:` is left
-    // out so a display name cannot stand in for what the job runs
+    // the job id, then only the step-level `name:` and `run:` lines under its `steps:`. The job's
+    // own `name:`, a `uses:` path, a `with:` value and a comment are all left out, so nothing but
+    // what the job runs can stand in for the id. Step keys are the two indents a step writes them
+    // at: `      - ` for the first key of a step and `        ` for the rest.
     fn job_steps(workflow: &str) -> Vec<(String, String)> {
         let mut jobs = Vec::new();
         let mut in_jobs = false;
+        let mut in_steps = false;
         for line in workflow.lines() {
             if line == "jobs:" {
                 in_jobs = true;
@@ -307,12 +310,20 @@ mod tests {
                 if let Some(id) = line.strip_prefix("  ").and_then(|l| l.strip_suffix(':')) {
                     if !id.starts_with(' ') && !id.starts_with('#') {
                         jobs.push((id.to_string(), String::new()));
+                        in_steps = false;
                         continue;
                     }
                 }
-                if let Some((_, steps)) = jobs.last_mut() {
-                    if line.starts_with("    steps:") || !steps.is_empty() {
-                        steps.push_str(&line.to_lowercase());
+                if line.starts_with("    steps:") {
+                    in_steps = true;
+                    continue;
+                }
+                let key = line
+                    .strip_prefix("      - ")
+                    .or_else(|| line.strip_prefix("        "));
+                if let (true, Some(key), Some((_, steps))) = (in_steps, key, jobs.last_mut()) {
+                    if key.starts_with("name:") || key.starts_with("run:") {
+                        steps.push_str(&key.to_lowercase());
                         steps.push('\n');
                     }
                 }
@@ -357,12 +368,40 @@ mod tests {
     }
 
     #[test]
+    fn a_uses_line_does_not_say_what_a_job_runs() {
+        let workflow = "\
+jobs:
+  vendored:
+    name: vendored
+    runs-on: ubuntu-latest
+    steps:
+      - uses: acme/vendored-action@0000000000000000000000000000000000000000 # v1
+        with:
+          name: vendored
+      # vendored
+      - run: echo hello
+  named:
+    runs-on: ubuntu-latest
+    steps:
+      - name: the vendored pin is checked
+        run: echo hello
+";
+        let jobs = job_steps(workflow);
+        assert_eq!(jobs.len(), 2, "jobs found: {jobs:?}");
+        assert!(
+            !jobs[0].1.contains("vendored"),
+            "a uses: path, a with: value or a comment satisfied the id"
+        );
+        assert!(jobs[1].1.contains("vendored"), "a step name: was dropped");
+    }
+
+    #[test]
     fn every_ci_job_id_names_what_it_runs() {
         let mut jobs = job_steps(CI);
         jobs.extend(job_steps(RELEASE));
         assert_eq!(jobs.len(), 8, "jobs found: {:?}", jobs);
         for (id, steps) in &jobs {
-            assert!(!steps.is_empty(), "{id} has no steps");
+            assert!(!steps.is_empty(), "{id} has no named step");
             for word in id.split('-') {
                 assert!(steps.contains(word), "{id}: no step says `{word}`");
             }
