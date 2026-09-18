@@ -362,6 +362,32 @@ fn no_adapter_install_reports_its_own_files() {
 }
 
 #[test]
+fn a_traceless_install_leaves_no_litter() {
+    for name in enallagi::agent::presets().keys() {
+        let repo = Repo::new();
+        // no harness directory in the product's history, so the install is excluded and read as untracked or ignored
+        repo.write("src/main.rs", "fn main() {}\n");
+        repo.commit_all("product");
+        enallagi::init::install(
+            &repo.root,
+            &enallagi::init::InitOpts {
+                adapter: Some(name.clone()),
+                dry_run: false,
+            },
+        )
+        .expect("install");
+        let cfg = config::load(&repo.root).expect("config");
+        let results = run(&repo, &cfg);
+        assert_eq!(
+            count(&results, "litter"),
+            Some(0),
+            "{name}\n{}",
+            render(&results)
+        );
+    }
+}
+
+#[test]
 fn the_seeded_learnings_all_predate_the_gate() {
     let (repo, cfg) = seeded();
     assert_eq!(count(&run(&repo, &cfg), "learning-ungated"), Some(0));
