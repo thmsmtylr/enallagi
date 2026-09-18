@@ -132,6 +132,9 @@ pub struct Digest {
     pub warnings: Vec<String>,
     pub stages_run: usize,
     pub role_seconds: BTreeMap<String, u64>,
+    pub turn_caps: Vec<String>,
+    // an empty promoted/killed pair means nothing to decide only if the stage actually spawned
+    pub adjudicated: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -594,6 +597,19 @@ impl<'a> Loop<'a> {
         self.digest.seconds += result.seconds;
         if let Some(role) = &role {
             *self.digest.role_seconds.entry(role.clone()).or_default() += result.seconds;
+            if role == "adjudicator" {
+                self.digest.adjudicated = true;
+            }
+        }
+        // an agent that spent every turn it was given stopped because it ran out, not because it finished
+        if result
+            .usage
+            .turns
+            .is_some_and(|t| t >= u64::from(stage.turns))
+        {
+            self.digest
+                .turn_caps
+                .push(format!("{}: turns {}", stage.name, stage.turns));
         }
         if let Some(cost) = result.usage.cost {
             self.digest.cost = round4(self.digest.cost + cost);
@@ -1200,8 +1216,21 @@ pub fn digest_text(digest: &Digest) -> String {
     }
     let _ = writeln!(out, "tasks landed:{}", inline(&digest.landed));
     listing(&mut out, "rows turned green:", &digest.rows);
-    let _ = writeln!(out, "findings promoted:{}", inline(&digest.promoted));
-    listing(&mut out, "findings killed:", &digest.killed);
+    // nothing decided reads as nothing to decide, so say which of the two states the round was in
+    if digest.promoted.is_empty() && digest.killed.is_empty() {
+        let state = if digest.adjudicated {
+            "the adjudicator ran and decided nothing"
+        } else {
+            "no adjudicate stage ran"
+        };
+        let _ = writeln!(out, "findings: {state}");
+    } else {
+        let _ = writeln!(out, "findings promoted:{}", inline(&digest.promoted));
+        listing(&mut out, "findings killed:", &digest.killed);
+    }
+    if !digest.turn_caps.is_empty() {
+        listing(&mut out, "turn caps hit:", &digest.turn_caps);
+    }
     listing(&mut out, "halts:", &digest.halts);
     listing(&mut out, "warnings:", &digest.warnings);
     let _ = writeln!(
