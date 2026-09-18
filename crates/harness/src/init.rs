@@ -246,10 +246,10 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
 
     let spec = at(&cfg.layout.spec);
     if has_content(&root.join(&spec)) {
-        report.kept.push(spec.clone());
         report.notes.push(format!(
             "{spec} was kept — merge the SPEC.section.md template into it by hand"
         ));
+        resync_kept(root, &mut plan, &mut report, &cfg, spec);
     } else {
         seed(root, &mut plan, &mut report, &spec, sub(SPEC_SECTION));
     }
@@ -540,6 +540,17 @@ fn seed_context(
         plan.push(write(path, sub(CONTEXT)));
         return;
     }
+    resync_kept(root, plan, report, cfg, path);
+}
+
+// a document the project owns keeps every word it wrote; only the check command it names follows the config
+fn resync_kept(
+    root: &Path,
+    plan: &mut Vec<Planned>,
+    report: &mut InitReport,
+    cfg: &Config,
+    path: String,
+) {
     let Ok(before) = fs::read_to_string(root.join(&path)) else {
         report.kept.push(path);
         return;
