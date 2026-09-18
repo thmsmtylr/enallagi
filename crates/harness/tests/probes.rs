@@ -96,7 +96,7 @@ fn probes_exit_0_every_probe_ran() {
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     assert_eq!(errors(&results), Vec::<&str>::new());
-    assert_eq!(results.len(), 23, "{}", render(&results));
+    assert_eq!(results.len(), 24, "{}", render(&results));
 }
 
 #[test]
@@ -1099,4 +1099,47 @@ fn every_policy_file_is_read() {
             ".github/PULL_REQUEST_TEMPLATE.md",
         ]
     );
+}
+
+const TEST_GLOB: &str = "[layout]\ntest_glob = [\"tests/*.rs\"]\n";
+
+fn unsubstituted(repo: &Repo, cfg: &Config) -> Vec<probes::Finding> {
+    findings(&run(repo, cfg), "prompt-unsubstituted").to_vec()
+}
+
+#[test]
+fn a_matched_test_glob_is_substituted_cleanly() {
+    let (repo, cfg) = seeded_with(TEST_GLOB);
+    repo.write("tests/a.rs", "#[test]\nfn a() {}\n");
+    repo.commit_all("a test");
+    assert_eq!(unsubstituted(&repo, &cfg), Vec::new());
+}
+
+#[test]
+fn a_token_left_in_a_role_is_reported() {
+    let (repo, cfg) = seeded_with(TEST_GLOB);
+    repo.write("tests/a.rs", "#[test]\nfn a() {}\n");
+    repo.commit_all("a test");
+    // built, never written literally: this repository's own probe must not see the fixture
+    let token = format!("__{}__", "NOT_A_KEY");
+    let path = repo.root.join(".enallagi/roles/scout.md");
+    let text = fs::read_to_string(&path).expect("scout.md");
+    fs::write(&path, format!("{text}run {token}\n")).expect("write");
+    let found = unsubstituted(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].path, ".enallagi/roles/scout.md");
+    assert_eq!(found[0].line, text.lines().count() + 1);
+    assert!(found[0].message.contains(&token), "{found:?}");
+}
+
+#[test]
+fn a_test_glob_matching_nothing_is_reported() {
+    let (repo, cfg) = seeded_with(TEST_GLOB);
+    let found = unsubstituted(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].path, ".enallagi/roles/verifier.md");
+    assert!(found[0].message.contains("'tests/*.rs'"), "{found:?}");
+    let line = fs::read_to_string(repo.root.join(&found[0].path)).expect("verifier.md");
+    let line = line.lines().nth(found[0].line - 1).expect("the line");
+    assert!(line.contains("git diff $BASE -- 'tests/*.rs'"), "{line}");
 }

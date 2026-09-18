@@ -15,6 +15,7 @@ mod learning_ungated;
 mod litter;
 mod plain_record;
 mod ponytail_ceiling;
+mod prompt_unsubstituted;
 mod queue_hygiene;
 mod queue_uncovered;
 mod rail_unenforced;
@@ -71,6 +72,7 @@ pub const NAMES: &[&str] = &[
     "litter",
     "plain-record",
     "install-stale",
+    "prompt-unsubstituted",
     "contribution-policy",
     "verdict-flip",
     "rejection-repeat",
@@ -82,7 +84,7 @@ pub const NAMES: &[&str] = &[
 
 type ProbeFn = fn(&ProbeCtx) -> ProbeResult;
 
-fn registry() -> [(&'static str, ProbeFn); 23] {
+fn registry() -> [(&'static str, ProbeFn); 24] {
     [
         ("spec-untested", spec_untested::probe),
         ("queue-uncovered", queue_uncovered::probe),
@@ -100,6 +102,7 @@ fn registry() -> [(&'static str, ProbeFn); 23] {
         ("litter", litter::probe),
         ("plain-record", plain_record::probe),
         ("install-stale", install_stale::probe),
+        ("prompt-unsubstituted", prompt_unsubstituted::probe),
         ("contribution-policy", contribution_policy::probe),
         ("verdict-flip", telemetry_probe::verdict_flip),
         ("rejection-repeat", telemetry_probe::rejection_repeat),

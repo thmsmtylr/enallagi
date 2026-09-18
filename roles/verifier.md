@@ -16,8 +16,8 @@ For each task with `status: review`:
 3. Establish your diff base ONCE and reuse it as `$BASE`: `BASE=$(enallagi base T-###)`, the product commit the task was queued against, so the diff carries nothing committed before the task was queued. Never `origin/main`: on a dogfood branch its diff also carries the round's install commit. A commit in that range whose subject names another task id is that task's, not this one's. If the command prints nothing, the heading is uncommitted: use the working tree.
 4. Check for the classic frauds, in order:
    - A `test-hashes.json` key re-cut for a file that is not on the task's `scope:` line (`git diff $BASE -- test-hashes.json`) → REJECT, quoting the key and the scope line. You are the authority on this.
-   - Whenever a `test-hashes.json` key moved, read that file's own diff line by line (`git diff $BASE -- <the file the key names>`). An assertion weakened to a tautology still runs and still reports; nothing but you reads a testcase body.
-   - Tests weakened, skipped or deleted to get green (`git diff $BASE -- '**/*.test.*'`)
+   - Read every hunk in `git diff $BASE -- __TEST_GLOB__` that adds, removes or changes a line matching `layout.test_decl_patterns` or an assertion macro, and quote each one in the verdict. An assertion weakened to a tautology still runs and still reports; nothing but you reads a testcase body.
+   - Tests weakened, skipped or deleted to get green (`git diff $BASE -- __TEST_GLOB__`)
    - A test whose name matches __SPEC__ but whose body asserts something weaker, or nothing
    - Criteria satisfied in letter but not spirit (right shape, hardcoded values, a fixture that is really the expected output)
    - Out-of-scope edits (`git diff $BASE --name-only` against the task's `scope:`) — the `one-scope` rail. The launcher re-runs this one behind you as `gate_scope` and forces a `done` back to `ready`

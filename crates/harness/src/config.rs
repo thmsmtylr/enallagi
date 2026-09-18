@@ -218,6 +218,7 @@ pub struct Layout {
     pub source_ext: Vec<String>,
     pub test_file_suffix_re: String,
     pub test_decl_patterns: Vec<String>,
+    pub test_glob: Vec<String>,
     pub harness_files: Vec<String>,
     pub harness_globs: Vec<String>,
     pub allowed_prefixes: Vec<String>,
@@ -793,6 +794,13 @@ pub fn subst(text: &str, cfg: &Config) -> String {
     };
     let check = or(&cfg.check.command, UNSET_CHECK);
     let force = or(&cfg.check.force, UNSET_FORCE);
+    // quoted one by one: the verifier pastes the value into a shell command
+    let test_glob = l
+        .test_glob
+        .iter()
+        .map(|spec| format!("'{spec}'"))
+        .collect::<Vec<_>>()
+        .join(" ");
     let mut tokens: Vec<(&str, &str)> = vec![
         ("__CHECK__", &check),
         ("__CHECK_FORCE__", &force),
@@ -806,6 +814,7 @@ pub fn subst(text: &str, cfg: &Config) -> String {
         ("__ROWS_END_HEADING__", &l.rows_end_heading),
         ("__SOURCE_ROOT__", &l.source_root),
         ("__LEARNINGS_CAP__", &cap),
+        ("__TEST_GLOB__", &test_glob),
     ];
     // unset means the preset's own directory, which only skills::skills_dir knows -- leave the token standing, not empty
     if let Some(dir) = l.skills_dir.as_deref() {
@@ -1552,11 +1561,23 @@ mod tests {
     }
 
     #[test]
+    fn subst_quotes_each_test_glob_pathspec() {
+        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        assert!(c.layout.test_glob.is_empty());
+        c.layout.test_glob = vec!["tests/*.rs".into(), "src/*.rs".into()];
+        assert_eq!(
+            subst("git diff $BASE -- __TEST_GLOB__", &c),
+            "git diff $BASE -- 'tests/*.rs' 'src/*.rs'"
+        );
+    }
+
+    #[test]
     fn subst_covers_every_token() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
         let text = "__CHECK__|__CHECK_FORCE__|__SPEC__|__ENALLAGI_DIR__|__SKILLS_DIR__|\
                     __CONTEXT_FILE__|__CONTRACT_FILE__|__SKILL_INVOCATION__|__DRIVER_COMMAND__|\
-                    __ROWS_HEADING__|__ROWS_END_HEADING__|__SOURCE_ROOT__|__LEARNINGS_CAP__";
+                    __ROWS_HEADING__|__ROWS_END_HEADING__|__SOURCE_ROOT__|__LEARNINGS_CAP__|\
+                    __TEST_GLOB__";
         let mut out = subst(text, &c);
         assert_eq!(
             out.matches("__").count(),

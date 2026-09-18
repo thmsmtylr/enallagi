@@ -2559,3 +2559,74 @@ fn a_stage_naming_a_new_role_runs_it() {
         "{rendered}"
     );
 }
+
+const TAUTOLOGY_TASK: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.rs
+rows: none — harness
+status: ready
+criteria:
+  - it happens
+";
+
+// runs the diff the rendered prompt names, so a pathspec that covers nothing lets the tautology through
+fn diff_reading_verifier(r: &Repo) -> String {
+    script(
+        r,
+        "src/fakeverify.sh",
+        &format!(
+            "role=.enallagi/run/roles/verifier.md\n\
+             specs=$(grep 'assertion macro' \"$role\" | grep -o 'git diff \\$BASE -- [^`]*' | sed 's/^git diff \\$BASE -- //')\n\
+             base=$(git rev-list --max-parents=0 HEAD)\n\
+             if eval \"git diff $base -- $specs\" | grep -q '^+.*assert!(true)'; then\n\
+             {bin} tasks set-status T-001 ready 'REJECTED: assert!(true) replaced an assertion'\n\
+             else\n\
+             {bin} tasks set-status T-001 done 'stub verified'\n\
+             fi\n\
+             {QUIET}",
+            bin = env!("CARGO_BIN_EXE_enallagi"),
+        ),
+    )
+}
+
+#[test]
+fn a_tautologised_test_does_not_reach_done() {
+    let r = repo("", "");
+    let implement = script(
+        &r,
+        "src/fakeimpl.sh",
+        &format!(
+            "sed -i.bak 's/assert_eq!(1 + 1, 2);/assert!(true);/' src/thing.rs\n\
+             rm -f src/thing.rs.bak\n\
+             {bin} tasks set-status T-001 review 'stub implemented'\n\
+             echo 'iteration' >>PROGRESS.md\n\
+             git add src/thing.rs >/dev/null 2>&1\n\
+             git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
+             {QUIET}",
+            bin = env!("CARGO_BIN_EXE_enallagi"),
+        ),
+    );
+    let verify = diff_reading_verifier(&r);
+    let toml = base_toml(&role_commands(&implement, &verify));
+    write_toml(
+        &r,
+        &toml.replace("[check]", "[layout]\ntest_glob = [\"src/*.rs\"]\n\n[check]"),
+    );
+    r.write(
+        "src/thing.rs",
+        "#[test]\nfn adds() {\n    assert_eq!(1 + 1, 2);\n}\n",
+    );
+    r.write("TASKS.md", TAUTOLOGY_TASK);
+    r.commit_all("stubs");
+
+    go(&r, &opts(1));
+    let thing = std::fs::read_to_string(r.root.join("src/thing.rs")).expect("thing.rs");
+    assert!(thing.contains("assert!(true);"), "{thing}");
+    let role = std::fs::read_to_string(r.root.join(".enallagi/run/roles/verifier.md"))
+        .expect("the rendered verifier role");
+    assert!(role.contains("git diff $BASE -- 'src/*.rs'"), "{role}");
+    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    assert!(!tasks.contains("status: done"), "{tasks}");
+    assert!(tasks.contains("REJECTED: assert!(true)"), "{tasks}");
+}
