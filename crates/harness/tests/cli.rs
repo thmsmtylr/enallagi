@@ -926,16 +926,28 @@ const README_UNRUNNABLE: [(&str, &str); 11] = [
     ),
 ];
 
-// A fence is commands whatever its tag, so `sh`, `console` and an untagged fence all run.
+// A fence that is not commands, named by its first line, never by its tag.
+const README_DATA_FENCES: [(&str, &str); 1] = [(
+    "## [T-001] the date parser drops a timezone",
+    "a task block the reader pastes into TASKS.md",
+)];
+
+// A fence is commands whatever its tag, so `sh`, `text` and an untagged fence all run.
 fn readme_commands(readme: &str) -> Vec<String> {
     let mut fenced: Vec<String> = Vec::new();
     let mut inside = false;
+    let mut first = false;
     let mut data = false;
     for line in readme.lines() {
-        if let Some(lang) = line.strip_prefix("```") {
+        if line.starts_with("```") {
             inside = !inside;
-            data = matches!(lang.trim(), "markdown" | "toml" | "text");
+            first = inside;
+            data = false;
             continue;
+        }
+        if first {
+            data = README_DATA_FENCES.iter().any(|(named, _)| *named == line);
+            first = false;
         }
         let cmd = line.split_once(" #").map_or(line, |(c, _)| c).trim();
         if inside && !data && !cmd.is_empty() {
@@ -981,22 +993,30 @@ fn every_readme_command_runs_or_is_named() {
             "no README command reads {cmd}"
         );
     }
+    for (first, _) in &README_DATA_FENCES {
+        assert!(
+            readme.lines().any(|l| l == *first),
+            "no README fence opens with {first}"
+        );
+    }
     let failures = readme_command_failures(&readme);
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
 #[test]
-fn a_failing_sh_fence_fails_the_readme_run() {
+fn a_failing_fence_of_any_tag_fails_the_readme_run() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
-    let appended = format!("{readme}\n```sh\nenallagi tasks nope\n```\n");
-    let failures = readme_command_failures(&appended);
-    assert!(
-        failures
-            .iter()
-            .any(|f| f.starts_with("enallagi tasks nope")),
-        "{failures:#?}"
-    );
+    for tag in ["sh", "text", "markdown", "toml", ""] {
+        let appended = format!("{readme}\n```{tag}\nenallagi tasks nope\n```\n");
+        let failures = readme_command_failures(&appended);
+        assert!(
+            failures
+                .iter()
+                .any(|f| f.starts_with("enallagi tasks nope")),
+            "tag {tag:?}: {failures:#?}"
+        );
+    }
 }
 
 struct IssueRepo {
