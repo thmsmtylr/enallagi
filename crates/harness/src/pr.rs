@@ -130,7 +130,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
         root,
         &["worktree", "add", "-q", "-b", &branch, &wt_arg, &base],
     )?;
-    let built = apply_and_commit(root, &wt, &base, &cfg.check.command, &tasks, &picked);
+    let built = apply_and_commit(root, &wt, &base, &cfg, &tasks, &picked);
     git::git(root, &["worktree", "remove", "--force", &wt_arg])?;
     if let Err(err) = built {
         git::git(root, &["branch", "-D", &branch])?;
@@ -230,7 +230,7 @@ fn apply_and_commit(
     root: &Path,
     wt: &Path,
     base: &str,
-    check: &str,
+    cfg: &config::Config,
     tasks: &[Task],
     picked: &[(String, String)],
 ) -> Result<(), PrError> {
@@ -266,18 +266,9 @@ fn apply_and_commit(
         }
     }
 
-    let out = Command::new("sh")
-        .arg("-c")
-        .arg(check)
-        .current_dir(wt)
-        .output()
-        .map_err(io("the check"))?;
-    if !out.status.success() {
-        return Err(PrError::Check(format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        )));
+    let report = gates::check_delta(wt, cfg, false);
+    if report.exit != 0 {
+        return Err(PrError::Check(report.output));
     }
 
     let round = git::git(root, &["rev-parse", "--abbrev-ref", "HEAD"])?;

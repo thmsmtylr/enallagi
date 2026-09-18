@@ -1175,3 +1175,41 @@ fn a_test_glob_matching_nothing_is_reported() {
     let line = line.lines().nth(found[0].line - 1).expect("the line");
     assert!(line.contains("git diff $BASE -- 'tests/*.rs'"), "{line}");
 }
+
+#[test]
+fn an_unprecomputed_check_honours_timeout() {
+    let (repo, mut cfg) = seeded();
+    cfg.check.force = "sleep 10".to_string();
+    cfg.check.timeout = "2s".to_string();
+    let ctx = ProbeCtx {
+        root: &repo.root,
+        cfg: &cfg,
+        check: None,
+        driver: false,
+    };
+    let started = std::time::Instant::now();
+    let out = render(&probes::run_all(&ctx, &["check-red".to_string()]));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "{out}"
+    );
+    assert!(out.starts_with("PROBE check-red ERROR "), "{out}");
+    assert!(out.contains("ran past 2s"), "{out}");
+}
+
+#[test]
+fn a_check_not_on_path_could_not_be_run() {
+    let (repo, mut cfg) = seeded();
+    cfg.check.force = "no-such-check-on-path".to_string();
+    let ctx = ProbeCtx {
+        root: &repo.root,
+        cfg: &cfg,
+        check: None,
+        driver: false,
+    };
+    let out = render(&probes::run_all(&ctx, &["check-red".to_string()]));
+    assert!(
+        out.starts_with("PROBE check-red ERROR the check could not be run:"),
+        "{out}"
+    );
+}

@@ -342,6 +342,25 @@ fn a_red_check_pushes_nothing() {
 }
 
 #[test]
+fn a_hung_check_is_bound_by_timeout() {
+    let (f, _) = landed("sleep 10\n");
+    exec(&f.tools.join("gh"), "exit 0\n");
+    let toml = f.root.join(".enallagi/enallagi.toml");
+    let text = fs::read_to_string(&toml).expect("config");
+    fs::write(&toml, format!("{text}timeout = \"2s\"\n")).expect("config");
+    let started = std::time::Instant::now();
+    let (code, out) = f.harness(&["pr", "T-001", "--push"]);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "{out}"
+    );
+    assert_ne!(code, 0, "{out}");
+    assert!(out.contains("ran past 2s"), "{out}");
+    assert!(f.remote_branches().lines().all(|b| !b.contains("task/")));
+    assert!(git(&f.root, &["branch", "--list", "task/*"]).is_empty());
+}
+
+#[test]
 fn push_pushes_the_branch_and_opens_the_pr() {
     let (f, _) = landed("exit 0\n");
     let log = f.tools.join("gh.log");

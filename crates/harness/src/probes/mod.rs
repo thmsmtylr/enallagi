@@ -212,37 +212,19 @@ fn force_check(ctx: &ProbeCtx) -> CheckOutcome {
             output: "nested under turbo, the check would recurse".to_string(),
         };
     }
-    let out = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(&ctx.cfg.check.force)
-        .current_dir(ctx.root)
-        .output();
-    match out {
-        Err(e) => CheckOutcome {
+    let report = crate::gates::check_delta(ctx.root, ctx.cfg, true);
+    if report.timed_out.is_none() && report.exit == 127 {
+        return CheckOutcome {
             ran: false,
             red: true,
-            output: format!("the check could not be run: {e}"),
-        },
-        Ok(out) => {
-            let mut log = String::from_utf8_lossy(&out.stdout).into_owned();
-            log.push_str(&String::from_utf8_lossy(&out.stderr));
-            if out.status.code() == Some(127) {
-                return CheckOutcome {
-                    ran: false,
-                    red: true,
-                    output: format!(
-                        "the check could not be run: {}",
-                        common::cut(log.trim(), 120)
-                    ),
-                };
-            }
-            CheckOutcome {
-                ran: true,
-                red: !out.status.success(),
-                output: log,
-            }
-        }
+            output: format!(
+                "{} {}",
+                crate::gates::NEVER_RAN,
+                common::cut(report.output.trim(), 120)
+            ),
+        };
     }
+    report.outcome()
 }
 
 pub fn render(results: &[(String, ProbeResult)]) -> String {
