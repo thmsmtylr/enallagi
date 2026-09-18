@@ -42,7 +42,16 @@ $EDITOR .enallagi/enallagi.toml   # set agent.preset and check.command
 enallagi init                     # re-run to apply the edited answers
 ```
 
-Write a task into `.enallagi/TASKS.md`:
+Turn an issue into a task:
+
+```bash
+enallagi issue owner/repo#12   # appends a proposed block to .enallagi/TASKS.md
+$EDITOR .enallagi/TASKS.md     # fill scope: and criteria:, then set status: ready
+```
+
+The block quotes the issue in `notes:`. It stays `proposed` until you write what done means.
+
+Or write a task into `.enallagi/TASKS.md` by hand:
 
 ```
 ## [T-001] the date parser drops a timezone
@@ -58,10 +67,10 @@ notes:
 Run it:
 
 ```bash
-enallagi run --iterations 1   # one task, in this checkout
-enallagi worktree 1           # or one task, in its own worktree
-enallagi watch                # attach read-only to the live loop
-enallagi pr T-001 --push      # one pull request for the landed task
+enallagi run --pipeline task --iterations 1   # one task, in this checkout
+enallagi worktree 1                          # or one task, in its own worktree
+enallagi watch                               # attach read-only to the live loop
+enallagi pr T-001 --push                     # one pull request for the landed task
 ```
 
 ## How a run works
@@ -118,6 +127,7 @@ Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGE
 - `run` drives the pipelines in place. `worktree` drives them in an isolated checkout.
 - `watch` attaches to a live loop. `events` queries the log.
 - `tasks` reads and edits the queue. `base` prints the commit a task was queued against.
+- `issue` appends a GitHub issue to the queue as a `proposed` task.
 - `probe` reports findings. `gate` runs one gate. `hook` is the agent's lifecycle entry point.
 - `skills` resolves declared skills. `eval` runs the evals. `pr` builds a pull request.
 

@@ -907,9 +907,14 @@ fn every_readme_command_runs_or_is_named() {
             "opens an interactive editor",
         ),
         (
-            "enallagi run --iterations 1",
+            "enallagi run --pipeline task --iterations 1",
             "spawns the agent CLI, which no test may call",
         ),
+        (
+            "enallagi issue owner/repo#12",
+            "reads a GitHub issue over the network with gh",
+        ),
+        ("$EDITOR .enallagi/TASKS.md", "opens an interactive editor"),
         (
             "cargo install --locked --git https://github.com/thmsmtylr/enallagi enallagi",
             "builds from the network and installs outside the tree",
@@ -958,5 +963,209 @@ fn every_readme_command_runs_or_is_named() {
             .output()
             .unwrap_or_else(|e| panic!("{cmd}: {e}"));
         assert_eq!(out.status.code(), Some(0), "{cmd}: {out:?}");
+    }
+}
+
+struct IssueRepo {
+    repo: enallagi::fixture::Repo,
+    tools: tempfile::TempDir,
+}
+
+impl IssueRepo {
+    // the instance is committed in its own repository, so its porcelain lists only what the command wrote
+    fn new(gh_body: &str) -> IssueRepo {
+        let repo = enallagi::fixture::Repo::new();
+        repo.init_harness("");
+        let state = repo.root.join(".enallagi");
+        for args in [
+            &["add", "-A"][..],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "state",
+            ][..],
+        ] {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&state)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "{out:?}");
+        }
+        let tools = tempfile::tempdir().expect("tempdir");
+        if !gh_body.is_empty() {
+            let gh = tools.path().join("gh");
+            std::fs::write(&gh, format!("#!/bin/sh\n{gh_body}")).expect("write gh");
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        IssueRepo { repo, tools }
+    }
+
+    // shell builtins only: PATH holds nothing but the stub
+    fn fixture_gh() -> String {
+        let json = include_str!("fixtures/issues/help-wanted.json");
+        assert!(
+            !json.contains('\''),
+            "the fixture cannot sit in single quotes"
+        );
+        format!("printf '%s\\n' \"$@\" >\"${{0%/*}}/gh.log\"\nprintf '%s' '{json}'\n")
+    }
+
+    // PATH is the tools directory alone, so a missing stub is a missing gh
+    fn issue(&self, args: &[&str]) -> std::process::Output {
+        enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+            .arg("issue")
+            .args(args)
+            .current_dir(&self.repo.root)
+            .env_remove("ENALLAGI_DIR")
+            .env("PATH", self.tools.path())
+            .output()
+            .expect("run enallagi issue")
+    }
+
+    fn tasks(&self) -> String {
+        std::fs::read_to_string(self.repo.root.join(".enallagi/TASKS.md")).expect("TASKS.md")
+    }
+
+    fn porcelain(&self) -> String {
+        let out = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(self.repo.root.join(".enallagi"))
+            .output()
+            .expect("git status");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+}
+
+#[test]
+fn issue_appends_one_proposed_block() {
+    let f = IssueRepo::new(&IssueRepo::fixture_gh());
+    let before = f.tasks();
+
+    let out = f.issue(&["owner/repo#12"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+
+    let args = std::fs::read_to_string(f.tools.path().join("gh.log")).expect("gh ran");
+    assert_eq!(
+        args.lines().collect::<Vec<_>>(),
+        [
+            "issue",
+            "view",
+            "12",
+            "--repo",
+            "owner/repo",
+            "--json",
+            "number,title,body,url,labels"
+        ]
+    );
+    assert_eq!(f.porcelain(), " M TASKS.md\n");
+
+    let after = f.tasks();
+    assert!(
+        after.starts_with(&before),
+        "the queue was rewritten, not appended to"
+    );
+    let blocks = enallagi::queue::parse(&after).expect("parse");
+    let last = blocks.last().expect("a block");
+    assert_eq!(last.id, "T-002");
+    assert_eq!(last.title, "a file uploaded unzipped cannot be downloaded");
+    let block = enallagi::queue::block_text(last);
+    let want = "\
+scope: src/thing.ts, src/thing.test.ts
+blockedBy:
+status: proposed
+rows: none — harness
+criteria:
+  - <objective, and naming the command whose output changes when it is done>
+notes: https://github.com/owner/repo/issues/12
+  labels: enhancement, help wanted
+  > ### Describe the bug
+  >
+  > A download of a file uploaded unzipped fails with `archive: false`.
+  >
+  > ### Affected version
+  >
+  > ```
+  > tool version 2.88.1 (2026-03-12)
+  > ```
+  >
+  > ## Steps to reproduce the behavior
+  >
+  > 1. Upload the file unzipped.
+  > 2. Download it.";
+    assert!(block.contains(want), "{block}");
+}
+
+#[test]
+fn issue_dry_run_prints_and_writes_nothing() {
+    let f = IssueRepo::new(&IssueRepo::fixture_gh());
+    let before = f.tasks();
+
+    let out = f.issue(&["https://github.com/owner/repo/issues/12", "--dry-run"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.starts_with("## [T-002] a file uploaded unzipped cannot be downloaded\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("status: proposed"), "{stdout}");
+    let args = std::fs::read_to_string(f.tools.path().join("gh.log")).expect("gh ran");
+    assert_eq!(
+        args.lines().collect::<Vec<_>>(),
+        [
+            "issue",
+            "view",
+            "https://github.com/owner/repo/issues/12",
+            "--json",
+            "number,title,body,url,labels"
+        ]
+    );
+    assert_eq!(f.tasks(), before);
+    assert_eq!(f.porcelain(), "");
+}
+
+#[test]
+fn issue_refuses_an_issue_already_queued() {
+    let f = IssueRepo::new(&IssueRepo::fixture_gh());
+    assert_eq!(f.issue(&["owner/repo#12"]).status.code(), Some(0));
+    let once = f.tasks();
+
+    let out = f.issue(&["owner/repo#12"]);
+    assert_ne!(out.status.code(), Some(0), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("T-002"), "{stderr}");
+    assert!(
+        stderr.contains("https://github.com/owner/repo/issues/12"),
+        "{stderr}"
+    );
+    assert_eq!(f.tasks(), once);
+}
+
+#[test]
+fn issue_names_the_gh_command_that_failed() {
+    for gh in [
+        "",
+        "echo 'To get started with GitHub CLI, please run:  gh auth login' >&2\nexit 4\n",
+        "echo 'GraphQL: Could not resolve to an issue with the number of 12.' >&2\nexit 1\n",
+        "echo 'not json'\n",
+    ] {
+        let f = IssueRepo::new(gh);
+        let before = f.tasks();
+        let out = f.issue(&["owner/repo#12"]);
+        assert_ne!(out.status.code(), Some(0), "{gh}: {out:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("gh issue view 12 --repo owner/repo"),
+            "{gh}: {stderr}"
+        );
+        assert_eq!(f.tasks(), before, "{gh}");
+        assert_eq!(f.porcelain(), "", "{gh}");
     }
 }

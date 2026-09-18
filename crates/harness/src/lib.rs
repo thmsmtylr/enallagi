@@ -10,6 +10,7 @@ pub mod gates;
 pub mod git;
 pub mod hooks;
 pub mod init;
+pub mod issue;
 pub mod pipeline;
 pub mod pr;
 pub mod probes;

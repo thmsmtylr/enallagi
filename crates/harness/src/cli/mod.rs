@@ -5,6 +5,7 @@ mod events;
 mod gate;
 mod hook;
 mod init;
+mod issue;
 mod pr;
 mod probe;
 mod run;
@@ -22,6 +23,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "enallagi",
     version,
+    disable_help_subcommand = true,
     about = "An autonomous task loop for a coding agent, installed into any git repository."
 )]
 pub struct Cli {
@@ -115,6 +117,16 @@ pub enum Command {
         /// Push past a contribution guide that conditions generated changes, once you have read it
         #[arg(long)]
         policy_read: bool,
+    },
+    /// Append a proposed block to TASKS.md from a GitHub issue
+    ///
+    /// Reads the issue with gh. Scope and criteria stay placeholders until you write them.
+    Issue {
+        /// Issue URL, or owner/repo#n
+        reference: String,
+        /// Print the block and write nothing
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Print the product commit a task was queued against
     ///
@@ -246,6 +258,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             push,
             policy_read,
         }),
+        Command::Issue { reference, dry_run } => issue::run(&issue::Args { reference, dry_run }),
         Command::Base { task } => base::run(&base::Args { task }),
         Command::Gate { which, task, base } => gate::run(&gate::Args { which, task, base }),
         Command::Hook { name } => hook::run(&hook::Args { name }),
@@ -277,12 +290,12 @@ mod tests {
     const CI: &str = include_str!("../../../../.github/workflows/ci.yml");
     const RELEASE: &str = include_str!("../../../../.github/workflows/release.yml");
 
-    const SUBCOMMANDS: [&str; 14] = [
-        "init", "eject", "run", "watch", "probe", "pr", "base", "gate", "hook", "skills", "tasks",
-        "eval", "events", "worktree",
+    const SUBCOMMANDS: [&str; 15] = [
+        "init", "eject", "run", "watch", "probe", "pr", "issue", "base", "gate", "hook", "skills",
+        "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 23] = [
+    const FLAGS: [&str; 24] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
@@ -300,6 +313,7 @@ mod tests {
         "run --dangerously-skip-permissions",
         "pr --push",
         "pr --policy-read",
+        "issue --dry-run",
         "gate --base",
         "eval --gate",
         "events --role",
@@ -363,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn the_subcommand_set_is_the_reviewed_fourteen() {
+    fn the_subcommand_set_is_the_reviewed_fifteen() {
         let cmd = Cli::command();
         let names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
         assert_eq!(names, SUBCOMMANDS);
