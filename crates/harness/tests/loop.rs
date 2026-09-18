@@ -2453,3 +2453,109 @@ fn a_skip_flag_with_no_bypass_flag_is_refused() {
     assert!(err.to_string().contains("custom"), "{err}");
     assert!(ends(&events).is_empty(), "nothing may spawn");
 }
+
+const EXTRA_SKILL: &str = "
+[[skill]]
+id = \"security\"
+source = \"path:vendor/security\"
+path = \"\"
+rev = \"v1\"
+gate = \"none\"
+why = \"fixture\"
+";
+
+fn synced_extra_skill() -> Repo {
+    let r = repo(&base_toml(EXTRA_SKILL), TASKS);
+    r.write("vendor/security/SKILL.md", "# security v1\n");
+    let (code, out) = harness(&r.root, &["skills", "sync"]);
+    assert_eq!(code, 0, "{out}");
+    r
+}
+
+fn locked_rev(r: &Repo, id: &str) -> Option<String> {
+    let lock = enallagi::skills::read_lock(&r.root, ".enallagi").expect("lock");
+    lock.skill
+        .iter()
+        .find(|e| e.id == id)
+        .map(|e| e.rev.clone().unwrap_or_default())
+}
+
+// docs/pipeline.md says so: sync resolves what is declared and never prunes what is not
+#[test]
+fn sync_leaves_a_removed_skill_vendored() {
+    let r = synced_extra_skill();
+    let vendored = r.root.join(".enallagi/skills/security/SKILL.md");
+    assert!(vendored.is_file());
+
+    write_toml(&r, &base_toml(""));
+    let (code, out) = harness(&r.root, &["skills", "sync"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("security"), "{out}");
+    assert!(vendored.is_file(), "the vendored copy was removed");
+    assert_eq!(locked_rev(&r, "security").as_deref(), Some("v1"));
+}
+
+#[test]
+fn a_changed_rev_revendors_the_skill() {
+    let r = synced_extra_skill();
+    let vendored = r.root.join(".enallagi/skills/security/SKILL.md");
+    r.write("vendor/security/SKILL.md", "# security v2\n");
+
+    let (_, out) = harness(&r.root, &["skills", "sync"]);
+    assert!(out.lines().any(|l| l == "security  cached"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(&vendored).unwrap(),
+        "# security v1\n"
+    );
+
+    write_toml(&r, &base_toml(&EXTRA_SKILL.replace("v1", "v2")));
+    let (code, out) = harness(&r.root, &["skills", "sync"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.lines().any(|l| l == "security  fetched"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(&vendored).unwrap(),
+        "# security v2\n"
+    );
+    assert_eq!(locked_rev(&r, "security").as_deref(), Some("v2"));
+}
+
+#[test]
+fn a_task_pipeline_without_adjudicate_skips_it() {
+    let toml = base_toml("").replace(
+        "stages = [\"implement\", \"verify\", \"adjudicate\"]",
+        "stages = [\"implement\", \"verify\"]",
+    );
+    let plan = plan_of(&repo(&toml, TASKS));
+    let at = plan
+        .find("=== pipeline task (queue.takeable) ===")
+        .unwrap_or_else(|| panic!("{plan}"));
+    let section = &plan[at..];
+    let section = &section[..section[1..]
+        .find("=== pipeline ")
+        .map_or(section.len(), |i| i + 1)];
+    assert!(section.contains("would spawn: verify"), "{section}");
+    assert!(!section.contains("adjudicate"), "{section}");
+}
+
+#[test]
+fn a_stage_naming_a_new_role_runs_it() {
+    let toml = base_toml("").replace(
+        "stages = [\"implement\", \"verify\", \"adjudicate\"]",
+        "stages = [\"security\"]",
+    ) + "\n[[stage]]\nname = \"security\"\nrole = \"security\"\nturns = 5\n";
+    let r = repo(&toml, TASKS);
+    r.write(
+        ".enallagi/roles/security.md",
+        "Read the diff for secrets.\n",
+    );
+    r.commit_all("a security role");
+
+    let (_, events) = go(&r, &opts(1));
+    assert_eq!(stages_started(&events), ["security"], "{events:#?}");
+    let rendered = std::fs::read_to_string(r.root.join(".enallagi/run/roles/security.md"))
+        .expect("the role was rendered");
+    assert!(
+        rendered.contains("Read the diff for secrets."),
+        "{rendered}"
+    );
+}

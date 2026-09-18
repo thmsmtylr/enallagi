@@ -327,6 +327,18 @@ fn the_reference_tables_live_in_docs() {
 }
 
 #[test]
+fn readme_links_the_three_guides() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
+    for guide in ["docs/setup.md", "docs/configuration.md", "docs/pipeline.md"] {
+        assert!(
+            readme.contains(&format!("]({guide})")),
+            "README.md never links {guide}"
+        );
+    }
+}
+
+#[test]
 fn the_shipped_documents_describe_and_do_not_argue() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let read = |rel: &str| std::fs::read_to_string(root.join(rel)).expect(rel);
@@ -362,7 +374,12 @@ fn the_shipped_documents_describe_and_do_not_argue() {
         offences.push(format!("README.md headings {sections:?}"));
     }
     let intent = read("docs/intent.md");
-    for (name, text) in [("README.md", &readme), ("docs/intent.md", &intent)] {
+    let guides =
+        ["docs/setup.md", "docs/configuration.md", "docs/pipeline.md"].map(|rel| (rel, read(rel)));
+    let texts = [("README.md", &readme), ("docs/intent.md", &intent)]
+        .into_iter()
+        .chain(guides.iter().map(|(rel, text)| (*rel, text)));
+    for (name, text) in texts {
         for (i, line) in text.lines().enumerate() {
             if argues.is_match(line) {
                 offences.push(format!("{name}:{} {line}", i + 1));
@@ -913,7 +930,7 @@ fn a_legacy_config_name_warns_about_the_rename() {
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
 }
 
-const README_UNRUNNABLE: [(&str, &str); 11] = [
+const DOC_UNRUNNABLE: [(&str, &str); 12] = [
     (
         "curl -LO https://github.com/thmsmtylr/enallagi/releases/latest/download/enallagi-aarch64-apple-darwin",
         "downloads a release asset over the network",
@@ -952,13 +969,30 @@ const README_UNRUNNABLE: [(&str, &str); 11] = [
         "enallagi pr T-001 --push",
         "pushes a branch and opens a pull request",
     ),
+    (
+        "enallagi skills sync",
+        "clones the shipped skills from GitHub over the network",
+    ),
 ];
 
 // A fence that is not commands, named by its first line, never by its tag.
-const README_DATA_FENCES: [(&str, &str); 1] = [(
-    "## [T-001] the date parser drops a timezone",
-    "a task block the reader pastes into TASKS.md",
-)];
+const DOC_DATA_FENCES: [(&str, &str); 3] = [
+    (
+        "## [T-001] the date parser drops a timezone",
+        "a task block the reader pastes into TASKS.md",
+    ),
+    (
+        r#"  "test": "node --import tsx --test src/*.test.ts""#,
+        "a line of the example repository's package.json",
+    ),
+    (
+        r#"  detected: check.command = "npm test" (package.json:4)"#,
+        "what enallagi init prints on the example repository",
+    ),
+];
+
+// The documents whose fences run, in order, in one fixture repository each.
+const RUN_DOCS: [&str; 2] = ["README.md", "docs/setup.md"];
 
 // A fence is commands whatever its tag, so `sh`, `text` and an untagged fence all run.
 fn readme_commands(readme: &str) -> Vec<String> {
@@ -974,7 +1008,7 @@ fn readme_commands(readme: &str) -> Vec<String> {
             continue;
         }
         if first {
-            data = README_DATA_FENCES.iter().any(|(named, _)| *named == line);
+            data = DOC_DATA_FENCES.iter().any(|(named, _)| *named == line);
             first = false;
         }
         let cmd = line.split_once(" #").map_or(line, |(c, _)| c).trim();
@@ -989,16 +1023,28 @@ fn readme_command_failures(readme: &str) -> Vec<String> {
     let repo = enallagi::fixture::Repo::new();
     let mut failures = Vec::new();
     for cmd in readme_commands(readme) {
-        if README_UNRUNNABLE.iter().any(|(named, _)| *named == cmd) {
+        if DOC_UNRUNNABLE.iter().any(|(named, _)| *named == cmd) {
             continue;
         }
         let args: Vec<&str> = cmd.split_whitespace().collect();
-        if args[0] != "enallagi" {
-            failures.push(format!("{cmd} has no runner and no reason"));
-            continue;
-        }
-        let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
-            .args(&args[1..])
+        let mut run = match args[0] {
+            "enallagi" => {
+                let mut c = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"));
+                c.args(&args[1..]);
+                c
+            }
+            // a quoted commit message survives only a shell
+            "git" => {
+                let mut c = std::process::Command::new("sh");
+                c.args(["-c", &cmd]);
+                c
+            }
+            _ => {
+                failures.push(format!("{cmd} has no runner and no reason"));
+                continue;
+            }
+        };
+        let out = run
             .current_dir(&repo.root)
             .output()
             .unwrap_or_else(|e| panic!("{cmd}: {e}"));
@@ -1015,20 +1061,43 @@ fn every_readme_command_runs_or_is_named() {
     let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
     let fenced = readme_commands(&readme);
     assert!(fenced.len() > 8, "README fenced commands: {fenced:?}");
-    for (cmd, _) in &README_UNRUNNABLE {
-        assert!(
-            fenced.iter().any(|f| f == cmd),
-            "no README command reads {cmd}"
-        );
-    }
-    for (first, _) in &README_DATA_FENCES {
-        assert!(
-            readme.lines().any(|l| l == *first),
-            "no README fence opens with {first}"
-        );
-    }
     let failures = readme_command_failures(&readme);
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn every_setup_command_runs_or_is_named() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let setup = std::fs::read_to_string(root.join("docs/setup.md")).expect("docs/setup.md");
+    let fenced = readme_commands(&setup);
+    assert!(
+        fenced.len() > 8,
+        "docs/setup.md fenced commands: {fenced:?}"
+    );
+    let failures = readme_command_failures(&setup);
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn every_named_fence_is_in_a_run_doc() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let docs: Vec<String> = RUN_DOCS
+        .iter()
+        .map(|rel| std::fs::read_to_string(root.join(rel)).expect(rel))
+        .collect();
+    let fenced: Vec<String> = docs.iter().flat_map(|d| readme_commands(d)).collect();
+    for (cmd, _) in &DOC_UNRUNNABLE {
+        assert!(
+            fenced.iter().any(|f| f == cmd),
+            "no document command reads {cmd}"
+        );
+    }
+    for (first, _) in &DOC_DATA_FENCES {
+        assert!(
+            docs.iter().any(|d| d.lines().any(|l| l == *first)),
+            "no document fence opens with {first}"
+        );
+    }
 }
 
 #[test]

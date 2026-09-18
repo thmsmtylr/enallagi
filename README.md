@@ -37,6 +37,8 @@ Releasing is one procedure, stated in
 
 ## From install to a landed task
 
+[docs/setup.md](docs/setup.md) walks the same path on a real repository, step by step.
+
 ```bash
 enallagi init                     # seeds the documents and writes .enallagi/enallagi.toml
 $EDITOR .enallagi/enallagi.toml   # set agent.preset and check.command
@@ -90,10 +92,12 @@ becomes `needs-spec` and halts the run.
 With none named, every pipeline in `.enallagi/enallagi.toml` is eligible.
 
 The pipeline, gate, probe, key and file tables are in [docs/reference.md](docs/reference.md).
+Changing a skill, a pipeline or a stage is in [docs/pipeline.md](docs/pipeline.md).
 
 ## Configuration
 
 `.enallagi/enallagi.toml` holds the whole configuration.
+Every key and its default is in [docs/configuration.md](docs/configuration.md).
 
 `enallagi init` writes only the keys whose value differs from the embedded defaults.
 A key left out takes its default.
@@ -115,12 +119,6 @@ A tree that matches no runner, or more than one, keeps the defaults and names th
   A preset that declares no bypass flag refuses the run.
 - `run.start` records the choice as `permissions_skipped`, and `enallagi events` prints it.
 - `check.command` is the single command that decides green.
-- `check.force` runs the same check uncached. Left out, it follows `check.command`.
-- `check.timeout` bounds it and defaults to `30m`. A check that runs past it halts the run.
-- `queue.drain` is how many standing `proposed` blocks the adjudicator takes a round. Default `3`.
-- `queue.turns_per_block` is the turns added to that stage per block. Default `25`.
-- `queue.proposed_rounds` is how long a `proposed` block stands before it expires. Default `6`.
-- `layout.*` says where the documents live.
 - `[[skill]]` declares a skill to vendor, with its `rev` and the gate that enforces it.
 
 Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGET_TOKENS`.

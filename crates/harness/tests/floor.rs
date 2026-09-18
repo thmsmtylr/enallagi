@@ -974,3 +974,65 @@ fn the_tag_equals_the_crate_version() {
     let version = crate_version_in(&read(&repo_root().join("crates/harness/Cargo.toml")));
     assert_eq!(tag_mismatch(&tag, &version), None);
 }
+
+fn default_keys() -> Vec<String> {
+    let default: toml::Table = toml::from_str(enallagi::config::DEFAULT_TOML).expect("defaults");
+    let mut keys = Vec::new();
+    for (table, value) in &default {
+        let fields: Vec<&toml::Table> = match value {
+            toml::Value::Table(t) => vec![t],
+            toml::Value::Array(a) => a.iter().filter_map(|v| v.as_table()).collect(),
+            _ => Vec::new(),
+        };
+        for key in fields.iter().flat_map(|t| t.keys()) {
+            let dotted = format!("{table}.{key}");
+            if !keys.contains(&dotted) {
+                keys.push(dotted);
+            }
+        }
+    }
+    keys
+}
+
+#[test]
+fn every_default_key_is_in_configuration_md() {
+    let keys = default_keys();
+    assert!(keys.iter().any(|k| k == "stage.post"), "{keys:?}");
+    let doc = read(&repo_root().join("docs/configuration.md"));
+    let missing: Vec<&String> = keys
+        .iter()
+        .filter(|k| !doc.contains(&format!("`{k}`")))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "docs/configuration.md never names {missing:?}"
+    );
+}
+
+// each runner's example is three list items: the preset's fail_name, a failing line, and its capture
+#[test]
+fn each_fail_name_example_captures_its_line() {
+    let doc = read(&repo_root().join("docs/configuration.md"));
+    let item = |line: &str, label: &str| {
+        line.trim_start()
+            .strip_prefix(&format!("- {label}: `"))
+            .and_then(|rest| rest.strip_suffix('`'))
+            .map(str::to_string)
+    };
+    let lines: Vec<&str> = doc.lines().collect();
+    let runners = enallagi::runners::presets();
+    assert_eq!(runners.len(), 7);
+    for runner in runners {
+        let at = lines
+            .iter()
+            .position(|l| item(l, "fail_name").as_deref() == Some(runner.fail_name.as_str()))
+            .unwrap_or_else(|| panic!("{} has no fail_name example", runner.name));
+        let failing = item(lines[at + 1], "failing line").expect(lines[at + 1]);
+        let captures = item(lines[at + 2], "captures").expect(lines[at + 2]);
+        let caught = re(&runner.fail_name)
+            .captures(&failing)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string());
+        assert_eq!(caught, Some(captures), "{}: {failing}", runner.name);
+    }
+}
