@@ -1296,6 +1296,37 @@ fn two_runners_in_one_tree_write_no_keys() {
 }
 
 #[test]
+fn a_tree_with_only_tests_writes_no_source_root() {
+    let repo = node_repo();
+    fs::remove_file(repo.root.join("src/schema.ts")).expect("remove src");
+    repo.commit_all("no src");
+    let report = install(&repo);
+    let written = read(&repo, ".enallagi/enallagi.toml");
+    assert!(!written.contains("source_root"), "{written}");
+    assert!(
+        !report
+            .notes
+            .iter()
+            .any(|n| n.starts_with("detected: layout.source_root")),
+        "{:?}",
+        report.notes
+    );
+    assert!(
+        detected(&report, "layout.allowed_prefixes").contains("\"tests/\""),
+        "{:?}",
+        report.notes
+    );
+    for key in [
+        "check.command",
+        "check.fail_name",
+        "layout.test_file_suffix_re",
+        "layout.test_decl_patterns",
+    ] {
+        detected(&report, key);
+    }
+}
+
+#[test]
 fn a_tree_with_no_runner_keeps_the_defaults() {
     let repo = Repo::new();
     let report = install(&repo);

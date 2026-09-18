@@ -168,7 +168,6 @@ fn source_root(runner: &Runner, dirs: &[(String, String)]) -> Option<(String, St
         .source_roots
         .iter()
         .find_map(|want| dirs.iter().find(|(dir, _)| dir == want))
-        .or_else(|| dirs.first())
         .cloned()
 }
 
