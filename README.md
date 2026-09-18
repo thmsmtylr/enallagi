@@ -89,6 +89,8 @@ becomes `needs-spec` and halts the run.
 `enallagi run --pipeline task` runs only the pipeline named. Repeat the flag to name more than one.
 With none named, every pipeline in `.enallagi/enallagi.toml` is eligible.
 
+The pipeline, gate, probe, key and file tables are in [docs/reference.md](docs/reference.md).
+
 ## Configuration
 
 `.enallagi/enallagi.toml` holds the whole configuration.

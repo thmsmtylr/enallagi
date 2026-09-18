@@ -299,6 +299,34 @@ fn skills_check_refuses_what_sync_then_locks() {
 }
 
 #[test]
+fn the_reference_tables_live_in_docs() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
+    let reference =
+        std::fs::read_to_string(root.join("docs/reference.md")).expect("docs/reference.md");
+    let rows = |text: &str| text.lines().filter(|l| l.starts_with('|')).count();
+    assert_eq!(rows(&readme), 0, "README.md carries a table");
+    assert!(
+        readme.contains("](docs/reference.md)"),
+        "README.md never links docs/reference.md"
+    );
+    // b008d8a's README carried 19 table rows, and none may be lost in the move
+    assert!(
+        rows(&reference) >= 19,
+        "docs/reference.md has {} rows",
+        rows(&reference)
+    );
+    let headings: Vec<&str> = reference
+        .lines()
+        .filter_map(|l| l.strip_prefix("## "))
+        .collect();
+    assert_eq!(
+        headings,
+        ["Pipelines", "Gates", "Probes", "Configuration", "Files"]
+    );
+}
+
+#[test]
 fn the_shipped_documents_describe_and_do_not_argue() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let read = |rel: &str| std::fs::read_to_string(root.join(rel)).expect(rel);
