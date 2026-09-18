@@ -1332,9 +1332,16 @@ struct IssueRepo {
 impl IssueRepo {
     // the instance is committed in its own repository, so its porcelain lists only what the command wrote
     fn new(gh_body: &str) -> IssueRepo {
+        IssueRepo::with_state(gh_body, &[])
+    }
+
+    fn with_state(gh_body: &str, files: &[(&str, &str)]) -> IssueRepo {
         let repo = enallagi::fixture::Repo::new();
         repo.init_harness("");
         let state = repo.root.join(".enallagi");
+        for (name, text) in files {
+            std::fs::write(state.join(name), text).expect("write state");
+        }
         for args in [
             &["add", "-A"][..],
             &[
@@ -1504,6 +1511,44 @@ fn issue_refuses_an_issue_already_queued() {
         "{stderr}"
     );
     assert_eq!(f.tasks(), once);
+}
+
+const LANDED_STUB: &str = "# TASKS\n\n## [T-001] landed\nstatus: done\narchived: DECISIONS.md\n";
+
+#[test]
+fn issue_refuses_an_issue_already_archived() {
+    let decisions = "# DECISIONS\n\n## Rejected findings\n\n## [T-001] landed\nstatus: done\n\
+        notes: https://github.com/owner/repo/issues/12\n";
+    let f = IssueRepo::with_state(
+        &IssueRepo::fixture_gh(),
+        &[("TASKS.md", LANDED_STUB), ("DECISIONS.md", decisions)],
+    );
+    for args in [&["owner/repo#12"][..], &["owner/repo#12", "--dry-run"][..]] {
+        let out = f.issue(args);
+        assert_ne!(out.status.code(), Some(0), "{args:?}: {out:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("T-001"), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains("https://github.com/owner/repo/issues/12"),
+            "{args:?}: {stderr}"
+        );
+        assert_eq!(f.tasks(), LANDED_STUB, "{args:?}");
+        assert_eq!(f.porcelain(), "", "{args:?}");
+    }
+}
+
+#[test]
+fn issue_requeues_an_expired_finding() {
+    let decisions = "# DECISIONS\n\n## Rejected findings\n\n## Expired findings\n\n\
+        ## [T-001] landed\nstatus: proposed\nnotes: https://github.com/owner/repo/issues/12\n";
+    let f = IssueRepo::with_state(
+        &IssueRepo::fixture_gh(),
+        &[("TASKS.md", LANDED_STUB), ("DECISIONS.md", decisions)],
+    );
+    let out = f.issue(&["owner/repo#12"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let blocks = enallagi::queue::parse(&f.tasks()).expect("parse");
+    assert_eq!(blocks.last().expect("a block").id, "T-002");
 }
 
 #[test]

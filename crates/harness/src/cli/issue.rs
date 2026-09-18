@@ -9,10 +9,13 @@ pub struct Args {
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
     let root = std::env::current_dir()?;
-    let path = config::instance_path(&root, &config::harness_dir(&root), "TASKS.md");
+    let dir = config::harness_dir(&root);
+    let path = config::instance_path(&root, &dir, "TASKS.md");
     let queue = Queue { path };
-    let appended =
-        issue::read(&args.reference).and_then(|found| issue::append(&queue.read()?, &found));
+    let decisions = std::fs::read_to_string(config::instance_path(&root, &dir, "DECISIONS.md"))
+        .unwrap_or_default();
+    let appended = issue::read(&args.reference)
+        .and_then(|found| issue::append(&queue.read()?, &decisions, &found));
     let (block, next) = match appended {
         Ok(appended) => appended,
         Err(err @ (IssueError::BadRef(_) | IssueError::Gh { .. } | IssueError::Queued { .. })) => {

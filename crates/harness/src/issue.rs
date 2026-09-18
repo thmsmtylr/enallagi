@@ -97,15 +97,26 @@ pub fn render(issue: &Issue, id: &str) -> String {
     lines.join("\n")
 }
 
+fn carrier<'a>(mut blocks: impl Iterator<Item = &'a queue::Block>, url: &str) -> Option<String> {
+    blocks
+        .find(|b| b.body.iter().any(|(_, l)| carries(l, url)))
+        .map(|b| b.id.clone())
+}
+
 // returns the block and the queue with it appended
-pub fn append(text: &str, issue: &Issue) -> Result<(String, String), IssueError> {
+pub fn append(text: &str, decisions: &str, issue: &Issue) -> Result<(String, String), IssueError> {
     let blocks = queue::parse(text)?;
-    if let Some(b) = blocks
-        .iter()
-        .find(|b| b.body.iter().any(|(_, l)| carries(l, &issue.url)))
-    {
+    // an archived stub carries no notes:, so a landed issue is found in DECISIONS.md; an expired one may return
+    let expired = decisions
+        .split('\n')
+        .position(|l| l.trim_end() == "## Expired findings")
+        .map_or(usize::MAX, |i| i + 1);
+    let archived = queue::parse(decisions)?;
+    let queued = carrier(blocks.iter(), &issue.url)
+        .or_else(|| carrier(archived.iter().filter(|b| b.line < expired), &issue.url));
+    if let Some(task) = queued {
         return Err(IssueError::Queued {
-            task: b.id.clone(),
+            task,
             url: issue.url.clone(),
         });
     }
@@ -149,13 +160,26 @@ mod tests {
             "{}\nnotes: https://x/issues/123\n",
             queue::heading("T-001", "a")
         );
-        let (block, _) = append(&q, &issue("https://x/issues/12", "")).unwrap();
+        let (block, _) = append(&q, "", &issue("https://x/issues/12", "")).unwrap();
         assert!(
             block.starts_with(&queue::heading("T-002", "a title")),
             "{block}"
         );
         assert!(matches!(
-            append(&q, &issue("https://x/issues/123", "")),
+            append(&q, "", &issue("https://x/issues/123", "")),
+            Err(IssueError::Queued { task, .. }) if task == "T-001"
+        ));
+    }
+
+    #[test]
+    fn a_longer_archived_number_is_not_a_duplicate() {
+        let decisions = format!(
+            "{}\nnotes: https://x/issues/123\n",
+            queue::heading("T-001", "a")
+        );
+        assert!(append("", &decisions, &issue("https://x/issues/12", "")).is_ok());
+        assert!(matches!(
+            append("", &decisions, &issue("https://x/issues/123", "")),
             Err(IssueError::Queued { task, .. }) if task == "T-001"
         ));
     }
@@ -163,7 +187,7 @@ mod tests {
     #[test]
     fn a_body_fence_leaves_the_queue_parseable() {
         let body = format!("```\n{}", queue::heading("T-9", "x"));
-        let (_, next) = append("", &issue("https://x/issues/1", &body)).unwrap();
+        let (_, next) = append("", "", &issue("https://x/issues/1", &body)).unwrap();
         let blocks = queue::parse(&next).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].id, "T-001");
