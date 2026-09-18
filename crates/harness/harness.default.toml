@@ -39,6 +39,7 @@ source_root = ""
 contract_file = "src/schema.ts"
 test_file_suffix_re = ""
 test_decl_patterns = []
+test_glob = []
 source_ext = [".ts", ".tsx", ".js", ".mjs", ".cjs", ".sh", ".py"]
 
 harness_files = [

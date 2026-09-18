@@ -103,6 +103,7 @@ The source and its tests, which init sets when it detects a runner:
 - `layout.source_ext`: extensions the probes read as source. Default `[".ts", ".tsx", ".js", ".mjs", ".cjs", ".sh", ".py"]`.
 - `layout.test_file_suffix_re`: a regex naming a test file. Empty by default, and init writes the detected runner's.
 - `layout.test_decl_patterns`: how a test is declared, with `{name}` for its name. Empty by default, and init writes the detected runner's.
+- `layout.test_glob`: git pathspecs holding test code, which the verifier diffs as `__TEST_GLOB__`. Empty by default.
 
 The allowlists the `litter` and `rail-unenforced` probes read:
 
