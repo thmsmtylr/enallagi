@@ -195,6 +195,109 @@ fn the_tree_has_no_litter() {
     assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
 }
 
+// the conventions a repository already carries, then the install, then what `skills sync` writes
+fn conventional() -> (Repo, Config) {
+    const IDS: [&str; 8] = [
+        "tdd",
+        "ponytail",
+        "debugging",
+        "review-received",
+        "verify-before-done",
+        "review-requested",
+        "brainstorming",
+        "caveman-commit",
+    ];
+    let repo = Repo::new();
+    for name in [
+        "docs/guide.md",
+        "bench/run.ts",
+        "package-lock.json",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        "CODE_OF_CONDUCT.md",
+        "CHANGELOG.md",
+    ] {
+        repo.write(name, "x\n");
+    }
+
+    // docs/ and bench/ are this repository's own, so they are named per repository and not by the defaults
+    let mut toml = String::from(
+        "[layout]\nallowed_prefixes = [\"src/\", \"docs/\", \"bench/\", \".enallagi/\", \".claude/\", \".github/\"]\n",
+    );
+    for id in IDS {
+        // a path: source under src/ keeps the fixture off the network and off the litter list
+        repo.write(&format!("src/vendor/{id}/SKILL.md"), "body\n");
+        toml.push_str(&format!(
+            "\n[[skill]]\nid = \"{id}\"\nsource = \"path:src/vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"fixture\"\n"
+        ));
+    }
+    // a tracked harness directory keeps the install in the product's history, so what it writes is tracked
+    repo.write(".enallagi/enallagi.toml", &toml);
+    repo.commit_all("conventions");
+
+    enallagi::init::install(&repo.root, &enallagi::init::InitOpts::default()).expect("install");
+    repo.commit_all("harness");
+
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["skills", "sync"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("run enallagi skills sync");
+    assert!(out.status.success(), "{out:?}");
+    repo.commit_all("skills");
+    let tracked =
+        enallagi::git::git(&repo.root, &["ls-files", "--", ".enallagi/harness.lock"]).expect("ls");
+    assert!(!tracked.is_empty(), "harness.lock is untracked");
+
+    let cfg = config::load(&repo.root).expect("config");
+    (repo, cfg)
+}
+
+#[test]
+fn a_repository_of_conventions_has_no_litter() {
+    let (repo, cfg) = conventional();
+    let results = run(&repo, &cfg);
+    assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
+}
+
+#[test]
+fn a_file_added_after_the_install_is_litter() {
+    let (repo, cfg) = conventional();
+    repo.write("scratch.md", "x\n");
+    repo.commit_all("scratch");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "litter");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, "scratch.md");
+}
+
+#[test]
+fn no_adapter_install_reports_its_own_files() {
+    for name in enallagi::agent::presets().keys() {
+        let repo = Repo::new();
+        // tracked before the install, so everything the install writes lands in the product's history
+        repo.write(".enallagi/enallagi.toml", "");
+        repo.commit_all("harness dir");
+        enallagi::init::install(
+            &repo.root,
+            &enallagi::init::InitOpts {
+                adapter: Some(name.clone()),
+                dry_run: false,
+            },
+        )
+        .expect("install");
+        repo.commit_all("harness");
+        let cfg = config::load(&repo.root).expect("config");
+        let results = run(&repo, &cfg);
+        assert_eq!(
+            count(&results, "litter"),
+            Some(0),
+            "{name}\n{}",
+            render(&results)
+        );
+    }
+}
+
 #[test]
 fn the_seeded_learnings_all_predate_the_gate() {
     let (repo, cfg) = seeded();
