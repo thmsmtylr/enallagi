@@ -389,8 +389,6 @@ pub struct StageResult {
 }
 
 const POLL: Duration = Duration::from_millis(200);
-// how long a SIGTERM gets to be honoured before the child is killed outright
-const GRACE: Duration = Duration::from_secs(10);
 // a stale reset rolls to the same time tomorrow, so a further-out one isn't worth a day-long sleep
 const MAX_WAIT: u64 = 6 * 3600;
 
@@ -586,11 +584,11 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         }
         if stop_signal().is_some() {
             stopped = true;
-            break kill_group(&mut child, pgid)?;
+            break crate::gates::kill_group(&mut child, pgid)?;
         }
         if s.timeout.is_some_and(|t| started.elapsed() >= t) {
             timed_out = true;
-            break kill_group(&mut child, pgid)?;
+            break crate::gates::kill_group(&mut child, pgid)?;
         }
         if last_emit.elapsed() >= Duration::from_secs(1) {
             flush(&buffer, &mut sent, &s.stage, events);
@@ -619,37 +617,6 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
             .unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
     };
     Ok((exit, output, timed_out))
-}
-
-fn kill_group(
-    child: &mut std::process::Child,
-    pgid: u32,
-) -> Result<std::process::ExitStatus, AgentError> {
-    let group = format!("-{pgid}");
-    signal_group("TERM", &group);
-    let deadline = Instant::now() + GRACE;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            child.kill()?;
-            break child.wait()?;
-        }
-        std::thread::sleep(POLL);
-    };
-    // the agent exiting says nothing about a grandchild it left behind
-    signal_group("KILL", &group);
-    Ok(status)
-}
-
-// a group already gone prints `No such process` on stderr, which is not the stage's output to carry
-fn signal_group(name: &str, group: &str) {
-    let _ = Command::new("kill")
-        .args([&format!("-{name}"), group])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
 }
 
 fn drain<R: Read + Send + 'static>(

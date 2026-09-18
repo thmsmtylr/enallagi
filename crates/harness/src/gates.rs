@@ -945,7 +945,10 @@ fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result
     })
 }
 
-fn kill_group(child: &mut std::process::Child, pgid: u32) -> std::io::Result<ExitStatus> {
+pub(crate) fn kill_group(
+    child: &mut std::process::Child,
+    pgid: u32,
+) -> std::io::Result<ExitStatus> {
     signal(libc::SIGTERM, pgid);
     let deadline = Instant::now() + GRACE;
     let status = loop {
@@ -957,7 +960,7 @@ fn kill_group(child: &mut std::process::Child, pgid: u32) -> std::io::Result<Exi
         }
         std::thread::sleep(POLL);
     };
-    // the shell exiting says nothing about a grandchild it left behind
+    // the leader exiting says nothing about a grandchild it left behind
     signal(libc::SIGKILL, pgid);
     Ok(status)
 }
