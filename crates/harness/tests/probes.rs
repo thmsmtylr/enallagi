@@ -930,3 +930,26 @@ fn an_answered_rejection_is_quiet_at_done() {
     }
     assert_eq!(rejection_stale(&repo, &cfg), Vec::<String>::new());
 }
+
+#[test]
+fn check_red_says_nothing_for_a_timed_out_check() {
+    let (repo, mut cfg) = seeded();
+    cfg.check.force = "sleep 10".to_string();
+    cfg.check.timeout = "2s".to_string();
+    let report = enallagi::gates::check_delta(&repo.root, &cfg, true);
+    assert!(report.timed_out.is_some(), "{report:?}");
+    let outcome = report.outcome();
+    assert!(
+        !outcome.ran && !outcome.red,
+        "a hang read as a check that ran"
+    );
+    let ctx = ProbeCtx {
+        root: &repo.root,
+        cfg: &cfg,
+        check: Some(&outcome),
+        driver: false,
+    };
+    let results = probes::run_all(&ctx, &["check-red".to_string()]);
+    assert_eq!(count(&results, "check-red"), None);
+    assert_eq!(errors(&results), vec!["check-red"]);
+}

@@ -1385,18 +1385,13 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
 // `ran` means the check STARTED, not that it named what failed --
 // reporting ran:false there would turn a real finding into an ERROR
 fn check_outcome(root: &Path, cfg: &Config) -> CheckOutcome {
-    let report = gates::check_delta(root, cfg, true);
-    let started = !report.output.starts_with(NEVER_RAN)
-        // nested under turbo the check would recurse, so it is not run at all
-        && std::env::var_os("TURBO_HASH").is_none();
-    CheckOutcome {
-        ran: started,
-        red: report.red,
-        output: report.output,
+    let mut outcome = gates::check_delta(root, cfg, true).outcome();
+    // nested under turbo the check would recurse, so it is not run at all
+    if std::env::var_os("TURBO_HASH").is_some() {
+        outcome.ran = false;
     }
+    outcome
 }
-
-const NEVER_RAN: &str = "the check could not be run:";
 
 fn config_sha256(root: &Path) -> String {
     let mut hasher = Sha256::new();

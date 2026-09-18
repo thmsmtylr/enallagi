@@ -1,7 +1,10 @@
 //! The named checks the loop runs after a stage exits.
 
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::config::Config;
 use crate::events::{Kind, Writer};
@@ -338,6 +341,9 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
     }
 
     let report = check_delta(ctx.root, ctx.cfg, false);
+    if let Some(halt) = hung(ctx, &report) {
+        return halt;
+    }
     if report.accepts() {
         return pass("done, and the gate agrees.");
     }
@@ -753,6 +759,9 @@ pub fn in_scope(path: &str, globs: &[String]) -> bool {
     })
 }
 
+// the one sentinel `probes` also writes, so a caller can tell "never started" from "started and red"
+pub const NEVER_RAN: &str = "the check could not be run:";
+
 #[derive(Debug, Clone, Default)]
 pub struct CheckReport {
     pub red: bool,
@@ -761,11 +770,22 @@ pub struct CheckReport {
     pub unnamed: bool,
     pub output: String,
     pub exit: i32,
+    /// The halt reason when the check ran past `[check] timeout`. Neither red nor green.
+    pub timed_out: Option<String>,
 }
 
 impl CheckReport {
     pub fn accepts(&self) -> bool {
-        !self.red || (!self.unnamed && self.unforgiven.is_empty())
+        self.timed_out.is_none() && (!self.red || (!self.unnamed && self.unforgiven.is_empty()))
+    }
+
+    // `ran` means the check STARTED and finished: a hang that reported green would be a green nobody ran
+    pub fn outcome(&self) -> crate::probes::CheckOutcome {
+        crate::probes::CheckOutcome {
+            ran: self.timed_out.is_none() && !self.output.starts_with(NEVER_RAN),
+            red: self.red,
+            output: self.output.clone(),
+        }
     }
 
     // the last n non-empty lines of output, so a rejection can show what the check actually saw
@@ -783,37 +803,157 @@ impl CheckReport {
     }
 }
 
+struct Run {
+    exit: i32,
+    output: String,
+    timed_out: bool,
+}
+
+const POLL: Duration = Duration::from_millis(100);
+// how long a SIGTERM gets to be honoured before the group is killed outright
+const GRACE: Duration = Duration::from_secs(10);
+
+// the check gets its own process group so a build tool's children die with it, not with the shell alone
+fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result<Run> {
+    use std::os::unix::process::CommandExt;
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()?;
+    let pgid = child.id();
+
+    // stdout and stderr interleave into one buffer, and draining them keeps a chatty check off a full pipe
+    let buffer = Arc::new(Mutex::new(String::new()));
+    let mut readers = Vec::new();
+    if let Some(out) = child.stdout.take() {
+        readers.push(drain(out, Arc::clone(&buffer)));
+    }
+    if let Some(err) = child.stderr.take() {
+        readers.push(drain(err, Arc::clone(&buffer)));
+    }
+
+    let started = Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() >= timeout {
+            timed_out = true;
+            break kill_group(&mut child, pgid)?;
+        }
+        std::thread::sleep(POLL);
+    };
+    for reader in readers {
+        let _ = reader.join();
+    }
+    let output = match buffer.lock() {
+        Ok(text) => text.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    let exit = if timed_out {
+        124
+    } else {
+        use std::os::unix::process::ExitStatusExt;
+        status
+            .code()
+            .unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
+    };
+    Ok(Run {
+        exit,
+        output,
+        timed_out,
+    })
+}
+
+fn kill_group(child: &mut std::process::Child, pgid: u32) -> std::io::Result<ExitStatus> {
+    let group = format!("-{pgid}");
+    signal("TERM", &group);
+    let deadline = Instant::now() + GRACE;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            break child.kill().and_then(|()| child.wait())?;
+        }
+        std::thread::sleep(POLL);
+    };
+    // the shell exiting says nothing about a grandchild it left behind
+    signal("KILL", &group);
+    Ok(status)
+}
+
+// a group already gone prints `No such process` on stderr, which is not the loop's output to carry
+fn signal(name: &str, group: &str) {
+    let _ = Command::new("kill")
+        .args([&format!("-{name}"), group])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn drain<R: Read + Send + 'static>(
+    pipe: R,
+    buffer: Arc<Mutex<String>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(pipe);
+        let mut line = Vec::new();
+        while matches!(reader.read_until(b'\n', &mut line), Ok(n) if n > 0) {
+            if let Ok(mut text) = buffer.lock() {
+                text.push_str(&String::from_utf8_lossy(&line));
+            }
+            line.clear();
+        }
+    })
+}
+
 pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
     let command = if force {
         &cfg.check.force
     } else {
         &cfg.check.command
     };
-    let out = match Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(root)
-        .output()
-    {
-        Ok(out) => out,
+    let timeout = cfg
+        .check
+        .timeout_duration()
+        .unwrap_or(crate::config::DEFAULT_CHECK_TIMEOUT);
+    let run = match run_bounded(root, command, timeout) {
+        Ok(run) => run,
         Err(err) => {
             return CheckReport {
                 red: true,
                 unnamed: true,
-                // the one sentinel `probes` also writes, so a caller can tell "never started" from "started and red"
-                output: format!("the check could not be run: {err}"),
+                output: format!("{NEVER_RAN} {err}"),
                 exit: -1,
                 ..CheckReport::default()
             };
         }
     };
-    let exit = out.status.code().unwrap_or(-1);
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    if out.status.success() {
+    let Run {
+        exit,
+        output,
+        timed_out,
+    } = run;
+    if timed_out {
+        let reason = format!(
+            "the check ran past {}s and was killed with its process group: `{command}`",
+            timeout.as_secs()
+        );
+        return CheckReport {
+            output: format!("{reason}\n{output}"),
+            exit,
+            timed_out: Some(reason),
+            ..CheckReport::default()
+        };
+    }
+    if exit == 0 {
         return CheckReport {
             output,
             exit,
@@ -847,6 +987,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         forgiven,
         output,
         exit,
+        timed_out: None,
     }
 }
 
@@ -877,8 +1018,27 @@ fn baseline(path: &Path) -> Vec<String> {
         .collect()
 }
 
+// a hang is not a failing test: a red would send the task back to ready and buy the same hang again
+fn hung(ctx: &mut GateCtx, report: &CheckReport) -> Option<GateOutcome> {
+    let reason = report.timed_out.clone()?;
+    ctx.halts.push(reason.clone());
+    ctx.events.emit(Kind::Halt {
+        halt: ctx.task.clone().unwrap_or_else(|| "check".to_string()),
+        reason: reason.clone(),
+    });
+    Some(GateOutcome {
+        pass: false,
+        reason,
+        skip_rest: true,
+        halt: true,
+    })
+}
+
 fn check_gate(ctx: &mut GateCtx) -> GateOutcome {
     let report = check_delta(ctx.root, ctx.cfg, false);
+    if let Some(halt) = hung(ctx, &report) {
+        return halt;
+    }
     if report.accepts() {
         return pass(if report.red {
             format!(
@@ -974,12 +1134,18 @@ mod tests {
 
     impl Env {
         fn new(check_body: &str) -> Env {
+            Env::timed(check_body, "30m")
+        }
+
+        fn timed(check_body: &str, timeout: &str) -> Env {
             let repo = Repo::new();
             repo.write(".enallagi/.gitignore", "events.jsonl\n*.log\nlogs/\n");
             let cmd = repo.stub_check(check_body);
             repo.write(
                 "enallagi.toml",
-                &format!("[check]\ncommand = \"{cmd}\"\nfail_name = '\\(fail\\) (.+)$'\n"),
+                &format!(
+                    "[check]\ncommand = \"{cmd}\"\ntimeout = \"{timeout}\"\nfail_name = '\\(fail\\) (.+)$'\n"
+                ),
             );
             repo.commit_all("harness");
             let cfg = crate::config::load(&repo.root).expect("load enallagi.toml");
@@ -1108,6 +1274,80 @@ mod tests {
         let env = Env::new("exit 0\n");
         let r = check_delta(&env.repo.root, &env.cfg, false);
         assert!(!r.red && r.accepts());
+    }
+
+    #[test]
+    fn a_check_past_its_timeout_is_neither_red_nor_green() {
+        let mut env = Env::timed("sleep 10\n", "2s");
+        let started = Instant::now();
+        let r = check_delta(&env.repo.root, &env.cfg, false);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the gate waited"
+        );
+        assert!(r.timed_out.is_some(), "{r:?}");
+        assert!(!r.red && !r.accepts(), "{r:?}");
+
+        let out = run("check-delta", &mut env.ctx(Some("T-001"), None));
+        assert!(out.halt && !out.pass, "{out:?}");
+        assert!(
+            out.reason.contains("2s") && out.reason.contains("fakecheck"),
+            "{}",
+            out.reason
+        );
+        assert!(
+            env.events()
+                .iter()
+                .any(|e| matches!(&e.kind, Kind::Halt { reason, .. } if reason == &out.reason)),
+            "no halt event"
+        );
+        assert_eq!(env.halts, vec![out.reason]);
+    }
+
+    #[test]
+    fn a_timed_out_check_kills_its_process_group() {
+        let env = Env::timed("sleep 30 & echo $! >child.pid\nsleep 30\n", "4s");
+        let started = Instant::now();
+        let r = check_delta(&env.repo.root, &env.cfg, false);
+        assert!(r.timed_out.is_some(), "{r:?}");
+        // a grandchild still holding the pipe would hold the gate for its own 30 seconds
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the gate waited"
+        );
+        let pid = std::fs::read_to_string(env.repo.root.join("child.pid"))
+            .expect("the check wrote its child's pid")
+            .trim()
+            .to_string();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while alive(&pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(!alive(&pid), "the check's child {pid} outlived it");
+    }
+
+    fn alive(pid: &str) -> bool {
+        Command::new("kill")
+            .args(["-0", pid])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn a_done_verdict_over_a_hung_check_halts() {
+        let mut env = Env::timed("sleep 10\n", "2s");
+        env.queue("done", "src/a.ts", "none — harness");
+        env.repo.commit_all("queue");
+        let out = run("verdict", &mut env.ctx(Some("T-001"), None));
+        assert!(out.halt && !out.pass, "{out:?}");
+        assert!(out.reason.contains("2s"), "{}", out.reason);
+        assert!(
+            env.tasks_text().contains("status: done"),
+            "a hang forced the verdict back"
+        );
     }
 
     #[test]
