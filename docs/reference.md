@@ -67,7 +67,9 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 ## Configuration
 
 `.enallagi/enallagi.toml` deep-merges over `crates/harness/harness.default.toml`.
-Tables merge key by key and arrays merge whole. Unknown keys are refused per table.
+Tables merge key by key and arrays merge whole.
+
+Unknown keys are refused per table.
 The fields are declared in `crates/harness/src/config.rs`.
 
 | Table | Keys |
