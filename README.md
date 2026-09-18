@@ -97,7 +97,9 @@ A tree that matches no runner, or more than one, keeps the defaults and names th
 - `agent.preset` names the CLI to drive, or `custom` with your own `agent.command`.
 - `agent.model` and `agent.effort` set defaults. A role or a task can override both.
 - `agent.dangerously_skip_permissions` adds the preset's bypass flag to every lane. Default `false`.
+  `enallagi run --dangerously-skip-permissions` does the same for one run.
   A preset that declares no bypass flag refuses the run.
+  `run.start` records the choice as `permissions_skipped`, and `enallagi events` prints it.
 - `check.command` is the single command that decides green.
 - `check.force` runs the same check uncached. Left out, it follows `check.command`.
 - `check.timeout` bounds it and defaults to `30m`. A check that runs past it halts the run.

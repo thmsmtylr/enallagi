@@ -88,6 +88,9 @@ pub enum Command {
         /// Refuse a stage whose skills are not already vendored and locked; never fetch
         #[arg(long)]
         frozen: bool,
+        /// Add the agent preset's bypass flag to every lane, as [agent] dangerously_skip_permissions does
+        #[arg(long)]
+        dangerously_skip_permissions: bool,
     },
     /// Attach read-only to a running loop's event log and queue
     Watch,
@@ -217,6 +220,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             no_tui,
             dry_run,
             frozen,
+            dangerously_skip_permissions,
         } => run::run(&run::Args {
             iterations,
             pipelines: pipeline,
@@ -226,6 +230,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             no_tui,
             dry_run,
             frozen,
+            dangerously_skip_permissions,
         }),
         Command::Watch => watch::run(),
         Command::Probe { names } => probe::run(&probe::Args { names }),
@@ -266,7 +271,7 @@ mod tests {
         "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 21] = [
+    const FLAGS: [&str; 22] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
@@ -281,6 +286,7 @@ mod tests {
         "run --no-tui",
         "run --dry-run",
         "run --frozen",
+        "run --dangerously-skip-permissions",
         "pr --push",
         "gate --base",
         "eval --gate",

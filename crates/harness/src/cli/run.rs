@@ -17,6 +17,7 @@ pub struct Args {
     pub no_tui: bool,
     pub dry_run: bool,
     pub frozen: bool,
+    pub dangerously_skip_permissions: bool,
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
@@ -45,6 +46,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         budget_usd: args.budget_usd,
         budget_seconds: args.budget_seconds,
         budget_tokens: args.budget_tokens,
+        dangerously_skip_permissions: args.dangerously_skip_permissions,
     }
     .with_env_budgets();
 

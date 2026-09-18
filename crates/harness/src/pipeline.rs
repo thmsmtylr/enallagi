@@ -88,6 +88,8 @@ pub struct RunOpts {
     pub budget_seconds: Option<u64>,
     pub budget_usd: Option<f64>,
     pub budget_tokens: Option<u64>,
+    // overrides [agent] dangerously_skip_permissions only toward true
+    pub dangerously_skip_permissions: bool,
 }
 
 impl Default for RunOpts {
@@ -101,6 +103,7 @@ impl Default for RunOpts {
             budget_seconds: None,
             budget_usd: None,
             budget_tokens: None,
+            dangerously_skip_permissions: false,
         }
     }
 }
@@ -326,7 +329,8 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
 }
 
 pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
-    let cfg = config::load(root).map_err(|e| Refused(e.to_string()))?;
+    let mut cfg = config::load(root).map_err(|e| Refused(e.to_string()))?;
+    cfg.agent.dangerously_skip_permissions |= opts.dangerously_skip_permissions;
     let presets = agent::presets();
     config::validate(&cfg, &presets, &|role| role_source(root, &cfg, role)).map_err(|errs| {
         Refused(
@@ -427,6 +431,7 @@ impl<'a> Loop<'a> {
         self.emit(Kind::RunStart {
             config_sha256: config_sha256(self.root),
             pipeline: None,
+            permissions_skipped: self.cfg.agent.dangerously_skip_permissions,
         });
 
         // a backticked mention is prose about the marker; only a bare one halts the run
