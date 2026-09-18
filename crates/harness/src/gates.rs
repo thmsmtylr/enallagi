@@ -839,13 +839,26 @@ fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result
 
     let started = Instant::now();
     let mut timed_out = false;
+    let mut exited = None;
+    // the shell exiting is not the end: a grandchild holding the pipe blocks the join below
     let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
+        if exited.is_none() {
+            exited = child.try_wait()?;
+        }
+        if let Some(status) = exited {
+            if readers.iter().all(|r| r.is_finished()) {
+                break status;
+            }
         }
         if started.elapsed() >= timeout {
             timed_out = true;
-            break kill_group(&mut child, pgid)?;
+            break match exited {
+                Some(status) => {
+                    signal("KILL", &format!("-{pgid}"));
+                    status
+                }
+                None => kill_group(&mut child, pgid)?,
+            };
         }
         std::thread::sleep(POLL);
     };
@@ -1324,6 +1337,20 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         assert!(!alive(&pid), "the check's child {pid} outlived it");
+    }
+
+    #[test]
+    fn a_grandchild_on_the_pipe_is_bound_by_timeout() {
+        let env = Env::timed("sleep 25 & exit 0\n", "2s");
+        let started = Instant::now();
+        let r = check_delta(&env.repo.root, &env.cfg, false);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the gate waited"
+        );
+        let reason = r.timed_out.as_deref().unwrap_or_default();
+        assert!(reason.contains("2s"), "{r:?}");
+        assert!(!r.red && !r.accepts(), "{r:?}");
     }
 
     fn alive(pid: &str) -> bool {
