@@ -1,14 +1,8 @@
 target/
 
-# Vendored skills are other people's work, fetched from harness.lock by `harness skills sync` and
-# never redistributed here. `running-the-loop` is installed by `harness init` on dogfood branches.
+# Vendored skills are other people's work, fetched from harness.lock by `enallagi skills sync` and
+# never redistributed here. `running-the-loop` is installed by `enallagi init` on dogfood branches.
 .claude/skills/*
 !.claude/skills/running-the-loop/
 
-# Scratch state `harness` writes here even when no instance is installed.
-.harness/events.jsonl
-.harness/*.log
-.harness/logs/
-.harness/worktrees/
-.harness/loop.pid
-.harness/run/
+.DS_Store
