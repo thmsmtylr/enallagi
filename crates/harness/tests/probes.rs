@@ -534,6 +534,35 @@ fn frictions_sharing_words_do_not_collapse() {
     );
 }
 
+// one trap written twice, the second far longer: over the whole line's words the pair overlaps 0.2048
+const LONG_REPEAT_FIXTURE: &str = "
+## fixture — a stale test binary
+friction: `sed -i.bak` then `mv` back restores the original mtime, so cargo reused the test binary built from the mutation and the suite failed on an assertion the source no longer carried. Nothing tells a stale test binary from a real red; `touch` on the file fixed it.
+next: nothing
+
+## fixture — the same trap, explained at length
+friction: restoring the mutated source with `cp` left an older mtime than the test binary, the exact trap T-007's entry recorded, and `touch` on the file was needed before the green re-run meant anything. That is the second occurrence of a stale test binary reading as a real verdict and it is now owed a .enallagi/LEARNINGS.md line, which an implementer cannot write: nothing in the check distinguishes a rebuilt test binary from a reused one.
+next: nothing
+";
+
+#[test]
+fn a_longer_rewrite_of_one_friction_is_reported() {
+    let (repo, cfg) = seeded();
+    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "PROGRESS.md");
+    let before = fs::read_to_string(&path).expect("progress").lines().count();
+    append(&repo, "PROGRESS.md", LONG_REPEAT_FIXTURE);
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "friction-repeat");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, ".enallagi/PROGRESS.md");
+    assert_eq!(found[0].line, before + 7);
+    assert!(
+        found[0].message.contains("recorded 2 times"),
+        "{}",
+        found[0].message
+    );
+}
+
 fn with_driver(body: &str) -> (Repo, Config) {
     let (repo, cfg) =
         seeded_with("[layout]\ndriver_command = \"$ENALLAGI_ROOT/src/fakedriver.sh\"\n");
