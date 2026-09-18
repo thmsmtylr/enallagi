@@ -1600,3 +1600,21 @@ fn issue_names_the_gh_command_that_failed() {
         assert_eq!(f.porcelain(), "", "{gh}");
     }
 }
+
+#[test]
+fn reference_config_links_the_guide() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let reference =
+        std::fs::read_to_string(root.join("docs/reference.md")).expect("docs/reference.md");
+    let section = reference
+        .split("\n## Configuration\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("docs/reference.md has a Configuration section");
+    let rows: Vec<&str> = section.lines().filter(|l| l.starts_with('|')).collect();
+    assert!(rows.is_empty(), "Configuration keeps a table: {rows:?}");
+    assert!(
+        section.contains("](configuration.md)"),
+        "Configuration never links configuration.md"
+    );
+}

@@ -72,19 +72,7 @@ Tables merge key by key and arrays merge whole.
 Unknown keys are refused per table.
 The fields are declared in `crates/harness/src/config.rs`.
 
-| Table | Keys |
-| --- | --- |
-| `[agent]` | `preset` (default `claude`), `command`, `model`, `effort`, `usage`, `rate_limit_pattern`, `dangerously_skip_permissions` |
-| `[agent.<role>]` | `preset`, `command`, `model`, `effort`, `usage`, for `scout`, `adjudicator`, `implementer`, `verifier` or `researcher` |
-| `[check]` | `command`, `force`, `fail_name` (group 1 is the failing test's name), `timeout` (default `30m`) |
-| `[queue]` | `drain` (default `3`), `turns_per_block` (default `25`), `proposed_rounds` (default `6`) |
-| `[layout]` | `harness_dir`, `skills_dir`, `spec`, `rows_heading`, `rows_end_heading`, `context_file`, `pointer_files`, `driver_command`, `learnings_cap`, `skill_invocation` |
-| `[layout]` tests | `source_root`, `source_ext`, `contract_file`, `test_file_suffix_re`, `test_decl_patterns` |
-| `[layout]` allowlists | `harness_files`, `harness_globs`, `allowed_prefixes`, `docs`, `harness_allow`, `machinery` |
-| `[[pipeline]]` | `name`, `when`, `stages`, `end_after_dry_rounds` |
-| `[[stage]]` | `name`, `role` or `command`, `turns` (default `40`), `timeout`, `env`, `post` |
-| `[[skill]]` | `id`, `source`, `path`, `rev`, `gate`, `why` |
-| `[[role]]` | `name`, `source`, `path`, `rev` |
+Every table and key, with its default, is in [configuration.md](configuration.md).
 
 A task's own `model:` and `effort:` lines win over `[agent]` and `[agent.<role>]`.
 
