@@ -244,8 +244,33 @@ fn ends(events: &[Event]) -> Vec<&Kind> {
 }
 
 fn plan_of(repo: &Repo) -> String {
+    plan_named(repo, &[])
+}
+
+fn plan_named(repo: &Repo, pipelines: &[&str]) -> String {
     let cfg = enallagi::config::load(&repo.root).expect("load");
-    pipeline::plan(&repo.root, &cfg).expect("plan")
+    let names: Vec<String> = pipelines.iter().map(|p| p.to_string()).collect();
+    pipeline::plan(&repo.root, &cfg, &names).expect("plan")
+}
+
+fn headings(plan: &str) -> Vec<&str> {
+    plan.lines()
+        .filter(|l| l.starts_with("=== pipeline"))
+        .collect()
+}
+
+#[test]
+fn a_dry_plan_skips_a_pipeline_left_unnamed() {
+    let r = repo(&base_toml(""), REVIEW_AND_READY_TASKS);
+    let all = plan_of(&r);
+    assert_eq!(headings(&all).len(), 2, "{all}");
+
+    let filtered = plan_named(&r, &["task"]);
+    assert_eq!(
+        headings(&filtered),
+        ["=== pipeline task (queue.takeable) ==="],
+        "{filtered}"
+    );
 }
 
 #[test]

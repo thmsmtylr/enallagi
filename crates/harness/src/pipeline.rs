@@ -259,13 +259,16 @@ fn level_word(level: &Option<String>) -> &str {
     level.as_deref().unwrap_or("default")
 }
 
-pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
+pub fn plan(root: &Path, cfg: &Config, pipelines: &[String]) -> Result<String, ConfigError> {
     let presets = agent::presets();
     let mut out = String::new();
     let mut scouting = false;
     let mut warnings = Vec::new();
 
     for pipeline in cfg.pipeline.iter() {
+        if !pipelines.is_empty() && !pipelines.contains(&pipeline.name) {
+            continue;
+        }
         let when = config::parse_when(&pipeline.when)?;
         if !holds(root, cfg, &when, &mut warnings) {
             continue;
@@ -361,7 +364,10 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
     }
 
     if opts.dry_run {
-        print!("{}", plan(root, &cfg).map_err(|e| Refused(e.to_string()))?);
+        print!(
+            "{}",
+            plan(root, &cfg, &opts.pipelines).map_err(|e| Refused(e.to_string()))?
+        );
         return Ok(Digest::default());
     }
 
