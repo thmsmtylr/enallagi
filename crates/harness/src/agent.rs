@@ -53,6 +53,9 @@ pub struct Preset {
     pub model_flag: Option<String>,
     #[serde(default)]
     pub effort_flag: Option<String>,
+    // kept out of argv so a lane runs with the agent's permission checks unless the operator asks otherwise
+    #[serde(default)]
+    pub bypass_flag: Option<String>,
 }
 
 pub type Presets = BTreeMap<String, Preset>;
@@ -69,6 +72,8 @@ pub enum AgentError {
     Stopped,
     #[error("the agent command is empty")]
     EmptyCommand,
+    #[error("preset {0} declares no bypass flag, so dangerously_skip_permissions cannot apply")]
+    NoBypassFlag(String),
 }
 
 const PRESET_FILES: &[(&str, &str)] = &[
@@ -220,6 +225,7 @@ pub fn resolve_task(
             env: BTreeMap::new(),
             model_flag: None,
             effort_flag: None,
+            bypass_flag: None,
         }
     } else {
         let mut preset = presets
@@ -242,6 +248,13 @@ pub fn resolve_task(
     }
     if !matches!(preset.turn_cap, TurnCap::Time) {
         drop_token(&mut argv, "{timeout}");
+    }
+    if cfg.dangerously_skip_permissions {
+        let flag = preset
+            .bypass_flag
+            .clone()
+            .ok_or_else(|| AgentError::NoBypassFlag(preset.name.clone()))?;
+        argv.push(flag);
     }
     if let (Some(flag), Some(model)) = (&preset.model_flag, model) {
         argv.push(flag.clone());
@@ -694,6 +707,55 @@ mod tests {
                 "{name} argv missing {{prompt}}"
             );
         }
+    }
+
+    #[test]
+    fn no_preset_argv_carries_its_bypass_flag() {
+        let presets = presets();
+        let expected = [
+            ("claude", "--dangerously-skip-permissions"),
+            ("codex", "--dangerously-bypass-approvals-and-sandbox"),
+            ("gemini", "--yolo"),
+            ("qwen", "--yolo"),
+            ("kimi", "--yolo"),
+            ("omp", "--yolo"),
+        ];
+        for (name, flag) in expected {
+            assert_eq!(presets[name].bypass_flag.as_deref(), Some(flag), "{name}");
+        }
+        for (name, preset) in &presets {
+            if let Some(flag) = &preset.bypass_flag {
+                assert!(!preset.argv.contains(flag), "{name} argv carries {flag}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_bypass_flag_rides_only_when_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = crate::config::load(dir.path()).unwrap().agent;
+        cfg.preset = "claude".into();
+        let off = resolve(&cfg, "scout", &presets()).unwrap();
+        assert!(!off
+            .argv
+            .iter()
+            .any(|w| w == "--dangerously-skip-permissions"));
+        cfg.dangerously_skip_permissions = true;
+        let on = resolve(&cfg, "scout", &presets()).unwrap();
+        assert!(on
+            .argv
+            .iter()
+            .any(|w| w == "--dangerously-skip-permissions"));
+    }
+
+    #[test]
+    fn no_bypass_flag_refuses_the_skip() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = crate::config::load(dir.path()).unwrap().agent;
+        cfg.preset = "pi".into();
+        cfg.dangerously_skip_permissions = true;
+        let err = resolve(&cfg, "scout", &presets()).err().expect("refused");
+        assert!(err.to_string().contains("pi"), "{err}");
     }
 
     #[test]

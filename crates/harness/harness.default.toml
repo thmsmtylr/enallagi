@@ -4,6 +4,8 @@
 [agent]
 preset = "claude"
 rate_limit_pattern = "hit your session limit"
+# adds the preset's bypass_flag to every lane; a preset that declares none refuses the run.
+dangerously_skip_permissions = false
 
 # command decides whether the tree is green; force is the same check uncached; fail_name's group 1 is the failing test's name.
 [check]

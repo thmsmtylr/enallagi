@@ -70,6 +70,10 @@ pub enum ConfigError {
     UnknownPreset(String),
     #[error("agent preset custom needs a command list ({0})")]
     CustomWithoutCommand(String),
+    #[error(
+        "agent preset {0} declares no bypass flag, so dangerously_skip_permissions cannot apply"
+    )]
+    NoBypassFlag(String),
     #[error("check.command is empty")]
     EmptyCheck,
     #[error("[agent.{role}] is not a role ({})", ROLE_NAMES.join(", "))]
@@ -120,6 +124,7 @@ pub struct AgentConfig {
     pub effort: Option<String>,
     pub usage: Option<UsagePaths>,
     pub rate_limit_pattern: String,
+    pub dangerously_skip_permissions: bool,
     #[serde(flatten)]
     pub roles: BTreeMap<String, AgentOverride>,
 }
@@ -672,6 +677,7 @@ pub fn validate(
         }
     }
     let mut checked_roles: BTreeSet<&str> = BTreeSet::new();
+    let mut unbypassed: BTreeSet<String> = BTreeSet::new();
 
     for st in &cfg.stage {
         match (&st.role, &st.command) {
@@ -716,6 +722,13 @@ pub fn validate(
         let preset = over
             .and_then(|o| o.preset.clone())
             .unwrap_or_else(|| cfg.agent.preset.clone());
+        let bypass = presets.get(&preset).map(|p| p.bypass_flag.is_some());
+        if cfg.agent.dangerously_skip_permissions
+            && (preset == "custom" || bypass == Some(false))
+            && unbypassed.insert(preset.clone())
+        {
+            errs.push(ConfigError::NoBypassFlag(preset.clone()));
+        }
         if preset == "custom" {
             let command = over
                 .and_then(|o| o.command.as_ref())
@@ -1179,6 +1192,26 @@ mod tests {
         c.agent.preset = "aider".into();
         let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
         assert!(errs.iter().any(|e| e.to_string().contains("timeout")));
+    }
+
+    #[test]
+    fn a_skip_with_no_bypass_flag_is_refused() {
+        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        c.agent.dangerously_skip_permissions = true;
+        assert!(validate(&c, &crate::agent::presets(), &|_| Some(String::new())).is_ok());
+        c.agent.roles.insert(
+            "scout".into(),
+            AgentOverride {
+                preset: Some("pi".into()),
+                ..AgentOverride::default()
+            },
+        );
+        let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.to_string().contains("pi declares no bypass flag")),
+            "{errs:?}"
+        );
     }
 
     #[test]

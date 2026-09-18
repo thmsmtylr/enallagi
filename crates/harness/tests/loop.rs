@@ -2367,3 +2367,46 @@ fn a_stopped_stage_still_records_its_end() {
         at(|k| matches!(k, Kind::RunEnd { .. })).unwrap_or_else(|| panic!("no run.end: {log:#?}"));
     assert!(start < end && end < run_end, "{log:#?}");
 }
+
+fn claude_args_repo(key: &str) -> Repo {
+    let toml = base_toml("").replacen(
+        "preset = \"custom\"\ncommand = [\"./src/fakeagent.sh\", \"{prompt}\", \"{turns}\"]",
+        &format!("preset = \"claude\"\n{key}command = [\"./src/fakeargs.sh\", \"{{prompt}}\"]"),
+        1,
+    );
+    let r = repo(&toml, "");
+    script(
+        &r,
+        "src/fakeargs.sh",
+        &format!("printf '%s\\n' \"$*\" >>args.txt\n{QUIET}"),
+    );
+    r.commit_all("args");
+    r
+}
+
+#[test]
+fn a_claude_lane_skips_no_permission_by_default() {
+    let r = claude_args_repo("");
+    let _ = try_go(&r, &opts(1));
+    let args = std::fs::read_to_string(r.root.join("args.txt")).expect("the scout ran");
+    assert!(!args.contains("--dangerously-skip-permissions"), "{args}");
+}
+
+#[test]
+fn the_skip_key_adds_the_bypass_flag() {
+    let r = claude_args_repo("dangerously_skip_permissions = true\n");
+    let _ = try_go(&r, &opts(1));
+    let args = std::fs::read_to_string(r.root.join("args.txt")).expect("the scout ran");
+    assert!(args.contains("--dangerously-skip-permissions"), "{args}");
+}
+
+#[test]
+fn a_skip_with_no_bypass_flag_refuses_the_run() {
+    let extra = "dangerously_skip_permissions = true\n";
+    let toml = base_toml("").replacen("[agent]\n", &format!("[agent]\n{extra}"), 1);
+    let r = repo(&toml, TASKS);
+    let (digest, events) = try_go(&r, &opts(1));
+    let err = digest.expect_err("the run is refused");
+    assert!(err.to_string().contains("custom"), "{err}");
+    assert!(ends(&events).is_empty(), "nothing may spawn");
+}

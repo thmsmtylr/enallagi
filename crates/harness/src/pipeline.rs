@@ -1538,5 +1538,6 @@ fn shell_preset() -> Preset {
         env: BTreeMap::new(),
         model_flag: None,
         effort_flag: None,
+        bypass_flag: None,
     }
 }
