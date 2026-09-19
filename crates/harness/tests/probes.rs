@@ -1155,6 +1155,21 @@ fn a_verdict_word_inside_a_rejection_is_not_read() {
 }
 
 #[test]
+fn a_verdict_word_later_in_a_rejection_is_not_read() {
+    let (repo, cfg) = seeded();
+    let rejection =
+        "  REJECTED: the diff is out of scope. Only three criteria Passed (verifier, 2026-09-18).\n";
+    append(
+        &repo,
+        "TASKS.md",
+        &reviewed_block("T-002", "review", rejection),
+    );
+    let found = rejection_stale(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("T-002"), "{}", found[0]);
+}
+
+#[test]
 fn a_mid_line_answer_silences_a_rejection() {
     let (repo, cfg) = seeded();
     let block = format!(

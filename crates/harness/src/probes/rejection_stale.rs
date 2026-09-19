@@ -11,17 +11,21 @@ fn outside_code(notes: &str) -> String {
     notes.split('`').step_by(2).collect::<Vec<_>>().join(" ")
 }
 
-// a verdict names its sentence: `REJECTED: the IMPLEMENTER left ...` is one rejection, not an answer
+// a verdict opens its sentence: `Only three criteria Passed` inside a rejection is not an answer
 fn latest_verdict(notes: &str) -> Option<&'static str> {
     let text = outside_code(notes);
     text.split('\n')
         .flat_map(|line| line.split(". "))
         .filter_map(|sentence| {
+            let opening = sentence.trim_start();
+            let opening = opening
+                .strip_prefix("notes:")
+                .unwrap_or(opening)
+                .trim_start();
             VERDICTS
                 .iter()
-                .filter_map(|word| sentence.find(word).map(|at| (at, *word)))
-                .min_by_key(|(at, _)| *at)
-                .map(|(_, word)| word)
+                .find(|word| opening.starts_with(**word))
+                .copied()
         })
         .last()
 }
