@@ -190,6 +190,14 @@ pub fn preflight(root: &Path) -> anyhow::Result<()> {
     if lines.is_empty() {
         return Ok(());
     }
+    if cfg.check.command.trim().is_empty() {
+        return Err(Refused(format!(
+            "enallagi.toml sets no check.command, so no lane can be told a check. \
+             Set it, then run `enallagi init`.\n{}",
+            lines.join("\n")
+        ))
+        .into());
+    }
     Err(Refused(format!(
         "the install does not match enallagi.toml, so every lane would be told the wrong check. \
          Run `enallagi init`, then run again.\n{}",

@@ -349,6 +349,32 @@ fn run_refuses_an_unset_check() {
 }
 
 #[test]
+fn run_names_an_unset_check_as_unset() {
+    let repo = enallagi::fixture::Repo::new();
+    let harness = |args: &[&str]| {
+        enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+            .args(args)
+            .current_dir(&repo.root)
+            .output()
+            .expect("run enallagi")
+    };
+    let out = harness(&["init"]);
+    assert!(out.status.success(), "{out:?}");
+
+    let out = harness(&["run", "--no-tui", "--iterations", "1"]);
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let first = stderr.lines().next().unwrap_or_default();
+    assert!(
+        first.contains("check.command") && first.contains("enallagi.toml"),
+        "{stderr}"
+    );
+    assert!(!first.contains("wrong check"), "{stderr}");
+    let log = std::fs::read_to_string(repo.root.join(".enallagi/events.jsonl")).unwrap_or_default();
+    assert!(!log.contains("stage.start"), "{log}");
+}
+
+#[test]
 fn the_reference_tables_live_in_docs() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
