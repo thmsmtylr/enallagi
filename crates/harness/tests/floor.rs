@@ -1077,6 +1077,16 @@ fn each_fail_name_example_captures_its_line() {
             .unwrap_or_else(|| panic!("{} has no fail_name example", runner.name));
         let failing = item(lines[at + 1], "failing line").expect(lines[at + 1]);
         let captures = item(lines[at + 2], "captures").expect(lines[at + 2]);
+        let fixture = repo_root()
+            .join("crates/harness/tests/fixtures/runners")
+            .join(&runner.name)
+            .join("fail.txt");
+        assert!(
+            read(&fixture).lines().any(|l| l == failing),
+            "{}: {failing} is not a line of {}",
+            runner.name,
+            fixture.display()
+        );
         let caught = re(&runner.fail_name)
             .captures(&failing)
             .and_then(|c| c.get(1))

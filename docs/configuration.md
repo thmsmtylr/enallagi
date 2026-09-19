@@ -27,50 +27,51 @@ Re-run `enallagi init` after every edit, as [setup.md](setup.md) says.
 ### `check.fail_name`
 
 Each runner init detects writes the pattern below.
-Each pattern is shown beside the failing line it was checked against, and the name it captures.
+Each pattern is shown beside a failing line from a captured run, and the name it captures.
 `floor.rs::each_fail_name_example_captures_its_line` re-checks every one against `crates/harness/runners/`.
+It also checks each failing line is a whole line of `crates/harness/tests/fixtures/runners/<runner>/fail.txt`.
 
-cargo test, from `cargo test -q` under cargo 1.98.1:
+cargo test, from `cargo test` under cargo 1.98.1:
 
 - fail_name: `^(?:test )?(\S+) (?:\.\.\. |--- )FAILED$`
-- failing line: `parses_a_date --- FAILED`
-- captures: `parses_a_date`
+- failing line: `test tests::a_sum_is_wrong ... FAILED`
+- captures: `tests::a_sum_is_wrong`
 
 node --test, from node v26.7.0:
 
 - fail_name: `^✖ (.+?) \([0-9.]+m?s\)$`
-- failing line: `✖ parses a date (1.251375ms)`
-- captures: `parses a date`
+- failing line: `✖ a sum is wrong (0.572958ms)`
+- captures: `a sum is wrong`
 
 bun test, from bun 1.3.14:
 
 - fail_name: `\(fail\) (.+?)(?: \[[0-9.]+m?s\])?$`
-- failing line: `(fail) parses a date [0.08ms]`
-- captures: `parses a date`
+- failing line: `(fail) a sum is wrong [0.14ms]`
+- captures: `a sum is wrong`
 
-vitest, a line in vitest's default reporter format, not run here:
+vitest, from `vitest run` under vitest 3.2.7:
 
 - fail_name: `^\s*×\s(.+?)\s+[0-9.]+m?s$`
-- failing line: `   × parses a date 3ms`
-- captures: `parses a date`
+- failing line: `   × a sum is wrong 3ms`
+- captures: `a sum is wrong`
 
-jest, a line in jest's failure summary format, not run here:
+jest, from jest 30.5.0:
 
 - fail_name: `^ {2}● (C|Co|Con|Cons|Conso|Consol|(?:[^C]|C[^o]|Co[^n]|Con[^s]|Cons[^o]|Conso[^l]|Consol[^e]|Console.).*)$`
-- failing line: `  ● date › parses a date`
-- captures: `date › parses a date`
+- failing line: `  ● a sum is wrong`
+- captures: `a sum is wrong`
 
-pytest, a line in pytest's short test summary format, not run here:
+pytest, from pytest 8.4.2:
 
 - fail_name: `^FAILED \S+::(\S+)`
-- failing line: `FAILED tests/test_date.py::test_parses_a_date - AssertionError`
-- captures: `test_parses_a_date`
+- failing line: `FAILED tests/test_sum.py::test_a_sum_is_wrong - assert (1 + 1) == 3`
+- captures: `test_a_sum_is_wrong`
 
 go test, from go1.26.2:
 
 - fail_name: `^\s*--- FAIL: (\S+) \([0-9.]+m?s\)$`
-- failing line: `--- FAIL: TestParsesADate (0.00s)`
-- captures: `TestParsesADate`
+- failing line: `--- FAIL: TestSumIsWrong (0.00s)`
+- captures: `TestSumIsWrong`
 
 ## `[queue]`
 
