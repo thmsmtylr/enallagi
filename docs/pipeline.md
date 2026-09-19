@@ -13,9 +13,11 @@ Keeping seven of the eight shipped skills means declaring all seven.
 
 Leave its `[[skill]]` table out of the list and run `enallagi skills sync`.
 
-Sync resolves what is declared and never prunes what is not.
-The vendored copy under the skills directory stays, and so does its entry in `harness.lock`.
-Delete both by hand. `sync_leaves_a_removed_skill_vendored` holds this in place.
+Sync deletes the vendored copy under the skills directory and drops its entry in `harness.lock`.
+It prints `<id>  removed` for each one.
+A directory with no lock entry is never deleted, so a skill placed there by hand survives.
+`enallagi skills check` and `sync --frozen` remove nothing.
+`sync_prunes_a_removed_skill` holds this in place.
 
 A shipped role names each shipped skill as `{{skill:<id>}}`.
 Removing one of those refuses the config until the role that names it is replaced.

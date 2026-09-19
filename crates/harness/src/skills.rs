@@ -127,6 +127,36 @@ pub fn skills_dir(cfg: &Config, preset: Option<&Preset>) -> PathBuf {
     Path::new(&cfg.layout.harness_dir).join("skills")
 }
 
+// only a locked id is pruned, so a skill placed in a preset's skills directory by hand survives
+pub fn prune(
+    root: &Path,
+    cfg: &Config,
+    preset: Option<&Preset>,
+) -> Result<Vec<String>, SkillError> {
+    let mut lock = read_lock(root, &cfg.layout.harness_dir)?;
+    let (gone, kept): (Vec<LockEntry>, Vec<LockEntry>) = lock
+        .skill
+        .into_iter()
+        .partition(|e| !cfg.skill.iter().any(|s| s.id == e.id));
+    lock.skill = kept;
+    if gone.is_empty() {
+        return Ok(Vec::new());
+    }
+    let base = root.join(skills_dir(cfg, preset));
+    for e in &gone {
+        // a hand-edited lock id becomes a directory to delete, so it gets the same check as a declared one
+        if !valid_id(&e.id) {
+            return Err(SkillError::BadId { id: e.id.clone() });
+        }
+        match fs::remove_dir_all(base.join(&e.id)) {
+            Err(err) if err.kind() != std::io::ErrorKind::NotFound => return Err(err.into()),
+            _ => {}
+        }
+    }
+    write_lock(root, &cfg.layout.harness_dir, &lock)?;
+    Ok(gone.into_iter().map(|e| e.id).collect())
+}
+
 pub struct ResolveOpts {
     pub frozen: bool,
     pub cache_dir: PathBuf,

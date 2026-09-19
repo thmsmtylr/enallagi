@@ -2749,19 +2749,28 @@ fn locked_rev(r: &Repo, id: &str) -> Option<String> {
         .map(|e| e.rev.clone().unwrap_or_default())
 }
 
-// docs/pipeline.md says so: sync resolves what is declared and never prunes what is not
 #[test]
-fn sync_leaves_a_removed_skill_vendored() {
+fn sync_prunes_a_removed_skill() {
     let r = synced_extra_skill();
-    let vendored = r.root.join(".enallagi/skills/security/SKILL.md");
-    assert!(vendored.is_file());
+    let dir = r.root.join(".enallagi/skills/security");
+    assert!(dir.join("SKILL.md").is_file());
+    r.write(".enallagi/skills/mine/SKILL.md", "# mine\n");
 
     write_toml(&r, &base_toml(""));
+    for cmd in [&["skills", "check"][..], &["skills", "sync", "--frozen"]] {
+        let (code, out) = harness(&r.root, cmd);
+        assert_eq!(code, 0, "{out}");
+        assert!(dir.is_dir(), "{cmd:?} pruned");
+    }
     let (code, out) = harness(&r.root, &["skills", "sync"]);
     assert_eq!(code, 0, "{out}");
-    assert!(!out.contains("security"), "{out}");
-    assert!(vendored.is_file(), "the vendored copy was removed");
-    assert_eq!(locked_rev(&r, "security").as_deref(), Some("v1"));
+    assert!(out.lines().any(|l| l == "security  removed"), "{out}");
+    assert!(!dir.exists(), "the vendored copy was kept");
+    assert_eq!(locked_rev(&r, "security"), None);
+    assert!(
+        r.root.join(".enallagi/skills/mine/SKILL.md").is_file(),
+        "an unlocked skill was pruned"
+    );
 }
 
 #[test]
