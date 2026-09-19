@@ -22,4 +22,11 @@ notes: <what a reviewer should scrutinise; the implementer's and the verifier's 
 | `attended: true` | the task needs a human credential. No launcher auto-selects it. |
 | `probe:` `command:` `output:` | required on a `proposed` block. The `anchored` rail: a finding with none of these is killed unread. |
 
+A new block takes one past the highest id ever used. That count covers:
+
+- every `## [T-nnn]` heading in the queue and in __ENALLAGI_DIR__/DECISIONS.md
+- every id named on a `## Rejected findings` line
+
+A killed id is spent and never taken again. `enallagi probe` → `queue-hygiene` reports a block that reuses one.
+
 A block is at most about thirty minutes of human-equivalent work. Split it if it is more.

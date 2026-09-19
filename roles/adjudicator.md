@@ -19,9 +19,9 @@ For each block with `status: proposed`, in file order:
    - **Uncriteriable** — you cannot write criteria objective enough for an agent that has read only __CONTEXT_FILE__, __SPEC__, __ENALLAGI_DIR__/LEARNINGS.md and the block. That is a kill, not a `needs-spec`.
 4. **The case that is neither a kill nor a task: a finding whose fix requires a change to __SPEC__ or __ENALLAGI_DIR__/RAILS.md. Halt the run for a human.** Leave the block at `proposed`, add one line to its `notes:` naming the document and what it would have to say, and print the halt with the block's id. Never edit either document yourself, and never soften the finding into a task that routes around the change.
 5. **Promote.** Write `scope:` as the globs a fix touches and nothing wider (`one-scope`), `rows:` if the block left it open, and criteria that each name the command whose output changes when the task is done. Then set `status: ready`. More than about thirty minutes of human-equivalent work is two blocks, not one (`minutes-not-hours`).
-6. **Kill.** Delete the proposed block from __ENALLAGI_DIR__/TASKS.md and append exactly one line to `## Rejected findings`, in the shape below. Prose with no command is not a refutation and is not a kill line (`citable`). One line per kill, appended; never edit or delete a line already there.
+6. **Kill.** Delete the proposed block from __ENALLAGI_DIR__/TASKS.md and append exactly one line to `## Rejected findings`, in the shape below. The line opens with the killed block's id, which spends that number for good: the next id is one past the highest ever used, over `## [T-` headings in __ENALLAGI_DIR__/TASKS.md and __ENALLAGI_DIR__/DECISIONS.md and every id on a `## Rejected findings` line, and `queue-hygiene` reports a block that reuses one. Prose with no command is not a refutation and is not a kill line (`citable`). One line per kill, appended; never edit or delete a line already there.
 ```
-- [YYYY-MM-DD] <the claim in one sentence> — refuted by `<command>`: <the output that refutes it>
+- [YYYY-MM-DD] T-nnn claimed <the claim in one sentence> — refuted by `<command>`: <the output that refutes it>
 ```
 Hard rules, each naming the rail it serves:
 - You never write a proposal. Something the probes missed goes in your report as an open question, never as a block (`anchored`).

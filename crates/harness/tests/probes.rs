@@ -869,6 +869,36 @@ fn a_scope_directory_is_reported_as_matching_none() {
     );
 }
 
+#[test]
+fn a_killed_id_reused_is_reported() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "DECISIONS.md",
+        "\n- [2026-09-01] T-002 claimed a thing — refuted by `x`: y, and T-004 already carries it\n",
+    );
+    append(
+        &repo,
+        "TASKS.md",
+        "\n## [T-002] a later finding under the killed number\nscope: src/a.rs\nblockedBy: none\nstatus: ready\n\n## [T-003] done under a killed number before the rule\nscope: src/b.rs\nblockedBy: none\nstatus: done\n\n## [T-004] the block the kill line names as the duplicate\nscope: src/c.rs\nblockedBy: none\nstatus: ready\n",
+    );
+    append(
+        &repo,
+        "DECISIONS.md",
+        "- [2026-09-02] T-003 claimed another thing — refuted by `x`: y\n",
+    );
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "queue-hygiene");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0]
+            .message
+            .contains("T-002 reuses the id of a killed finding"),
+        "{}",
+        found[0].message
+    );
+}
+
 // the two subjects the criteria name, taken from this repository's own history
 const COMMENTARY_SUBJECT: &str = "fix(ci): four failures, four causes, none of them the same";
 const RECORD_SUBJECT: &str = "queue: T-036 ready, docs/demo.sh joins the scope";
