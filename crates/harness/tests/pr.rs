@@ -503,3 +503,18 @@ fn a_blocker_built_this_run_is_the_base() {
         "{thing}"
     );
 }
+
+#[test]
+fn pr_commits_its_description_to_the_state_repo() {
+    let (f, _) = landed("exit 0");
+    let (code, out) = f.harness(&["pr", "T-001"]);
+    assert_eq!(code, 0, "{out}");
+    let state = f.root.join(".enallagi");
+    assert_eq!(git(&state, &["ls-files", "--", "pr"]), "pr/T-001.md");
+    assert_eq!(
+        git(&state, &["status", "--porcelain", "--", "pr"]),
+        "",
+        "{}",
+        git(&state, &["status", "--porcelain"])
+    );
+}

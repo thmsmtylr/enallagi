@@ -475,7 +475,7 @@ fn a_dated_learning_with_no_eval_is_reported() {
 }
 
 #[test]
-fn a_rule_naming_a_real_eval_is_not() {
+fn a_dated_learning_is_told_where_to_move() {
     let (repo, cfg) = seeded();
     append(
         &repo,
@@ -483,7 +483,37 @@ fn a_rule_naming_a_real_eval_is_not() {
         "- [2026-09-02] the check cache served a green nobody ran -> always run `./selftest.sh` uncached (evals/cache-green).\n",
     );
     fs::create_dir_all(repo.root.join("evals/cache-green")).expect("mkdir");
-    assert_eq!(count(&run(&repo, &cfg), "learning-ungated"), Some(0));
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "learning-ungated");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0].message.contains("## Earned rules")
+            && found[0].message.contains(".enallagi/DECISIONS.md"),
+        "{}",
+        found[0].message
+    );
+}
+
+#[test]
+fn an_earned_rule_counts_against_the_cap() {
+    let (repo, cfg) = seeded();
+    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "DECISIONS.md");
+    let rules: String = (1..=8)
+        .map(|n| {
+            format!("- [2026-09-0{n}] a rule that cost a run -> do the other thing (`git log`).\n")
+        })
+        .collect();
+    let text = fs::read_to_string(&path).expect("decisions");
+    let under = format!("## Earned rules\n\n{rules}");
+    fs::write(&path, text.replacen("## Earned rules\n", &under, 1)).expect("write");
+    let out = render(&run(&repo, &cfg));
+    assert_eq!(
+        out.lines()
+            .filter(|l| l.contains("against a cap of 12"))
+            .count(),
+        1,
+        "{out}"
+    );
 }
 
 #[test]

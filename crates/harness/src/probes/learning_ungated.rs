@@ -1,4 +1,4 @@
-//! A dated rule must name the eval that holds it, and the library is capacity-bounded. `[seed]` entries predate the gate and are exempt.
+//! `LEARNINGS.md` holds the seed rules an install shipped. A rule the loop earned belongs under `## Earned rules` in `DECISIONS.md`, which an install never rewrites, and the two are capped together.
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
@@ -11,50 +11,48 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let dated = common::re(DATED)?;
-    let names = common::re(r"evals/([\w.-]+)")?;
     let cap = ctx.cfg.layout.learnings_cap;
     let entries = common::learning_entries(ctx)?;
     let learnings = common::instance(ctx, "LEARNINGS.md");
+    let decisions = common::instance(ctx, "DECISIONS.md");
     let mut found = Vec::new();
 
     for (at, text) in &entries {
         if !dated.is_match(text.trim()) {
             continue;
         }
-        let named: Vec<String> = names
-            .captures_iter(text)
-            .filter_map(|m| m.get(1).map(|g| g.as_str().to_string()))
-            .collect();
-        if named.is_empty() {
-            found.push(common::finding(
-                &learnings,
-                *at,
-                format!(
-                    "dated rule names no eval, so nothing decided it was worth its place: {}",
-                    common::cut(text.trim(), 80)
-                ),
-            ));
-            continue;
-        }
-        for name in named {
-            if !common::is_dir(ctx.root, &format!("evals/{name}")) {
-                found.push(common::finding(
-                    &learnings,
-                    *at,
-                    format!("names evals/{name}, which does not exist"),
-                ));
-            }
-        }
+        found.push(common::finding(
+            &learnings,
+            *at,
+            format!(
+                "a dated rule in the seed library: move it under `## Earned rules` in {decisions}, with the `enallagi eval --gate` run that admitted it or the command that showed its cost: {}",
+                common::cut(text.trim(), 80)
+            ),
+        ));
     }
-    if entries.len() > cap {
+
+    let held = entries.len() + earned(ctx, &decisions)?;
+    if held > cap {
         found.push(common::finding(
             &learnings,
             0,
             format!(
-                "the rule library holds {} entries against a cap of {cap}. Every entry is read at the start of every task; adding one means removing one",
-                entries.len()
+                "the rule library holds {held} entries against a cap of {cap}. Every entry is read at the start of every task; adding one means removing one"
             ),
         ));
     }
     Ok(found)
+}
+
+fn earned(ctx: &ProbeCtx, decisions: &str) -> Res<usize> {
+    if !common::is_file(ctx.root, decisions) {
+        return Ok(0);
+    }
+    Ok(common::lines_of(ctx.root, decisions)?
+        .iter()
+        .skip_while(|line| !line.starts_with("## Earned rules"))
+        .skip(1)
+        .take_while(|line| !line.starts_with("## "))
+        .filter(|line| line.starts_with("- "))
+        .count())
 }

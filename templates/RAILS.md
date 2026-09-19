@@ -48,10 +48,29 @@ names a test by `file::test name`, copied character for character from __SPEC__'
 | `blocked-is-allowed` | A task may stop with `BLOCKED` and a written reason, which is a success. A task may **never** be marked done without the exact command and its pasted output. | `enallagi run` → `gate_verdict` |
 | `no-clarification-left` | If any `[NEEDS CLARIFICATION]` marker exists in __SPEC__, the loop does not start. | `enallagi run` |
 | `harness-lane` | One round changes a product lever or the measure of that lever, never both. A diff touching the launcher, the hooks, the check script or `.check-baseline` belongs to a task that declared `rows: none — harness`. A `test-hashes.json` re-cut is **exempt** when every key it changed names a file the task's own `scope:` line covers (SPEC.md §0.2 `tests-immutable`). | `enallagi run` → `gate_scope` |
-| `friction` | Every iteration's __ENALLAGI_DIR__/PROGRESS.md entry ends with the round's question — what cost time that a rule or a check could prevent. The first occurrence is evidence and stays in __ENALLAGI_DIR__/PROGRESS.md; the **second** occurrence of the same thing is decided: a line in __ENALLAGI_DIR__/LEARNINGS.md through `enallagi eval --gate`, or a dated kill line in __ENALLAGI_DIR__/DECISIONS.md quoting the `--gate` run that refused the rule. | judgment — the verifier, for the line's presence · `enallagi probe` → `friction-repeat`, for the second occurrence |
-| `gated-rules` | A rule only enters __ENALLAGI_DIR__/LEARNINGS.md through `enallagi eval --gate <name>`, which requires its eval to fail without the rule, pass with it, and regress no eval that was passing. The file is capped: at the cap, adding a rule means removing one. | `enallagi probe` → `learning-ungated` · judgment — the verifier, that a new rule cites its `--gate` run |
+| `friction` | Every iteration's __ENALLAGI_DIR__/PROGRESS.md entry ends with the round's question — what cost time that a rule or a check could prevent. The first occurrence is evidence and stays in __ENALLAGI_DIR__/PROGRESS.md; the **second** occurrence of the same thing is decided: a dated rule under `## Earned rules` in __ENALLAGI_DIR__/DECISIONS.md, or a dated kill line under `## Rejected findings` in the same file quoting the `--gate` run that refused the rule. | judgment — the verifier, for the line's presence · `enallagi probe` → `friction-repeat`, for the second occurrence |
+| `gated-rules` | __ENALLAGI_DIR__/LEARNINGS.md holds the `[seed]` rules the install shipped and nothing else: `enallagi init` seeds it from the binary and `enallagi eject` removes it, so a line appended there is gone at the next install. A rule the loop earned is a dated line under `## Earned rules` in __ENALLAGI_DIR__/DECISIONS.md, **written by the adjudicator**, carrying either the `enallagi eval --gate <name>` run that admitted it — its eval fails without the rule, passes with it, and regresses no eval that was passing — or the command that showed what it cost. The two files are capped together: at the cap, adding a rule means removing one. | `enallagi probe` → `learning-ungated`, for a dated line left in __ENALLAGI_DIR__/LEARNINGS.md and for the pair over its cap · judgment — the verifier, that a new rule cites its `--gate` run or its command |
 | `verifier-not-implementer` | Final acceptance runs in a fresh session that sees only the diff and the exit criteria. It never sees the implementation conversation. | `enallagi run` · `__ENALLAGI_DIR__/roles/verifier.md` |
 | `lane-plugins` | A lane loads the plugins the harness directory ships and no others. Every plugin the operator's own settings file enables is named `false` in the `--settings` override the preset carries, so a skill or a hook installed in the home directory never reaches a stage. | `enallagi run`, spawning the preset with its `--settings` override |
+
+## Records
+
+Every path the product writes under `__ENALLAGI_DIR__/` is named here with the store that keeps it.
+A path with no store is lost to the first tidy-up.
+`crates/harness/tests/floor.rs::every_harness_dir_path_has_a_store` reads the source and fails on a
+path this table does not name.
+
+| Path | Store |
+| --- | --- |
+| `__ENALLAGI_DIR__/.git` | the state repository, created by `enallagi init` when the harness directory is its own repository |
+| `__ENALLAGI_DIR__/TASKS.md` | tracked — committed by `enallagi run` at the end of every stage |
+| `__ENALLAGI_DIR__/events.jsonl` | ignored — one run's log, read with `enallagi events` while the run is live |
+| `__ENALLAGI_DIR__/hooks` | tracked — the operator's own scripts, read by `enallagi hook` and written by nothing here |
+| `__ENALLAGI_DIR__/loop.pid` | ignored — one live process, removed when it exits |
+| `__ENALLAGI_DIR__/pr` | tracked — committed into the state repository by `enallagi pr`, which writes it |
+| `__ENALLAGI_DIR__/roles` | tracked — written by `enallagi init` |
+| `__ENALLAGI_DIR__/run` | ignored — the role prompts a stage renders, rebuilt at every stage |
+| `__ENALLAGI_DIR__/worktrees` | ignored — a lane's checkout, removed when the lane ends |
 
 ## Task protocol
 
@@ -68,8 +87,8 @@ names a test by `file::test name`, copied character for character from __SPEC__'
 - Implementer sets `review`, never `done`. Verifier promotes to `done` or rejects to `ready` with
   reproducible reasons, and the launcher then re-runs the gate itself. A lint failure alone is a
   rejection.
-- A task must be completable by an agent that has read only `__CONTEXT_FILE__`, __SPEC__, __ENALLAGI_DIR__/LEARNINGS.md and
-  its own task block. Criteria assuming conversational context are unrunnable.
+- A task must be completable by an agent that has read only `__CONTEXT_FILE__`, __SPEC__, __ENALLAGI_DIR__/LEARNINGS.md,
+  `## Earned rules` in __ENALLAGI_DIR__/DECISIONS.md and its own task block. Criteria assuming conversational context are unrunnable.
 - `attended: true` marks a task needing a human credential. No launcher picks one up on auto-select.
 - **One checkout is one writer.** Never let two sessions edit __ENALLAGI_DIR__/TASKS.md in one working directory.
 

@@ -1152,3 +1152,34 @@ fn no_default_names_a_runner() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn every_harness_dir_path_has_a_store() {
+    // a path the product writes under the harness directory that the records table does not name has no store, so the first tidy-up takes it
+    let joined = re(
+        r#"(?:\.join\(\s*&?(?:self\.)?(?:ctx\.)?(?:cfg\.layout\.)?(?:harness_dir|dir)\s*\)|\bharness_dir)\s*\.join\(\s*"([^"]+)"\s*\)"#,
+    );
+    assert!(
+        joined.is_match("root.join(&dir)\n        .join(\"pr\")"),
+        "the scan cannot report"
+    );
+
+    let rails = read(&repo_root().join("templates/RAILS.md"));
+    let (_, below) = rails
+        .split_once("\n## Records\n")
+        .expect("templates/RAILS.md carries a ## Records section");
+    let records = below.split("\n## ").next().unwrap_or(below);
+
+    let mut missing: Vec<String> = Vec::new();
+    for (rel, text) in crate_sources() {
+        for caught in joined.captures_iter(text.as_str()) {
+            let name = &caught[1];
+            if !records.contains(&format!("`__ENALLAGI_DIR__/{name}`")) {
+                missing.push(format!("{}: {name}", rel.display()));
+            }
+        }
+    }
+    missing.sort();
+    missing.dedup();
+    assert_eq!(missing, Vec::<String>::new());
+}

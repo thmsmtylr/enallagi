@@ -168,6 +168,9 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
         fs::create_dir_all(parent).map_err(io(parent.display()))?;
     }
     fs::write(&description, text).map_err(io(description.display()))?;
+    // the description is the only record of the contribution-policy decision, so it is committed rather than left for the next tidy-up
+    let record = format!("pr/{}.md", ids.join("-"));
+    git::commit_instance(root, &dir, &[&record], &format!("pr {}", ids.join("-")))?;
 
     if refused {
         git::git(root, &["branch", "-D", &branch])?;

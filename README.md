@@ -140,7 +140,7 @@ Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGE
 `enallagi pr --push` reads the target's contribution guide first.
 A sentence there that refuses or conditions generated changes stops the push.
 
-Pass `--policy-read` once you have read it. The description file records either outcome.
+Pass `--policy-read` once you have read it. `enallagi pr` records either outcome in the description file, and commits it under `<harness directory>/pr/`.
 
 Run `enallagi <command> --help` for the flags.
 
