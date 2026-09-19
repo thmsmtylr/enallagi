@@ -989,8 +989,12 @@ fn undeclared_exact(workflow: &str, root: &Path) -> Vec<String> {
             continue;
         };
         let suite = root.join(format!("crates/harness/tests/{}.rs", &c[1]));
-        let declared = fs::read_to_string(&suite)
-            .is_ok_and(|text| re(&format!(r"\bfn {}\(", regex::escape(&c[2]))).is_match(&text));
+        // a helper fn of the same name is not a test, so the fn must sit under `#[test]`
+        let test_fn = format!(
+            r"(?m)^\s*#\[test\]\s*\n(?:\s*#\[.*\]\s*\n|\s*\n)*\s*fn {}\(",
+            regex::escape(&c[2])
+        );
+        let declared = fs::read_to_string(&suite).is_ok_and(|text| re(&test_fn).is_match(&text));
         if !declared {
             out.push(format!("{} in {}", &c[2], suite.display()));
         }
@@ -1017,6 +1021,8 @@ fn every_workflow_exact_names_a_declared_test() {
     let reported = undeclared_exact(renamed, &root);
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert!(reported[0].contains("the_tag_equals_the_crate_versionX"));
+    let helper = "      - run: cargo test -p enallagi --test floor -- --include-ignored --exact tag_mismatch\n";
+    assert_eq!(undeclared_exact(helper, &root).len(), 1);
     let no_suite = "      - run: cargo test -p enallagi --test nosuch -- --exact main_tracks_no_instance_file\n";
     assert_eq!(undeclared_exact(no_suite, &root).len(), 1);
     let unparsed = "      - run: cargo test -- --exact main_tracks_no_instance_file\n";
