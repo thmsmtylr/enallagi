@@ -952,7 +952,7 @@ impl<'a> Loop<'a> {
             env,
             cwd: self.root,
             timeout,
-            prompt: self.stage_prompt(role, handed),
+            prompt: self.stage_prompt(role, handed, task.as_deref()),
             turns: turn_cap(self.cfg, stage, handed.len()),
             stage: stage.name.clone(),
             task,
@@ -1299,8 +1299,14 @@ impl<'a> Loop<'a> {
     }
 
     // the prompt carries the ids the stage was sized for, so it decides those and no others
-    fn stage_prompt(&self, role: &str, ids: &[String]) -> String {
-        let prompt = prompt_for(role, self.cfg);
+    fn stage_prompt(&self, role: &str, ids: &[String], task: Option<&str>) -> String {
+        let mut prompt = prompt_for(role, self.cfg);
+        if role == "implementer" {
+            if let Some(clause) = task.and_then(|t| self.prior_attempts(t)) {
+                prompt.push(' ');
+                prompt.push_str(&clause);
+            }
+        }
         if ids.is_empty() {
             return prompt;
         }
@@ -1308,6 +1314,40 @@ impl<'a> Loop<'a> {
             "{prompt} Act on exactly these blocks, in this order: {}. Leave every other proposed block alone.",
             ids.join(", ")
         )
+    }
+
+    // a commit naming the task the implementer is about to take is an attempt no verdict accepted:
+    // an accepted one leaves the task `done`, which no implementer takes
+    fn prior_attempts(&self, task: &str) -> Option<String> {
+        let log = git::git(
+            self.root,
+            &["log", "--format=%h %s", &format!("--grep={task}")],
+        )
+        .ok()?;
+        let shows: Vec<String> = log
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .filter(|(_, subject)| names(subject, task))
+            .map(|(sha, _)| format!("`git show {sha}`"))
+            .collect();
+        if shows.is_empty() {
+            return None;
+        }
+        let answer = self
+            .blocks()
+            .iter()
+            .find(|b| b.id == task)
+            .and_then(rejection_text)
+            .and_then(|text| text.lines().next().map(str::trim).map(String::from))
+            .filter(|line| !line.is_empty())
+            .map(|line| format!(" The line to answer is: {line}"))
+            .unwrap_or_default();
+        Some(format!(
+            "{task} carries a prior implementation attempt no verdict accepted. \
+             Read {} and the block's REJECTED: text before you write any code. \
+             Do not re-send a diff an attempt already had rejected for the same reason.{answer}",
+            shows.join(", ")
+        ))
     }
 
     // a rejection the verifier just wrote is already queued as the task's own work; a block promoted
@@ -1481,6 +1521,15 @@ fn claims(verdict: &str) -> Vec<String> {
         .filter(|s| !s.contains('`') && s.split_whitespace().count() >= 5)
         .map(|s| s.trim().to_string())
         .collect()
+}
+
+// `T-13` must not be read out of the subject of `T-134`: an id is named as a whole word
+fn names(subject: &str, task: &str) -> bool {
+    subject.match_indices(task).any(|(at, _)| {
+        let before = subject[..at].chars().next_back();
+        let after = subject[at + task.len()..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+    })
 }
 
 // lowercase, one space between words: two statements of the same sentence compare equal

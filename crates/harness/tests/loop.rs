@@ -2212,6 +2212,66 @@ fn the_adjudicator_prompt_names_the_filed_ids() {
     assert!(prompt.contains("T-009"), "{prompt}");
 }
 
+const REJECTED_TASK: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.ts, implement-prompt
+rows: none — harness
+status: ready
+criteria:
+  - it happens
+notes: REJECTED: the red deleted the whole call site, so it covered no branch.
+";
+
+fn implementing(r: &Repo, tasks: &str) {
+    let implement = implementer(r, "printf '%s' \"$1\" >implement-prompt\n");
+    let verify = verifier(r);
+    write_toml(r, &base_toml(&role_commands(&implement, &verify)));
+    r.write("TASKS.md", tasks);
+    r.commit_all("stubs");
+}
+
+fn implement_prompt(r: &Repo) -> String {
+    std::fs::read_to_string(r.root.join("implement-prompt")).expect("the prompt")
+}
+
+#[test]
+fn the_implement_prompt_names_a_rejected_attempt() {
+    let r = repo("", "");
+    implementing(&r, REJECTED_TASK);
+    r.write("src/thing.ts", "first attempt\n");
+    r.commit_all("T-001: first attempt");
+    let attempt = enallagi::git::head(&r.root).expect("the attempt sha");
+
+    go(&r, &opts(1));
+    let prompt = implement_prompt(&r);
+    assert!(prompt.contains(&format!("git show {attempt}")), "{prompt}");
+    assert!(prompt.contains("it covered no branch"), "{prompt}");
+}
+
+#[test]
+fn a_task_with_no_attempt_leaves_the_prompt_alone() {
+    let r = repo("", "");
+    implementing(&r, REJECTED_TASK);
+
+    go(&r, &opts(1));
+    let prompt = implement_prompt(&r);
+    assert!(!prompt.contains("prior implementation attempt"), "{prompt}");
+    assert!(!prompt.contains("git show"), "{prompt}");
+}
+
+#[test]
+fn a_longer_id_is_not_read_as_a_prior_attempt() {
+    let r = repo("", "");
+    implementing(&r, REJECTED_TASK);
+    r.write("src/thing.ts", "another task\n");
+    r.commit_all("T-0012: a different task");
+
+    go(&r, &opts(1));
+    let prompt = implement_prompt(&r);
+    assert!(!prompt.contains("prior implementation attempt"), "{prompt}");
+}
+
 #[test]
 fn a_task_round_does_not_spend_the_discovery_budget() {
     let r = repo("", "");
