@@ -1985,11 +1985,16 @@ fn a_verdict_filing_nothing_skips_adjudicate() {
     assert_eq!(digest.landed, vec!["T-001".to_string()]);
 }
 
-// one fixture, both arms: what the verifier files decides whether the stage spawns at all
-fn adjudicating(filed: &str) -> Digest {
+// one fixture, every arm: what the verifier files decides whether the stage spawns at all, and the
+// adjudicator's body decides how it ended
+fn adjudicating_with(filed: &str, body: &str) -> Digest {
     let r = repo("", "");
-    draining(&r, filed, "");
+    draining(&r, filed, body);
     go(&r, &opts(1)).0
+}
+
+fn adjudicating(filed: &str) -> Digest {
+    adjudicating_with(filed, "")
 }
 
 #[test]
@@ -2004,6 +2009,27 @@ fn the_digest_tells_no_adjudicator_from_no_decision() {
     assert!(
         skipped.contains("findings: no adjudicate stage ran"),
         "{skipped}"
+    );
+}
+
+#[test]
+fn a_halted_adjudicator_is_not_a_decision() {
+    let halted = pipeline::digest_text(&adjudicating_with(
+        FILED,
+        "echo 'HALT T-009: the fix needs SPEC.md'\n",
+    ));
+    assert!(
+        halted.contains("findings: the adjudicator could not decide"),
+        "{halted}"
+    );
+}
+
+#[test]
+fn a_nonzero_adjudicator_is_not_a_decision() {
+    let failed = pipeline::digest_text(&adjudicating_with(FILED, "exit 1\n"));
+    assert!(
+        failed.contains("findings: the adjudicator could not decide"),
+        "{failed}"
     );
 }
 

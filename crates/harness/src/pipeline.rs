@@ -145,11 +145,20 @@ pub struct Digest {
     pub role_seconds: BTreeMap<String, u64>,
     pub turn_caps: Vec<String>,
     pub timeouts: Vec<String>,
-    // an empty promoted/killed pair means nothing to decide only if the stage actually spawned
-    pub adjudicated: bool,
+    pub adjudication: Adjudication,
     pub proposed_standing: usize,
     pub proposed_oldest: usize,
     pub expired: usize,
+}
+
+// an empty promoted/killed pair means nothing to decide only if the stage both spawned and ended
+// cleanly; a stage that halted or exited nonzero decided nothing because it could not
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Adjudication {
+    #[default]
+    NoStage,
+    Ran,
+    Undecided,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -733,9 +742,6 @@ impl<'a> Loop<'a> {
         self.digest.seconds += result.seconds;
         if let Some(role) = &role {
             *self.digest.role_seconds.entry(role.clone()).or_default() += result.seconds;
-            if role == "adjudicator" {
-                self.digest.adjudicated = true;
-            }
         }
         // an agent ran out of turns only if the preset spawned was handed this number: None passes no cap, Config reads one from the agent's own file and Time spends a clock
         if matches!(spawn.preset.turn_cap, TurnCap::Flag)
@@ -827,6 +833,13 @@ impl<'a> Loop<'a> {
         } else {
             self.gates(stage, task.clone(), iter_bases, stage_bases, result.output)
         };
+        // read from how the stage ended, so a halt or a nonzero exit never reads as a decision
+        if role.as_deref() == Some("adjudicator") {
+            self.digest.adjudication = match result.timed_out || matches!(flow, Flow::Stop) {
+                true => Adjudication::Undecided,
+                false => Adjudication::Ran,
+            };
+        }
         let msg = format!("{} {}", stage.name, task.unwrap_or_default());
         self.commit_state(msg.trim_end());
         flow
@@ -1462,12 +1475,12 @@ pub fn digest_text(digest: &Digest) -> String {
     if !digest.pulls.is_empty() {
         listing(&mut out, "pull requests:", &digest.pulls);
     }
-    // nothing decided reads as nothing to decide, so say which of the two states the round was in
+    // nothing decided reads as nothing to decide, so say which of the three states the round was in
     if digest.promoted.is_empty() && digest.killed.is_empty() {
-        let state = if digest.adjudicated {
-            "the adjudicator ran and decided nothing"
-        } else {
-            "no adjudicate stage ran"
+        let state = match digest.adjudication {
+            Adjudication::NoStage => "no adjudicate stage ran",
+            Adjudication::Ran => "the adjudicator ran and decided nothing",
+            Adjudication::Undecided => "the adjudicator could not decide",
         };
         let _ = writeln!(out, "findings: {state}");
     } else {
