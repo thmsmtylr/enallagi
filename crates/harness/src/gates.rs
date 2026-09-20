@@ -654,7 +654,8 @@ fn commit_identity(ctx: &mut GateCtx) -> GateOutcome {
         return pass("the repository configures no user.email");
     }
     let range = format!("{base}..HEAD");
-    let log = git(ctx.root, &["log", "--no-merges", "--format=%h %ae", &range]).unwrap_or_default();
+    // a merge commit carries an author too, so it is read like any other
+    let log = git(ctx.root, &["log", "--format=%h %ae", &range]).unwrap_or_default();
     let strangers: Vec<String> = log
         .lines()
         .filter_map(|l| l.split_once(' '))
@@ -1418,6 +1419,42 @@ mod tests {
         assert!(!out.pass, "{}", out.reason);
         assert!(
             out.reason.contains("elsewhere@example.test") && out.reason.contains("t@t"),
+            "{}",
+            out.reason
+        );
+    }
+
+    #[test]
+    fn a_merge_commit_by_a_stranger_is_refused() {
+        let mut env = Env::new("exit 0\n");
+        let base = head(&env.repo.root).expect("base");
+        git(&env.repo.root, &["checkout", "-q", "-b", "side"]).expect("branch");
+        env.repo.write("src/other.ts", "export const y = 1\n");
+        env.repo.commit_all("T-001 on the side");
+        git(&env.repo.root, &["checkout", "-q", "-"]).expect("back");
+        env.repo.write("src/schema.ts", "export const x = 4\n");
+        env.repo.commit_all("T-001 on the trunk");
+        git(
+            &env.repo.root,
+            &[
+                "-c",
+                "user.email=elsewhere@example.test",
+                "-c",
+                "commit.gpgsign=false",
+                "merge",
+                "--no-ff",
+                "-q",
+                "-m",
+                "T-001 merge",
+                "side",
+            ],
+        )
+        .expect("a merge by someone else");
+        let mut ctx = env.ctx(Some("T-001"), Some(&base));
+        let out = commit_identity(&mut ctx);
+        assert!(!out.pass, "{}", out.reason);
+        assert!(
+            out.reason.contains("elsewhere@example.test"),
             "{}",
             out.reason
         );
