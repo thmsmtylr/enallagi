@@ -74,6 +74,8 @@ pub enum AgentError {
     EmptyCommand,
     #[error("preset {0} declares no bypass flag, so dangerously_skip_permissions cannot apply")]
     NoBypassFlag(String),
+    #[error("the rate limit resets {0}, further out than the wait ceiling")]
+    ResetBeyondWait(String),
 }
 
 const PRESET_FILES: &[(&str, &str)] = &[
@@ -331,38 +333,84 @@ pub fn extract_usage(output: &str, paths: &UsagePaths) -> UsageValues {
     values
 }
 
+// the date is optional: a weekly notice read `resets Sep 20 at 4am` and a session one `resets 2am`
+fn reset_pattern() -> &'static Regex {
+    static RESET: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    RESET.get_or_init(|| {
+        // the minutes are optional too: a live notice read `resets 2am` and the hour-only form must still wait
+        Regex::new(
+            r"(?i)resets\s+(?:([a-z]{3,9})\s+(\d{1,2})\s+at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)\s*\(([^)]+)\)",
+        )
+        .expect("the reset pattern is a literal")
+    })
+}
+
+fn month_number(name: &str) -> Option<i8> {
+    const MONTHS: [&str; 12] = [
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
+    let head = name.get(..3)?.to_ascii_lowercase();
+    let index = MONTHS.iter().position(|m| *m == head)?;
+    i8::try_from(index + 1).ok()
+}
+
+/// The dated part of a reset notice, `Sep 20 at 4am`, in the notice's own words.
+pub fn dated_reset(notice: &str) -> Option<String> {
+    let caps = reset_pattern().captures(notice)?;
+    let month = caps.get(1)?;
+    month_number(month.as_str())?;
+    Some(notice[month.start()..caps.get(5)?.end()].to_string())
+}
+
 // without this a session-limit notice reads as a finished iteration and burns the rest of the run doing nothing
 pub fn seconds_until_reset(notice: &str, now: jiff::Zoned) -> Option<u64> {
-    static RESET: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let re = RESET.get_or_init(|| {
-        // the minutes are optional: a live notice read `resets 2am` and the hour-only form must still wait
-        Regex::new(r"(?i)resets\s+(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?\s*\(([^)]+)\)")
-            .expect("the reset pattern is a literal")
-    });
-    let caps = re.captures(notice)?;
-    let hour: i8 = caps.get(1)?.as_str().parse().ok()?;
+    let caps = reset_pattern().captures(notice)?;
+    let hour: i8 = caps.get(3)?.as_str().parse().ok()?;
     if !(1..=12).contains(&hour) {
         return None;
     }
-    let minute: i8 = match caps.get(2) {
+    let minute: i8 = match caps.get(4) {
         Some(m) => m.as_str().parse().ok()?,
         None => 0,
     };
-    let pm = caps.get(3)?.as_str().eq_ignore_ascii_case("p");
+    let pm = caps.get(5)?.as_str().starts_with(['p', 'P']);
     let hour = hour % 12 + if pm { 12 } else { 0 };
-    let zone = jiff::tz::TimeZone::get(caps.get(4)?.as_str()).ok()?;
+    let zone = jiff::tz::TimeZone::get(caps.get(6)?.as_str()).ok()?;
     let now = now.with_time_zone(zone);
-    let mut reset = now
-        .with()
-        .hour(hour)
-        .minute(minute)
-        .second(0)
-        .subsec_nanosecond(0)
-        .build()
-        .ok()?;
-    if reset <= now {
-        reset = reset.checked_add(jiff::Span::new().days(1)).ok()?;
-    }
+    let reset = match (caps.get(1), caps.get(2)) {
+        (Some(month), Some(day)) => {
+            let month = month_number(month.as_str())?;
+            let day: i8 = day.as_str().parse().ok()?;
+            let at = |year: i16| -> Option<jiff::Zoned> {
+                jiff::civil::Date::new(year, month, day)
+                    .ok()?
+                    .at(hour, minute, 0, 0)
+                    .to_zoned(now.time_zone().clone())
+                    .ok()
+            };
+            // the notice carries no year, so a date already past is next year's
+            let this_year = at(now.year())?;
+            if this_year > now {
+                this_year
+            } else {
+                at(now.year() + 1)?
+            }
+        }
+        _ => {
+            let mut reset = now
+                .with()
+                .hour(hour)
+                .minute(minute)
+                .second(0)
+                .subsec_nanosecond(0)
+                .build()
+                .ok()?;
+            if reset <= now {
+                reset = reset.checked_add(jiff::Span::new().days(1)).ok()?;
+            }
+            reset
+        }
+    };
     let seconds = reset.timestamp().as_second() - now.timestamp().as_second();
     Some(u64::try_from(seconds).ok()? + 60)
 }
@@ -495,10 +543,13 @@ pub fn spawn(
         else {
             return Ok(result);
         };
-        let Some(sleep_seconds) =
-            seconds_until_reset(&matched, stage_now()).filter(|s| *s <= MAX_WAIT)
-        else {
-            return Ok(result);
+        let waited = seconds_until_reset(&matched, stage_now());
+        let Some(sleep_seconds) = waited.filter(|s| *s <= MAX_WAIT) else {
+            // a dated notice says when work can resume, so the halt says it too instead of reading as a failed stage
+            return match dated_reset(&matched).filter(|_| waited.is_some()) {
+                Some(reset) => Err(AgentError::ResetBeyondWait(reset)),
+                None => Ok(result),
+            };
         };
         events.emit(Kind::Limit {
             stage: s.stage.clone(),
@@ -947,7 +998,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_time_parses_from_a_notice() {
+    fn seconds_until_reset_reads_a_clock_time() {
         let now = jiff::civil::date(2026, 9, 7)
             .at(10, 0, 0, 0)
             .in_tz("Australia/Melbourne")
@@ -968,6 +1019,38 @@ mod tests {
         assert!(seconds_until_reset("resets 12:40am (Mars/Olympus)", now.clone()).is_none());
         assert!(seconds_until_reset("resets 13am (UTC)", now.clone()).is_none());
         assert!(seconds_until_reset("resets 0am (UTC)", now).is_none());
+    }
+
+    #[test]
+    fn seconds_until_reset_reads_a_dated_notice() {
+        let now = jiff::civil::date(2026, 9, 18)
+            .at(17, 57, 25, 0)
+            .in_tz("UTC")
+            .unwrap();
+        // Sep 20 4am in Melbourne is 2026-09-19T18:00:00Z, and the function adds its minute of slack
+        let s = seconds_until_reset(
+            "You've hit your weekly limit \u{b7} resets Sep 20 at 4am (Australia/Melbourne)",
+            now.clone(),
+        )
+        .unwrap();
+        assert_eq!(s, 86555 + 60);
+        let with_minutes =
+            seconds_until_reset("resets Sep 20 at 4:30am (Australia/Melbourne)", now.clone())
+                .unwrap();
+        assert_eq!(with_minutes, 86555 + 30 * 60 + 60);
+        // a January notice read in December is next year's, not a date 360 days behind
+        let over_new_year = seconds_until_reset(
+            "resets Jan 2 at 4am (UTC)",
+            jiff::civil::date(2026, 12, 28)
+                .at(0, 0, 0, 0)
+                .in_tz("UTC")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(over_new_year, 5 * 86400 + 4 * 3600 + 60);
+        assert!(seconds_until_reset("resets Hax 20 at 4am (UTC)", now.clone()).is_none());
+        assert!(seconds_until_reset("resets Feb 30 at 4am (UTC)", now.clone()).is_none());
+        assert!(seconds_until_reset("resets Sep 20 at 4am (Mars/Olympus)", now).is_none());
     }
 
     fn fix_now(zoned: jiff::Zoned) {
@@ -1285,6 +1368,35 @@ mod tests {
         )
         .unwrap();
         assert_eq!(res.exit, 0);
+        assert!(!w
+            .log
+            .read()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e.kind, Kind::Limit { .. })));
+    }
+
+    #[test]
+    fn a_dated_reset_past_the_ceiling_halts() {
+        let r = crate::fixture::Repo::new();
+        fix_now(
+            jiff::civil::date(2026, 9, 18)
+                .at(17, 57, 25, 0)
+                .in_tz("UTC")
+                .unwrap(),
+        );
+        let argv = r.stub_agent(
+            "echo 'hit your weekly limit resets Sep 20 at 4am (Australia/Melbourne)'; exit 1",
+        );
+        let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
+        let err = spawn(
+            &spawner(argv, &r.root),
+            &mut w,
+            &stop_file(&r.root),
+            &Regex::new("hit your weekly limit").unwrap(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Sep 20 at 4am"), "{err}");
         assert!(!w
             .log
             .read()
