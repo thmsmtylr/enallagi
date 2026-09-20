@@ -133,9 +133,13 @@ pub struct Log {
 }
 
 impl Log {
+    // a lane runs in a linked worktree that is removed when the lane ends, and an ignored file cannot
+    // ride a fast-forward, so the log resolves to the main worktree and every reader finds it there
     pub fn open(harness_dir: &Path) -> Log {
+        let dir = crate::git::main_worktree_path(harness_dir)
+            .unwrap_or_else(|| harness_dir.to_path_buf());
         Log {
-            path: harness_dir.join("events.jsonl"),
+            path: dir.join("events.jsonl"),
         }
     }
 

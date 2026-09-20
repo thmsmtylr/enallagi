@@ -367,6 +367,33 @@ mod tests {
         remove_left(&r, &report);
     }
 
+    // the run a lane could not merge is the one its log is most needed for, so the log is not in the
+    // worktree the operator is told to remove
+    #[test]
+    fn a_stuck_lane_leaves_its_events_in_the_parent() {
+        let r = nested_repo();
+        let cfg = cfg(&r);
+        let state = r.root.join(".enallagi");
+
+        let report = lane(&r.root, &cfg, &mut |wt| {
+            let mut w = crate::events::Writer::new(crate::events::Log::open(&wt.join(".enallagi")));
+            w.emit(crate::events::Kind::Halt {
+                halt: "x".into(),
+                reason: "y".into(),
+            });
+            land(wt, "T-001", "one.txt");
+            std::fs::write(state.join("moved.txt"), "y").expect("write");
+            commit_in(&state, "a second writer moved the state");
+            Ok(())
+        })
+        .expect("lane");
+
+        assert!(!report.merged, "reason: {}", report.reason);
+        let log = std::fs::read_to_string(state.join("events.jsonl")).expect("the parent's log");
+        assert!(log.contains(r#""kind":"halt""#), "{log}");
+        remove_left(&r, &report);
+    }
+
     #[test]
     fn a_stuck_product_branch_merges_neither() {
         let r = nested_repo();
