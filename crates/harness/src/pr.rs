@@ -94,6 +94,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     let range = format!("{base}..HEAD");
     let landed = git::git(root, &["log", "--format=%B", &base])?;
     let mut stacked: Option<usize> = None;
+    let mut on: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     for task in &tasks {
         for blocker in queue::blockers(&task.block) {
             if ids.contains(&blocker)
@@ -104,13 +105,28 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
             if gates::names_task(&landed, &blocker) {
                 continue;
             }
-            // the blocker built last carries the ones built before it
+            // the blocker built last is the base; that it carries the others is checked below
             if let Some(at) = opts.stack_on.iter().position(|id| *id == blocker) {
+                on.insert(at);
                 stacked = stacked.max(Some(at));
             } else {
                 refusals.push(format!(
                     "{} is blocked by {blocker}, whose product change is not on {base}",
                     task.id
+                ));
+            }
+        }
+    }
+    // a branch has one base, so two blockers stack only when the later one already carries the earlier
+    if let Some(at) = stacked {
+        let branch = format!("task/{}", opts.stack_on[at]);
+        let history = git::git(root, &["log", "--format=%B", &branch]).unwrap_or_default();
+        for other in on.iter().filter(|o| **o != at) {
+            let id = &opts.stack_on[*other];
+            if !gates::names_task(&history, id) {
+                refusals.push(format!(
+                    "{id} and {} are both unmerged blockers, and {branch} does not carry {id}",
+                    opts.stack_on[at]
                 ));
             }
         }

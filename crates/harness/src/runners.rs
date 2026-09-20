@@ -226,7 +226,6 @@ fn tree(root: &Path) -> Vec<String> {
     out
 }
 
-// ponytail: every run: step in the workflow is joined, so a file with two jobs concatenates them; group by job when a fixture needs it
 fn check_command(root: &Path, runner: &Runner) -> Option<(String, String)> {
     let runs = regex::Regex::new(&runner.run_re).ok()?;
     let installs =
@@ -240,23 +239,55 @@ fn check_command(root: &Path, runner: &Runner) -> Option<(String, String)> {
     workflows.sort();
     for workflow in workflows {
         let text = std::fs::read_to_string(root.join(&workflow)).unwrap_or_default();
-        let steps = run_steps(&text);
-        if !steps.iter().any(|(_, cmd)| runs.is_match(cmd)) {
-            continue;
+        // one job's steps are the check; a second job in the same file builds or deploys
+        for (offset, job) in jobs(&text) {
+            let steps = run_steps(&job);
+            if !steps.iter().any(|(_, cmd)| runs.is_match(cmd)) {
+                continue;
+            }
+            let kept: Vec<&(usize, String)> = steps
+                .iter()
+                .filter(|(_, cmd)| !installs.is_match(cmd))
+                .collect();
+            let Some((line, _)) = kept.first() else {
+                continue;
+            };
+            let command = kept
+                .iter()
+                .map(|(_, cmd)| cmd.as_str())
+                .collect::<Vec<&str>>()
+                .join(" && ");
+            return Some((command, format!("{workflow}:{}", line + offset)));
         }
-        let kept: Vec<&(usize, String)> = steps
-            .iter()
-            .filter(|(_, cmd)| !installs.is_match(cmd))
-            .collect();
-        let (line, _) = kept.first()?;
-        let command = kept
-            .iter()
-            .map(|(_, cmd)| cmd.as_str())
-            .collect::<Vec<&str>>()
-            .join(" && ");
-        return Some((command, format!("{workflow}:{line}")));
     }
     None
+}
+
+/// Each job's own lines, with the count of lines before it. A file with no `jobs:` is one job.
+fn jobs(text: &str) -> Vec<(usize, String)> {
+    let head = regex::Regex::new(r"^  [A-Za-z_][A-Za-z0-9_-]*:\s*$").expect("literal pattern");
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(at) = lines.iter().position(|l| l.trim_end() == "jobs:") else {
+        return vec![(0, text.to_string())];
+    };
+    let mut out: Vec<(usize, String)> = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate().skip(at + 1) {
+        // a line at column 0 ends the jobs: mapping
+        if !line.trim().is_empty() && !line.starts_with(' ') {
+            break;
+        }
+        if head.is_match(line) {
+            if let Some(from) = start {
+                out.push((from, lines[from..i].join("\n")));
+            }
+            start = Some(i);
+        }
+    }
+    if let Some(from) = start {
+        out.push((from, lines[from..].join("\n")));
+    }
+    out
 }
 
 /// Every `run:` step in a workflow, with the 1-based line it starts on; a block scalar is one step per line.

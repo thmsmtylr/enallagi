@@ -505,6 +505,41 @@ fn a_blocker_built_this_run_is_the_base() {
 }
 
 #[test]
+fn two_sibling_blockers_are_refused() {
+    let (f, _) = landed("exit 0\n");
+    let mut tasks = DONE_AND_REJECTED.replace(
+        "blockedBy: none\nstatus: ready\nnotes: verifier: rejected, it shouts\n",
+        "blockedBy: none\nstatus: done\n",
+    );
+    tasks.push_str("\n## [T-003] the thing carries both\nscope: src/thing.txt\nblockedBy: T-001, T-002\nstatus: done\n");
+    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    commit(
+        &f.root,
+        "src/thing.txt",
+        &replace(&f.thing(), "four\n", "four, after both\n"),
+        "feat(thing): T-003 the thing carries both",
+    );
+    // each blocker is built off the default branch, so neither branch carries the other
+    for id in ["T-001", "T-002"] {
+        enallagi::pr::build(&f.root, &[id.to_string()], &enallagi::pr::PrOpts::default())
+            .unwrap_or_else(|e| panic!("{id} builds off origin: {e:?}"));
+    }
+    let opts = enallagi::pr::PrOpts {
+        stack_on: vec!["T-001".to_string(), "T-002".to_string()],
+        ..enallagi::pr::PrOpts::default()
+    };
+    let both = enallagi::pr::build(&f.root, &["T-003".to_string()], &opts);
+    let Err(enallagi::pr::PrError::Refused(said)) = both else {
+        panic!("{both:?}");
+    };
+    let said = said.join("\n");
+    assert!(
+        said.contains("T-001") && said.contains("task/T-002"),
+        "{said}"
+    );
+}
+
+#[test]
 fn pr_commits_its_description_to_the_state_repo() {
     let (f, _) = landed("exit 0");
     let (code, out) = f.harness(&["pr", "T-001"]);

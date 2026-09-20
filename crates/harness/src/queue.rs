@@ -151,9 +151,12 @@ pub fn ids_at(blocks: &[Block], status: &str) -> Vec<String> {
         .collect()
 }
 
-pub fn next_id(blocks: &[Block]) -> String {
+// an id a finished block took is never free again: `archived` is DECISIONS.md, and leaving it out
+// hands a live task the id of an archived one
+pub fn next_id(blocks: &[Block], archived: &[Block]) -> String {
     let high = blocks
         .iter()
+        .chain(archived)
         .filter_map(|b| b.id.strip_prefix("T-")?.parse::<u64>().ok())
         .max()
         .unwrap_or(0);
@@ -291,10 +294,17 @@ mod tests {
 
     #[test]
     fn next_id_follows_the_highest_id() {
-        assert_eq!(next_id(&parse(Q).unwrap()), "T-004");
-        assert_eq!(next_id(&[]), "T-001");
+        assert_eq!(next_id(&parse(Q).unwrap(), &[]), "T-004");
+        assert_eq!(next_id(&[], &[]), "T-001");
         let wide = parse("## [T-1204] a\n\n## [T-7] b\n").unwrap();
-        assert_eq!(next_id(&wide), "T-1205");
+        assert_eq!(next_id(&wide, &[]), "T-1205");
+    }
+
+    #[test]
+    fn next_id_never_reissues_an_archived_id() {
+        let live = parse(Q).unwrap();
+        let archived = parse("## [T-050] landed\nstatus: done\n").unwrap();
+        assert_eq!(next_id(&live, &archived), "T-051");
     }
 
     #[test]

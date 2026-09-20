@@ -136,7 +136,7 @@ pub fn append(text: &str, decisions: &str, issue: &Issue) -> Result<(String, Str
             url: issue.url.clone(),
         });
     }
-    let block = render(issue, &queue::next_id(&blocks));
+    let block = render(issue, &queue::next_id(&blocks, &archived));
     let mut next = text.trim_end_matches('\n').to_string();
     if !next.is_empty() {
         next.push_str("\n\n");

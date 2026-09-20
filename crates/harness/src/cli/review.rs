@@ -35,10 +35,16 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     }
     println!("  skipped: {} with no path", found.unanchored);
     println!("  skipped: {} resolved or outdated", found.settled);
-    if args.dry_run {
-        return Ok(0);
+    // what was read is kept; the exit code is what says the rest was never read
+    if !args.dry_run {
+        queue.write(&appended.queue)?;
+        println!("  queue: {}", queue.path.display());
     }
-    queue.write(&appended.queue)?;
-    println!("  queue: {}", queue.path.display());
+    if found.short {
+        eprintln!(
+            "enallagi review: more than one page of reviews, threads or comments, and only the first 100 of each were read"
+        );
+        return Ok(1);
+    }
     Ok(0)
 }

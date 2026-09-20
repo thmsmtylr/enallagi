@@ -1257,6 +1257,23 @@ fn init_writes_the_keys_the_runner_decides() {
 }
 
 #[test]
+fn a_second_job_is_not_part_of_the_check() {
+    let repo = node_repo();
+    repo.write(
+        ".github/workflows/ci.yml",
+        "name: ci\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - run: npm run typecheck\n      - run: npm test\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run build\n      - run: ./deploy.sh production\n",
+    );
+    repo.commit_all("a workflow that also deploys");
+    install(&repo);
+    let written: toml::Value =
+        toml::from_str(&read(&repo, ".enallagi/enallagi.toml")).expect("parse");
+    assert_eq!(
+        written["check"]["command"].as_str(),
+        Some("npm run typecheck && npm test")
+    );
+}
+
+#[test]
 fn init_names_the_file_a_detected_value_came_from() {
     let repo = node_repo();
     let report = install(&repo);

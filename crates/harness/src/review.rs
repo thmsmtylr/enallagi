@@ -4,13 +4,14 @@ use crate::issue;
 use crate::queue::{self, QueueError};
 use std::process::Command;
 
-// ponytail: first:100 on each list, so a pull request past a hundred threads reads short; paginate when one is
+// ponytail: first:100 on each list; a longer pull request is reported short rather than read, and
+// `hasNextPage` is what says so. Follow the cursors when one repository needs it.
 const QUERY: &str = concat!(
     "query($owner:String!,$repo:String!,$number:Int!){",
     "repository(owner:$owner,name:$repo){pullRequest(number:$number){",
-    "reviews(first:100){nodes{body}}",
-    "reviewThreads(first:100){nodes{isResolved isOutdated ",
-    "comments(first:100){nodes{path body url}}}}",
+    "reviews(first:100){pageInfo{hasNextPage} nodes{body}}",
+    "reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved isOutdated ",
+    "comments(first:100){pageInfo{hasNextPage} nodes{path body url}}}}",
     "}}}",
 );
 
@@ -27,6 +28,20 @@ pub enum ReviewError {
 #[derive(Debug, serde::Deserialize)]
 struct Nodes<T> {
     nodes: Vec<T>,
+    #[serde(rename = "pageInfo", default)]
+    page: Option<PageInfo>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PageInfo {
+    has_next_page: bool,
+}
+
+impl<T> Nodes<T> {
+    fn short(&self) -> bool {
+        self.page.as_ref().is_some_and(|p| p.has_next_page)
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -85,6 +100,8 @@ pub struct Found {
     pub anchored: Vec<Anchored>,
     pub unanchored: usize,
     pub settled: usize,
+    // a list came back at its page limit, so what follows was never read
+    pub short: bool,
 }
 
 #[derive(Debug, Default)]
@@ -150,9 +167,11 @@ fn collect(response: Response) -> Found {
         .count();
     let mut found = Found {
         unanchored,
+        short: pull.reviews.short() || pull.review_threads.short(),
         ..Found::default()
     };
     for thread in pull.review_threads.nodes {
+        found.short |= thread.comments.short();
         if thread.is_resolved || thread.is_outdated {
             found.settled += thread.comments.nodes.len();
             continue;
@@ -221,7 +240,7 @@ pub fn append(text: &str, decisions: &str, found: &Found) -> Result<Appended, Re
             out.carried.push((task, comment.url.clone()));
             continue;
         }
-        let block = render(comment, &queue::next_id(&blocks));
+        let block = render(comment, &queue::next_id(&blocks, &archived));
         if !next.is_empty() {
             next.push_str("\n\n");
         }

@@ -1664,9 +1664,9 @@ fn reference_config_links_the_guide() {
 const REVIEW_QUERY: &str = concat!(
     "query($owner:String!,$repo:String!,$number:Int!){",
     "repository(owner:$owner,name:$repo){pullRequest(number:$number){",
-    "reviews(first:100){nodes{body}}",
-    "reviewThreads(first:100){nodes{isResolved isOutdated ",
-    "comments(first:100){nodes{path body url}}}}",
+    "reviews(first:100){pageInfo{hasNextPage} nodes{body}}",
+    "reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved isOutdated ",
+    "comments(first:100){pageInfo{hasNextPage} nodes{path body url}}}}",
     "}}}",
 );
 
@@ -1678,6 +1678,7 @@ const SUMMARY: &str = include_str!("fixtures/reviews/summary.json");
 const SETTLED: &str = include_str!("fixtures/reviews/settled.json");
 const GENERATED: &str = include_str!("fixtures/reviews/generated.json");
 const PLAIN: &str = include_str!("fixtures/reviews/plain.json");
+const SHORT: &str = include_str!("fixtures/reviews/short.json");
 
 // everything a proposed block states before the comment's own words
 fn scaffold_of(block: &str) -> Vec<&str> {
@@ -1686,6 +1687,20 @@ fn scaffold_of(block: &str) -> Vec<&str> {
         .skip(1)
         .take_while(|l| !l.starts_with("notes:"))
         .collect()
+}
+
+#[test]
+fn a_short_read_is_kept_and_reported() {
+    let f = GhRepo::new(&review_gh(SHORT));
+    let out = f.review(&["owner/repo#13"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("only the first 100 of each were read"),
+        "{said}"
+    );
+    let blocks = enallagi::queue::parse(&f.tasks()).expect("parse");
+    assert_eq!(blocks.len(), 2, "the comment it did read is queued");
 }
 
 #[test]
