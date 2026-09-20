@@ -1178,3 +1178,54 @@ fn every_harness_dir_path_has_a_store() {
     missing.dedup();
     assert_eq!(missing, Vec::<String>::new());
 }
+
+#[test]
+fn no_comment_cites_an_issue_number() {
+    // ponytail: whole-line comments only, which is the shape the rule has been broken in; read a
+    // trailing comment too once a scan can tell one from a `//` inside a string literal
+    let cited = re(r"(?m)^[ \t]*//[^\n]*#[0-9]+");
+    assert!(
+        cited.is_match("// the seeded spec: owner/repo#49 rewrote it by hand"),
+        "the scan cannot report"
+    );
+
+    let root = repo_root();
+    // the rule is the citation's form and names no repository: an upstream citation in a fixture
+    // and a slug passed to a function are both accepted
+    for (rel, marker) in [
+        (
+            "crates/harness/tests/fixtures/harness.default.json",
+            "#34235",
+        ),
+        ("crates/harness/src/issue.rs", "a/b#7"),
+    ] {
+        let text = read(&root.join(rel));
+        let line = text
+            .lines()
+            .find(|l| l.contains(marker))
+            .unwrap_or_else(|| panic!("{rel} no longer carries {marker}"));
+        assert!(!cited.is_match(line), "{rel}: {line}");
+    }
+
+    let shipped = tracked(&root);
+    let crates = root.join("crates");
+    let mut scanned = 0;
+    for rel in walk(&crates) {
+        if rel.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        if !shipped.contains(&Path::new("crates").join(&rel)) {
+            continue;
+        }
+        let text = read(&crates.join(&rel));
+        scanned += 1;
+        assert!(
+            !cited.is_match(&text),
+            "crates/{}: {:?}",
+            rel.display(),
+            cited.find(&text).map(|m| m.as_str())
+        );
+    }
+    // an empty corpus is not a pass; `git ls-files 'crates/**/*.rs'` -> 77
+    assert!(scanned > 50, "{scanned} sources scanned");
+}
