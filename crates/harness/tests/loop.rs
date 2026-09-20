@@ -2919,6 +2919,29 @@ fn sync_prunes_a_removed_skill() {
 }
 
 #[test]
+fn sync_prunes_nothing_on_a_bad_lock_id() {
+    let r = synced_extra_skill();
+    let lock = enallagi::skills::lock_path(&r.root, ".enallagi");
+    let text = std::fs::read_to_string(&lock).expect("lock");
+    std::fs::write(
+        &lock,
+        format!(
+            "{text}\n[[skill]]\nid = \"zz/../victim\"\nsource = \"path:vendor/victim\"\nsha256 = \"0\"\n"
+        ),
+    )
+    .expect("append a bad lock id");
+
+    write_toml(&r, &base_toml(""));
+    let (code, out) = harness(&r.root, &["skills", "sync"]);
+    assert_ne!(code, 0, "{out}");
+    assert!(
+        r.root.join(".enallagi/skills/security/SKILL.md").is_file(),
+        "a pruned directory went before the bad id was read: {out}"
+    );
+    assert_eq!(locked_rev(&r, "security").as_deref(), Some("v1"), "{out}");
+}
+
+#[test]
 fn a_changed_rev_revendors_the_skill() {
     let r = synced_extra_skill();
     let vendored = r.root.join(".enallagi/skills/security/SKILL.md");
