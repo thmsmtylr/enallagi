@@ -28,13 +28,17 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     };
     let cfg = config::load(&root)?;
     let presets = agent::presets();
-    config::validate(&cfg, &presets, &|role| role_source(&root, &cfg, role)).map_err(|errs| {
-        anyhow::anyhow!(errs
+    // resolving skills runs no check, so a repository that has not set one still syncs and lists
+    if let Err(errs) = config::validate(&cfg, &presets, &|role| role_source(&root, &cfg, role)) {
+        let errs: Vec<String> = errs
             .iter()
+            .filter(|e| !matches!(e, config::ConfigError::EmptyCheck))
             .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join("\n"))
-    })?;
+            .collect();
+        if !errs.is_empty() {
+            anyhow::bail!(errs.join("\n"));
+        }
+    }
     // a custom preset has no directory of its own; layout.skills_dir or <harness_dir>/skills answers
     let preset = presets.get(&cfg.agent.preset);
     let ids: Vec<String> = cfg.skill.iter().map(|s| s.id.clone()).collect();

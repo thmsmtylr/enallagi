@@ -8,6 +8,8 @@ use std::process::Command;
 // a lane exports its own variables, and a spawned binary must read the fixture's tree, not the lane's
 pub fn command(bin: &str) -> Command {
     let mut cmd = Command::new(bin);
+    // CI=true freezes skill resolution, so a fixture run on a runner refuses every stage
+    cmd.env_remove("CI");
     crate::config::drop_legacy_env(&mut cmd);
     for (key, _) in std::env::vars() {
         if key.starts_with(crate::config::ENV) {
