@@ -1415,12 +1415,7 @@ impl GhRepo {
                 "state",
             ][..],
         ] {
-            let out = std::process::Command::new("git")
-                .args(args)
-                .current_dir(&state)
-                .output()
-                .expect("git");
-            assert!(out.status.success(), "{out:?}");
+            enallagi::git::git(&state, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"));
         }
         let tools = tempfile::tempdir().expect("tempdir");
         if !gh_body.is_empty() {

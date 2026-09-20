@@ -98,12 +98,7 @@ fn harness(cwd: &Path, args: &[&str]) -> (i32, String, String) {
 fn history(subjects: &[&str]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let git = |args: &[&str]| {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(dir.path())
-            .status()
-            .expect("spawn git");
-        assert!(status.success(), "git {args:?}");
+        enallagi::git::git(dir.path(), args).unwrap_or_else(|e| panic!("git {args:?}: {e}"));
     };
     git(&["init", "-q"]);
     git(&["config", "user.email", "t@t"]);
