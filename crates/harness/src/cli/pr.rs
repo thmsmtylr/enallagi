@@ -1,3 +1,5 @@
+//! `enallagi pr <tasks>` -- builds the branch and the description, and prints a refusal or a conflict instead of raising it.
+
 use crate::pr::{self, PrError, PrOpts};
 
 pub struct Args {

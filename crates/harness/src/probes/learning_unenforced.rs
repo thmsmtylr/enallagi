@@ -1,3 +1,5 @@
+//! A rule that names no file, no command and no hook. Nothing can run it, so it is advice and not enforcement.
+
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
 

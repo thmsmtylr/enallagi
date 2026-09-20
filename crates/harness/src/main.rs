@@ -1,3 +1,5 @@
+//! The binary. Refuses a retired environment variable and the retired `run <n>` form before clap sees either, then exits with the code `cli::run` returns.
+
 use clap::Parser;
 use enallagi::cli::Cli;
 

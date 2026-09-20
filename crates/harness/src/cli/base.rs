@@ -1,3 +1,5 @@
+//! `enallagi base <task>` -- prints the commit a task's work starts from, and nothing at all when there is none.
+
 use crate::{config, git};
 
 pub struct Args {

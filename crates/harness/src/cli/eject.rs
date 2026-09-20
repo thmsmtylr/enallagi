@@ -1,3 +1,5 @@
+//! `enallagi eject` -- removes the install and prints every path it took, kept or moved.
+
 use std::path::PathBuf;
 
 use crate::eject::{self, EjectOpts};

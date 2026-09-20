@@ -1,3 +1,5 @@
+//! Every git the harness runs. The repository it is pointed at decides the identity on a commit, never the process it was spawned from, and a split state repository is located rather than assumed.
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

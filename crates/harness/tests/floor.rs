@@ -722,6 +722,81 @@ fn no_identifier_names_a_task_or_a_step() {
     assert!(scanned > 50, "{scanned} sources scanned");
 }
 
+// `//!` is the only comment `cargo doc` renders onto the module's own page, so a summary written as
+// `//` or `///` does not count. No module is exempt, dispatchers included, and a header that only
+// repeats the path it sits at says nothing the reader did not already have.
+fn module_summary(rel: &Path, text: &str) -> Result<(), String> {
+    let Some(header) = text.lines().next().and_then(|l| l.strip_prefix("//!")) else {
+        return Err("no `//!` summary line".to_string());
+    };
+    let own: Vec<String> = rel
+        .with_extension("")
+        .components()
+        .flat_map(|c| {
+            c.as_os_str()
+                .to_string_lossy()
+                .to_lowercase()
+                .split('_')
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let header = header.to_lowercase();
+    let said = re("[a-z0-9]+")
+        .find_iter(&header)
+        .any(|w| w.as_str() != "rs" && !own.iter().any(|part| part == w.as_str()));
+    if said {
+        Ok(())
+    } else {
+        Err(format!("`//!{header}` restates the path"))
+    }
+}
+
+#[test]
+fn every_module_says_what_it_is() {
+    let at = |name: &str| PathBuf::from(name);
+    assert!(
+        module_summary(&at("git.rs"), "use std::path::Path;\n").is_err(),
+        "the scan cannot report"
+    );
+    assert!(
+        module_summary(&at("git.rs"), "//! git\n").is_err(),
+        "the scan cannot report"
+    );
+    assert!(
+        module_summary(&at("cli/mod.rs"), "//! cli/mod.rs\n").is_err(),
+        "the scan cannot report"
+    );
+    assert!(module_summary(&at("git.rs"), "//! Every command the loop runs.\n").is_ok());
+
+    let root = repo_root();
+    let shipped = tracked(&root);
+    let src = Path::new("crates/harness/src");
+    let mut blank = Vec::new();
+    let mut scanned = Vec::new();
+    for (rel, text) in crate_sources() {
+        if !shipped.contains(&src.join(&rel)) {
+            continue;
+        }
+        scanned.push(rel.display().to_string());
+        if let Err(why) = module_summary(&rel, &text) {
+            blank.push(format!("{}/{}: {why}", src.display(), rel.display()));
+        }
+    }
+    blank.sort();
+    assert!(
+        blank.is_empty(),
+        "{} without a summary: {blank:#?}",
+        blank.len()
+    );
+    // the two dispatchers are covered like every other module, not exempted
+    for named in ["cli/mod.rs", "main.rs"] {
+        assert!(scanned.contains(&named.to_string()), "{named} unscanned");
+    }
+    // an empty corpus is not a pass; `find crates/harness/src -name '*.rs' | wc -l` -> 66
+    assert!(scanned.len() > 60, "{} modules scanned", scanned.len());
+}
+
 #[test]
 fn one_matcher_answers_both_commit_callers() {
     let copies: Vec<String> = crate_sources()

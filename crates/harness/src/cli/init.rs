@@ -1,3 +1,5 @@
+//! `enallagi init` -- installs, or moves instance files into the harness directory, or prunes the defaulted keys out of enallagi.toml.
+
 use crate::config;
 use crate::init::{self, InitOpts};
 

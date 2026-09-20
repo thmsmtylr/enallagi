@@ -1,3 +1,5 @@
+//! `enallagi eval [names]` -- runs the suite, or one gate's cases, exiting 1 on a failure and 2 when it could not run.
+
 use crate::{eval, git};
 use std::path::PathBuf;
 

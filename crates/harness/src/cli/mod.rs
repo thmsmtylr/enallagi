@@ -1,3 +1,5 @@
+//! The parser and the dispatcher: one clap `Command` variant per subcommand, and `run` hands each to the sibling module of the same name.
+
 mod base;
 mod eject;
 mod eval;
