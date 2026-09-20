@@ -1378,18 +1378,18 @@ fn a_failing_fence_of_any_tag_fails_the_readme_run() {
     }
 }
 
-struct IssueRepo {
+struct GhRepo {
     repo: enallagi::fixture::Repo,
     tools: tempfile::TempDir,
 }
 
-impl IssueRepo {
+impl GhRepo {
     // the instance is committed in its own repository, so its porcelain lists only what the command wrote
-    fn new(gh_body: &str) -> IssueRepo {
-        IssueRepo::with_state(gh_body, &[])
+    fn new(gh_body: &str) -> GhRepo {
+        GhRepo::with_state(gh_body, &[])
     }
 
-    fn with_state(gh_body: &str, files: &[(&str, &str)]) -> IssueRepo {
+    fn with_state(gh_body: &str, files: &[(&str, &str)]) -> GhRepo {
         let repo = enallagi::fixture::Repo::new();
         repo.init_harness("");
         let state = repo.root.join(".enallagi");
@@ -1424,12 +1424,11 @@ impl IssueRepo {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         }
-        IssueRepo { repo, tools }
+        GhRepo { repo, tools }
     }
 
     // shell builtins only: PATH holds nothing but the stub
-    fn fixture_gh() -> String {
-        let json = include_str!("fixtures/issues/help-wanted.json");
+    fn gh_printing(json: &str) -> String {
         assert!(
             !json.contains('\''),
             "the fixture cannot sit in single quotes"
@@ -1437,16 +1436,28 @@ impl IssueRepo {
         format!("printf '%s\\n' \"$@\" >\"${{0%/*}}/gh.log\"\nprintf '%s' '{json}'\n")
     }
 
+    fn fixture_gh() -> String {
+        GhRepo::gh_printing(include_str!("fixtures/issues/help-wanted.json"))
+    }
+
     // PATH is the tools directory alone, so a missing stub is a missing gh
-    fn issue(&self, args: &[&str]) -> std::process::Output {
+    fn command(&self, name: &str, args: &[&str]) -> std::process::Output {
         enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
-            .arg("issue")
+            .arg(name)
             .args(args)
             .current_dir(&self.repo.root)
             .env_remove("ENALLAGI_DIR")
             .env("PATH", self.tools.path())
             .output()
-            .expect("run enallagi issue")
+            .expect("run enallagi")
+    }
+
+    fn issue(&self, args: &[&str]) -> std::process::Output {
+        self.command("issue", args)
+    }
+
+    fn review(&self, args: &[&str]) -> std::process::Output {
+        self.command("review", args)
     }
 
     fn tasks(&self) -> String {
@@ -1465,7 +1476,7 @@ impl IssueRepo {
 
 #[test]
 fn issue_appends_one_proposed_block() {
-    let f = IssueRepo::new(&IssueRepo::fixture_gh());
+    let f = GhRepo::new(&GhRepo::fixture_gh());
     let before = f.tasks();
 
     let out = f.issue(&["owner/repo#12"]);
@@ -1524,7 +1535,7 @@ notes: https://github.com/owner/repo/issues/12
 
 #[test]
 fn issue_dry_run_prints_and_writes_nothing() {
-    let f = IssueRepo::new(&IssueRepo::fixture_gh());
+    let f = GhRepo::new(&GhRepo::fixture_gh());
     let before = f.tasks();
 
     let out = f.issue(&["https://github.com/owner/repo/issues/12", "--dry-run"]);
@@ -1552,7 +1563,7 @@ fn issue_dry_run_prints_and_writes_nothing() {
 
 #[test]
 fn issue_refuses_an_issue_already_queued() {
-    let f = IssueRepo::new(&IssueRepo::fixture_gh());
+    let f = GhRepo::new(&GhRepo::fixture_gh());
     assert_eq!(f.issue(&["owner/repo#12"]).status.code(), Some(0));
     let once = f.tasks();
 
@@ -1573,8 +1584,8 @@ const LANDED_STUB: &str = "# TASKS\n\n## [T-001] landed\nstatus: done\narchived:
 fn issue_refuses_an_issue_already_archived() {
     let decisions = "# DECISIONS\n\n## Rejected findings\n\n## [T-001] landed\nstatus: done\n\
         notes: https://github.com/owner/repo/issues/12\n";
-    let f = IssueRepo::with_state(
-        &IssueRepo::fixture_gh(),
+    let f = GhRepo::with_state(
+        &GhRepo::fixture_gh(),
         &[("TASKS.md", LANDED_STUB), ("DECISIONS.md", decisions)],
     );
     for args in [&["owner/repo#12"][..], &["owner/repo#12", "--dry-run"][..]] {
@@ -1595,8 +1606,8 @@ fn issue_refuses_an_issue_already_archived() {
 fn issue_requeues_an_expired_finding() {
     let decisions = "# DECISIONS\n\n## Rejected findings\n\n## Expired findings\n\n\
         ## [T-001] landed\nstatus: proposed\nnotes: https://github.com/owner/repo/issues/12\n";
-    let f = IssueRepo::with_state(
-        &IssueRepo::fixture_gh(),
+    let f = GhRepo::with_state(
+        &GhRepo::fixture_gh(),
         &[("TASKS.md", LANDED_STUB), ("DECISIONS.md", decisions)],
     );
     let out = f.issue(&["owner/repo#12"]);
@@ -1613,7 +1624,7 @@ fn issue_names_the_gh_command_that_failed() {
         "echo 'GraphQL: Could not resolve to an issue with the number of 12.' >&2\nexit 1\n",
         "echo 'not json'\n",
     ] {
-        let f = IssueRepo::new(gh);
+        let f = GhRepo::new(gh);
         let before = f.tasks();
         let out = f.issue(&["owner/repo#12"]);
         assert_ne!(out.status.code(), Some(0), "{gh}: {out:?}");
@@ -1643,4 +1654,198 @@ fn reference_config_links_the_guide() {
         section.contains("](configuration.md)"),
         "Configuration never links configuration.md"
     );
+}
+
+const REVIEW_QUERY: &str = concat!(
+    "query($owner:String!,$repo:String!,$number:Int!){",
+    "repository(owner:$owner,name:$repo){pullRequest(number:$number){",
+    "reviews(first:100){nodes{body}}",
+    "reviewThreads(first:100){nodes{isResolved isOutdated ",
+    "comments(first:100){nodes{path body url}}}}",
+    "}}}",
+);
+
+fn review_gh(fixture: &str) -> String {
+    GhRepo::gh_printing(fixture)
+}
+
+const SUMMARY: &str = include_str!("fixtures/reviews/summary.json");
+const SETTLED: &str = include_str!("fixtures/reviews/settled.json");
+const GENERATED: &str = include_str!("fixtures/reviews/generated.json");
+const PLAIN: &str = include_str!("fixtures/reviews/plain.json");
+
+// everything a proposed block states before the comment's own words
+fn scaffold_of(block: &str) -> Vec<&str> {
+    block
+        .lines()
+        .skip(1)
+        .take_while(|l| !l.starts_with("notes:"))
+        .collect()
+}
+
+#[test]
+fn review_appends_one_block_per_comment() {
+    let f = GhRepo::new(&review_gh(SUMMARY));
+    let before = f.tasks();
+
+    let out = f.review(&["owner/repo#13"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+
+    let args = std::fs::read_to_string(f.tools.path().join("gh.log")).expect("gh ran");
+    assert_eq!(
+        args.lines().collect::<Vec<_>>(),
+        [
+            "api",
+            "graphql",
+            "-f",
+            &format!("query={REVIEW_QUERY}"),
+            "-f",
+            "owner=owner",
+            "-f",
+            "repo=repo",
+            "-F",
+            "number=13",
+        ]
+    );
+
+    let after = f.tasks();
+    assert!(after.starts_with(&before), "the queue was rewritten");
+    let blocks = enallagi::queue::parse(&after).expect("parse");
+    assert_eq!(blocks.len(), 3, "{after}");
+    let first = enallagi::queue::block_text(&blocks[1]);
+    assert_eq!(
+        first.trim_end(),
+        "\
+## [T-002] Refactor suggestion
+scope: src/date.rs
+blockedBy:
+status: proposed
+rows: none — harness
+criteria:
+  - <objective, and naming the command whose output changes when it is done>
+notes: https://github.com/owner/repo/pull/13#discussion_r1000000001
+  > ### Refactor suggestion
+  >
+  > `parse` drops the timezone when the offset is absent.
+  >
+  > ```suggestion
+  >     let offset = offset.unwrap_or(UTC);
+  > ```",
+        "{first}"
+    );
+    assert_eq!(blocks[2].id, "T-003");
+    assert_eq!(
+        enallagi::queue::field(&blocks[2], "scope").as_deref(),
+        Some("src/cli.rs")
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("  proposed: ## [T-002] "), "{stdout}");
+    assert!(stdout.contains("  proposed: ## [T-003] "), "{stdout}");
+    assert!(stdout.contains("  skipped: 1 with no path"), "{stdout}");
+}
+
+#[test]
+fn review_skips_a_resolved_or_outdated_thread() {
+    let f = GhRepo::new(&review_gh(SETTLED));
+    let out = f.review(&["https://github.com/owner/repo/pull/13"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+
+    let args = std::fs::read_to_string(f.tools.path().join("gh.log")).expect("gh ran");
+    assert!(args.contains("number=13"), "{args}");
+
+    let blocks = enallagi::queue::parse(&f.tasks()).expect("parse");
+    assert_eq!(blocks.len(), 2, "{}", f.tasks());
+    assert_eq!(
+        enallagi::queue::field(&blocks[1], "scope").as_deref(),
+        Some("src/cli.rs")
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("  skipped: 2 resolved or outdated"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn review_run_twice_appends_nothing() {
+    let f = GhRepo::new(&review_gh(SUMMARY));
+    assert_eq!(f.review(&["owner/repo#13"]).status.code(), Some(0));
+    let once = f.tasks();
+
+    let out = f.review(&["owner/repo#13"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(f.tasks(), once);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("proposed:"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "  carried: T-002 https://github.com/owner/repo/pull/13#discussion_r1000000001"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "  carried: T-003 https://github.com/owner/repo/pull/13#discussion_r1000000002"
+        ),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn review_dry_run_prints_and_writes_nothing() {
+    let f = GhRepo::new(&review_gh(SUMMARY));
+    let before = f.tasks();
+
+    let out = f.review(&["owner/repo#13", "--dry-run"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.starts_with("## [T-002] Refactor suggestion\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\n## [T-003] "), "{stdout}");
+    assert!(stdout.contains("status: proposed"), "{stdout}");
+    assert_eq!(f.tasks(), before);
+    assert_eq!(f.porcelain(), "");
+}
+
+#[test]
+fn a_generated_and_a_plain_comment_share_a_shape() {
+    let mut shapes = Vec::new();
+    for fixture in [GENERATED, PLAIN] {
+        let f = GhRepo::new(&review_gh(fixture));
+        let out = f.review(&["owner/repo#13", "--dry-run"]);
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            stdout.contains("notes: https://github.com/owner/repo/pull/13#discussion_r1000000003"),
+            "{stdout}"
+        );
+        shapes.push(
+            scaffold_of(&stdout)
+                .iter()
+                .map(|l| l.to_string())
+                .collect::<Vec<_>>(),
+        );
+    }
+    assert_eq!(shapes[0], shapes[1]);
+    assert_eq!(shapes[0][0], "scope: src/date.rs");
+}
+
+// a name in the source would be a filter on who reviewed; the command reads every open thread
+#[test]
+fn the_review_source_names_no_comment_author() {
+    const SOURCE: [(&str, &str); 2] = [
+        ("src/review.rs", include_str!("../src/review.rs")),
+        ("src/cli/review.rs", include_str!("../src/cli/review.rs")),
+    ];
+    for (name, text) in SOURCE {
+        let tokens: Vec<&str> = text
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .collect();
+        for named in ["author", "login", "user", "bot", "reviewer"] {
+            assert!(!tokens.contains(&named), "{name} says `{named}`");
+        }
+    }
 }

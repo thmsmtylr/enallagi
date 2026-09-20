@@ -15,6 +15,7 @@ pub mod pipeline;
 pub mod pr;
 pub mod probes;
 pub mod queue;
+pub mod review;
 pub mod roles;
 pub mod runners;
 pub mod skills;

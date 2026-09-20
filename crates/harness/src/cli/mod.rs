@@ -8,6 +8,7 @@ mod init;
 mod issue;
 mod pr;
 mod probe;
+mod review;
 mod run;
 mod skills;
 mod tasks;
@@ -128,6 +129,17 @@ pub enum Command {
         /// Issue URL, or owner/repo#n
         reference: String,
         /// Print the block and write nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Append a proposed block for each open comment on a pull request review
+    ///
+    /// Reads the comments with gh. A comment with no file anchor is skipped, and so is a resolved
+    /// or outdated one. Each block takes its scope from the comment's path.
+    Review {
+        /// Pull request URL, or owner/repo#n
+        reference: String,
+        /// Print the blocks and write nothing
         #[arg(long)]
         dry_run: bool,
     },
@@ -264,6 +276,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             policy_read,
         }),
         Command::Issue { reference, dry_run } => issue::run(&issue::Args { reference, dry_run }),
+        Command::Review { reference, dry_run } => review::run(&review::Args { reference, dry_run }),
         Command::Base { task } => base::run(&base::Args { task }),
         Command::Gate { which, task, base } => gate::run(&gate::Args { which, task, base }),
         Command::Hook { name } => hook::run(&hook::Args { name }),
@@ -295,12 +308,12 @@ mod tests {
     const CI: &str = include_str!("../../../../.github/workflows/ci.yml");
     const RELEASE: &str = include_str!("../../../../.github/workflows/release.yml");
 
-    const SUBCOMMANDS: [&str; 15] = [
-        "init", "eject", "run", "watch", "probe", "pr", "issue", "base", "gate", "hook", "skills",
-        "tasks", "eval", "events", "worktree",
+    const SUBCOMMANDS: [&str; 16] = [
+        "init", "eject", "run", "watch", "probe", "pr", "issue", "review", "base", "gate", "hook",
+        "skills", "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 25] = [
+    const FLAGS: [&str; 26] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
@@ -320,6 +333,7 @@ mod tests {
         "pr --push",
         "pr --policy-read",
         "issue --dry-run",
+        "review --dry-run",
         "gate --base",
         "eval --gate",
         "events --role",
@@ -411,7 +425,7 @@ jobs:
     }
 
     #[test]
-    fn the_subcommand_set_is_the_reviewed_fifteen() {
+    fn the_subcommand_set_is_the_reviewed_sixteen() {
         let cmd = Cli::command();
         let names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
         assert_eq!(names, SUBCOMMANDS);
@@ -459,7 +473,7 @@ jobs:
         let wide: Vec<&str> = help.lines().filter(|l| l.chars().count() > 100).collect();
         assert!(wide.is_empty(), "past 100 columns: {wide:#?}");
         let lines = help.lines().count();
-        assert!(lines <= 24, "--help is {lines} lines");
+        assert!(lines <= 25, "--help is {lines} lines");
     }
 
     #[test]

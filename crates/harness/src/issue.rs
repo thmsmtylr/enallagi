@@ -68,7 +68,7 @@ pub fn read(reference: &str) -> Result<Issue, IssueError> {
 }
 
 // `.../issues/12` is a prefix of `.../issues/123`, so a match followed by a digit is another issue
-fn carries(line: &str, url: &str) -> bool {
+pub(crate) fn carries(line: &str, url: &str) -> bool {
     line.match_indices(url).any(|(at, _)| {
         !line[at + url.len()..]
             .chars()
@@ -77,27 +77,47 @@ fn carries(line: &str, url: &str) -> bool {
     })
 }
 
-// the body is quoted line by line, so a fence or a heading in it cannot end the block
-pub fn render(issue: &Issue, id: &str) -> String {
-    let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
-    let mut lines = vec![
-        queue::heading(id, issue.title.trim()),
-        "scope: src/thing.ts, src/thing.test.ts".to_string(),
+// the fields a proposed block carries before anyone writes what done means
+pub(crate) fn scaffold(id: &str, title: &str, scope: &str) -> Vec<String> {
+    vec![
+        queue::heading(id, title),
+        format!("scope: {scope}"),
         "blockedBy:".to_string(),
         "status: proposed".to_string(),
         "rows: none — harness".to_string(),
         "criteria:".to_string(),
         "  - <objective, and naming the command whose output changes when it is done>".to_string(),
-        format!("notes: {}", issue.url),
-        format!("  labels: {}", labels.join(", ")),
-    ];
-    for line in issue.body.lines() {
+    ]
+}
+
+// quoted line by line, so a fence or a heading in the text cannot end the block
+pub(crate) fn quote(text: &str, lines: &mut Vec<String>) {
+    for line in text.lines() {
         lines.push(format!("  > {line}").trim_end().to_string());
     }
+}
+
+pub fn render(issue: &Issue, id: &str) -> String {
+    let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
+    let mut lines = scaffold(id, issue.title.trim(), "src/thing.ts, src/thing.test.ts");
+    lines.push(format!("notes: {}", issue.url));
+    lines.push(format!("  labels: {}", labels.join(", ")));
+    quote(&issue.body, &mut lines);
     lines.join("\n")
 }
 
-fn carrier<'a>(mut blocks: impl Iterator<Item = &'a queue::Block>, url: &str) -> Option<String> {
+// an archived stub carries no notes:, so a landed finding is found in DECISIONS.md; an expired one may return
+pub(crate) fn expired_at(decisions: &str) -> usize {
+    decisions
+        .split('\n')
+        .position(|l| l.trim_end() == "## Expired findings")
+        .map_or(usize::MAX, |i| i + 1)
+}
+
+pub(crate) fn carrier<'a>(
+    mut blocks: impl Iterator<Item = &'a queue::Block>,
+    url: &str,
+) -> Option<String> {
     blocks
         .find(|b| b.body.iter().any(|(_, l)| carries(l, url)))
         .map(|b| b.id.clone())
@@ -106,11 +126,7 @@ fn carrier<'a>(mut blocks: impl Iterator<Item = &'a queue::Block>, url: &str) ->
 // returns the block and the queue with it appended
 pub fn append(text: &str, decisions: &str, issue: &Issue) -> Result<(String, String), IssueError> {
     let blocks = queue::parse(text)?;
-    // an archived stub carries no notes:, so a landed issue is found in DECISIONS.md; an expired one may return
-    let expired = decisions
-        .split('\n')
-        .position(|l| l.trim_end() == "## Expired findings")
-        .map_or(usize::MAX, |i| i + 1);
+    let expired = expired_at(decisions);
     let archived = queue::parse(decisions)?;
     let queued = carrier(blocks.iter(), &issue.url)
         .or_else(|| carrier(archived.iter().filter(|b| b.line < expired), &issue.url));

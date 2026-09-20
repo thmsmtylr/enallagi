@@ -133,7 +133,7 @@ Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGE
 - `run` drives the pipelines in place. `worktree` drives them in an isolated checkout.
 - `watch` attaches to a live loop. `events` queries the log.
 - `tasks` reads and edits the queue. `base` prints the commit a task was queued against.
-- `issue` appends a GitHub issue to the queue as a `proposed` task.
+- `issue` appends a GitHub issue, and `review` a pull request's review comments, as `proposed` tasks.
 - `probe` reports findings. `gate` runs one gate. `hook` is the agent's lifecycle entry point.
 - `skills` resolves declared skills. `eval` runs the evals. `pr` builds a pull request.
 
