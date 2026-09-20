@@ -137,6 +137,10 @@ post = ["commit-round", "queue-intact", "adjudicator-halt", "dry-round"]
 // base_toml alone falls back to the shipped `[[skill]]` table, whose sources are github clones, and
 // the test then reaches the network.
 fn write_toml(r: &Repo, toml: &str) {
+    write_toml_at(r, "enallagi.toml", toml);
+}
+
+fn write_toml_at(r: &Repo, rel: &str, toml: &str) {
     let full = format!("{toml}{}", r.local_skills(toml));
     // built, never written literally: the floor test greps this tree for the literal
     let remote = concat!("source = \"", "github:");
@@ -144,7 +148,7 @@ fn write_toml(r: &Repo, toml: &str) {
         !full.contains(remote) && !full.contains("source = \"git+"),
         "a fixture config may not name a remote skill source:\n{full}"
     );
-    r.write("enallagi.toml", &full);
+    r.write(rel, &full);
 }
 
 fn repo(toml: &str, tasks: &str) -> Repo {
@@ -240,8 +244,33 @@ fn ends(events: &[Event]) -> Vec<&Kind> {
 }
 
 fn plan_of(repo: &Repo) -> String {
+    plan_named(repo, &[])
+}
+
+fn plan_named(repo: &Repo, pipelines: &[&str]) -> String {
     let cfg = enallagi::config::load(&repo.root).expect("load");
-    pipeline::plan(&repo.root, &cfg).expect("plan")
+    let names: Vec<String> = pipelines.iter().map(|p| p.to_string()).collect();
+    pipeline::plan(&repo.root, &cfg, &names).expect("plan")
+}
+
+fn headings(plan: &str) -> Vec<&str> {
+    plan.lines()
+        .filter(|l| l.starts_with("=== pipeline"))
+        .collect()
+}
+
+#[test]
+fn a_dry_plan_skips_a_pipeline_left_unnamed() {
+    let r = repo(&base_toml(""), REVIEW_AND_READY_TASKS);
+    let all = plan_of(&r);
+    assert_eq!(headings(&all).len(), 2, "{all}");
+
+    let filtered = plan_named(&r, &["task"]);
+    assert_eq!(
+        headings(&filtered),
+        ["=== pipeline task (queue.takeable) ==="],
+        "{filtered}"
+    );
 }
 
 #[test]
@@ -391,6 +420,57 @@ fn every_stage_appends_a_run_log_record() {
 }
 
 #[test]
+fn the_verdict_gate_records_the_check_tally() {
+    let r = repo("", "");
+    script(
+        &r,
+        "src/fakecheck.sh",
+        "echo 'test result: ok. 237 passed; 0 failed; 0 ignored'\n\
+         echo 'test result: ok. 239 passed; 0 failed; 5 ignored'\n",
+    );
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let (digest, events) = go(&r, &opts(1));
+    let tally = events.iter().find_map(|e| match &e.kind {
+        Kind::Gate { gate, tally, .. } if gate == "verdict" => *tally,
+        _ => None,
+    });
+    let tally = tally.unwrap_or_else(|| panic!("no verdict tally: {events:#?}"));
+    assert_eq!((tally.passed, tally.ignored, tally.lines), (476, 5, 2));
+    assert!(
+        !digest.warnings.iter().any(|w| w.contains("test result:")),
+        "{:?}",
+        digest.warnings
+    );
+}
+
+#[test]
+fn a_check_with_no_count_warns_in_the_digest() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+
+    let (digest, _) = go(&r, &opts(1));
+    assert!(
+        digest
+            .warnings
+            .iter()
+            .any(|w| w == "the check printed no `test result:` line: `./src/fakecheck.sh`"),
+        "{:?}",
+        digest.warnings
+    );
+    let text = enallagi::pipeline::digest_text(&digest);
+    assert!(text.contains("./src/fakecheck.sh"), "{text}");
+}
+
+#[test]
 fn the_record_carries_role_seconds_cost() {
     let r = repo("", "");
     let implement = implementer(&r, "");
@@ -501,6 +581,64 @@ fn a_token_budget_counts_the_cache_lanes() {
     let (digest, events) = go(&r, &o);
     assert!(
         digest.halts.iter().any(|h| h.contains("566820 tokens")),
+        "{:?}",
+        digest.halts
+    );
+    assert_eq!(ends(&events).len(), 1, "{events:#?}");
+}
+
+// the result line of CACHED with its two cache lanes gone
+const UNCACHED: &str =
+    "echo '{\"total_cost_usd\":0.5,\"usage\":{\"input_tokens\":22,\"output_tokens\":6233}}'\n";
+
+#[test]
+fn an_unreported_declared_lane_halts_the_budget() {
+    let r = repo(&base_toml(""), TASKS);
+    script(&r, "src/fakeagent.sh", UNCACHED);
+    r.commit_all("uncached usage");
+    let o = RunOpts {
+        budget_tokens: Some(100_000),
+        ..opts(1)
+    };
+    let (digest, events) = go(&r, &o);
+    assert!(
+        digest.halts.iter().any(|h| h
+            .contains("[agent.usage].cache_creation_input_tokens and .cache_read_input_tokens")),
+        "{:?}",
+        digest.halts
+    );
+    assert_eq!(ends(&events).len(), 1, "{events:#?}");
+}
+
+#[test]
+fn a_two_lane_usage_table_enforces_the_budget() {
+    let toml = base_toml("")
+        .replace(
+            "cache_creation_input_tokens = \"usage.cache_creation_input_tokens\"\n",
+            "",
+        )
+        .replace(
+            "cache_read_input_tokens = \"usage.cache_read_input_tokens\"\n",
+            "",
+        );
+    let r = repo(&toml, TASKS);
+    script(&r, "src/fakeagent.sh", UNCACHED);
+    r.commit_all("two-lane usage");
+    let o = RunOpts {
+        budget_tokens: Some(1_000),
+        ..opts(1)
+    };
+    let (digest, events) = go(&r, &o);
+    assert!(
+        digest.halts.iter().any(|h| h.contains("6255 tokens")),
+        "{:?}",
+        digest.halts
+    );
+    assert!(
+        !digest
+            .halts
+            .iter()
+            .any(|h| h.contains("cannot be enforced")),
         "{:?}",
         digest.halts
     );
@@ -659,6 +797,7 @@ fn run_without_a_tty_prints_one_line_per_event() {
     let verify = verifier(&r);
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
     r.write("TASKS.md", TASKS);
+    installed(&r);
     r.commit_all("stubs");
 
     // this asserts what a tty-less run prints; CI would make the run --frozen and refuse the
@@ -684,6 +823,7 @@ fn harness_run_exits_2_on_a_refused_config() {
         &base_toml("").replace("\"commit-round\"", "\"nope\""),
         TASKS,
     );
+    installed(&r);
     let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["run", "--no-tui", "--iterations", "1"])
         .current_dir(&r.root)
@@ -691,6 +831,54 @@ fn harness_run_exits_2_on_a_refused_config() {
         .expect("run enallagi run");
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("nope"));
+}
+
+// the binary refuses a tree whose install does not match enallagi.toml, so a fixture it drives is installed
+fn installed(r: &Repo) {
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+}
+
+fn harness(root: &std::path::Path, args: &[&str]) -> (i32, String) {
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(args)
+        .current_dir(root)
+        // CI freezes the run, which refuses the fixture's skills before the stage
+        .env_remove("CI")
+        .output()
+        .expect("run enallagi");
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.code().unwrap_or(-1), text)
+}
+
+// the first external run's shape: enallagi.toml's check was edited and no one re-ran init
+#[test]
+fn a_stale_install_refuses_the_run_until_init() {
+    let r = Repo::new();
+    script(&r, "src/fakecheck.sh", "exit 0\n");
+    script(&r, "src/fakeagent.sh", QUIET);
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+
+    write_toml_at(&r, ".enallagi/enallagi.toml", &base_toml(""));
+    r.write(".enallagi/TASKS.md", TASKS);
+    r.commit_all("a check the install has not seen");
+
+    let (code, out) = harness(&r.root, &["run", "--no-tui", "--iterations", "1"]);
+    assert_ne!(code, 0, "{out}");
+    assert!(
+        out.contains("check-unnamed") || out.contains("install-stale"),
+        "{out}"
+    );
+    assert!(out.contains("enallagi init"), "{out}");
+    let log = std::fs::read_to_string(r.root.join(".enallagi/events.jsonl")).unwrap_or_default();
+    assert!(!log.contains("stage.start"), "{log}");
+
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+    let (_, out) = harness(&r.root, &["run", "--no-tui", "--iterations", "1"]);
+    assert!(out.contains("stage.start"), "{out}");
 }
 
 const SKILL: &str = r#"
@@ -1797,11 +1985,16 @@ fn a_verdict_filing_nothing_skips_adjudicate() {
     assert_eq!(digest.landed, vec!["T-001".to_string()]);
 }
 
-// one fixture, both arms: what the verifier files decides whether the stage spawns at all
-fn adjudicating(filed: &str) -> Digest {
+// one fixture, every arm: what the verifier files decides whether the stage spawns at all, and the
+// adjudicator's body decides how it ended
+fn adjudicating_with(filed: &str, body: &str) -> Digest {
     let r = repo("", "");
-    draining(&r, filed, "");
+    draining(&r, filed, body);
     go(&r, &opts(1)).0
+}
+
+fn adjudicating(filed: &str) -> Digest {
+    adjudicating_with(filed, "")
 }
 
 #[test]
@@ -1820,6 +2013,27 @@ fn the_digest_tells_no_adjudicator_from_no_decision() {
 }
 
 #[test]
+fn a_halted_adjudicator_is_not_a_decision() {
+    let halted = pipeline::digest_text(&adjudicating_with(
+        FILED,
+        "echo 'HALT T-009: the fix needs SPEC.md'\n",
+    ));
+    assert!(
+        halted.contains("findings: the adjudicator could not decide"),
+        "{halted}"
+    );
+}
+
+#[test]
+fn a_nonzero_adjudicator_is_not_a_decision() {
+    let failed = pipeline::digest_text(&adjudicating_with(FILED, "exit 1\n"));
+    assert!(
+        failed.contains("findings: the adjudicator could not decide"),
+        "{failed}"
+    );
+}
+
+#[test]
 fn a_stage_at_its_turn_cap_is_named_in_the_digest() {
     let r = repo(&base_toml(""), "");
     r.write("TASKS.md", "# queue\n");
@@ -1833,6 +2047,78 @@ fn a_stage_at_its_turn_cap_is_named_in_the_digest() {
     let (digest, _) = go(&r, &opts(1));
     let text = pipeline::digest_text(&digest);
     assert!(text.contains("turn caps hit:\n  scout: turns 5"), "{text}");
+}
+
+#[test]
+fn digest_and_probe_agree_past_the_turn_cap() {
+    use enallagi::probes::telemetry::{turns_exhausted, ProbeResult};
+    let r = repo(&base_toml(""), "");
+    r.write("TASKS.md", "# queue\n");
+    script(
+        &r,
+        "src/fakeagent.sh",
+        "echo '{\"total_cost_usd\":0.5,\"num_turns\":6}'\n",
+    );
+    r.commit_all("a scout reporting one turn past its cap");
+
+    let (digest, _) = go(&r, &opts(1));
+    let in_digest = pipeline::digest_text(&digest).contains("scout: turns 5");
+    let cfg = enallagi::config::load(&r.root).expect("config");
+    let log = enallagi::events::Log::open(&r.root.join(".enallagi"));
+    let ProbeResult::Count(findings) = turns_exhausted(&log, &cfg) else {
+        panic!("turns_exhausted could not read the log");
+    };
+    let in_probe = findings.iter().any(|f| f.message.contains("stage scout"));
+    assert_eq!(in_digest, in_probe, "digest {in_digest}, probe {in_probe}");
+}
+
+#[test]
+fn an_uncapped_stage_is_not_named_as_a_turn_cap() {
+    let toml = base_toml("").replace(
+        r#"command = ["./src/fakeagent.sh", "{prompt}", "{turns}"]"#,
+        r#"command = ["./src/fakeagent.sh", "{prompt}"]"#,
+    );
+    let r = repo(&toml, "");
+    r.write("TASKS.md", "# queue\n");
+    script(
+        &r,
+        "src/fakeagent.sh",
+        "echo '{\"total_cost_usd\":0.5,\"num_turns\":5}'\n",
+    );
+    r.commit_all("a scout whose command carries no turn flag");
+
+    let (digest, _) = go(&r, &opts(1));
+    let text = pipeline::digest_text(&digest);
+    assert!(!text.contains("turn caps hit:"), "{text}");
+}
+
+#[test]
+fn a_timed_out_stage_is_named_as_a_timeout() {
+    let toml = base_toml("")
+        .replace(
+            r#"command = ["./src/fakeagent.sh", "{prompt}", "{turns}"]"#,
+            r#"command = ["./src/fakeagent.sh", "{prompt}", "{timeout}"]"#,
+        )
+        .replace(
+            "name = \"scout\"\nrole = \"scout\"\nturns = 5\n",
+            "name = \"scout\"\nrole = \"scout\"\nturns = 5\ntimeout = \"1s\"\n",
+        );
+    let r = repo(&toml, "");
+    r.write("TASKS.md", "# queue\n");
+    script(
+        &r,
+        "src/fakeagent.sh",
+        "echo '{\"total_cost_usd\":0.5,\"num_turns\":5}'\nsleep 5\n",
+    );
+    r.commit_all("a scout that outlives its stage timeout");
+
+    let (digest, _) = go(&r, &opts(1));
+    let text = pipeline::digest_text(&digest);
+    assert!(
+        text.contains("timeouts hit:\n  scout: timeout 1s"),
+        "{text}"
+    );
+    assert!(!text.contains("turn caps hit:"), "{text}");
 }
 
 #[test]
@@ -2001,6 +2287,66 @@ fn the_adjudicator_prompt_names_the_filed_ids() {
     assert!(prompt.contains("T-009"), "{prompt}");
 }
 
+const REJECTED_TASK: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.ts, implement-prompt
+rows: none — harness
+status: ready
+criteria:
+  - it happens
+notes: REJECTED: the red deleted the whole call site, so it covered no branch.
+";
+
+fn implementing(r: &Repo, tasks: &str) {
+    let implement = implementer(r, "printf '%s' \"$1\" >implement-prompt\n");
+    let verify = verifier(r);
+    write_toml(r, &base_toml(&role_commands(&implement, &verify)));
+    r.write("TASKS.md", tasks);
+    r.commit_all("stubs");
+}
+
+fn implement_prompt(r: &Repo) -> String {
+    std::fs::read_to_string(r.root.join("implement-prompt")).expect("the prompt")
+}
+
+#[test]
+fn the_implement_prompt_names_a_rejected_attempt() {
+    let r = repo("", "");
+    implementing(&r, REJECTED_TASK);
+    r.write("src/thing.ts", "first attempt\n");
+    r.commit_all("T-001: first attempt");
+    let attempt = enallagi::git::head(&r.root).expect("the attempt sha");
+
+    go(&r, &opts(1));
+    let prompt = implement_prompt(&r);
+    assert!(prompt.contains(&format!("git show {attempt}")), "{prompt}");
+    assert!(prompt.contains("it covered no branch"), "{prompt}");
+}
+
+#[test]
+fn a_task_with_no_attempt_leaves_the_prompt_alone() {
+    let r = repo("", "");
+    implementing(&r, REJECTED_TASK);
+
+    go(&r, &opts(1));
+    let prompt = implement_prompt(&r);
+    assert!(!prompt.contains("prior implementation attempt"), "{prompt}");
+    assert!(!prompt.contains("git show"), "{prompt}");
+}
+
+#[test]
+fn a_longer_id_is_not_read_as_a_prior_attempt() {
+    let r = repo("", "");
+    implementing(&r, REJECTED_TASK);
+    r.write("src/thing.ts", "another task\n");
+    r.commit_all("T-0012: a different task");
+
+    go(&r, &opts(1));
+    let prompt = implement_prompt(&r);
+    assert!(!prompt.contains("prior implementation attempt"), "{prompt}");
+}
+
 #[test]
 fn a_task_round_does_not_spend_the_discovery_budget() {
     let r = repo("", "");
@@ -2039,4 +2385,836 @@ fn a_promotion_repeating_a_noted_verdict_is_refused() {
         .iter()
         .find(|w| w.contains("T-009") && w.contains("T-001") && w.contains(NOTED_REJECTION));
     assert!(named.is_some(), "{:?}", digest.warnings);
+}
+
+fn standing(n: u32) -> String {
+    format!("\n## [T-{n}] a standing proposal\n\nscope: src/thing.ts\nrows: none — harness\nstatus: proposed\ncriteria:\n  - it happens\n")
+}
+
+#[test]
+fn a_standing_pile_drains_oldest_first() {
+    let r = repo("", "");
+    let verify = rejecting_verifier(&r);
+    let implement = implementer(&r, "");
+    let adj = adjudicator(
+        &r,
+        "printf '%s' \"$1\" >adjudicate-prompt\nprintf '%s' \"$2\" >adjudicate-turns\n",
+    );
+    let roles = format!(
+        "{}{}",
+        role_commands(&implement, &verify),
+        role_command("adjudicator", &adj)
+    );
+    write_toml(
+        &r,
+        &base_toml(&format!("{roles}\n[queue]\nproposed_rounds = 100\n")),
+    );
+    r.write("TASKS.md", TASKS);
+    r.write("src/filed.md", FILED);
+    r.commit_all("stubs");
+
+    // one commit each, oldest first: the state commit that added a heading is what orders the pile
+    for n in 101..=110 {
+        let mut tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+        tasks.push_str(&standing(n));
+        r.write("TASKS.md", &tasks);
+        r.commit_all(&format!("file T-{n}"));
+    }
+
+    go(&r, &opts(1));
+    let prompt = std::fs::read_to_string(r.root.join("adjudicate-prompt")).expect("the prompt");
+    assert!(prompt.contains("T-009"), "{prompt}");
+    for n in 101..=103 {
+        assert!(
+            prompt.contains(&format!("T-{n}")),
+            "T-{n} missing: {prompt}"
+        );
+    }
+    for n in 104..=110 {
+        assert!(
+            !prompt.contains(&format!("T-{n}")),
+            "T-{n} handed: {prompt}"
+        );
+    }
+
+    let turns = std::fs::read_to_string(r.root.join("adjudicate-turns")).expect("the turns");
+    assert_eq!(turns, "105");
+}
+
+#[test]
+fn the_dry_plan_prints_the_adjudicate_cap() {
+    let tasks = format!("{TASKS}{}{}", standing(101), standing(102));
+    let r = repo(&base_toml(""), &tasks);
+    let plan = plan_of(&r);
+    assert!(
+        plan.contains("adjudicate as role adjudicator via ./src/fakeagent.sh (turns: 55,"),
+        "{plan}"
+    );
+}
+
+#[test]
+fn the_digest_counts_standing_and_expired() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    let roles = role_commands(&implement, &verify);
+    write_toml(
+        &r,
+        &base_toml(&format!(
+            "{roles}\n[queue]\ndrain = 0\nproposed_rounds = 20\n"
+        )),
+    );
+    r.write("TASKS.md", &format!("{TASKS}{}", standing(100)));
+    r.commit_all("stubs");
+
+    // far more commits than proposed_rounds, so only T-100 is past the bound whatever the round commits
+    for n in 1..=30 {
+        r.write("filler.txt", &n.to_string());
+        r.commit_all(&format!("filler {n}"));
+    }
+    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    r.write(
+        "TASKS.md",
+        &format!("{tasks}{}{}", standing(101), standing(102)),
+    );
+    r.commit_all("two fresh proposals");
+
+    let (digest, _) = go(&r, &opts(1));
+    let text = pipeline::digest_text(&digest);
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("proposed: "))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(line.starts_with("proposed: 2 standing, oldest "), "{line}");
+    assert!(line.ends_with(" rounds, expired 1"), "{line}");
+}
+
+fn named(pipelines: &[&str], max_iter: u32) -> RunOpts {
+    RunOpts {
+        max_iter,
+        pipelines: pipelines.iter().map(|p| p.to_string()).collect(),
+        ..RunOpts::default()
+    }
+}
+
+// no TASKS.md and a scout stub: `!queue.takeable` holds and discover is the round's pipeline
+fn empty_queue_with_scout() -> Repo {
+    let r = repo("", "");
+    let scout = script(&r, "src/fakescout.sh", QUIET);
+    write_toml(&r, &base_toml(&role_command("scout", &scout)));
+    r.commit_all("a scout");
+    r
+}
+
+#[test]
+fn only_a_named_pipeline_runs_its_stages() {
+    let (_, events) = go(&empty_queue_with_scout(), &named(&["discover"], 1));
+    assert!(
+        stages_started(&events).contains(&"scout".to_string()),
+        "{events:#?}"
+    );
+
+    let (_, events) = go(&empty_queue_with_scout(), &named(&["task"], 1));
+    assert!(stages_started(&events).is_empty(), "{events:#?}");
+}
+
+#[test]
+fn a_filtered_round_with_nothing_to_run_ends() {
+    let (digest, events) = go(&empty_queue_with_scout(), &named(&["task"], 3));
+    assert_eq!(digest.iterations, 1, "{digest:#?}");
+    let warnings = events
+        .iter()
+        .find_map(|e| match &e.kind {
+            Kind::RunEnd { warnings, .. } => Some(warnings.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{events:#?}"));
+    assert!(
+        warnings.iter().any(|w| w.contains("--pipeline task")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn an_unnamed_run_still_reaches_discover() {
+    let (_, events) = go(&empty_queue_with_scout(), &opts(1));
+    assert!(
+        stages_started(&events).contains(&"scout".to_string()),
+        "{events:#?}"
+    );
+}
+
+#[test]
+fn an_unknown_pipeline_name_is_refused() {
+    let r = repo(&base_toml(""), TASKS);
+    let (outcome, events) = try_go(&r, &named(&["nope"], 1));
+    let err = outcome.expect_err("refused");
+    assert!(err.downcast_ref::<pipeline::Refused>().is_some(), "{err}");
+    let text = err.to_string();
+    for name in ["nope", "review", "task", "discover"] {
+        assert!(text.contains(name), "{text}");
+    }
+    assert!(stages_started(&events).is_empty(), "{events:#?}");
+}
+
+// a stop arrives as a signal to a process, so these drive the binary rather than pipeline::run
+fn sleeping_agent() -> Repo {
+    let r = repo(&base_toml(""), TASKS);
+    script(
+        &r,
+        "src/fakeagent.sh",
+        "echo $$ >agent.pid\nsleep 120 &\necho $! >child.pid\nsleep 120\n",
+    );
+    r.commit_all("a sleeping agent");
+    installed(&r);
+    r
+}
+
+fn alive(pid: &str) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", pid])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn pid_from(path: &std::path::Path) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            let pid = text.trim().to_string();
+            if !pid.is_empty() {
+                return pid;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("{} was never written", path.display());
+}
+
+fn stop_leaves_nothing_running(signal: &str) -> Vec<Event> {
+    let r = sleeping_agent();
+    let mut launcher = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["run", "--iterations", "1", "--no-tui"])
+        .current_dir(&r.root)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("enallagi run");
+    let child = pid_from(&r.root.join("child.pid"));
+    let agent = pid_from(&r.root.join("agent.pid"));
+
+    let sent = std::process::Command::new("kill")
+        .args([&format!("-{signal}"), &launcher.id().to_string()])
+        .status()
+        .expect("signal the launcher");
+    assert!(sent.success(), "{signal} was not delivered");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while (alive(&agent) || alive(&child)) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(!alive(&agent), "the agent {agent} outlived the launcher");
+    assert!(!alive(&child), "the agent's child {child} outlived it");
+    launcher.wait().expect("the launcher exited");
+
+    let log = enallagi::events::Log::open(&r.root.join(".enallagi"))
+        .read()
+        .expect("events.jsonl");
+    assert!(
+        log.iter()
+            .any(|e| matches!(&e.kind, Kind::Halt { halt, .. } if halt == "signal")),
+        "{log:#?}"
+    );
+    assert!(
+        matches!(log.last().map(|e| &e.kind), Some(Kind::RunEnd { .. })),
+        "{log:#?}"
+    );
+    log
+}
+
+#[test]
+fn a_sigterm_stops_the_lane_and_its_child() {
+    stop_leaves_nothing_running("TERM");
+}
+
+#[test]
+fn a_sigint_stops_the_lane_and_its_child() {
+    stop_leaves_nothing_running("INT");
+}
+
+#[test]
+fn a_stopped_stage_still_records_its_end() {
+    let log = stop_leaves_nothing_running("TERM");
+    let at = |p: fn(&Kind) -> bool| log.iter().position(|e| p(&e.kind));
+    let start = at(|k| matches!(k, Kind::StageStart { stage, .. } if stage == "implement"))
+        .unwrap_or_else(|| panic!("no stage.start for implement: {log:#?}"));
+    let end = at(
+        |k| matches!(k, Kind::StageEnd { stage, exit, .. } if stage == "implement" && *exit != 0),
+    )
+    .unwrap_or_else(|| panic!("the stopped stage logged no end and no exit: {log:#?}"));
+    let run_end =
+        at(|k| matches!(k, Kind::RunEnd { .. })).unwrap_or_else(|| panic!("no run.end: {log:#?}"));
+    assert!(start < end && end < run_end, "{log:#?}");
+}
+
+#[test]
+fn a_sigterm_stops_a_running_check() {
+    let r = repo(
+        &base_toml(&role_commands("./src/fakeimpl.sh", "./src/fakeverify.sh")),
+        REVIEW_TASK,
+    );
+    implementer(&r, "");
+    verifier(&r);
+    script(&r, "src/fakecheck.sh", "echo $$ >check.pid\nsleep 120\n");
+    installed(&r);
+    r.commit_all("a sleeping check");
+    let mut launcher = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["run", "--iterations", "1", "--no-tui"])
+        .current_dir(&r.root)
+        .env_remove("CI")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("enallagi run");
+    let check = pid_from(&r.root.join("check.pid"));
+
+    let sent = std::process::Command::new("kill")
+        .args(["-TERM", &launcher.id().to_string()])
+        .status()
+        .expect("signal the launcher");
+    assert!(sent.success(), "TERM was not delivered");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while alive(&check) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        !alive(&check),
+        "the check {check} outlived the signal by 5s"
+    );
+    launcher.wait().expect("the launcher exited");
+
+    let log = enallagi::events::Log::open(&r.root.join(".enallagi"))
+        .read()
+        .expect("events.jsonl");
+    assert!(
+        log.iter()
+            .any(|e| matches!(&e.kind, Kind::Halt { halt, .. } if halt == "signal")),
+        "{log:#?}"
+    );
+}
+
+#[test]
+fn a_sigterm_ends_the_limit_wait() {
+    let r = repo(&base_toml(""), TASKS);
+    let reset = jiff::Zoned::now()
+        .with_time_zone(jiff::tz::TimeZone::UTC)
+        .checked_add(jiff::Span::new().minutes(3))
+        .expect("three minutes ahead")
+        .strftime("%I:%M%p")
+        .to_string();
+    script(
+        &r,
+        "src/fakeagent.sh",
+        &format!("echo 'hit your session limit resets {reset} (UTC)'\n"),
+    );
+    r.commit_all("a limited agent");
+    installed(&r);
+    let mut launcher = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["run", "--iterations", "1", "--no-tui"])
+        .current_dir(&r.root)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("enallagi run");
+    let read = || {
+        enallagi::events::Log::open(&r.root.join(".enallagi"))
+            .read()
+            .unwrap_or_default()
+    };
+    let limits = |log: &[Event]| {
+        log.iter()
+            .filter(|e| matches!(e.kind, Kind::Limit { .. }))
+            .count()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while limits(&read()) == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(limits(&read()), 1, "no limit wait began: {:#?}", read());
+
+    let sent = std::process::Command::new("kill")
+        .args(["-TERM", &launcher.id().to_string()])
+        .status()
+        .expect("signal the launcher");
+    assert!(sent.success(), "TERM was not delivered");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while launcher.try_wait().expect("poll the launcher").is_none()
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let exited = launcher.try_wait().expect("poll the launcher").is_some();
+    if !exited {
+        let _ = launcher.kill();
+        let _ = launcher.wait();
+    }
+    assert!(exited, "the launcher outlived the signal by 10s");
+
+    let log = read();
+    assert_eq!(limits(&log), 1, "{log:#?}");
+    assert!(
+        matches!(log.last().map(|e| &e.kind), Some(Kind::RunEnd { .. })),
+        "{log:#?}"
+    );
+}
+
+fn claude_args_repo(key: &str) -> Repo {
+    let toml = base_toml("").replacen(
+        "preset = \"custom\"\ncommand = [\"./src/fakeagent.sh\", \"{prompt}\", \"{turns}\"]",
+        &format!("preset = \"claude\"\n{key}command = [\"./src/fakeargs.sh\", \"{{prompt}}\"]"),
+        1,
+    );
+    let r = repo(&toml, "");
+    script(
+        &r,
+        "src/fakeargs.sh",
+        &format!("printf '%s\\n' \"$*\" >>args.txt\n{QUIET}"),
+    );
+    r.commit_all("args");
+    r
+}
+
+#[test]
+fn a_claude_lane_skips_no_permission_by_default() {
+    let r = claude_args_repo("");
+    let _ = try_go(&r, &opts(1));
+    let args = std::fs::read_to_string(r.root.join("args.txt")).expect("the scout ran");
+    assert!(!args.contains("--dangerously-skip-permissions"), "{args}");
+}
+
+#[test]
+fn the_skip_key_adds_the_bypass_flag() {
+    let r = claude_args_repo("dangerously_skip_permissions = true\n");
+    let _ = try_go(&r, &opts(1));
+    let args = std::fs::read_to_string(r.root.join("args.txt")).expect("the scout ran");
+    assert!(args.contains("--dangerously-skip-permissions"), "{args}");
+}
+
+#[test]
+fn a_skip_with_no_bypass_flag_refuses_the_run() {
+    let extra = "dangerously_skip_permissions = true\n";
+    let toml = base_toml("").replacen("[agent]\n", &format!("[agent]\n{extra}"), 1);
+    let r = repo(&toml, TASKS);
+    let (digest, events) = try_go(&r, &opts(1));
+    let err = digest.expect_err("the run is refused");
+    assert!(err.to_string().contains("custom"), "{err}");
+    assert!(ends(&events).is_empty(), "nothing may spawn");
+}
+
+fn skipped(events: &[Event]) -> Option<bool> {
+    events.iter().find_map(|e| match &e.kind {
+        Kind::RunStart {
+            permissions_skipped,
+            ..
+        } => Some(*permissions_skipped),
+        _ => None,
+    })
+}
+
+#[test]
+fn the_skip_flag_adds_the_bypass_flag() {
+    let r = claude_args_repo("");
+    let run = RunOpts {
+        dangerously_skip_permissions: true,
+        ..opts(1)
+    };
+    let (_, events) = try_go(&r, &run);
+    let args = std::fs::read_to_string(r.root.join("args.txt")).expect("the scout ran");
+    assert!(args.contains("--dangerously-skip-permissions"), "{args}");
+    assert_eq!(skipped(&events), Some(true), "{events:#?}");
+}
+
+#[test]
+fn the_run_start_records_no_skip() {
+    let r = claude_args_repo("");
+    let (_, events) = try_go(&r, &opts(1));
+    assert_eq!(skipped(&events), Some(false), "{events:#?}");
+}
+
+#[test]
+fn a_skip_flag_with_no_bypass_flag_is_refused() {
+    let r = repo(&base_toml(""), TASKS);
+    let run = RunOpts {
+        dangerously_skip_permissions: true,
+        ..opts(1)
+    };
+    let (digest, events) = try_go(&r, &run);
+    let err = digest.expect_err("the run is refused");
+    assert!(err.to_string().contains("custom"), "{err}");
+    assert!(ends(&events).is_empty(), "nothing may spawn");
+}
+
+const EXTRA_SKILL: &str = "
+[[skill]]
+id = \"security\"
+source = \"path:vendor/security\"
+path = \"\"
+rev = \"v1\"
+gate = \"none\"
+why = \"fixture\"
+";
+
+fn synced_extra_skill() -> Repo {
+    let r = repo(&base_toml(EXTRA_SKILL), TASKS);
+    r.write("vendor/security/SKILL.md", "# security v1\n");
+    let (code, out) = harness(&r.root, &["skills", "sync"]);
+    assert_eq!(code, 0, "{out}");
+    r
+}
+
+fn locked_rev(r: &Repo, id: &str) -> Option<String> {
+    let lock = enallagi::skills::read_lock(&r.root, ".enallagi").expect("lock");
+    lock.skill
+        .iter()
+        .find(|e| e.id == id)
+        .map(|e| e.rev.clone().unwrap_or_default())
+}
+
+#[test]
+fn sync_prunes_a_removed_skill() {
+    let r = synced_extra_skill();
+    let dir = r.root.join(".enallagi/skills/security");
+    assert!(dir.join("SKILL.md").is_file());
+    r.write(".enallagi/skills/mine/SKILL.md", "# mine\n");
+
+    write_toml(&r, &base_toml(""));
+    for cmd in [&["skills", "check"][..], &["skills", "sync", "--frozen"]] {
+        let (code, out) = harness(&r.root, cmd);
+        assert_eq!(code, 0, "{out}");
+        assert!(dir.is_dir(), "{cmd:?} pruned");
+    }
+    let (code, out) = harness(&r.root, &["skills", "sync"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.lines().any(|l| l == "security  removed"), "{out}");
+    assert!(!dir.exists(), "the vendored copy was kept");
+    assert_eq!(locked_rev(&r, "security"), None);
+    assert!(
+        r.root.join(".enallagi/skills/mine/SKILL.md").is_file(),
+        "an unlocked skill was pruned"
+    );
+}
+
+#[test]
+fn a_changed_rev_revendors_the_skill() {
+    let r = synced_extra_skill();
+    let vendored = r.root.join(".enallagi/skills/security/SKILL.md");
+    r.write("vendor/security/SKILL.md", "# security v2\n");
+
+    let (_, out) = harness(&r.root, &["skills", "sync"]);
+    assert!(out.lines().any(|l| l == "security  cached"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(&vendored).unwrap(),
+        "# security v1\n"
+    );
+
+    write_toml(&r, &base_toml(&EXTRA_SKILL.replace("v1", "v2")));
+    let (code, out) = harness(&r.root, &["skills", "sync"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.lines().any(|l| l == "security  fetched"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(&vendored).unwrap(),
+        "# security v2\n"
+    );
+    assert_eq!(locked_rev(&r, "security").as_deref(), Some("v2"));
+}
+
+#[test]
+fn a_task_pipeline_without_adjudicate_skips_it() {
+    let toml = base_toml("").replace(
+        "stages = [\"implement\", \"verify\", \"adjudicate\"]",
+        "stages = [\"implement\", \"verify\"]",
+    );
+    let plan = plan_of(&repo(&toml, TASKS));
+    let at = plan
+        .find("=== pipeline task (queue.takeable) ===")
+        .unwrap_or_else(|| panic!("{plan}"));
+    let section = &plan[at..];
+    let section = &section[..section[1..]
+        .find("=== pipeline ")
+        .map_or(section.len(), |i| i + 1)];
+    assert!(section.contains("would spawn: verify"), "{section}");
+    assert!(!section.contains("adjudicate"), "{section}");
+}
+
+#[test]
+fn a_stage_naming_a_new_role_runs_it() {
+    let toml = base_toml("").replace(
+        "stages = [\"implement\", \"verify\", \"adjudicate\"]",
+        "stages = [\"security\"]",
+    ) + "\n[[stage]]\nname = \"security\"\nrole = \"security\"\nturns = 5\n";
+    let r = repo(&toml, TASKS);
+    r.write(
+        ".enallagi/roles/security.md",
+        "Read the diff for secrets.\n",
+    );
+    r.commit_all("a security role");
+
+    let (_, events) = go(&r, &opts(1));
+    assert_eq!(stages_started(&events), ["security"], "{events:#?}");
+    let rendered = std::fs::read_to_string(r.root.join(".enallagi/run/roles/security.md"))
+        .expect("the role was rendered");
+    assert!(
+        rendered.contains("Read the diff for secrets."),
+        "{rendered}"
+    );
+}
+
+const TAUTOLOGY_TASK: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.rs
+rows: none — harness
+status: ready
+criteria:
+  - it happens
+";
+
+// runs only the diff the rendered prompt names, so a pathspec that misses lets the tautology through
+fn diff_reading_verifier(r: &Repo) -> String {
+    script(
+        r,
+        "src/fakeverify.sh",
+        &format!(
+            "role=.enallagi/run/roles/verifier.md\n\
+             specs=$(grep 'Tests weakened' \"$role\" | grep -o 'git diff \\$BASE -- [^`]*' | sed 's/^git diff \\$BASE -- //')\n\
+             base=$(git rev-list --max-parents=0 HEAD)\n\
+             if [ -n \"$specs\" ] && eval \"git diff $base -- $specs\" | grep -q '^+.*assert!(true)'; then\n\
+             {bin} tasks set-status T-001 ready 'REJECTED: assert!(true) replaced an assertion'\n\
+             else\n\
+             {bin} tasks set-status T-001 done 'stub verified'\n\
+             fi\n\
+             {QUIET}",
+            bin = env!("CARGO_BIN_EXE_enallagi"),
+        ),
+    )
+}
+
+#[test]
+fn a_tautologised_test_does_not_reach_done() {
+    let r = repo("", "");
+    let implement = script(
+        &r,
+        "src/fakeimpl.sh",
+        &format!(
+            "sed -i.bak 's/assert_eq!(1 + 1, 2);/assert!(true);/' src/thing.rs\n\
+             rm -f src/thing.rs.bak\n\
+             {bin} tasks set-status T-001 review 'stub implemented'\n\
+             echo 'iteration' >>PROGRESS.md\n\
+             git add src/thing.rs >/dev/null 2>&1\n\
+             git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
+             {QUIET}",
+            bin = env!("CARGO_BIN_EXE_enallagi"),
+        ),
+    );
+    let verify = diff_reading_verifier(&r);
+    let toml = base_toml(&role_commands(&implement, &verify));
+    write_toml(
+        &r,
+        &toml.replace("[check]", "[layout]\ntest_glob = [\"src/*.rs\"]\n\n[check]"),
+    );
+    r.write(
+        "src/thing.rs",
+        "#[test]\nfn adds() {\n    assert_eq!(1 + 1, 2);\n}\n",
+    );
+    r.write("TASKS.md", TAUTOLOGY_TASK);
+    r.commit_all("stubs");
+
+    go(&r, &opts(1));
+    let thing = std::fs::read_to_string(r.root.join("src/thing.rs")).expect("thing.rs");
+    assert!(thing.contains("assert!(true);"), "{thing}");
+    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    assert!(!tasks.contains("status: done"), "{tasks}");
+    assert!(tasks.contains("REJECTED: assert!(true)"), "{tasks}");
+    let role = std::fs::read_to_string(r.root.join(".enallagi/run/roles/verifier.md"))
+        .expect("the rendered verifier role");
+    assert!(role.contains("git diff $BASE -- 'src/*.rs'"), "{role}");
+}
+
+struct Pulls {
+    repo: Repo,
+    origin: tempfile::TempDir,
+    tools: tempfile::TempDir,
+}
+
+// a bare origin at the fixture's HEAD, and a gh on PATH that records its argv and its parent's pid
+fn pulls(extra: &str, check: &str) -> Pulls {
+    let r = repo("", "");
+    script(&r, "src/fakecheck.sh", check);
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    write_toml(
+        &r,
+        &base_toml(&format!("{}{extra}", role_commands(&implement, &verify))),
+    );
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+    installed(&r);
+    r.commit_all("installed");
+    let origin = tempfile::TempDir::new().expect("tempdir");
+    let bare = origin.path().join("origin.git");
+    let git = |root: &std::path::Path, args: &[&str]| {
+        enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+    };
+    git(
+        origin.path(),
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            &r.root.display().to_string(),
+            "origin.git",
+        ],
+    );
+    git(
+        &r.root,
+        &["remote", "add", "origin", &bare.display().to_string()],
+    );
+    git(&r.root, &["fetch", "-q", "origin"]);
+    let tools = tempfile::TempDir::new().expect("tempdir");
+    let gh = tools.path().join("gh");
+    std::fs::write(
+        &gh,
+        format!(
+            "#!/usr/bin/env bash\necho $PPID >{dir}/gh.ppid\nprintf '%s\\n' \"$@\" >{dir}/gh.log\necho https://example.test/pull/1\n",
+            dir = tools.path().display()
+        ),
+    )
+    .expect("gh");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    Pulls {
+        repo: r,
+        origin,
+        tools,
+    }
+}
+
+impl Pulls {
+    fn run(&self, args: &[&str]) -> (u32, String) {
+        let path = format!(
+            "{}:{}",
+            self.tools.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let launcher = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+            .args(["run", "--iterations", "1", "--no-tui"])
+            .args(args)
+            .current_dir(&self.repo.root)
+            .env_remove("CI")
+            .env("PATH", path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("enallagi run");
+        let pid = launcher.id();
+        let out = launcher.wait_with_output().expect("the launcher exited");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (pid, text)
+    }
+
+    fn gh(&self) -> Option<String> {
+        std::fs::read_to_string(self.tools.path().join("gh.log")).ok()
+    }
+
+    fn remote_branches(&self) -> String {
+        enallagi::git::git(
+            &self.origin.path().join("origin.git"),
+            &["branch", "--list"],
+        )
+        .expect("branches")
+    }
+}
+
+#[test]
+fn pr_per_task_opens_one_from_the_launcher() {
+    let p = pulls("", "exit 0\n");
+    let (pid, out) = p.run(&["--pr-per-task"]);
+    assert!(out.contains("tasks landed: T-001"), "{out}");
+    let args = p.gh().unwrap_or_else(|| panic!("gh never ran:\n{out}"));
+    assert!(args.starts_with("pr\ncreate\n"), "{args}");
+    assert!(args.contains("--head\ntask/T-001\n"), "{args}");
+    let ppid = std::fs::read_to_string(p.tools.path().join("gh.ppid")).expect("gh.ppid");
+    assert_eq!(
+        ppid.trim(),
+        pid.to_string(),
+        "gh was not the launcher's child"
+    );
+    assert!(p.remote_branches().contains("task/T-001"), "{out}");
+    let pulls = out.split("pull requests:").nth(1).expect(&out);
+    assert!(
+        pulls.contains("T-001: https://example.test/pull/1"),
+        "{out}"
+    );
+
+    let claude = &enallagi::agent::presets()["claude"];
+    let settings = claude
+        .argv
+        .iter()
+        .position(|w| w == "--settings")
+        .expect("the lane carries deny rules");
+    assert!(claude.argv[settings + 1].contains("Bash(git push:*)"));
+}
+
+#[test]
+fn a_run_without_pr_per_task_opens_nothing() {
+    let p = pulls("", "exit 0\n");
+    let (_, out) = p.run(&[]);
+    assert!(out.contains("tasks landed: T-001"), "{out}");
+    assert!(p.gh().is_none(), "gh ran:\n{out}");
+    assert!(!p.remote_branches().contains("task/"), "{out}");
+    assert!(!out.contains("pull requests:"), "{out}");
+}
+
+#[test]
+fn pr_per_task_config_opens_one() {
+    let p = pulls("\n[pr]\nper_task = true\n", "exit 0\n");
+    let (_, out) = p.run(&[]);
+    assert!(p.gh().is_some(), "gh never ran:\n{out}");
+    assert!(out.contains("T-001: https://example.test/pull/1"), "{out}");
+}
+
+#[test]
+fn a_red_task_branch_opens_no_pr() {
+    // green in the checkout, red in the replayed worktree: the marker is excluded, never committed
+    let p = pulls("", "test -f green.marker\n");
+    p.repo.write("green.marker", "");
+    let exclude = enallagi::git::git(&p.repo.root, &["rev-parse", "--git-path", "info/exclude"])
+        .expect("exclude");
+    let exclude = p.repo.root.join(exclude);
+    let text = std::fs::read_to_string(&exclude).unwrap_or_default();
+    std::fs::write(&exclude, format!("{text}green.marker\n")).expect("exclude");
+
+    let (_, out) = p.run(&["--pr-per-task"]);
+    assert!(out.contains("tasks landed: T-001"), "{out}");
+    assert!(p.gh().is_none(), "gh ran:\n{out}");
+    assert!(!p.remote_branches().contains("task/"), "{out}");
+    let pulls = out.split("pull requests:").nth(1).expect(&out);
+    assert!(pulls.contains("T-001: none opened"), "{out}");
+    let warnings = out.split("warnings:").nth(1).expect(&out);
+    assert!(
+        warnings.contains("T-001 opened no pull request")
+            && warnings.contains("the check failed in the task worktree"),
+        "{out}"
+    );
 }

@@ -1,5 +1,6 @@
 name = "kimi"
-argv = ["kimi", "-p", "{prompt}", "--output-format", "stream-json", "--yolo"]
+argv = ["kimi", "-p", "{prompt}", "--output-format", "stream-json"]
+bypass_flag = "--yolo"
 turn_cap = "config"
 model_flag = "--model"
 skills_dir = ".agents/skills"

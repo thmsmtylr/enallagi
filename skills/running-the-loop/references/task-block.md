@@ -13,7 +13,7 @@ notes: <what a reviewer should scrutinise; the implementer's and the verifier's 
 
 | Field | Meaning |
 | --- | --- |
-| `scope:` | comma-separated globs. A directory is written `dir/**`, since a bare `dir` matches none of its files. The `one-scope` rail: touching anything outside them is a rejection. An out-of-scope need is a note on the task and a stop, never a quiet edit. |
+| `scope:` | comma-separated globs. A directory is written `dir/**`, since a bare `dir` matches none of its files. The `one-scope` rail: touching anything outside them is a rejection. Write the line from the consumers the criteria's own commands list, never from a count. Those are the files `grep -rln <symbol>` finds over the tree, the rendered copy of every template named, and the test that hashes a file named. A path added later needs a one-line `widened:` reason, which the verifier grades. |
 | `blockedBy:` | empty, `none`, or comma-separated task ids. The launcher will not select a task whose blockers are not all `done`. |
 | `status:` | `proposed` (the scout's, inert to the loop) · `ready` · `blocked` · `review` (the implementer's last act) · `done` (the verifier's, and the launcher re-runs the gate behind it) · `needs-spec` (the contract does not answer a question the task hit). |
 | `rows:` | the exit-criteria rows the task turns green, copied character for character, or `none — harness` / `none — measurement`. This is how the one-row rail binds without a second queue. |
@@ -21,5 +21,12 @@ notes: <what a reviewer should scrutinise; the implementer's and the verifier's 
 | `notes:` | the evidence, quoted as found, including another repository's identifiers. `criteria:` describes a finding from another repository by its shape, never by those identifiers, and so do the fixtures, test names and evals written from it. |
 | `attended: true` | the task needs a human credential. No launcher auto-selects it. |
 | `probe:` `command:` `output:` | required on a `proposed` block. The `anchored` rail: a finding with none of these is killed unread. |
+
+A new block takes one past the highest id ever used. That count covers:
+
+- every `## [T-nnn]` heading in the queue and in __ENALLAGI_DIR__/DECISIONS.md
+- every id named on a `## Rejected findings` line
+
+A killed id is spent and never taken again. `enallagi probe` → `queue-hygiene` reports a block that reuses one.
 
 A block is at most about thirty minutes of human-equivalent work. Split it if it is more.

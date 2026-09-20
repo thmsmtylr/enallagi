@@ -5,8 +5,10 @@ mod events;
 mod gate;
 mod hook;
 mod init;
+mod issue;
 mod pr;
 mod probe;
+mod review;
 mod run;
 mod skills;
 mod tasks;
@@ -22,6 +24,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "enallagi",
     version,
+    disable_help_subcommand = true,
     about = "An autonomous task loop for a coding agent, installed into any git repository."
 )]
 pub struct Cli {
@@ -44,6 +47,9 @@ pub enum Command {
         /// Move instance files at the repository root, or in a legacy .harness/, into the harness directory, and install nothing
         #[arg(long = "move")]
         move_files: bool,
+        /// Rewrite enallagi.toml without the keys that equal their default
+        #[arg(long)]
+        prune_defaults: bool,
     },
     /// Remove from this repository and leave no trace
     ///
@@ -64,6 +70,9 @@ pub enum Command {
         /// Iterations to run; a run also ends after two discovery rounds that leave nothing takeable
         #[arg(short = 'n', long = "iterations", default_value_t = 3)]
         iterations: u32,
+        /// Pipeline from enallagi.toml to run, repeatable; none given runs whichever one's `when` holds
+        #[arg(long = "pipeline", value_name = "NAME")]
+        pipeline: Vec<String>,
         /// Dollar budget for the run; overrides BUDGET_USD when given
         #[arg(long = "budget-usd")]
         budget_usd: Option<f64>,
@@ -82,6 +91,12 @@ pub enum Command {
         /// Refuse a stage whose skills are not already vendored and locked; never fetch
         #[arg(long)]
         frozen: bool,
+        /// Add the agent preset's bypass flag to every lane, as [agent] dangerously_skip_permissions does
+        #[arg(long)]
+        dangerously_skip_permissions: bool,
+        /// Push each landed task to its own branch and open its pull request, as [pr] per_task does
+        #[arg(long)]
+        pr_per_task: bool,
     },
     /// Attach read-only to a running loop's event log and queue
     Watch,
@@ -103,6 +118,30 @@ pub enum Command {
         /// Push the branch and open the pull request with gh when it is installed; never merges
         #[arg(long)]
         push: bool,
+        /// Push past a contribution guide that conditions generated changes, once you have read it
+        #[arg(long)]
+        policy_read: bool,
+    },
+    /// Append a proposed block to TASKS.md from a GitHub issue
+    ///
+    /// Reads the issue with gh. Scope and criteria stay placeholders until you write them.
+    Issue {
+        /// Issue URL, or owner/repo#n
+        reference: String,
+        /// Print the block and write nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Append a proposed block for each open comment on a pull request review
+    ///
+    /// Reads the comments with gh. A comment with no file anchor is skipped, and so is a resolved
+    /// or outdated one. Each block takes its scope from the comment's path.
+    Review {
+        /// Pull request URL, or owner/repo#n
+        reference: String,
+        /// Print the blocks and write nothing
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Print the product commit a task was queued against
     ///
@@ -188,10 +227,12 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             adapter,
             dry_run,
             move_files,
+            prune_defaults,
         } => init::run(&init::Args {
             adapter,
             dry_run,
             move_files,
+            prune_defaults,
         }),
         Command::Eject {
             dry_run,
@@ -202,24 +243,40 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         }),
         Command::Run {
             iterations,
+            pipeline,
             budget_usd,
             budget_seconds,
             budget_tokens,
             no_tui,
             dry_run,
             frozen,
+            dangerously_skip_permissions,
+            pr_per_task,
         } => run::run(&run::Args {
             iterations,
+            pipelines: pipeline,
             budget_usd,
             budget_seconds,
             budget_tokens,
             no_tui,
             dry_run,
             frozen,
+            dangerously_skip_permissions,
+            pr_per_task,
         }),
         Command::Watch => watch::run(),
         Command::Probe { names } => probe::run(&probe::Args { names }),
-        Command::Pr { tasks, push } => pr::run(&pr::Args { tasks, push }),
+        Command::Pr {
+            tasks,
+            push,
+            policy_read,
+        } => pr::run(&pr::Args {
+            tasks,
+            push,
+            policy_read,
+        }),
+        Command::Issue { reference, dry_run } => issue::run(&issue::Args { reference, dry_run }),
+        Command::Review { reference, dry_run } => review::run(&review::Args { reference, dry_run }),
         Command::Base { task } => base::run(&base::Args { task }),
         Command::Gate { which, task, base } => gate::run(&gate::Args { which, task, base }),
         Command::Hook { name } => hook::run(&hook::Args { name }),
@@ -251,25 +308,32 @@ mod tests {
     const CI: &str = include_str!("../../../../.github/workflows/ci.yml");
     const RELEASE: &str = include_str!("../../../../.github/workflows/release.yml");
 
-    const SUBCOMMANDS: [&str; 14] = [
-        "init", "eject", "run", "watch", "probe", "pr", "base", "gate", "hook", "skills", "tasks",
-        "eval", "events", "worktree",
+    const SUBCOMMANDS: [&str; 16] = [
+        "init", "eject", "run", "watch", "probe", "pr", "issue", "review", "base", "gate", "hook",
+        "skills", "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 19] = [
+    const FLAGS: [&str; 26] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
+        "init --prune-defaults",
         "eject --dry-run",
         "eject --keep-record",
         "run --iterations",
+        "run --pipeline",
         "run --budget-usd",
         "run --budget-seconds",
         "run --budget-tokens",
         "run --no-tui",
         "run --dry-run",
         "run --frozen",
+        "run --dangerously-skip-permissions",
+        "run --pr-per-task",
         "pr --push",
+        "pr --policy-read",
+        "issue --dry-run",
+        "review --dry-run",
         "gate --base",
         "eval --gate",
         "events --role",
@@ -361,7 +425,7 @@ jobs:
     }
 
     #[test]
-    fn the_subcommand_set_is_the_reviewed_fourteen() {
+    fn the_subcommand_set_is_the_reviewed_sixteen() {
         let cmd = Cli::command();
         let names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
         assert_eq!(names, SUBCOMMANDS);
@@ -387,12 +451,29 @@ jobs:
     }
 
     #[test]
+    fn run_takes_the_pipeline_flag_more_than_once() {
+        let cli = Cli::try_parse_from([
+            "enallagi",
+            "run",
+            "--pipeline",
+            "task",
+            "--pipeline",
+            "review",
+        ])
+        .expect("parse");
+        let Command::Run { pipeline, .. } = cli.command else {
+            panic!("{:?}", cli.command)
+        };
+        assert_eq!(pipeline, ["task", "review"]);
+    }
+
+    #[test]
     fn no_help_line_runs_past_one_hundred_columns() {
         let help = Cli::command().render_help().to_string();
         let wide: Vec<&str> = help.lines().filter(|l| l.chars().count() > 100).collect();
         assert!(wide.is_empty(), "past 100 columns: {wide:#?}");
         let lines = help.lines().count();
-        assert!(lines <= 24, "--help is {lines} lines");
+        assert!(lines <= 25, "--help is {lines} lines");
     }
 
     #[test]

@@ -91,6 +91,14 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         }
     }
 
+    if let SkillsCmd::Sync = args.cmd {
+        if !frozen {
+            for id in skills::prune(&root, &cfg, preset)? {
+                println!("{id}  removed");
+            }
+        }
+    }
+
     if unresolved.is_empty() {
         return Ok(0);
     }

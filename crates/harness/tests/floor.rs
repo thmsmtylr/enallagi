@@ -974,3 +974,212 @@ fn the_tag_equals_the_crate_version() {
     let version = crate_version_in(&read(&repo_root().join("crates/harness/Cargo.toml")));
     assert_eq!(tag_mismatch(&tag, &version), None);
 }
+
+// `--exact` with a name no suite declares runs zero tests and exits 0
+fn undeclared_exact(workflow: &str, root: &Path) -> Vec<String> {
+    let step = re(r"cargo test\b.*--test\s+(\S+).*--exact\s+(\S+)");
+    let mut out = Vec::new();
+    for line in workflow.lines() {
+        let before_comment = line.split('#').next().unwrap_or("");
+        if !before_comment.contains("--exact") {
+            continue;
+        }
+        let Some(c) = step.captures(before_comment) else {
+            out.push(before_comment.trim().to_string());
+            continue;
+        };
+        let suite = root.join(format!("crates/harness/tests/{}.rs", &c[1]));
+        // a helper fn of the same name is not a test, so the fn must sit under `#[test]`
+        let test_fn = format!(
+            r"(?m)^\s*#\[test\]\s*\n(?:\s*#\[.*\]\s*\n|\s*\n)*\s*fn {}\(",
+            regex::escape(&c[2])
+        );
+        let declared = fs::read_to_string(&suite).is_ok_and(|text| re(&test_fn).is_match(&text));
+        if !declared {
+            out.push(format!("{} in {}", &c[2], suite.display()));
+        }
+    }
+    out
+}
+
+#[test]
+fn every_workflow_exact_names_a_declared_test() {
+    let root = repo_root();
+    let dir = root.join(".github/workflows");
+    let workflows: Vec<String> = walk(&dir).iter().map(|f| read(&dir.join(f))).collect();
+    let steps = workflows
+        .iter()
+        .flat_map(|w| w.lines())
+        .filter(|l| l.contains("--exact"))
+        .count();
+    assert!(steps > 0, "no --exact step in .github/workflows/");
+    for workflow in &workflows {
+        assert_eq!(undeclared_exact(workflow, &root), Vec::<String>::new());
+    }
+
+    let renamed = "      - run: cargo test -p enallagi --test floor -- --exact the_tag_equals_the_crate_versionX\n";
+    let reported = undeclared_exact(renamed, &root);
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert!(reported[0].contains("the_tag_equals_the_crate_versionX"));
+    let helper = "      - run: cargo test -p enallagi --test floor -- --include-ignored --exact tag_mismatch\n";
+    assert_eq!(undeclared_exact(helper, &root).len(), 1);
+    let no_suite = "      - run: cargo test -p enallagi --test nosuch -- --exact main_tracks_no_instance_file\n";
+    assert_eq!(undeclared_exact(no_suite, &root).len(), 1);
+    let unparsed = "      - run: cargo test -- --exact main_tracks_no_instance_file\n";
+    assert_eq!(undeclared_exact(unparsed, &root).len(), 1);
+}
+
+fn default_keys() -> Vec<String> {
+    let default: toml::Table = toml::from_str(enallagi::config::DEFAULT_TOML).expect("defaults");
+    let mut keys = Vec::new();
+    for (table, value) in &default {
+        let fields: Vec<&toml::Table> = match value {
+            toml::Value::Table(t) => vec![t],
+            toml::Value::Array(a) => a.iter().filter_map(|v| v.as_table()).collect(),
+            _ => Vec::new(),
+        };
+        for key in fields.iter().flat_map(|t| t.keys()) {
+            let dotted = format!("{table}.{key}");
+            if !keys.contains(&dotted) {
+                keys.push(dotted);
+            }
+        }
+    }
+    keys
+}
+
+#[test]
+fn every_default_key_is_in_configuration_md() {
+    let keys = default_keys();
+    assert!(keys.iter().any(|k| k == "stage.post"), "{keys:?}");
+    let doc = read(&repo_root().join("docs/configuration.md"));
+    let missing: Vec<&String> = keys
+        .iter()
+        .filter(|k| !doc.contains(&format!("`{k}`")))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "docs/configuration.md never names {missing:?}"
+    );
+}
+
+// each runner's example is three list items: the preset's fail_name, a failing line, and its capture
+#[test]
+fn each_fail_name_example_captures_its_line() {
+    let doc = read(&repo_root().join("docs/configuration.md"));
+    let item = |line: &str, label: &str| {
+        line.trim_start()
+            .strip_prefix(&format!("- {label}: `"))
+            .and_then(|rest| rest.strip_suffix('`'))
+            .map(str::to_string)
+    };
+    let lines: Vec<&str> = doc.lines().collect();
+    let runners = enallagi::runners::presets();
+    assert_eq!(runners.len(), 7);
+    for runner in runners {
+        let at = lines
+            .iter()
+            .position(|l| item(l, "fail_name").as_deref() == Some(runner.fail_name.as_str()))
+            .unwrap_or_else(|| panic!("{} has no fail_name example", runner.name));
+        let failing = item(lines[at + 1], "failing line").expect(lines[at + 1]);
+        let captures = item(lines[at + 2], "captures").expect(lines[at + 2]);
+        let fixture = repo_root()
+            .join("crates/harness/tests/fixtures/runners")
+            .join(&runner.name)
+            .join("fail.txt");
+        assert!(
+            read(&fixture).lines().any(|l| l == failing),
+            "{}: {failing} is not a line of {}",
+            runner.name,
+            fixture.display()
+        );
+        let caught = re(&runner.fail_name)
+            .captures(&failing)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string());
+        assert_eq!(caught, Some(captures), "{}: {failing}", runner.name);
+    }
+}
+
+fn string_values(value: &toml::Value, out: &mut Vec<String>) {
+    match value {
+        toml::Value::String(s) => out.push(s.clone()),
+        toml::Value::Array(a) => a.iter().for_each(|v| string_values(v, out)),
+        toml::Value::Table(t) => t.values().for_each(|v| string_values(v, out)),
+        _ => {}
+    }
+}
+
+fn runner_words(defaults: &str) -> Vec<String> {
+    let mut names: Vec<String> = ["pnpm", "yarn", "bunx", "bunfig"]
+        .map(String::from)
+        .to_vec();
+    for runner in enallagi::runners::presets() {
+        names.push(runner.name.clone());
+        names.extend(
+            runner
+                .test_command
+                .split_whitespace()
+                .next()
+                .map(String::from),
+        );
+    }
+    let mut values = Vec::new();
+    string_values(&toml::from_str(defaults).expect("defaults"), &mut values);
+    let word = re(r"\w+");
+    let mut hits: Vec<String> = values
+        .iter()
+        .filter(|v| {
+            word.find_iter(v)
+                .any(|w| names.iter().any(|n| n == w.as_str()))
+        })
+        .cloned()
+        .collect();
+    hits.dedup();
+    hits
+}
+
+#[test]
+fn no_default_names_a_runner() {
+    assert_eq!(
+        runner_words(enallagi::config::DEFAULT_TOML),
+        Vec::<String>::new()
+    );
+    let bun = "[check]\ncommand = \"bun run check\"\n[layout]\ndocs = [\"bun.lock\"]\n";
+    assert_eq!(runner_words(bun), vec!["bun run check", "bun.lock"]);
+    assert_eq!(
+        runner_words("[x]\ny = \"node_modules\"\n"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn every_harness_dir_path_has_a_store() {
+    // a path the product writes under the harness directory that the records table does not name has no store, so the first tidy-up takes it
+    let joined = re(
+        r#"(?:\.join\(\s*&?(?:self\.)?(?:ctx\.)?(?:cfg\.layout\.)?(?:harness_dir|dir)\s*\)|\bharness_dir)\s*\.join\(\s*"([^"]+)"\s*\)"#,
+    );
+    assert!(
+        joined.is_match("root.join(&dir)\n        .join(\"pr\")"),
+        "the scan cannot report"
+    );
+
+    let rails = read(&repo_root().join("templates/RAILS.md"));
+    let (_, below) = rails
+        .split_once("\n## Records\n")
+        .expect("templates/RAILS.md carries a ## Records section");
+    let records = below.split("\n## ").next().unwrap_or(below);
+
+    let mut missing: Vec<String> = Vec::new();
+    for (rel, text) in crate_sources() {
+        for caught in joined.captures_iter(text.as_str()) {
+            let name = &caught[1];
+            if !records.contains(&format!("`__ENALLAGI_DIR__/{name}`")) {
+                missing.push(format!("{}: {name}", rel.display()));
+            }
+        }
+    }
+    missing.sort();
+    missing.dedup();
+    assert_eq!(missing, Vec::<String>::new());
+}

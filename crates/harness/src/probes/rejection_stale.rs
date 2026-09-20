@@ -11,13 +11,23 @@ fn outside_code(notes: &str) -> String {
     notes.split('`').step_by(2).collect::<Vec<_>>().join(" ")
 }
 
+// a verdict opens its sentence: `Only three criteria Passed` inside a rejection is not an answer
 fn latest_verdict(notes: &str) -> Option<&'static str> {
     let text = outside_code(notes);
-    VERDICTS
-        .iter()
-        .filter_map(|word| text.rfind(word).map(|at| (at, *word)))
-        .max_by_key(|(at, _)| *at)
-        .map(|(_, word)| word)
+    text.split('\n')
+        .flat_map(|line| line.split(". "))
+        .filter_map(|sentence| {
+            let opening = sentence.trim_start();
+            let opening = opening
+                .strip_prefix("notes:")
+                .unwrap_or(opening)
+                .trim_start();
+            VERDICTS
+                .iter()
+                .find(|word| opening.starts_with(**word))
+                .copied()
+        })
+        .last()
 }
 
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {

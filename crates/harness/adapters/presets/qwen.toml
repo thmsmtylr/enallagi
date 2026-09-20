@@ -1,5 +1,6 @@
 name = "qwen"
-argv = ["qwen", "-p", "{prompt}", "--output-format", "stream-json", "--yolo", "--max-session-turns", "{turns}"]
+argv = ["qwen", "-p", "{prompt}", "--output-format", "stream-json", "--max-session-turns", "{turns}"]
+bypass_flag = "--yolo"
 turn_cap = "flag"
 model_flag = "--model"
 instruction_file = "QWEN.md"

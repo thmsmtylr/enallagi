@@ -1,0 +1,3 @@
+help-wanted.json: gh version 2.74.1, `gh issue view <n> --repo <owner>/<repo> --json number,title,body,url,labels`
+on an open `help wanted` issue, 2026-09-18. Identifiers and prose replaced. Kept: the five keys, the four
+label fields, CRLF and LF line ends mixed in one body, `###` headings and an unlabelled fence. A `## ` line is added.

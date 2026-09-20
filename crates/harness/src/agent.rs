@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -52,6 +53,9 @@ pub struct Preset {
     pub model_flag: Option<String>,
     #[serde(default)]
     pub effort_flag: Option<String>,
+    // kept out of argv so a lane runs with the agent's permission checks unless the operator asks otherwise
+    #[serde(default)]
+    pub bypass_flag: Option<String>,
 }
 
 pub type Presets = BTreeMap<String, Preset>;
@@ -64,10 +68,12 @@ pub enum AgentError {
     CustomWithoutCommand,
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("stopped: STOP file appeared during a rate-limit wait")]
+    #[error("stopped: a STOP file or a signal arrived during a rate-limit wait")]
     Stopped,
     #[error("the agent command is empty")]
     EmptyCommand,
+    #[error("preset {0} declares no bypass flag, so dangerously_skip_permissions cannot apply")]
+    NoBypassFlag(String),
 }
 
 const PRESET_FILES: &[(&str, &str)] = &[
@@ -219,6 +225,7 @@ pub fn resolve_task(
             env: BTreeMap::new(),
             model_flag: None,
             effort_flag: None,
+            bypass_flag: None,
         }
     } else {
         let mut preset = presets
@@ -241,6 +248,13 @@ pub fn resolve_task(
     }
     if !matches!(preset.turn_cap, TurnCap::Time) {
         drop_token(&mut argv, "{timeout}");
+    }
+    if cfg.dangerously_skip_permissions {
+        let flag = preset
+            .bypass_flag
+            .clone()
+            .ok_or_else(|| AgentError::NoBypassFlag(preset.name.clone()))?;
+        argv.push(flag);
     }
     if let (Some(flag), Some(model)) = (&preset.model_flag, model) {
         argv.push(flag.clone());
@@ -375,10 +389,43 @@ pub struct StageResult {
 }
 
 const POLL: Duration = Duration::from_millis(200);
-// how long a SIGTERM gets to be honoured before the child is killed outright
-const GRACE: Duration = Duration::from_secs(10);
 // a stale reset rolls to the same time tomorrow, so a further-out one isn't worth a day-long sleep
 const MAX_WAIT: u64 = 6 * 3600;
+
+// the two numbers POSIX fixes, so no binding crate is needed to name them
+const SIGINT: i32 = 2;
+const SIGTERM: i32 = 15;
+const SIG_DFL: usize = 0;
+
+static SIGNALLED: AtomicI32 = AtomicI32::new(0);
+
+extern "C" {
+    fn signal(signum: i32, handler: usize) -> usize;
+}
+
+extern "C" fn note_signal(signum: i32) {
+    SIGNALLED.store(signum, Ordering::Relaxed);
+    // an operator who signals twice is not made to wait: the second one gets the default disposition
+    unsafe { signal(signum, SIG_DFL) };
+}
+
+/// Take SIGINT and SIGTERM, so a stop reaches the agent the launcher spawned instead of orphaning it.
+pub fn catch_stop_signals() {
+    let handler = note_signal as extern "C" fn(i32) as usize;
+    unsafe {
+        signal(SIGINT, handler);
+        signal(SIGTERM, handler);
+    }
+}
+
+/// The name of the signal a stop arrived on, once one has.
+pub fn stop_signal() -> Option<&'static str> {
+    match SIGNALLED.load(Ordering::Relaxed) {
+        SIGINT => Some("SIGINT"),
+        SIGTERM => Some("SIGTERM"),
+        _ => None,
+    }
+}
 
 #[cfg(not(test))]
 fn stage_now() -> jiff::Zoned {
@@ -464,14 +511,13 @@ pub fn spawn(
     }
 }
 
-fn sleep_until(mut left: u64, stop_file: &Path) -> Result<(), AgentError> {
-    while left > 0 {
-        if stop_file.exists() {
+fn sleep_until(seconds: u64, stop_file: &Path) -> Result<(), AgentError> {
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+        if stop_file.exists() || stop_signal().is_some() {
             return Err(AgentError::Stopped);
         }
-        let chunk = left.min(60);
-        std::thread::sleep(Duration::from_secs(chunk));
-        left -= chunk;
+        std::thread::sleep(left.min(POLL));
     }
     Ok(())
 }
@@ -500,8 +546,10 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         Err(_) => s.preset.env.clone(),
     };
 
+    use std::os::unix::process::CommandExt;
     let mut command = Command::new(program);
     crate::config::drop_legacy_env(&mut command);
+    // the agent gets its own process group, so a stop reaches the lanes and shells it spawned too
     let mut child = command
         .args(args)
         .current_dir(s.cwd)
@@ -510,7 +558,9 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()?;
+    let pgid = child.id();
 
     // stdout and stderr interleave into one buffer: most presets put progress on stderr and gates read one stream
     let buffer = Arc::new(Mutex::new(String::new()));
@@ -526,13 +576,18 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
     let mut sent = 0usize;
     let mut last_emit = Instant::now();
     let mut timed_out = false;
+    let mut stopped = false;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
         }
+        if stop_signal().is_some() {
+            stopped = true;
+            break crate::gates::kill_group(&mut child, pgid)?;
+        }
         if s.timeout.is_some_and(|t| started.elapsed() >= t) {
             timed_out = true;
-            break terminate(&mut child)?;
+            break crate::gates::kill_group(&mut child, pgid)?;
         }
         if last_emit.elapsed() >= Duration::from_secs(1) {
             flush(&buffer, &mut sent, &s.stage, events);
@@ -540,10 +595,8 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         }
         std::thread::sleep(POLL);
     };
-    // ponytail: a timed-out child can leave a grandchild holding the pipe, so
-    // the readers are joined only on a clean exit; upgrade to a process-group
-    // kill if a preset turns out to orphan writers on a clean exit too.
-    if !timed_out {
+    // a killed child can leave a grandchild holding the pipe, so the readers are joined only on a clean exit
+    if !timed_out && !stopped {
         for reader in readers {
             let _ = reader.join();
         }
@@ -563,22 +616,6 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
             .unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
     };
     Ok((exit, output, timed_out))
-}
-
-fn terminate(child: &mut std::process::Child) -> Result<std::process::ExitStatus, AgentError> {
-    let pid = child.id().to_string();
-    let _ = Command::new("kill").args(["-TERM", &pid]).status();
-    let deadline = Instant::now() + GRACE;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(status);
-        }
-        if Instant::now() >= deadline {
-            child.kill()?;
-            return Ok(child.wait()?);
-        }
-        std::thread::sleep(POLL);
-    }
 }
 
 fn drain<R: Read + Send + 'static>(
@@ -636,6 +673,55 @@ mod tests {
                 "{name} argv missing {{prompt}}"
             );
         }
+    }
+
+    #[test]
+    fn no_preset_argv_carries_its_bypass_flag() {
+        let presets = presets();
+        let expected = [
+            ("claude", "--dangerously-skip-permissions"),
+            ("codex", "--dangerously-bypass-approvals-and-sandbox"),
+            ("gemini", "--yolo"),
+            ("qwen", "--yolo"),
+            ("kimi", "--yolo"),
+            ("omp", "--yolo"),
+        ];
+        for (name, flag) in expected {
+            assert_eq!(presets[name].bypass_flag.as_deref(), Some(flag), "{name}");
+        }
+        for (name, preset) in &presets {
+            if let Some(flag) = &preset.bypass_flag {
+                assert!(!preset.argv.contains(flag), "{name} argv carries {flag}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_bypass_flag_rides_only_when_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = crate::config::load(dir.path()).unwrap().agent;
+        cfg.preset = "claude".into();
+        let off = resolve(&cfg, "scout", &presets()).unwrap();
+        assert!(!off
+            .argv
+            .iter()
+            .any(|w| w == "--dangerously-skip-permissions"));
+        cfg.dangerously_skip_permissions = true;
+        let on = resolve(&cfg, "scout", &presets()).unwrap();
+        assert!(on
+            .argv
+            .iter()
+            .any(|w| w == "--dangerously-skip-permissions"));
+    }
+
+    #[test]
+    fn no_bypass_flag_refuses_the_skip() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = crate::config::load(dir.path()).unwrap().agent;
+        cfg.preset = "pi".into();
+        cfg.dangerously_skip_permissions = true;
+        let err = resolve(&cfg, "scout", &presets()).err().expect("refused");
+        assert!(err.to_string().contains("pi"), "{err}");
     }
 
     #[test]

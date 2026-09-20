@@ -38,7 +38,7 @@ fn declare(repo: &Repo, source: &str, rev: Option<&str>) -> config::Config {
     repo.write(
         "enallagi.toml",
         &format!(
-            "[[role]]\nname = \"implementer\"\nsource = \"{source}\"\npath = \"roles\"\n{rev}"
+            "[check]\ncommand = \"true\"\n\n[[role]]\nname = \"implementer\"\nsource = \"{source}\"\npath = \"roles\"\n{rev}"
         ),
     );
     let cfg = config::load(&repo.root).expect("load");

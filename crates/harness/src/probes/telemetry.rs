@@ -290,7 +290,7 @@ pub fn turns_exhausted(log: &Log, cfg: &Config) -> ProbeResult {
         } = &e.kind
         {
             if let Some(s) = cfg.stage.iter().find(|s| &s.name == stage) {
-                if u64::from(s.turns) == *t {
+                if crate::config::spent_turn_cap(s.turns, *t) {
                     findings.push(cite(
                         log,
                         &events,

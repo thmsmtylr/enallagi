@@ -1,0 +1,10 @@
+name = "vitest"
+detect_files = ["package.json"]
+detect_re = 'vitest\b'
+test_command = "npx vitest run"
+run_re = 'vitest\b|npm (run )?test\b'
+fail_name = '^\s*×\s(.+?)\s+[0-9.]+m?s$'
+test_file_suffix_re = '\.(test|spec)\.[cm]?[jt]sx?$'
+test_decl_patterns = ["test('{name}'", 'test("{name}"', "it('{name}'", 'it("{name}"']
+source_ext = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]
+source_roots = ["src", "lib", "app"]

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::config::Config;
-use crate::events::{Kind, Writer};
+use crate::events::{Kind, Tally, Writer};
 use crate::git::{self, git, head, porcelain};
 use crate::queue::{self, Queue};
 use crate::skills::LockEntry;
@@ -41,6 +41,7 @@ pub struct GateOutcome {
     pub reason: String,
     pub skip_rest: bool,
     pub halt: bool,
+    pub tally: Option<Tally>,
 }
 
 fn pass(reason: impl Into<String>) -> GateOutcome {
@@ -78,6 +79,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         task,
         pass: outcome.pass,
         reason: outcome.reason.clone(),
+        tally: outcome.tally,
     });
     outcome
 }
@@ -139,6 +141,16 @@ fn field_of(ctx: &GateCtx, task: &str, key: &str) -> String {
         .find(|b| b.id == task)
         .and_then(|b| queue::field(b, key))
         .unwrap_or_default()
+}
+
+// the field as TASKS.md held it at a revision, the base when rev is None, the way lock_at reads
+fn field_at(ctx: &GateCtx, task: &str, key: &str, rev: Option<&str>) -> Option<String> {
+    let text = show_at(ctx, &rel(ctx, "TASKS.md"), rev)?;
+    queue::parse(&text)
+        .ok()?
+        .iter()
+        .find(|b| b.id == task)
+        .and_then(|b| queue::field(b, key))
 }
 
 fn unreadable(ctx: &mut GateCtx, task: &str) -> GateOutcome {
@@ -344,8 +356,12 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
     if let Some(halt) = hung(ctx, &report) {
         return halt;
     }
+    let tally = counted(ctx, &report);
     if report.accepts() {
-        return pass("done, and the gate agrees.");
+        return GateOutcome {
+            tally,
+            ..pass("done, and the gate agrees.")
+        };
     }
     let sha = head(ctx.root).unwrap_or_default();
     let named = if report.unforgiven.is_empty() {
@@ -359,7 +375,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         report.exit
     );
     let tail8 = report.tail(8).join("\n");
-    force_back(
+    let outcome = force_back(
         ctx,
         "verdict",
         &task,
@@ -369,7 +385,8 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         &format!(
             "{task} was forced back to ready by the gate: the verifier said done, the gate was red.\ncheck tail:\n{tail8}"
         ),
-    )
+    );
+    GateOutcome { tally, ..outcome }
 }
 
 // word boundaries, so one id never matches a longer id it prefixes
@@ -381,20 +398,9 @@ pub fn names_task(subject: &str, task: &str) -> bool {
 // is an operator's or another round's and is not charged here. filter is a git --diff-filter value,
 // empty for every change
 fn commit_files(root: &Path, base: &str, task: &str, filter: &str) -> Vec<String> {
-    let range = format!("{base}..HEAD");
-    let log = git(
-        root,
-        &["log", "--reverse", "--no-merges", "--format=%h %s", &range],
-    )
-    .unwrap_or_default();
     let flag = format!("--diff-filter={filter}");
     let mut files: Vec<String> = Vec::new();
-    for sha in log
-        .lines()
-        .filter_map(|l| l.split_once(' '))
-        .filter(|(_, subject)| names_task(subject, task))
-        .map(|(sha, _)| sha.to_string())
-    {
+    for sha in task_commits(root, base, task) {
         let mut args = vec!["show", "--format=", "--name-only"];
         if !filter.is_empty() {
             args.push(&flag);
@@ -407,6 +413,20 @@ fn commit_files(root: &Path, base: &str, task: &str, filter: &str) -> Vec<String
         }
     }
     files
+}
+
+fn task_commits(root: &Path, base: &str, task: &str) -> Vec<String> {
+    let range = format!("{base}..HEAD");
+    git(
+        root,
+        &["log", "--reverse", "--no-merges", "--format=%h %s", &range],
+    )
+    .unwrap_or_default()
+    .lines()
+    .filter_map(|l| l.split_once(' '))
+    .filter(|(_, subject)| names_task(subject, task))
+    .map(|(sha, _)| sha.to_string())
+    .collect()
 }
 
 // the task's files: the product repository's, and in a nested install the harness
@@ -440,7 +460,19 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         return pass("no base");
     }
 
-    let pats = scope_globs(&field_of(ctx, &task, "scope"));
+    // the lane edits the block it is graded against, so a path the line gained since the queue
+    // passes only with a `widened:` reason, and the verdict names it
+    let head_block = |key: &str| {
+        field_at(ctx, &task, key, Some("HEAD")).unwrap_or_else(|| field_of(ctx, &task, key))
+    };
+    let pats = scope_globs(&head_block("scope"));
+    let queued = field_at(ctx, &task, "scope", None).map(|line| scope_globs(&line));
+    let gained: Vec<String> = queued
+        .map(|q| pats.iter().filter(|p| !q.contains(p)).cloned().collect())
+        .unwrap_or_default();
+    let widened = head_block("widened");
+    let widening =
+        (!gained.is_empty()).then(|| format!("widened scope: with {}", gained.join(" ")));
     let skills_dir = skills_dir_for(ctx.cfg);
     let lock = rel(ctx, "harness.lock");
     let hashes = rel(ctx, "test-hashes.json");
@@ -547,19 +579,31 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     if rows.contains("none") && rows.contains("harness") {
         harness_hit.clear();
     }
-    // the baseline only ever shrinks; a line ADDED is a red check made green by hand, whatever rows: says
-    let grew = diff_since_base(ctx, &rel(ctx, ".check-baseline"))
-        .map(|d| {
-            d.lines()
+    // the baseline only ever shrinks; a line the task's own commits ADD is a red check made green by
+    // hand, whatever rows: says
+    let grew = at_base(ctx, &rel(ctx, ".check-baseline")).is_some_and(|(repo, inner, base)| {
+        task_commits(&repo, &base, &task).iter().any(|sha| {
+            git(&repo, &["show", "--format=", sha, "--", &inner])
+                .unwrap_or_default()
+                .lines()
                 .any(|l| l.starts_with('+') && !l.starts_with("++") && !l.starts_with("+#"))
         })
-        .unwrap_or(false);
+    });
 
-    if out_of.is_empty() && harness_hit.is_empty() && !grew {
-        return pass(format!("{task} stayed inside its scope."));
+    let unexplained = widening.is_some() && widened.is_empty();
+    if out_of.is_empty() && harness_hit.is_empty() && !grew && !unexplained {
+        return pass(match widening {
+            Some(w) => format!("{task} stayed inside its scope. It {w}: {widened}"),
+            None => format!("{task} stayed inside its scope."),
+        });
     }
 
     let mut parts: Vec<String> = Vec::new();
+    if let Some(w) = widening.filter(|_| unexplained) {
+        parts.push(format!(
+            "{w} since it was queued, and the block carries no reason; write it as a `widened:` line"
+        ));
+    }
     if !out_of.is_empty() {
         parts.push(format!(
             "touched {}, which the scope line does not name",
@@ -770,8 +814,9 @@ pub struct CheckReport {
     pub unnamed: bool,
     pub output: String,
     pub exit: i32,
-    /// The halt reason when the check ran past `[check] timeout`. Neither red nor green.
+    /// The halt reason when the check ran past `[check] timeout` or a signal stopped it. Neither red nor green.
     pub timed_out: Option<String>,
+    pub tally: Tally,
 }
 
 impl CheckReport {
@@ -786,6 +831,21 @@ impl CheckReport {
             red: self.red,
             output: self.output.clone(),
         }
+    }
+
+    // a failure the exit hid, or a check that ran and printed no count, is a number nobody can quote
+    pub fn tally_warning(&self, command: &str) -> Option<String> {
+        if self.timed_out.is_some() || self.output.starts_with(NEVER_RAN) {
+            return None;
+        }
+        let t = self.tally;
+        if t.failed > 0 && self.exit == 0 {
+            return Some(format!(
+                "the check exited 0 with {} failed over {} `test result:` lines: `{command}`",
+                t.failed, t.lines
+            ));
+        }
+        (t.lines == 0).then(|| format!("the check printed no `test result:` line: `{command}`"))
     }
 
     // the last n non-empty lines of output, so a rejection can show what the check actually saw
@@ -807,6 +867,7 @@ struct Run {
     exit: i32,
     output: String,
     timed_out: bool,
+    stopped: Option<&'static str>,
 }
 
 const POLL: Duration = Duration::from_millis(100);
@@ -841,6 +902,7 @@ fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result
 
     let started = Instant::now();
     let mut timed_out = false;
+    let mut stopped = None;
     let mut exited = None;
     // the shell exiting is not the end: a grandchild holding the pipe blocks the join below
     let status = loop {
@@ -852,8 +914,9 @@ fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result
                 break status;
             }
         }
-        if started.elapsed() >= timeout {
-            timed_out = true;
+        stopped = crate::agent::stop_signal();
+        if stopped.is_some() || started.elapsed() >= timeout {
+            timed_out = stopped.is_none();
             break match exited {
                 Some(status) => {
                     signal(libc::SIGKILL, pgid);
@@ -888,10 +951,14 @@ fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result
         exit,
         output,
         timed_out,
+        stopped,
     })
 }
 
-fn kill_group(child: &mut std::process::Child, pgid: u32) -> std::io::Result<ExitStatus> {
+pub(crate) fn kill_group(
+    child: &mut std::process::Child,
+    pgid: u32,
+) -> std::io::Result<ExitStatus> {
     signal(libc::SIGTERM, pgid);
     let deadline = Instant::now() + GRACE;
     let status = loop {
@@ -903,7 +970,7 @@ fn kill_group(child: &mut std::process::Child, pgid: u32) -> std::io::Result<Exi
         }
         std::thread::sleep(POLL);
     };
-    // the shell exiting says nothing about a grandchild it left behind
+    // the leader exiting says nothing about a grandchild it left behind
     signal(libc::SIGKILL, pgid);
     Ok(status)
 }
@@ -928,6 +995,34 @@ fn drain<R: Read + Send + 'static>(
             line.clear();
         }
     })
+}
+
+pub fn tally(output: &str) -> Tally {
+    let mut t = Tally::default();
+    for line in output.lines().filter(|l| l.starts_with("test result:")) {
+        t.lines += 1;
+        let words: Vec<&str> = line.split_whitespace().collect();
+        for pair in words.windows(2) {
+            let Ok(n) = pair[0].parse::<u64>() else {
+                continue;
+            };
+            match pair[1].trim_end_matches([';', ',']) {
+                "passed" => t.passed += n,
+                "failed" => t.failed += n,
+                "ignored" => t.ignored += n,
+                _ => {}
+            }
+        }
+    }
+    t
+}
+
+// the gate's copy of the tally, and the digest's warning when the tally contradicts the exit
+fn counted(ctx: &mut GateCtx, report: &CheckReport) -> Option<Tally> {
+    if let Some(warning) = report.tally_warning(&ctx.cfg.check.command) {
+        ctx.warnings.push(warning);
+    }
+    Some(report.tally)
 }
 
 pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
@@ -956,16 +1051,24 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         exit,
         output,
         timed_out,
+        stopped,
     } = run;
-    if timed_out {
-        let reason = format!(
-            "the check ran past {}s and its process group was killed: `{command}`",
-            timeout.as_secs()
-        );
+    let tally = tally(&output);
+    if timed_out || stopped.is_some() {
+        let reason = match stopped {
+            Some(signal) => {
+                format!("the check was stopped by {signal} and its process group was killed: `{command}`")
+            }
+            None => format!(
+                "the check ran past {}s and its process group was killed: `{command}`",
+                timeout.as_secs()
+            ),
+        };
         return CheckReport {
             output: format!("{reason}\n{output}"),
             exit,
             timed_out: Some(reason),
+            tally,
             ..CheckReport::default()
         };
     }
@@ -973,6 +1076,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         return CheckReport {
             output,
             exit,
+            tally,
             ..CheckReport::default()
         };
     }
@@ -1004,6 +1108,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         output,
         exit,
         timed_out: None,
+        tally,
     }
 }
 
@@ -1038,8 +1143,13 @@ fn baseline(path: &Path) -> Vec<String> {
 fn hung(ctx: &mut GateCtx, report: &CheckReport) -> Option<GateOutcome> {
     let reason = report.timed_out.clone()?;
     ctx.halts.push(reason.clone());
+    // the round's boundary would name the signal, but a halted gate never reaches it
+    let halt = match crate::agent::stop_signal() {
+        Some(_) => "signal".to_string(),
+        None => ctx.task.clone().unwrap_or_else(|| "check".to_string()),
+    };
     ctx.events.emit(Kind::Halt {
-        halt: ctx.task.clone().unwrap_or_else(|| "check".to_string()),
+        halt,
         reason: reason.clone(),
     });
     Some(GateOutcome {
@@ -1047,6 +1157,7 @@ fn hung(ctx: &mut GateCtx, report: &CheckReport) -> Option<GateOutcome> {
         reason,
         skip_rest: true,
         halt: true,
+        tally: None,
     })
 }
 
@@ -1055,6 +1166,14 @@ fn check_gate(ctx: &mut GateCtx) -> GateOutcome {
     if let Some(halt) = hung(ctx, &report) {
         return halt;
     }
+    let tally = counted(ctx, &report);
+    GateOutcome {
+        tally,
+        ..judged(&report)
+    }
+}
+
+fn judged(report: &CheckReport) -> GateOutcome {
     if report.accepts() {
         return pass(if report.red {
             format!(
@@ -1096,6 +1215,7 @@ fn adjudicator_halt(ctx: &mut GateCtx) -> GateOutcome {
         reason,
         skip_rest: true,
         halt: true,
+        tally: None,
     }
 }
 
@@ -1398,6 +1518,99 @@ mod tests {
         );
     }
 
+    // line 1 says 237; the fourteen lines sum to 471
+    fn fourteen_result_lines() -> String {
+        let mut out = String::from(
+            "running 237 tests\ntest result: ok. 237 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s\n",
+        );
+        for i in 0..13 {
+            let ignored = if i == 4 { 5 } else { 0 };
+            out.push_str(&format!(
+                "\nrunning 18 tests\ntest result: ok. 18 passed; 0 failed; {ignored} ignored; 0 measured; 0 filtered out; finished in 0.01s\n"
+            ));
+        }
+        out
+    }
+
+    #[test]
+    fn tally_sums_every_test_result_line() {
+        let t = tally(&fourteen_result_lines());
+        assert_eq!(
+            t,
+            Tally {
+                passed: 471,
+                failed: 0,
+                ignored: 5,
+                lines: 14
+            }
+        );
+    }
+
+    #[test]
+    fn check_delta_fills_the_tally() {
+        let env = Env::new(&format!(
+            "cat <<'EOF'\n{}EOF\nexit 0\n",
+            fourteen_result_lines()
+        ));
+        let r = check_delta(&env.repo.root, &env.cfg, false);
+        assert_eq!(r.exit, 0, "{}", r.output);
+        assert_eq!(r.tally.passed, 471);
+        assert_eq!(r.tally.lines, 14);
+    }
+
+    #[test]
+    fn check_gate_event_carries_the_tally() {
+        let mut env = Env::new(&format!(
+            "cat <<'EOF'\n{}EOF\nexit 0\n",
+            fourteen_result_lines()
+        ));
+        let out = run("check-delta", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert!(env.warnings.is_empty(), "{:?}", env.warnings);
+        let tally = env.events().iter().find_map(|e| match &e.kind {
+            Kind::Gate { gate, tally, .. } if gate == "check-delta" => *tally,
+            _ => None,
+        });
+        assert_eq!(tally.map(|t| (t.passed, t.lines)), Some((471, 14)));
+    }
+
+    #[test]
+    fn failed_tally_on_exit_zero_warns() {
+        let mut env = Env::new(
+            "echo 'test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out'\nexit 0\n",
+        );
+        run("check-delta", &mut env.ctx(Some("T-001"), None));
+        let cmd = env.cfg.check.command.clone();
+        assert_eq!(
+            env.warnings,
+            vec![format!(
+                "the check exited 0 with 1 failed over 1 `test result:` lines: `{cmd}`"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_check_with_no_result_line_warns() {
+        let mut env = Env::new("echo built\nexit 0\n");
+        run("check-delta", &mut env.ctx(Some("T-001"), None));
+        let cmd = env.cfg.check.command.clone();
+        assert_eq!(
+            env.warnings,
+            vec![format!("the check printed no `test result:` line: `{cmd}`")]
+        );
+    }
+
+    #[test]
+    fn a_check_that_never_ran_does_not_warn() {
+        let report = CheckReport {
+            output: format!("{NEVER_RAN} no such file"),
+            exit: -1,
+            red: true,
+            ..CheckReport::default()
+        };
+        assert_eq!(report.tally_warning("x"), None);
+    }
+
     #[test]
     fn tail_skips_blank_lines_and_keeps_the_last_n() {
         let report = CheckReport {
@@ -1436,7 +1649,9 @@ mod tests {
 
     #[test]
     fn verdict_forces_back_a_done_with_a_red_check() {
-        let mut env = Env::new("echo boom\necho 'error: something'\necho done\nexit 101\n");
+        let mut env = Env::new(
+            "echo boom\necho 'error: something'\necho 'test result: FAILED. 0 passed; 1 failed; 0 ignored'\necho done\nexit 101\n",
+        );
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.commit_all("verdict");
 
@@ -1462,7 +1677,7 @@ mod tests {
 
     #[test]
     fn verdict_agrees_with_a_clean_green_done() {
-        let mut env = Env::new("exit 0\n");
+        let mut env = Env::new("echo 'test result: ok. 1 passed; 0 failed; 0 ignored'\nexit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.commit_all("verdict");
 
@@ -1633,6 +1848,21 @@ mod tests {
             .log()
             .contains("chore(T-001): harness scope gate rejected a done verdict"));
         env.assert_rejection_events();
+    }
+
+    #[test]
+    fn scope_ignores_an_operator_baseline_line() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", ".check-baseline", "none — harness");
+        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write(".check-baseline", "alpha\nbeta\n");
+        env.repo.commit_all("fix: an operator baseline line");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        assert!(env.tasks_text().contains("status: done"));
     }
 
     #[test]

@@ -1,0 +1,10 @@
+name = "pytest"
+detect_files = ["pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "requirements.txt"]
+detect_re = 'pytest\b'
+test_command = "pytest"
+run_re = 'pytest\b'
+fail_name = '^FAILED \S+::(\S+)'
+test_file_suffix_re = '(^|/)test_[^/]+\.py$|_test\.py$'
+test_decl_patterns = ["def {name}("]
+source_ext = [".py"]
+source_roots = ["src"]

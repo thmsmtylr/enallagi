@@ -6,28 +6,40 @@ use std::sync::{mpsc, Arc};
 
 use crate::events::{self, Event, Kind};
 use crate::pipeline::{self, RunOpts};
-use crate::{git, skills, tui};
+use crate::{agent, git, skills, tui};
 
 pub struct Args {
     pub iterations: u32,
+    pub pipelines: Vec<String>,
     pub budget_usd: Option<f64>,
     pub budget_seconds: Option<u64>,
     pub budget_tokens: Option<u64>,
     pub no_tui: bool,
     pub dry_run: bool,
     pub frozen: bool,
+    pub dangerously_skip_permissions: bool,
+    pub pr_per_task: bool,
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
+    // a stop is the operator's, so it ends the run through the digest rather than orphaning a lane
+    agent::catch_stop_signals();
     let cwd = std::env::current_dir()?;
     let root = match git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
         Ok(top) => std::path::PathBuf::from(top),
         Err(_) => cwd,
     };
+    if !args.dry_run {
+        if let Err(err) = pipeline::preflight(&root) {
+            eprintln!("enallagi run: {err}");
+            return Ok(2);
+        }
+    }
     let tui = !args.no_tui && !args.dry_run && std::io::stdout().is_terminal();
     // flags set here win: with_env_budgets only fills a field still None
     let opts = RunOpts {
         max_iter: args.iterations,
+        pipelines: args.pipelines.clone(),
         dry_run: args.dry_run,
         // CI is frozen whether or not anyone passed the flag: fetching a skill mid-run breaks the lock
         frozen: args.frozen || skills::frozen_from_env(std::env::var_os("CI").as_deref()),
@@ -35,6 +47,8 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         budget_usd: args.budget_usd,
         budget_seconds: args.budget_seconds,
         budget_tokens: args.budget_tokens,
+        dangerously_skip_permissions: args.dangerously_skip_permissions,
+        pr_per_task: args.pr_per_task,
     }
     .with_env_budgets();
 

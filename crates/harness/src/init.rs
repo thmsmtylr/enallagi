@@ -3,6 +3,7 @@
 use crate::agent::{self, Preset};
 use crate::config::{self, Config};
 use crate::git;
+use crate::runners;
 use crate::skills;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -201,6 +202,14 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         cfg.layout.context_file = config::instance_rel(root, &dir, "AGENTS.md");
     }
     config::root_layout_skills(root, &mut cfg);
+    let missing = config::unset_keys(&cfg);
+    if !missing.is_empty() {
+        report.notes.push(format!(
+            "unset: {} — set each in {} before a lane runs.",
+            missing.join(" "),
+            config_rel(root)
+        ));
+    }
     let at = |name: &str| config::instance_rel(root, &dir, name);
     let toml = config_rel(root);
     // before subst, which would put a root-layout queue under the harness directory
@@ -401,7 +410,9 @@ fn seed_config(
     plan: &mut Vec<Planned>,
     report: &mut InitReport,
 ) -> Result<Option<String>, InitError> {
-    if has_content(&config::config_path(root)) {
+    let path = config::config_path(root);
+    if has_content(&path) {
+        audit_config(root, &path, report)?;
         return Ok(None);
     }
     let json = root.join("harness.json");
@@ -417,11 +428,52 @@ fn seed_config(
     } else {
         report
             .notes
-            .push("no enallagi.toml — seeding the defaults. Edit it, then re-run.".to_string());
-        config::DEFAULT_TOML.to_string()
+            .push("no enallagi.toml — writing only the keys that differ from the defaults. Edit it, then re-run.".to_string());
+        // only the fresh file is detected into; a migrated one already carries the operator's answers
+        let found = runners::detect(root);
+        report.notes.extend(runners::notes(&found));
+        runners::apply(config::DEFAULT_TOML, &found.keys)
     };
+    let (text, _) = config::prune_defaults(&text)?;
     plan.push(write(config_rel(root), text.clone()));
     Ok(Some(text))
+}
+
+// an older init wrote every default into the file, so a later edit to check.command left force behind
+fn audit_config(root: &Path, path: &Path, report: &mut InitReport) -> Result<(), InitError> {
+    let text = fs::read_to_string(path).map_err(io(path.display()))?;
+    let (_, dropped) = config::prune_defaults(&text)?;
+    let rel = config_rel(root);
+    if dropped.is_empty() {
+        return Ok(());
+    }
+    report.notes.push(format!(
+        "{rel}: {} keys equal their default ({}). `enallagi init --prune-defaults` removes them.",
+        dropped.len(),
+        dropped.join(" ")
+    ));
+    let stale_force = dropped.iter().any(|key| key == "check.force")
+        && !dropped.iter().any(|key| key == "check.command");
+    if stale_force {
+        report.notes.push(format!(
+            "{rel}: check.force is the default and check.command is not. Delete force and it follows command."
+        ));
+    }
+    Ok(())
+}
+
+/// Drops every key in enallagi.toml that equals its embedded default, and names each one.
+pub fn prune(root: &Path, dry_run: bool) -> Result<Vec<String>, InitError> {
+    let path = config::config_path(root);
+    if !has_content(&path) {
+        return Ok(Vec::new());
+    }
+    let text = fs::read_to_string(&path).map_err(io(path.display()))?;
+    let (pruned, dropped) = config::prune_defaults(&text)?;
+    if !dry_run && !dropped.is_empty() {
+        fs::write(&path, pruned).map_err(io(path.display()))?;
+    }
+    Ok(dropped)
 }
 
 fn config_rel(root: &Path) -> String {
@@ -572,18 +624,30 @@ fn resync(
     check: &config::CheckConfig,
 ) -> Option<String> {
     let (command, force) = defaults?;
+    let rendered = |value: &str, unset: &str| match value.is_empty() {
+        true => unset.to_string(),
+        false => value.to_string(),
+    };
     let mut out = text.to_string();
-    for (default, configured) in [(command, &check.command), (force, &check.force)] {
-        if default != configured {
+    for (default, configured) in [
+        (command, rendered(&check.command, config::UNSET_CHECK)),
+        (force, rendered(&check.force, config::UNSET_FORCE)),
+    ] {
+        // an empty default would match every empty pair in the document, fences included
+        if !default.is_empty() && *default != configured {
             out = out.replace(&format!("`{default}`"), &format!("`{configured}`"));
         }
     }
     (out != text).then_some(out)
 }
 
+// the rendered form, so a document seeded with no check resyncs from the text it was seeded with
 fn default_check() -> Option<(String, String)> {
     let cfg = config_from("").ok()?;
-    Some((cfg.check.command, cfg.check.force))
+    Some((
+        config::subst("__CHECK__", &cfg),
+        config::subst("__CHECK_FORCE__", &cfg),
+    ))
 }
 
 // Claude Code doesn't read AGENTS.md natively; the @ import is its documented workaround
@@ -869,16 +933,24 @@ mod tests {
     #[test]
     fn an_unreadable_default_rewrites_nothing() {
         let cfg = config_from("[check]\ncommand = \"make check\"\n").expect("config");
-        let text = "- Verify, and this is what done means: `bun run check`\n";
-        assert_eq!(resync(text, None, &cfg.check), None);
-
-        let defaults = (
-            "bun run check".to_string(),
-            "bun run check -- --force".to_string(),
+        let text = format!(
+            "- Verify, and this is what done means: `{}`\n",
+            config::UNSET_CHECK
         );
+        assert_eq!(resync(&text, None, &cfg.check), None);
+
+        let defaults = default_check().expect("defaults");
         assert_eq!(
-            resync(text, Some(&defaults), &cfg.check).as_deref(),
+            resync(&text, Some(&defaults), &cfg.check).as_deref(),
             Some("- Verify, and this is what done means: `make check`\n")
         );
+    }
+
+    #[test]
+    fn an_empty_default_replaces_no_pair() {
+        let cfg = config_from("[check]\ncommand = \"make check\"\n").expect("config");
+        let text = "```sh\necho ``\n```\n";
+        let empty = (String::new(), String::new());
+        assert_eq!(resync(text, Some(&empty), &cfg.check), None);
     }
 }
