@@ -47,6 +47,10 @@ fn create_worktree(
 ) -> Result<(String, PathBuf, Pairs), WorktreeError> {
     let harness_dir = &cfg.layout.harness_dir;
     let state_root = git::state_root(root, harness_dir);
+    let start = by_branch(root, cfg)
+        .then(|| resumable_base(root))
+        .flatten()
+        .unwrap_or_else(|| "HEAD".to_string());
     let mut last_dir = PathBuf::new();
     for n in 0..=10u32 {
         let name = if n == 0 {
@@ -66,9 +70,21 @@ fn create_worktree(
         let mut made: Vec<&(PathBuf, PathBuf)> = Vec::new();
         for pair in pairs.iter().rev() {
             let (repo, wt) = pair;
+            let from = if repo.as_path() == root {
+                &start
+            } else {
+                "HEAD"
+            };
             if !git::git_ok(
                 repo,
-                &["worktree", "add", "-b", &branch, &wt.to_string_lossy()],
+                &[
+                    "worktree",
+                    "add",
+                    "-b",
+                    &branch,
+                    &wt.to_string_lossy(),
+                    from,
+                ],
             ) {
                 break;
             }
@@ -96,14 +112,37 @@ pub fn by_branch(root: &Path, cfg: &Config) -> bool {
     cfg.pr.per_task && git::state_root(root, &cfg.layout.harness_dir) != root
 }
 
-// the checkout's branch carries what the upstream carries and nothing else
+// the checkout's branch carries what its own tracking ref carries and nothing else, so a branch
+// named for neither its remote nor its upstream still follows the ref `enallagi pr` builds onto
 fn follow_upstream(root: &Path, branch: &str) -> String {
-    match git::git(root, &["fetch", "-q", "origin", branch])
-        .and_then(|_| git::git(root, &["merge", "--ff-only", "FETCH_HEAD"]))
-    {
-        Ok(out) => format!("{branch} follows origin/{branch}: {out}"),
-        Err(err) => err.to_string(),
-    }
+    let followed = || -> Result<String, git::GitError> {
+        let upstream = git::git(root, &["rev-parse", "--abbrev-ref", "@{upstream}"])?;
+        git::git(root, &["fetch", "-q"])?;
+        let out = git::git(root, &["merge", "--ff-only", "@{upstream}"])?;
+        Ok(format!("{branch} follows {upstream}: {out}"))
+    };
+    followed().unwrap_or_else(|err| err.to_string())
+}
+
+// under `[pr] per_task` the checkout's branch never carries the lane's product commits, so a task
+// left unfinished lives on the last lane branch, and the next lane starts there rather than at HEAD
+fn resumable_base(root: &Path) -> Option<String> {
+    let listed = git::git(
+        root,
+        &[
+            "branch",
+            "--list",
+            "lane/*",
+            "--format=%(refname:short)",
+            "--sort=-refname",
+        ],
+    )
+    .ok()?;
+    listed
+        .lines()
+        .map(str::trim)
+        .find(|b| !b.is_empty() && git::git_ok(root, &["merge-base", "--is-ancestor", "HEAD", b]))
+        .map(str::to_string)
 }
 
 // an untracked file is the operator's own and a lane never sees it, so it is named and not refused
@@ -153,6 +192,11 @@ pub fn lane(
         eprintln!("{}", untracked_notice(&untracked));
     }
 
+    // before the worktree, never after: a lane branched from a checkout behind its upstream builds
+    // a pull request `enallagi pr` then refuses, and no later fast-forward reaches that lane
+    let by_branch = by_branch(root, cfg);
+    let followed = by_branch.then(|| follow_upstream(root, &parent_branch));
+
     let ts = jiff::Timestamp::now().strftime("%Y%m%d-%H%M%S").to_string();
     let base = format!("{ts}-{}", std::process::id());
     let (branch, dir, pairs) = create_worktree(root, cfg, &base)?;
@@ -176,7 +220,6 @@ pub fn lane(
         )));
     }
 
-    let by_branch = by_branch(root, cfg);
     let merging: Pairs = pairs
         .iter()
         .filter(|(repo, _)| !(by_branch && repo.as_path() == root))
@@ -193,7 +236,7 @@ pub fn lane(
         return Ok(left(stuck.join("\n")));
     }
 
-    let mut said = Vec::new();
+    let mut said: Vec<String> = followed.into_iter().collect();
     let mut merged: Vec<(&PathBuf, String)> = Vec::new();
     for (repo, _) in &merging {
         let pre = git::git(repo, &["rev-parse", "HEAD"])?;
@@ -220,9 +263,6 @@ pub fn lane(
                 }
             }
         }
-    }
-    if by_branch {
-        said.push(follow_upstream(root, &parent_branch));
     }
     // `git branch -d` refuses an unmerged branch, so a lane delivered by branch keeps its own until
     // `enallagi pr` has replayed it
@@ -299,17 +339,21 @@ mod tests {
         r
     }
 
-    fn land(wt: &Path, id: &str, file: &str) {
+    fn land_at(wt: &Path, id: &str, file: &str, status: &str) {
         std::fs::write(wt.join(file), id).expect("write");
         commit_in(wt, &format!("{id} work"));
         let state = wt.join(".enallagi");
         let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("the lane's TASKS.md");
         let at = tasks.find(&format!("## [{id}]")).expect("the block");
-        let verdict = tasks[at..].replacen("status: ready", "status: done", 1);
+        let verdict = tasks[at..].replacen("status: ready", &format!("status: {status}"), 1);
         std::fs::write(state.join("TASKS.md"), format!("{}{verdict}", &tasks[..at]))
             .expect("write");
         commit_in(&state, &format!("verify {id}"));
         std::fs::write(state.join("events.jsonl"), "{}\n").expect("an ignored run log");
+    }
+
+    fn land(wt: &Path, id: &str, file: &str) {
+        land_at(wt, id, file, "done");
     }
 
     fn per_task_repo() -> Repo {
@@ -341,7 +385,25 @@ mod tests {
         )
         .expect("remote");
         git::git(&r.root, &["fetch", "-q", "origin"]).expect("fetch");
+        let branch = git::git(&r.root, &["rev-parse", "--abbrev-ref", "HEAD"]).expect("branch");
+        let tracking = format!("--set-upstream-to=origin/{branch}");
+        git::git(&r.root, &["branch", &tracking, &branch]).expect("upstream");
         (dir, bare)
+    }
+
+    // a commit the checkout has never seen, on the branch a clone of `origin` checks out
+    fn commit_on_origin(bare: &Path, file: &str) -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        git::git(
+            dir.path(),
+            &["clone", "-q", &bare.to_string_lossy(), "clone"],
+        )
+        .expect("clone");
+        let wt = dir.path().join("clone");
+        std::fs::write(wt.join(file), "x").expect("write");
+        commit_in(&wt, "upstream work");
+        git::git(&wt, &["push", "-q", "origin", "HEAD"]).expect("push");
+        dir
     }
 
     fn remove_left(r: &Repo, report: &LaneReport) {
@@ -442,13 +504,76 @@ mod tests {
         )
         .expect("merge the pull request");
 
-        lane(&r.root, &cfg, &mut |_wt| Ok(())).expect("the next lane");
+        let (mut parent_inside, mut lane_inside) = (false, false);
+        lane(&r.root, &cfg, &mut |wt| {
+            parent_inside = r.root.join("one.txt").exists();
+            lane_inside = wt.join("one.txt").exists();
+            Ok(())
+        })
+        .expect("the next lane");
 
+        assert!(
+            parent_inside,
+            "the checkout followed after the lane, not before"
+        );
+        assert!(
+            lane_inside,
+            "the lane was created before the checkout followed"
+        );
         let count =
             |range: String| git::git(&r.root, &["rev-list", "--count", &range]).expect("rev-list");
         assert_eq!(count(format!("{branch}..origin/{branch}")), "0");
         assert_eq!(count(format!("origin/{branch}..{branch}")), "0");
         assert!(r.root.join("one.txt").exists());
+    }
+
+    #[test]
+    fn a_follow_reads_the_branchs_tracking_ref() {
+        let r = per_task_repo();
+        let cfg = cfg(&r);
+        let (_origin, bare) = origin_of(&r);
+        let default = git::git(&r.root, &["rev-parse", "--abbrev-ref", "HEAD"]).expect("branch");
+        let _clone = commit_on_origin(&bare, "upstream.txt");
+        // the checkout's branch is not named for its upstream, and `origin/work` does not exist
+        git::git(&r.root, &["branch", "-m", &default, "work"]).expect("rename");
+        let tracking = format!("--set-upstream-to=origin/{default}");
+        git::git(&r.root, &["branch", &tracking, "work"]).expect("upstream");
+
+        let report = lane(&r.root, &cfg, &mut |_wt| Ok(())).expect("lane");
+
+        assert!(report.merged, "reason: {}", report.reason);
+        assert!(
+            r.root.join("upstream.txt").exists(),
+            "reason: {}",
+            report.reason
+        );
+    }
+
+    #[test]
+    fn an_unfinished_task_keeps_its_implementation() {
+        let r = per_task_repo();
+        let cfg = cfg(&r);
+
+        let first = lane(&r.root, &cfg, &mut |wt| {
+            land_at(wt, "T-001", "one.txt", "review");
+            Ok(())
+        })
+        .expect("the first lane");
+        assert!(first.merged, "reason: {}", first.reason);
+        assert!(!r.root.join("one.txt").exists());
+
+        let mut seen = false;
+        let second = lane(&r.root, &cfg, &mut |wt| {
+            seen = wt.join("one.txt").exists();
+            Ok(())
+        })
+        .expect("the second lane");
+
+        assert!(
+            seen,
+            "the second lane started without T-001's implementation: {}",
+            second.reason
+        );
     }
 
     #[test]

@@ -77,8 +77,12 @@ The fields are declared in `crates/harness/src/config.rs`.
 Every table and key, with its default, is in [configuration.md](configuration.md).
 
 `[pr] per_task = true` hands the operator one pushed branch per landed task.
-The checkout's own branch then follows its upstream and carries nothing else.
+The checkout's own branch then follows its own tracking ref and carries nothing else.
 With `per_task = false` a lane fast-forwards the checkout's branch and pushes nothing.
+
+That split needs the harness documents in a repository of their own.
+When they share the product repository, `by_branch` is false even under `per_task = true`.
+Lane commits then fast-forward into the checkout, exactly as they do under `per_task = false`.
 
 A task's own `model:` and `effort:` lines win over `[agent]` and `[agent.<role>]`.
 
