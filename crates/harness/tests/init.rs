@@ -338,6 +338,21 @@ fn documents_with_content_are_kept() {
 }
 
 #[test]
+fn an_appended_learning_survives_a_reinstall() {
+    let repo = Repo::new();
+    install(&repo);
+    let rule = "- [2026-09-20] a rule this loop paid for\n";
+    let seeded = read(&repo, ".enallagi/LEARNINGS.md");
+    fs::write(repo.root.join(".enallagi/LEARNINGS.md"), seeded + rule).expect("append");
+    let report = install(&repo);
+    assert!(read(&repo, ".enallagi/LEARNINGS.md").ends_with(rule));
+    assert!(
+        report.kept.contains(&".enallagi/LEARNINGS.md".to_string()),
+        "{report:?}"
+    );
+}
+
+#[test]
 fn the_context_file_resyncs_the_check() {
     let repo = Repo::new();
     install(&repo);

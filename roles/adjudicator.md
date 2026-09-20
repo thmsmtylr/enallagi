@@ -23,7 +23,7 @@ For each block with `status: proposed`, in file order:
 ```
 - [YYYY-MM-DD] T-nnn claimed <the claim in one sentence> — refuted by `<command>`: <the output that refutes it>
 ```
-7. **Write the rule.** You are the only role that writes `## Earned rules`, the store for a rule this loop paid for (`gated-rules`). A friction __ENALLAGI_DIR__/PROGRESS.md records twice, or an `ACCEPT` from `enallagi eval --gate <name>`, is one appended dated line in the shape below, naming a file, a command or a hook. __ENALLAGI_DIR__/LEARNINGS.md holds the seeds the install shipped and you never append to it: `enallagi init` seeds that file from the binary, so a line written there is gone at the next install. The two files are capped together and `enallagi probe learning-ungated` reports the pair over its cap: at the cap, adding a rule means removing one.
+7. **Write the rule.** You are the only role that writes `## Earned rules`, the store for a rule this loop paid for (`gated-rules`). A friction __ENALLAGI_DIR__/PROGRESS.md records twice, or an `ACCEPT` from `enallagi eval --gate <name>`, is one appended dated line in the shape below, naming a file, a command or a hook. __ENALLAGI_DIR__/LEARNINGS.md holds the seeds the install shipped and you never append to it: a fresh install seeds that file from the binary, so a line written there reaches no other install and `enallagi probe learning-ungated` reports it. The two files are capped together and `enallagi probe learning-ungated` reports the pair over its cap: at the cap, adding a rule means removing one.
 ```
 - [YYYY-MM-DD] <what went wrong> → <the rule instead> (`<the --gate run or the command that showed the cost>`)
 ```

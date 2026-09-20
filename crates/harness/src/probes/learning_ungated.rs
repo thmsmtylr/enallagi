@@ -1,4 +1,4 @@
-//! `LEARNINGS.md` holds the seed rules an install shipped. A rule the loop earned belongs under `## Earned rules` in `DECISIONS.md`, which an install never rewrites, and the two are capped together.
+//! `LEARNINGS.md` holds the seed rules an install shipped. A rule the loop earned belongs under `## Earned rules` in `DECISIONS.md`, the store the adjudicator writes, and the two are capped together.
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
