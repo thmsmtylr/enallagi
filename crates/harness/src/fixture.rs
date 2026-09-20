@@ -5,12 +5,30 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+// A lane is spawned with the repository's git identity exported, a `cargo test` it runs inherits it,
+// and an exported identity beats the `user.email` every fixture repository configures. Dropping it
+// per command would miss the in-process runs, so a fixture drops it from the process, once.
+fn drop_ambient_identity() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        for key in [
+            "GIT_AUTHOR_NAME",
+            "GIT_AUTHOR_EMAIL",
+            "GIT_COMMITTER_NAME",
+            "GIT_COMMITTER_EMAIL",
+        ] {
+            std::env::remove_var(key);
+        }
+    });
+}
+
 // a lane exports its own variables, and a spawned binary must read the fixture's tree, not the lane's
 pub fn command(bin: &str) -> Command {
     let mut cmd = Command::new(bin);
     // CI=true freezes skill resolution, so a fixture run on a runner refuses every stage
     cmd.env_remove("CI");
     crate::config::drop_legacy_env(&mut cmd);
+    drop_ambient_identity();
     for (key, _) in std::env::vars() {
         if key.starts_with(crate::config::ENV) {
             cmd.env_remove(key);
@@ -26,6 +44,7 @@ pub struct Repo {
 
 impl Repo {
     pub fn new() -> Repo {
+        drop_ambient_identity();
         let dir = tempfile::TempDir::new().expect("tempdir");
         let root = dir.path().to_path_buf();
         run(&root, &["init", "-q"]);
@@ -39,6 +58,7 @@ impl Repo {
 
     // a fixture that can't be built is an I/O error here, never a panic, so eval reports ERROR not a crash
     pub fn try_new() -> std::io::Result<Repo> {
+        drop_ambient_identity();
         let dir = tempfile::TempDir::new()?;
         let root = dir.path().to_path_buf();
         let io = std::io::Error::other;
