@@ -3,10 +3,14 @@
 use super::common::{self, Res};
 use super::ponytail_ceiling;
 use super::{Finding, ProbeCtx, ProbeResult};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
-// measured against real friction-line duplicates in this repo's own history, not picked
+// FRICTION_OVERLAP on FRICTION_FIXTURE (tests/probes.rs): reworded pair 0.8750, near-miss pair 0.4762, by `overlap` over `common::normal` words
 const FRICTION_OVERLAP: f64 = 0.5;
+// RARE_SHARED: PROGRESS.md:136 and :199 share 4 rare long words, no other pair of its 71 frictions more than 2, FRICTION_FIXTURE's near-miss 2
+const RARE_SHARED: usize = 3;
+// shorter words are the connective prose that a near-miss pair shares, `lane` and `time` in FRICTION_FIXTURE
+const RARE_WORD_LEN: usize = 5;
 
 struct Group {
     first: BTreeSet<String>,
@@ -31,6 +35,17 @@ fn overlap(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
     }
 }
 
+// a long word only these two frictions carry: counted, not divided, so a longer rewrite of one friction still matches
+fn rare_shared(
+    a: &BTreeSet<String>,
+    b: &BTreeSet<String>,
+    spread: &HashMap<String, usize>,
+) -> usize {
+    a.intersection(b)
+        .filter(|w| w.len() >= RARE_WORD_LEN && spread.get(*w) == Some(&2))
+        .count()
+}
+
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
     common::result(find(ctx))
 }
@@ -39,7 +54,7 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let progress = common::instance(ctx, "PROGRESS.md");
     let learnings = common::instance(ctx, "LEARNINGS.md");
-    let mut groups: Vec<Group> = Vec::new();
+    let mut frictions: Vec<(usize, String, BTreeSet<String>)> = Vec::new();
     for (index, line) in common::lines_of(ctx.root, &progress)?.iter().enumerate() {
         let Some(rest) = line.strip_prefix("friction:") else {
             continue;
@@ -50,14 +65,24 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             continue;
         }
         let tokens: BTreeSet<String> = key.split(' ').map(String::from).collect();
-        match groups
-            .iter_mut()
-            .find(|group| overlap(&group.first, &tokens) >= FRICTION_OVERLAP)
-        {
-            Some(group) => group.hits.push((index + 1, text)),
+        frictions.push((index + 1, text, tokens));
+    }
+    let mut spread: HashMap<String, usize> = HashMap::new();
+    for word in frictions.iter().flat_map(|(_, _, tokens)| tokens) {
+        *spread.entry(word.clone()).or_default() += 1;
+    }
+
+    let mut groups: Vec<Group> = Vec::new();
+    // ponytail: a rare word is one exactly two frictions carry, so a third occurrence joins only by overlap; count spread outside the group to lift it
+    for (line, text, tokens) in frictions {
+        match groups.iter_mut().find(|group| {
+            overlap(&group.first, &tokens) >= FRICTION_OVERLAP
+                || rare_shared(&group.first, &tokens, &spread) >= RARE_SHARED
+        }) {
+            Some(group) => group.hits.push((line, text)),
             None => groups.push(Group {
                 first: tokens,
-                hits: vec![(index + 1, text)],
+                hits: vec![(line, text)],
             }),
         }
     }

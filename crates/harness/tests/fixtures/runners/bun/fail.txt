@@ -1,0 +1,18 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/sum.test.ts:
+1 | import { test, expect } from "bun:test";
+2 | test("a sum is wrong", () => { expect(1 + 1).toBe(3); });
+                                                 ^
+error: expect(received).toBe(expected)
+
+Expected: 3
+Received: 2
+
+      at <anonymous> (/private/tmp/runcap1/bun/tests/sum.test.ts:2:46)
+(fail) a sum is wrong [0.14ms]
+
+ 1 pass
+ 1 fail
+ 2 expect() calls
+Ran 2 tests across 1 file. [8.00ms]

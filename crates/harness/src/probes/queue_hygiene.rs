@@ -1,6 +1,7 @@
-//! The queue read against itself: a repeated id, a missing status, an undefined blocker, a block in review whose scope matches nothing, or a scope entry naming a bare directory.
+//! The queue read against itself: a repeated id, a killed id reused, a missing status, an undefined blocker, a block in review whose scope matches nothing, or a scope entry naming a bare directory.
 
 use super::common::{self, Res};
+use super::ponytail_ceiling::kill_lines;
 use super::{Finding, ProbeCtx, ProbeResult};
 use std::collections::BTreeSet;
 
@@ -13,6 +14,12 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let tasks = common::instance(ctx, "TASKS.md");
     let ids: BTreeSet<&str> = blocks.iter().map(|b| b.id.as_str()).collect();
     let task_id = common::re(r"T-\d+")?;
+    // the id opening a kill line, never one it cites: a duplicate kill names the live block it duplicates
+    let opening = common::re(r"^- \[[^\]]*\] (T-\d+)\b")?;
+    let killed: BTreeSet<String> = kill_lines(ctx)?
+        .iter()
+        .filter_map(|l| opening.captures(l).map(|m| m[1].to_string()))
+        .collect();
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     let mut tree: Option<Vec<String>> = None;
     let mut found = Vec::new();
@@ -54,6 +61,13 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
 
         if status.as_deref() == Some("done") {
             continue;
+        }
+        if killed.contains(&block.id) {
+            found.push(common::finding(
+                &tasks,
+                block.line,
+                format!("{} reuses the id of a killed finding", block.id),
+            ));
         }
         let Some((scope_at, scope)) = common::field(block, "scope") else {
             continue;

@@ -181,6 +181,9 @@ fn an_ejected_repository_looks_untouched() {
     )
     .expect("config");
     std::fs::write(r.root.join(".enallagi/TASKS.md"), TASKS).expect("queue");
+    // the run refuses an install that has not seen this config, so init runs once more over it
+    let (code, out) = harness(&r.root, &["init", "--adapter", "claude"]);
+    assert_eq!(code, 0, "{out}");
     let (code, out) = harness(&r.root, &["run", "--iterations", "1", "--no-tui"]);
     assert_eq!(code, 0, "{out}");
     let log = git(&r.root, &["log", "--format=%s"]);

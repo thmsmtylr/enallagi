@@ -23,7 +23,6 @@ fn run(repo: &Repo, args: &[&str]) -> Out {
 
 fn installed() -> Repo {
     let repo = Repo::new();
-    // the shipped default check is `bun run check`; a machine without bun would make check-red ERROR
     repo.write(
         "enallagi.toml",
         "[check]\ncommand = \"true\"\nfail_name = \"x\"\n",

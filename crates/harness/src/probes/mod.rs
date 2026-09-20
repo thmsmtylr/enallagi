@@ -1,6 +1,7 @@
 //! What the tree says about itself. A probe REPORTS, never gates; one that could not run says ERROR, not a claim of zero.
 
 pub mod common;
+pub mod contribution_policy;
 pub mod telemetry;
 
 mod check_red;
@@ -14,6 +15,7 @@ mod learning_ungated;
 mod litter;
 mod plain_record;
 mod ponytail_ceiling;
+mod prompt_unsubstituted;
 mod queue_hygiene;
 mod queue_uncovered;
 mod rail_unenforced;
@@ -70,6 +72,8 @@ pub const NAMES: &[&str] = &[
     "litter",
     "plain-record",
     "install-stale",
+    "prompt-unsubstituted",
+    "contribution-policy",
     "verdict-flip",
     "rejection-repeat",
     "stage-outlier",
@@ -80,7 +84,7 @@ pub const NAMES: &[&str] = &[
 
 type ProbeFn = fn(&ProbeCtx) -> ProbeResult;
 
-fn registry() -> [(&'static str, ProbeFn); 22] {
+fn registry() -> [(&'static str, ProbeFn); 24] {
     [
         ("spec-untested", spec_untested::probe),
         ("queue-uncovered", queue_uncovered::probe),
@@ -98,6 +102,8 @@ fn registry() -> [(&'static str, ProbeFn); 22] {
         ("litter", litter::probe),
         ("plain-record", plain_record::probe),
         ("install-stale", install_stale::probe),
+        ("prompt-unsubstituted", prompt_unsubstituted::probe),
+        ("contribution-policy", contribution_policy::probe),
         ("verdict-flip", telemetry_probe::verdict_flip),
         ("rejection-repeat", telemetry_probe::rejection_repeat),
         ("stage-outlier", telemetry_probe::stage_outlier),
@@ -206,37 +212,19 @@ fn force_check(ctx: &ProbeCtx) -> CheckOutcome {
             output: "nested under turbo, the check would recurse".to_string(),
         };
     }
-    let out = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(&ctx.cfg.check.force)
-        .current_dir(ctx.root)
-        .output();
-    match out {
-        Err(e) => CheckOutcome {
+    let report = crate::gates::check_delta(ctx.root, ctx.cfg, true);
+    if report.timed_out.is_none() && report.exit == 127 {
+        return CheckOutcome {
             ran: false,
             red: true,
-            output: format!("the check could not be run: {e}"),
-        },
-        Ok(out) => {
-            let mut log = String::from_utf8_lossy(&out.stdout).into_owned();
-            log.push_str(&String::from_utf8_lossy(&out.stderr));
-            if out.status.code() == Some(127) {
-                return CheckOutcome {
-                    ran: false,
-                    red: true,
-                    output: format!(
-                        "the check could not be run: {}",
-                        common::cut(log.trim(), 120)
-                    ),
-                };
-            }
-            CheckOutcome {
-                ran: true,
-                red: !out.status.success(),
-                output: log,
-            }
-        }
+            output: format!(
+                "{} {}",
+                crate::gates::NEVER_RAN,
+                common::cut(report.output.trim(), 120)
+            ),
+        };
     }
+    report.outcome()
 }
 
 pub fn render(results: &[(String, ProbeResult)]) -> String {

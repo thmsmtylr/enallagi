@@ -337,6 +337,7 @@ mod tests {
             w.emit(Kind::RunStart {
                 config_sha256: "deadbeef".into(),
                 pipeline: None,
+                permissions_skipped: false,
             }),
             w.emit(Kind::StageStart {
                 stage: "implement".into(),
@@ -361,6 +362,7 @@ mod tests {
                 task: "T-001".into(),
                 pass: true,
                 reason: "ok".into(),
+                tally: None,
             }),
             w.emit(Kind::StageStart {
                 stage: "verify".into(),

@@ -4,14 +4,26 @@
 [agent]
 preset = "claude"
 rate_limit_pattern = "hit your session limit"
+# adds the preset's bypass_flag to every lane; a preset that declares none refuses the run.
+dangerously_skip_permissions = false
 
-# command decides whether the tree is green; force is the same check uncached; fail_name's group 1 is the failing test's name.
+# command decides whether the tree is green, force is the same check uncached, fail_name's group 1 is the failing test's name; all empty until init detects a runner.
 [check]
-command = "bun run check"
-force = "bun run check -- --force"
-fail_name = '\(fail\) (.+?)(?: \[[0-9.]+m?s\])?$'
+command = ""
+force = ""
+fail_name = ""
 # timeout bounds both forms; a check that runs past it is killed with its process group and halts the run.
 timeout = "30m"
+
+# drain is the standing proposed blocks one adjudicate stage takes; turns_per_block sizes that stage; proposed_rounds is how long a proposed block may stand.
+[queue]
+drain = 3
+turns_per_block = 25
+proposed_rounds = 6
+
+# per_task has enallagi run push each landed task to its own branch and open its pull request, as --pr-per-task does.
+[pr]
+per_task = false
 
 [layout]
 # context_file is the file every role reads first, unset meaning AGENTS.md beside the queue; pointer_files are one-line pointers to it for tools that cannot take it on their command line.
@@ -27,17 +39,17 @@ driver_command = ""
 spec = "SPEC.md"
 rows_heading = "## 11. Exit criteria"
 rows_end_heading = "## 12."
-source_root = "src"
+source_root = ""
 contract_file = "src/schema.ts"
-test_file_suffix_re = '\.test\.ts'
-test_decl_patterns = ["test('{name}'", 'test("{name}"']
+test_file_suffix_re = ""
+test_decl_patterns = []
+test_glob = []
 source_ext = [".ts", ".tsx", ".js", ".mjs", ".cjs", ".sh", ".py"]
 
 harness_files = [
   "package.json",
   "turbo.json",
   "check.ts",
-  "bunfig.toml",
   "Makefile",
   "pyproject.toml",
 ]
@@ -86,10 +98,8 @@ harness_allow = [
   "package.json",
   "turbo.json",
   "tsconfig.json",
-  "bunfig.toml",
   "check.ts",
   "hooks.json",
-  "bun.lock",
   "package-lock.json",
   ".gitignore",
   "Makefile",
@@ -134,13 +144,13 @@ end_after_dry_rounds = 2
 name = "implement"
 role = "implementer"
 turns = 120
-post = ["queue-intact", "implementer-not-done"]
+post = ["queue-intact", "commit-identity", "implementer-not-done"]
 
 [[stage]]
 name = "verify"
 role = "verifier"
 turns = 100
-post = ["commit-verdict", "queue-intact", "verdict", "scope"]
+post = ["commit-verdict", "queue-intact", "commit-identity", "verdict", "scope"]
 
 [[stage]]
 name = "scout"

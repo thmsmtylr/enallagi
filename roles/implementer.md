@@ -14,17 +14,18 @@ Protocol:
 1. Read __CONTEXT_FILE__, __SPEC__, __ENALLAGI_DIR__/LEARNINGS.md and the task block. Restate the acceptance criteria in one sentence. If the task carries verifier rejection notes, address them first.
 2. Read every file in scope BEFORE editing, plus `__CONTRACT_FILE__`.
 3. Red: write tests that directly encode the acceptance criteria, named exactly as __SPEC__ names them, and watch them fail.
-4. Green: implement the smallest change that passes. Do not refactor neighbouring code, do not add features not in the criteria, do not touch files outside `scope:`.
+4. Green: implement the smallest change that passes. Do not refactor neighbouring code, do not add features not in the criteria, do not touch files outside `scope:` unless you add them to it with a one-line `widened:` reason in the block, which the verifier grades and the scope gate requires.
 5. Run `__CHECK__` yourself. Fix failures. Repeat until green — green means on delta against `.check-baseline`, never a line added to it.
 6. Update the task block: `status: review`, never `done` (that is the verifier's), and two or three lines in `notes:` on what you changed and what a reviewer should scrutinise. Under a verifier's verdict, the first line you write opens with the word `IMPLEMENTER`.
 7. Commit the product paths on `scope:` only: `feat(<scope>): T-### <summary>`. Never stage __ENALLAGI_DIR__/TASKS.md, __ENALLAGI_DIR__/PROGRESS.md or any other instance file; the launcher commits them when the stage ends. When `git status --porcelain -- <the scope: paths>` prints nothing and the implementation is already on HEAD, run no commit: write `already committed at <sha>` in `notes:` and set `status: review`.
 
 Hard rules, each naming the rail it serves:
-- A schema change or an out-of-scope edit turns out to be needed: halt the task. Set `status: needs-spec` with the explanation in notes. Do not improvise around the contract (`contracts`, `one-scope`).
+- A schema change, or an out-of-scope edit you cannot give a `widened:` reason for, turns out to be needed: halt the task. Set `status: needs-spec` with the explanation in notes. Do not improvise around the contract (`contracts`, `one-scope`).
 - Never weaken a test, loosen a type, or use `any` / non-null assertions to get to green. Never weaken, disable or delete a lint rule either: typecheck and test green with lint red is NOT green (`green`).
 - Enforce every product rail in __ENALLAGI_DIR__/RAILS.md, and never add a dependency outside its stack list (`minimal`). If a task appears to need a rail bent, that is `needs-spec`, never a quiet exception. Test the **update** path as well as create.
 - Never state a business model, sequence or market position that was not given to you, in code, comments or notes. An inference is written as an open question or not at all (`no-invented-strategy`).
 - Every number you state must be one you ran and observed, stamped with the fixture or revision it came from. Never tune a constant to make a check pass (`measure-first`).
+- A test count you stamp is the tally the launcher recorded, never a total read off the first `test result:` line. `enallagi events --task <id>` prints it as `tally=` on the gate event, and `grep '^test result:' | awk '{p+=$4; f+=$6; i+=$8}'` over the check's output re-derives it (`measure-first`).
 - Every claim in a comment or note carries a URL with its date, a `file:line`, or the command and its output (`citable`).
 - No live network calls in tests. Fixtures, always.
 - Uncertain between two approaches: pick the one that is easier to delete later, and record the choice in notes.

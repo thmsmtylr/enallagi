@@ -1,5 +1,6 @@
 name = "gemini"
-argv = ["gemini", "-p", "{prompt}", "--output-format", "stream-json", "--yolo"]
+argv = ["gemini", "-p", "{prompt}", "--output-format", "stream-json"]
+bypass_flag = "--yolo"
 turn_cap = "config"
 model_flag = "--model"
 instruction_file = "GEMINI.md"

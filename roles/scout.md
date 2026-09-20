@@ -11,7 +11,7 @@ Protocol:
 3. **A count of zero is only good news if the probe parsed something.** Only `spec-untested` and `queue-uncovered` have a parse-size guard. `rail-unenforced`, `hash-uncovered`, `rejection-stale`, `friction-repeat`, `learning-ungated` and `queue-hygiene` report `0` both when the tree is clean and when a heading they parse has drifted. A count that fell to zero since the last run is a line in your report, not silence.
 4. One `FINDING` line is at most one proposed block. Zero `FINDING` lines is zero blocks: report "nothing to propose" and stop. That is a valid outcome (`blocked-is-allowed`).
 5. Grep __ENALLAGI_DIR__/TASKS.md for the finding's `path:line` and its message first. A finding already carried by a block at `ready`, `blocked`, `review` or `proposed` is not proposed again.
-6. Take the next free id by grepping **both** __ENALLAGI_DIR__/TASKS.md and __ENALLAGI_DIR__/DECISIONS.md for `## [T-`. Never reuse a number.
+6. Take the next id as one past the highest ever used. The highest is over `## [T-` headings in **both** __ENALLAGI_DIR__/TASKS.md and __ENALLAGI_DIR__/DECISIONS.md and every id on a `## Rejected findings` line: `{ grep -h '^## \[T-' __ENALLAGI_DIR__/TASKS.md __ENALLAGI_DIR__/DECISIONS.md; sed -n '/^## Rejected findings/,/^## \[T-/p' __ENALLAGI_DIR__/DECISIONS.md; } | grep -o 'T-[0-9]*' | sort -t- -k2 -n | tail -1`. A killed id is spent, never free, and `queue-hygiene` reports a block that reuses one.
 7. Append the block. Every field below is required, and `rows:` is what `one-row` binds through; a block missing `probe:`, `command:` or `output:` is malformed and the adjudicator kills it unread.
 ```
 ## [T-###] <the finding, in the finding's own words>

@@ -342,6 +342,25 @@ fn a_red_check_pushes_nothing() {
 }
 
 #[test]
+fn a_hung_check_is_bound_by_timeout() {
+    let (f, _) = landed("sleep 10\n");
+    exec(&f.tools.join("gh"), "exit 0\n");
+    let toml = f.root.join(".enallagi/enallagi.toml");
+    let text = fs::read_to_string(&toml).expect("config");
+    fs::write(&toml, format!("{text}timeout = \"2s\"\n")).expect("config");
+    let started = std::time::Instant::now();
+    let (code, out) = f.harness(&["pr", "T-001", "--push"]);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "{out}"
+    );
+    assert_ne!(code, 0, "{out}");
+    assert!(out.contains("ran past 2s"), "{out}");
+    assert!(f.remote_branches().lines().all(|b| !b.contains("task/")));
+    assert!(git(&f.root, &["branch", "--list", "task/*"]).is_empty());
+}
+
+#[test]
 fn push_pushes_the_branch_and_opens_the_pr() {
     let (f, _) = landed("exit 0\n");
     let log = f.tools.join("gh.log");
@@ -381,4 +400,156 @@ fn pr_refuses_a_done_task_no_round_commit_names() {
     assert_ne!(code, 0, "{out}");
     assert!(out.contains("T-004") && out.contains("no commit"), "{out}");
     assert!(git(&f.root, &["branch", "--list", "task/*"]).is_empty());
+}
+
+const REFUSAL: &str = "We do not accept pull requests written by AI tools.";
+
+fn guarded() -> (Fixture, PathBuf) {
+    let (f, _) = landed("exit 0\n");
+    commit(
+        &f.root,
+        "CONTRIBUTING.md",
+        &format!("# Contributing\n\nRun the tests.\n{REFUSAL}\n"),
+        "docs: contribution guide",
+    );
+    let log = f.tools.join("gh.log");
+    exec(
+        &f.tools.join("gh"),
+        &format!("printf '%s\\n' \"$@\" >{}\n", log.display()),
+    );
+    (f, log)
+}
+
+#[test]
+fn push_refuses_a_guide_refusing_generated_work() {
+    let (f, log) = guarded();
+    let (code, out) = f.harness(&["pr", "T-001", "--push"]);
+    assert_ne!(code, 0, "{out}");
+    assert!(
+        out.contains(REFUSAL) && out.contains("CONTRIBUTING.md:4"),
+        "{out}"
+    );
+    assert!(out.contains("--policy-read"), "{out}");
+    assert!(f.remote_branches().lines().all(|b| !b.contains("task/")));
+    assert!(!log.exists(), "gh ran");
+    let text = fs::read_to_string(f.root.join(".enallagi/pr/T-001.md")).expect("description");
+    let policy = text.split("## Contribution policy").nth(1).expect("policy");
+    assert!(
+        policy.contains(REFUSAL) && policy.contains("refused"),
+        "{text}"
+    );
+
+    let (code, out) = f.harness(&["pr", "T-001", "--push", "--policy-read"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(f.remote_branches().contains("task/T-001"));
+    assert!(log.exists(), "gh did not run");
+    let text = fs::read_to_string(f.root.join(".enallagi/pr/T-001.md")).expect("description");
+    let policy = text.split("## Contribution policy").nth(1).expect("policy");
+    assert!(
+        policy.contains(REFUSAL) && policy.contains("--policy-read"),
+        "{text}"
+    );
+}
+
+#[test]
+fn pr_without_push_prints_the_policy_finding() {
+    let (f, log) = guarded();
+    let (code, out) = f.harness(&["pr", "T-001"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains(REFUSAL) && out.contains("CONTRIBUTING.md:4"),
+        "{out}"
+    );
+    assert!(git(&f.root, &["branch", "--list", "task/T-001"]).contains("task/T-001"));
+    assert!(!log.exists(), "gh ran");
+}
+
+#[test]
+fn a_blocker_built_this_run_is_the_base() {
+    let (f, _) = landed("exit 0\n");
+    let tasks = DONE_AND_REJECTED.replace(
+        "blockedBy: none\nstatus: ready\nnotes: verifier: rejected, it shouts\n",
+        "blockedBy: T-001\nstatus: done\n",
+    );
+    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    let first = enallagi::pr::build(
+        &f.root,
+        &["T-001".to_string()],
+        &enallagi::pr::PrOpts::default(),
+    )
+    .expect("T-001 builds off origin");
+    assert_eq!(first.base, "main");
+
+    let unstacked = enallagi::pr::build(
+        &f.root,
+        &["T-002".to_string()],
+        &enallagi::pr::PrOpts::default(),
+    );
+    assert!(unstacked.is_err(), "{unstacked:?}");
+
+    let opts = enallagi::pr::PrOpts {
+        stack_on: vec!["T-001".to_string()],
+        ..enallagi::pr::PrOpts::default()
+    };
+    let second = enallagi::pr::build(&f.root, &["T-002".to_string()], &opts).expect("T-002 stacks");
+    assert_eq!(second.base, "task/T-001");
+    assert_eq!(
+        git(&f.root, &["rev-parse", "task/T-002^"]),
+        git(&f.root, &["rev-parse", "task/T-001"])
+    );
+    let thing = git(&f.root, &["show", "task/T-002:src/thing.txt"]);
+    assert!(
+        thing.contains("two two\n") && thing.contains("FIVE\n"),
+        "{thing}"
+    );
+}
+
+#[test]
+fn two_sibling_blockers_are_refused() {
+    let (f, _) = landed("exit 0\n");
+    let mut tasks = DONE_AND_REJECTED.replace(
+        "blockedBy: none\nstatus: ready\nnotes: verifier: rejected, it shouts\n",
+        "blockedBy: none\nstatus: done\n",
+    );
+    tasks.push_str("\n## [T-003] the thing carries both\nscope: src/thing.txt\nblockedBy: T-001, T-002\nstatus: done\n");
+    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    commit(
+        &f.root,
+        "src/thing.txt",
+        &replace(&f.thing(), "four\n", "four, after both\n"),
+        "feat(thing): T-003 the thing carries both",
+    );
+    // each blocker is built off the default branch, so neither branch carries the other
+    for id in ["T-001", "T-002"] {
+        enallagi::pr::build(&f.root, &[id.to_string()], &enallagi::pr::PrOpts::default())
+            .unwrap_or_else(|e| panic!("{id} builds off origin: {e:?}"));
+    }
+    let opts = enallagi::pr::PrOpts {
+        stack_on: vec!["T-001".to_string(), "T-002".to_string()],
+        ..enallagi::pr::PrOpts::default()
+    };
+    let both = enallagi::pr::build(&f.root, &["T-003".to_string()], &opts);
+    let Err(enallagi::pr::PrError::Refused(said)) = both else {
+        panic!("{both:?}");
+    };
+    let said = said.join("\n");
+    assert!(
+        said.contains("T-001") && said.contains("task/T-002"),
+        "{said}"
+    );
+}
+
+#[test]
+fn pr_commits_its_description_to_the_state_repo() {
+    let (f, _) = landed("exit 0");
+    let (code, out) = f.harness(&["pr", "T-001"]);
+    assert_eq!(code, 0, "{out}");
+    let state = f.root.join(".enallagi");
+    assert_eq!(git(&state, &["ls-files", "--", "pr"]), "pr/T-001.md");
+    assert_eq!(
+        git(&state, &["status", "--porcelain", "--", "pr"]),
+        "",
+        "{}",
+        git(&state, &["status", "--porcelain"])
+    );
 }

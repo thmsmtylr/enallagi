@@ -1,7 +1,7 @@
 # LEARNINGS
 
-<!-- One line per costly mistake: - [date] <what went wrong> → <rule instead> (evals/<name>). A dated line lands only on ACCEPT from `enallagi eval --gate <name>`; `[seed]` entries predate the gate. Read at the start of every task.
-     Capped (learningsCap): at the cap, adding a rule means removing one. Every entry names a file, a command or a hook, or `enallagi probe` `learning-unenforced` reports it. Rails are named in CLAUDE.md, never numbered. -->
+<!-- The `[seed]` rules this install shipped, read at the start of every task. `enallagi init` seeds this file from the binary and keeps it once it has content, so a line appended here reaches no other install and `enallagi probe` `learning-ungated` reports it.
+     A rule the loop earns goes under `## Earned rules` in __ENALLAGI_DIR__/DECISIONS.md, written by the adjudicator. Capped (learningsCap) across the two files: at the cap, adding a rule means removing one. Every entry names a file, a command or a hook, or `learning-unenforced` reports it. Rails are named in CLAUDE.md, never numbered. -->
 
 - [seed] **ZERO IS NOT PASS.** A build tool that ran no task, a hook that matched no file, a filter
   that selected no package and a glob that found nothing all exit 0. In every case the absence of a

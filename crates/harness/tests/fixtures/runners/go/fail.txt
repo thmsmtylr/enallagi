@@ -1,0 +1,5 @@
+--- FAIL: TestSumIsWrong (0.00s)
+    sum_test.go:7: got 2 want 3
+FAIL
+FAIL	capture	0.300s
+FAIL

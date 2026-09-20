@@ -1,0 +1,10 @@
+name = "node"
+detect_files = ["package.json"]
+detect_re = 'node\b[^"]*--test\b'
+test_command = "npm test"
+run_re = 'npm (run )?test\b|node\b[^"]*--test\b'
+fail_name = '^✖ (.+?) \([0-9.]+m?s\)$'
+test_file_suffix_re = '\.test\.[cm]?[jt]sx?$'
+test_decl_patterns = ["test('{name}'", 'test("{name}"', "it('{name}'", 'it("{name}"']
+source_ext = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]
+source_roots = ["src", "lib", "app"]

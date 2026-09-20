@@ -151,8 +151,24 @@ pub fn ids_at(blocks: &[Block], status: &str) -> Vec<String> {
         .collect()
 }
 
+// an id a finished block took is never free again: `archived` is DECISIONS.md, and leaving it out
+// hands a live task the id of an archived one
+pub fn next_id(blocks: &[Block], archived: &[Block]) -> String {
+    let high = blocks
+        .iter()
+        .chain(archived)
+        .filter_map(|b| b.id.strip_prefix("T-")?.parse::<u64>().ok())
+        .max()
+        .unwrap_or(0);
+    format!("T-{:03}", high + 1)
+}
+
+pub fn heading(id: &str, title: &str) -> String {
+    format!("## [{id}] {title}")
+}
+
 pub fn block_text(b: &Block) -> String {
-    let mut lines = vec![format!("## [{}] {}", b.id, b.title)];
+    let mut lines = vec![heading(&b.id, &b.title)];
     lines.extend(b.body.iter().map(|(_, l)| l.clone()));
     lines.join("\n")
 }
@@ -275,6 +291,21 @@ mod tests {
     use super::*;
 
     const Q: &str = "## [T-001] first\nscope: src/a.ts\nblockedBy: none\nstatus: ready\ncriteria:\n  - x\n\n## [T-002] second\nscope: src/b.ts\nblockedBy: T-001\nstatus: blocked\n\n```\n## [T-999] not a task\nstatus: ready\n```\n\n## [T-003] attended\nscope: src/c.ts\nblockedBy:\nstatus: ready\nattended: true\n";
+
+    #[test]
+    fn next_id_follows_the_highest_id() {
+        assert_eq!(next_id(&parse(Q).unwrap(), &[]), "T-004");
+        assert_eq!(next_id(&[], &[]), "T-001");
+        let wide = parse("## [T-1204] a\n\n## [T-7] b\n").unwrap();
+        assert_eq!(next_id(&wide, &[]), "T-1205");
+    }
+
+    #[test]
+    fn next_id_never_reissues_an_archived_id() {
+        let live = parse(Q).unwrap();
+        let archived = parse("## [T-050] landed\nstatus: done\n").unwrap();
+        assert_eq!(next_id(&live, &archived), "T-051");
+    }
 
     #[test]
     fn fenced_heading_is_not_a_task() {

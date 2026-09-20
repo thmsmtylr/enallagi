@@ -16,7 +16,7 @@ use crate::probes::{self, CheckOutcome, ProbeCtx};
 use crate::queue::{self, Queue};
 use crate::roles;
 use crate::skills::{self, ResolveOpts};
-use crate::{archive, git};
+use crate::{archive, git, pr};
 
 // A lane running ps to check for competing writers must ignore its parent.
 const LANE: &str = "You are this loop's own lane, spawned by the harness. There is no human in this session
@@ -26,7 +26,7 @@ rule is about a second operator, and it does not apply to the process that start
 
 const SCOUT: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/scout.md: read that file first and follow it exactly. Run `enallagi probe` and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop.";
 
-const ADJUDICATOR: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/adjudicator.md: read that file first and follow it exactly. Act on every block with 'status: proposed' this iteration filed, in file order. Promote it to 'status: ready' with a scope and criteria an agent that has read only __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or __CONTEXT_FILE__ is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop.";
+const ADJUDICATOR: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/adjudicator.md: read that file first and follow it exactly. Act on exactly the 'status: proposed' blocks this prompt names, in the order it names them. Promote it to 'status: ready' with a scope and criteria an agent that has read only __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or __CONTEXT_FILE__ is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop.";
 
 const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __ENALLAGI_DIR__/run/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the product paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason. Never stage or commit TASKS.md, PROGRESS.md or any other file under __ENALLAGI_DIR__: this loop commits them when your stage ends. An implementation left uncommitted is a lost iteration.";
 
@@ -80,24 +80,33 @@ fn rendered_role_path(root: &Path, cfg: &Config, role: &str) -> PathBuf {
 #[derive(Debug, Clone)]
 pub struct RunOpts {
     pub max_iter: u32,
+    // empty runs every pipeline whose `when` holds; a name here is the only one the round may choose
+    pub pipelines: Vec<String>,
     pub dry_run: bool,
     pub frozen: bool,
     pub tui: bool,
     pub budget_seconds: Option<u64>,
     pub budget_usd: Option<f64>,
     pub budget_tokens: Option<u64>,
+    // overrides [agent] dangerously_skip_permissions only toward true
+    pub dangerously_skip_permissions: bool,
+    // overrides [pr] per_task only toward true
+    pub pr_per_task: bool,
 }
 
 impl Default for RunOpts {
     fn default() -> Self {
         RunOpts {
             max_iter: 3,
+            pipelines: Vec::new(),
             dry_run: false,
             frozen: false,
             tui: false,
             budget_seconds: None,
             budget_usd: None,
             budget_tokens: None,
+            dangerously_skip_permissions: false,
+            pr_per_task: false,
         }
     }
 }
@@ -130,16 +139,82 @@ pub struct Digest {
     pub killed: Vec<String>,
     pub halts: Vec<String>,
     pub warnings: Vec<String>,
+    // one line per landed task under --pr-per-task: its URL, or why none was opened
+    pub pulls: Vec<String>,
     pub stages_run: usize,
     pub role_seconds: BTreeMap<String, u64>,
     pub turn_caps: Vec<String>,
-    // an empty promoted/killed pair means nothing to decide only if the stage actually spawned
-    pub adjudicated: bool,
+    pub timeouts: Vec<String>,
+    pub adjudication: Adjudication,
+    pub proposed_standing: usize,
+    pub proposed_oldest: usize,
+    pub expired: usize,
+}
+
+// an empty promoted/killed pair means nothing to decide only if the stage both spawned and ended
+// cleanly; a stage that halted or exited nonzero decided nothing because it could not
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Adjudication {
+    #[default]
+    NoStage,
+    Ran,
+    Undecided,
 }
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct Refused(pub String);
+
+// the two probes that answer "would this lane be told the wrong check?"
+const PREFLIGHT: [&str; 2] = ["check-unnamed", "install-stale"];
+
+/// Refuses before the first stage when the installed files or the context file have drifted from
+/// the configured check. A probe that could not run refuses too: its zero is not a pass.
+pub fn preflight(root: &Path) -> anyhow::Result<()> {
+    let cfg = config::load(root).map_err(|e| Refused(e.to_string()))?;
+    // Some(..) keeps run_all from running the check itself; neither of these probes reads it
+    let check = CheckOutcome {
+        ran: false,
+        red: false,
+        output: String::new(),
+    };
+    let ctx = ProbeCtx {
+        root,
+        cfg: &cfg,
+        check: Some(&check),
+        driver: false,
+    };
+    let names: Vec<String> = PREFLIGHT.iter().map(|n| n.to_string()).collect();
+    let mut lines = Vec::new();
+    for (name, result) in probes::run_all(&ctx, &names) {
+        match result {
+            probes::ProbeResult::Count(found) => lines.extend(
+                found
+                    .iter()
+                    .map(|f| format!("{name} {}:{} {}", f.path, f.line, f.message)),
+            ),
+            probes::ProbeResult::Error(reason) => lines.push(format!("{name} ERROR {reason}")),
+            probes::ProbeResult::Off(_) => {}
+        }
+    }
+    if lines.is_empty() {
+        return Ok(());
+    }
+    if cfg.check.command.trim().is_empty() {
+        return Err(Refused(format!(
+            "enallagi.toml sets no check.command, so no lane can be told a check. \
+             Set it, then run `enallagi init`.\n{}",
+            lines.join("\n")
+        ))
+        .into());
+    }
+    Err(Refused(format!(
+        "the install does not match enallagi.toml, so every lane would be told the wrong check. \
+         Run `enallagi init`, then run again.\n{}",
+        lines.join("\n")
+    ))
+    .into())
+}
 
 fn queue_blocks(root: &Path, cfg: &Config) -> Vec<queue::Block> {
     std::fs::read_to_string(config::instance_path(
@@ -161,6 +236,31 @@ fn plan_task(blocks: &[queue::Block], when: &Predicate) -> Option<String> {
     }
 }
 
+// the round's own proposals, then the oldest standing ones the drain allows
+fn handed_ids(root: &Path, cfg: &Config, at_start: &[String]) -> Vec<String> {
+    let all = queue::ids_at(&queue_blocks(root, cfg), "proposed");
+    let (mut standing, fresh): (Vec<String>, Vec<String>) =
+        all.into_iter().partition(|id| at_start.contains(id));
+    let ages = archive::ages(root, cfg, &standing);
+    standing.sort_by_key(|id| std::cmp::Reverse(ages.get(id).copied().unwrap_or(0)));
+    standing.truncate(cfg.queue.drain);
+    fresh.into_iter().chain(standing).collect()
+}
+
+// a stage handed n blocks is sized for n, not for the one the config names
+fn turn_cap(cfg: &Config, stage: &config::Stage, handed: usize) -> u32 {
+    stage.turns + cfg.queue.turns_per_block * handed as u32
+}
+
+// the plan has no round behind it, so every proposed block counts as standing
+fn planned_cap(root: &Path, cfg: &Config, stage: &config::Stage) -> u32 {
+    if stage.role.as_deref() != Some("adjudicator") {
+        return stage.turns;
+    }
+    let at_start = queue::ids_at(&queue_blocks(root, cfg), "proposed");
+    turn_cap(cfg, stage, handed_ids(root, cfg, &at_start).len())
+}
+
 fn task_levels(blocks: &[queue::Block], task: Option<&str>) -> agent::Levels {
     let Some(b) = task.and_then(|id| blocks.iter().find(|b| b.id == id)) else {
         return agent::Levels::default();
@@ -177,13 +277,16 @@ fn level_word(level: &Option<String>) -> &str {
     level.as_deref().unwrap_or("default")
 }
 
-pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
+pub fn plan(root: &Path, cfg: &Config, pipelines: &[String]) -> Result<String, ConfigError> {
     let presets = agent::presets();
     let mut out = String::new();
     let mut scouting = false;
     let mut warnings = Vec::new();
 
     for pipeline in cfg.pipeline.iter() {
+        if !pipelines.is_empty() && !pipelines.contains(&pipeline.name) {
+            continue;
+        }
         let when = config::parse_when(&pipeline.when)?;
         if !holds(root, cfg, &when, &mut warnings) {
             continue;
@@ -210,7 +313,7 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
                         out,
                         "  DRY_RUN would spawn: {name} as role {role} via {via} \
                          (turns: {}, model: {}, effort: {})",
-                        stage.turns,
+                        planned_cap(root, cfg, stage),
                         level_word(&resolved.levels.model),
                         level_word(&resolved.levels.effort)
                     );
@@ -252,7 +355,8 @@ pub fn plan(root: &Path, cfg: &Config) -> Result<String, ConfigError> {
 }
 
 pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
-    let cfg = config::load(root).map_err(|e| Refused(e.to_string()))?;
+    let mut cfg = config::load(root).map_err(|e| Refused(e.to_string()))?;
+    cfg.agent.dangerously_skip_permissions |= opts.dangerously_skip_permissions;
     let presets = agent::presets();
     config::validate(&cfg, &presets, &|role| role_source(root, &cfg, role)).map_err(|errs| {
         Refused(
@@ -264,9 +368,24 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
     })?;
     let rate_limit = Regex::new(&format!("(?i){}", cfg.agent.rate_limit_pattern))
         .map_err(|e| Refused(format!("agent.rate_limit_pattern: {e}")))?;
+    if let Some(unknown) = opts
+        .pipelines
+        .iter()
+        .find(|name| !cfg.pipeline.iter().any(|p| &p.name == *name))
+    {
+        let names: Vec<&str> = cfg.pipeline.iter().map(|p| p.name.as_str()).collect();
+        return Err(Refused(format!(
+            "--pipeline {unknown}: enallagi.toml names {}",
+            names.join(", ")
+        ))
+        .into());
+    }
 
     if opts.dry_run {
-        print!("{}", plan(root, &cfg).map_err(|e| Refused(e.to_string()))?);
+        print!(
+            "{}",
+            plan(root, &cfg, &opts.pipelines).map_err(|e| Refused(e.to_string()))?
+        );
         return Ok(Digest::default());
     }
 
@@ -283,13 +402,14 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         },
         digest: Digest::default(),
         cost_missing: false,
-        tokens_missing: false,
+        tokens_missing: Vec::new(),
         spent_tokens: 0,
         needs_spec_at_start: Vec::new(),
         proposed_at_start: Vec::new(),
         dry_rounds: 0,
         dry_pipeline: None,
         stopped: false,
+        built: Vec::new(),
     };
     looper.go()
 }
@@ -312,13 +432,16 @@ struct Loop<'a> {
     writer: Writer,
     digest: Digest,
     cost_missing: bool,
-    tokens_missing: bool,
+    // the declared [agent.usage] lanes the last stage left unreported
+    tokens_missing: Vec<&'static str>,
     spent_tokens: u64,
     needs_spec_at_start: Vec<String>,
     proposed_at_start: Vec<String>,
     dry_rounds: u32,
     dry_pipeline: Option<String>,
     stopped: bool,
+    // tasks whose pull-request branch this run built, in order, so a dependent task stacks on one
+    built: Vec<String>,
 }
 
 enum Flow {
@@ -341,6 +464,7 @@ impl<'a> Loop<'a> {
         self.emit(Kind::RunStart {
             config_sha256: config_sha256(self.root),
             pipeline: None,
+            permissions_skipped: self.cfg.agent.dangerously_skip_permissions,
         });
 
         // a backticked mention is prose about the marker; only a bare one halts the run
@@ -384,6 +508,7 @@ impl<'a> Loop<'a> {
     fn archive(&mut self) {
         match archive::archive_done(self.root, self.cfg, false) {
             Ok(report) => {
+                self.digest.expired += report.expired.len();
                 if let Some(refused) = report.refused {
                     self.digest.warnings.push(refused);
                 }
@@ -396,6 +521,12 @@ impl<'a> Loop<'a> {
     fn finish(&mut self, iterations: u32) -> Digest {
         // the task the last iteration landed is archived by the run that landed it, not the next one
         self.archive();
+        let proposed = self.ids_at("proposed");
+        self.digest.proposed_oldest = archive::ages(self.root, self.cfg, &proposed)
+            .into_values()
+            .max()
+            .unwrap_or(0);
+        self.digest.proposed_standing = proposed.len();
         self.digest.iterations = iterations;
         self.emit(Kind::RunEnd {
             halts: self.digest.halts.clone(),
@@ -429,9 +560,15 @@ impl<'a> Loop<'a> {
         let progress_before = file_len(&self.file("PROGRESS.md"));
 
         let Some(pipeline) = self.choose() else {
-            self.digest
-                .warnings
-                .push("no pipeline's `when` held; nothing to run.".to_string());
+            let reason = if self.opts.pipelines.is_empty() {
+                "no pipeline's `when` held; nothing to run.".to_string()
+            } else {
+                format!(
+                    "--pipeline {}: no `when` held; nothing to run.",
+                    self.opts.pipelines.join(", ")
+                )
+            };
+            self.digest.warnings.push(reason);
             return false;
         };
 
@@ -535,11 +672,17 @@ impl<'a> Loop<'a> {
             return Flow::Stop;
         }
 
-        // the per-iteration drain reads only what this round filed; a standing backlog is a separate invocation
-        if stage.role.as_deref() == Some("adjudicator") && self.newly_proposed().is_empty() {
+        let adjudicating = stage.role.as_deref() == Some("adjudicator");
+        let handed = match adjudicating {
+            true => handed_ids(self.root, self.cfg, &self.proposed_at_start),
+            false => Vec::new(),
+        };
+        // nothing filed this round and nothing standing to drain: the stage has no input at all
+        if adjudicating && handed.is_empty() {
             let stage_bases = iter_bases.clone();
             return self.gates(stage, task, iter_bases, stage_bases, String::new());
         }
+        let turns = turn_cap(self.cfg, stage, handed.len());
 
         let timeout = match stage.timeout_duration() {
             Ok(t) => t,
@@ -555,10 +698,12 @@ impl<'a> Loop<'a> {
         env.insert("ENALLAGI_ITERATION".into(), self.writer.iter.to_string());
 
         let (spawn, role) = match (&stage.role, &stage.command) {
-            (Some(role), _) => match self.role_spawn(stage, role, task.clone(), env, timeout) {
-                Ok(spawn) => (spawn, Some(role.clone())),
-                Err(flow) => return flow,
-            },
+            (Some(role), _) => {
+                match self.role_spawn(stage, role, task.clone(), env, timeout, &handed) {
+                    Ok(spawn) => (spawn, Some(role.clone())),
+                    Err(flow) => return flow,
+                }
+            }
             (None, Some(command)) => (
                 self.command_spawn(stage, command, task.clone(), env, timeout),
                 None,
@@ -597,19 +742,23 @@ impl<'a> Loop<'a> {
         self.digest.seconds += result.seconds;
         if let Some(role) = &role {
             *self.digest.role_seconds.entry(role.clone()).or_default() += result.seconds;
-            if role == "adjudicator" {
-                self.digest.adjudicated = true;
-            }
         }
-        // an agent that spent every turn it was given stopped because it ran out, not because it finished
-        if result
-            .usage
-            .turns
-            .is_some_and(|t| t >= u64::from(stage.turns))
+        // an agent ran out of turns only if the preset spawned was handed this number: None passes no cap, Config reads one from the agent's own file and Time spends a clock
+        if matches!(spawn.preset.turn_cap, TurnCap::Flag)
+            && result
+                .usage
+                .turns
+                .is_some_and(|t| config::spent_turn_cap(turns, t))
         {
             self.digest
                 .turn_caps
-                .push(format!("{}: turns {}", stage.name, stage.turns));
+                .push(format!("{}: turns {turns}", stage.name));
+        }
+        if result.timed_out {
+            let spent = timeout.map_or(result.seconds, |t| t.as_secs());
+            self.digest
+                .timeouts
+                .push(format!("{}: timeout {spent}s", stage.name));
         }
         if let Some(cost) = result.usage.cost {
             self.digest.cost = round4(self.digest.cost + cost);
@@ -624,10 +773,31 @@ impl<'a> Loop<'a> {
             if self.opts.budget_usd.is_some() && result.usage.cost.is_none() {
                 self.cost_missing = true;
             }
-            if self.opts.budget_tokens.is_some()
-                && (result.usage.input_tokens.is_none() || result.usage.output_tokens.is_none())
-            {
-                self.tokens_missing = true;
+            if self.opts.budget_tokens.is_some() {
+                let declared = &spawn.preset.usage;
+                let u = &result.usage;
+                // input and output stay required so a preset with no usage table still halts
+                let missing: Vec<&'static str> = [
+                    ("input_tokens", true, u.input_tokens),
+                    ("output_tokens", true, u.output_tokens),
+                    (
+                        "cache_creation_input_tokens",
+                        declared.cache_creation_input_tokens.is_some(),
+                        u.cache_creation_input_tokens,
+                    ),
+                    (
+                        "cache_read_input_tokens",
+                        declared.cache_read_input_tokens.is_some(),
+                        u.cache_read_input_tokens,
+                    ),
+                ]
+                .into_iter()
+                .filter(|(_, required, value)| *required && value.is_none())
+                .map(|(lane, _, _)| lane)
+                .collect();
+                if !missing.is_empty() {
+                    self.tokens_missing = missing;
+                }
             }
         }
         self.spent_tokens += spent_tokens;
@@ -645,7 +815,13 @@ impl<'a> Loop<'a> {
             turns: result.usage.turns,
         });
 
-        let flow = if result.exit != 0 {
+        let flow = if let Some(signal) = agent::stop_signal() {
+            self.halt(
+                "signal",
+                format!("{} was stopped by {signal}, exiting.", stage.name),
+            );
+            Flow::Stop
+        } else if result.exit != 0 {
             self.halt(
                 "stage",
                 format!(
@@ -657,6 +833,13 @@ impl<'a> Loop<'a> {
         } else {
             self.gates(stage, task.clone(), iter_bases, stage_bases, result.output)
         };
+        // read from how the stage ended, so a halt or a nonzero exit never reads as a decision
+        if role.as_deref() == Some("adjudicator") {
+            self.digest.adjudication = match result.timed_out || matches!(flow, Flow::Stop) {
+                true => Adjudication::Undecided,
+                false => Adjudication::Ran,
+            };
+        }
         let msg = format!("{} {}", stage.name, task.unwrap_or_default());
         self.commit_state(msg.trim_end());
         flow
@@ -710,6 +893,7 @@ impl<'a> Loop<'a> {
         task: Option<String>,
         env: BTreeMap<String, String>,
         timeout: Option<Duration>,
+        handed: &[String],
     ) -> Result<StageSpawn<'a>, Flow> {
         let levels = task_levels(&self.blocks(), task.as_deref());
         let resolved = match agent::resolve_task(&self.cfg.agent, role, &self.presets, &levels) {
@@ -789,8 +973,8 @@ impl<'a> Loop<'a> {
             env,
             cwd: self.root,
             timeout,
-            prompt: self.stage_prompt(role),
-            turns: stage.turns,
+            prompt: self.stage_prompt(role, handed, task.as_deref()),
+            turns: turn_cap(self.cfg, stage, handed.len()),
             stage: stage.name.clone(),
             task,
             preset: resolved.preset,
@@ -876,9 +1060,13 @@ impl<'a> Loop<'a> {
         }
     }
 
-    // order matters: STOP file, then budgets, then a new needs-spec task
+    // order matters: a signal, then the STOP file, then budgets, then a new needs-spec task
     fn boundary(&mut self, needs_spec: bool) -> bool {
         if self.stopped {
+            return true;
+        }
+        if let Some(signal) = agent::stop_signal() {
+            self.halt("signal", format!("stopped by {signal}, exiting."));
             return true;
         }
         if self.file("STOP").is_file() {
@@ -903,8 +1091,8 @@ impl<'a> Loop<'a> {
         if self.cost_missing {
             return Some("BUDGET_USD is set and the last stage reported no cost, so the budget cannot be enforced. The agent command must print a cost [agent.usage].cost can read (claude: add --output-format json), or unset BUDGET_USD.".to_string());
         }
-        if self.tokens_missing {
-            return Some("BUDGET_TOKENS is set and the last stage reported no tokens, so the budget cannot be enforced. The agent command must print the counts [agent.usage].input_tokens and .output_tokens can read, or unset BUDGET_TOKENS.".to_string());
+        if !self.tokens_missing.is_empty() {
+            return Some(format!("BUDGET_TOKENS is set and the last stage left a declared token lane unreported, so the budget cannot be enforced. The agent command must print the counts [agent.usage].{} can read, or unset BUDGET_TOKENS.", self.tokens_missing.join(" and .")));
         }
         if let Some(budget) = self.opts.budget_seconds.filter(|b| *b > 0) {
             if self.digest.seconds >= budget {
@@ -976,6 +1164,11 @@ impl<'a> Loop<'a> {
 
     fn choose(&mut self) -> Option<config::Pipeline> {
         for i in 0..self.cfg.pipeline.len() {
+            if !self.opts.pipelines.is_empty()
+                && !self.opts.pipelines.contains(&self.cfg.pipeline[i].name)
+            {
+                continue;
+            }
             let Ok(when) = config::parse_when(&self.cfg.pipeline[i].when) else {
                 continue;
             };
@@ -1016,6 +1209,9 @@ impl<'a> Loop<'a> {
                 if let Some(rows) = rows.filter(|r| !r.is_empty()) {
                     self.digest.rows.push(format!("{task}: {rows}"));
                 }
+                if self.opts.pr_per_task || self.cfg.pr.per_task {
+                    self.open_pull(task);
+                }
             }
             other => self.digest.warnings.push(format!(
                 "{task} ended the iteration at {}, not done.",
@@ -1026,6 +1222,32 @@ impl<'a> Loop<'a> {
         // rather than warning that a role left none -- a verify-only round has no other record
         if file_len(&self.file("PROGRESS.md")) <= progress_before {
             self.progress_stub(task, pipeline, status.as_deref());
+        }
+    }
+
+    // the launcher pushes, never the lane: the lane's argv denies `git push`
+    fn open_pull(&mut self, task: &str) {
+        let opts = pr::PrOpts {
+            push: true,
+            policy_read: false,
+            stack_on: self.built.clone(),
+        };
+        match pr::build(self.root, &[task.to_string()], &opts) {
+            Ok(report) => {
+                self.built.push(task.to_string());
+                let opened = report.opened.unwrap_or_default();
+                self.digest.pulls.push(format!("{task}: {opened}"));
+            }
+            Err(err) => {
+                let reason = err.to_string();
+                let first = reason.lines().next().unwrap_or_default();
+                self.digest
+                    .pulls
+                    .push(format!("{task}: none opened, {first}"));
+                self.digest
+                    .warnings
+                    .push(format!("{task} opened no pull request: {reason}"));
+            }
         }
     }
 
@@ -1097,27 +1319,56 @@ impl<'a> Loop<'a> {
         self.ids_at("review").into_iter().next()
     }
 
-    fn newly_proposed(&self) -> Vec<String> {
-        self.ids_at("proposed")
-            .into_iter()
-            .filter(|id| !self.proposed_at_start.contains(id))
-            .collect()
-    }
-
-    // the drain's prompt carries the round's own ids, so the stage is sized for them and not for the backlog
-    fn stage_prompt(&self, role: &str) -> String {
-        let prompt = prompt_for(role, self.cfg);
-        let ids = match role {
-            "adjudicator" => self.newly_proposed(),
-            _ => Vec::new(),
-        };
+    // the prompt carries the ids the stage was sized for, so it decides those and no others
+    fn stage_prompt(&self, role: &str, ids: &[String], task: Option<&str>) -> String {
+        let mut prompt = prompt_for(role, self.cfg);
+        if role == "implementer" {
+            if let Some(clause) = task.and_then(|t| self.prior_attempts(t)) {
+                prompt.push(' ');
+                prompt.push_str(&clause);
+            }
+        }
         if ids.is_empty() {
             return prompt;
         }
         format!(
-            "{prompt} This iteration filed {}. Act on those blocks and leave any older proposed block alone.",
+            "{prompt} Act on exactly these blocks, in this order: {}. Leave every other proposed block alone.",
             ids.join(", ")
         )
+    }
+
+    // a commit naming the task the implementer is about to take is an attempt no verdict accepted:
+    // an accepted one leaves the task `done`, which no implementer takes
+    fn prior_attempts(&self, task: &str) -> Option<String> {
+        let log = git::git(
+            self.root,
+            &["log", "--format=%h %s", &format!("--grep={task}")],
+        )
+        .ok()?;
+        let shows: Vec<String> = log
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .filter(|(_, subject)| names(subject, task))
+            .map(|(sha, _)| format!("`git show {sha}`"))
+            .collect();
+        if shows.is_empty() {
+            return None;
+        }
+        let answer = self
+            .blocks()
+            .iter()
+            .find(|b| b.id == task)
+            .and_then(rejection_text)
+            .and_then(|text| text.lines().next().map(str::trim).map(String::from))
+            .filter(|line| !line.is_empty())
+            .map(|line| format!(" The line to answer is: {line}"))
+            .unwrap_or_default();
+        Some(format!(
+            "{task} carries a prior implementation attempt no verdict accepted. \
+             Read {} and the block's REJECTED: text before you write any code. \
+             Do not re-send a diff an attempt already had rejected for the same reason.{answer}",
+            shows.join(", ")
+        ))
     }
 
     // a rejection the verifier just wrote is already queued as the task's own work; a block promoted
@@ -1221,20 +1472,31 @@ pub fn digest_text(digest: &Digest) -> String {
     }
     let _ = writeln!(out, "tasks landed:{}", inline(&digest.landed));
     listing(&mut out, "rows turned green:", &digest.rows);
-    // nothing decided reads as nothing to decide, so say which of the two states the round was in
+    if !digest.pulls.is_empty() {
+        listing(&mut out, "pull requests:", &digest.pulls);
+    }
+    // nothing decided reads as nothing to decide, so say which of the three states the round was in
     if digest.promoted.is_empty() && digest.killed.is_empty() {
-        let state = if digest.adjudicated {
-            "the adjudicator ran and decided nothing"
-        } else {
-            "no adjudicate stage ran"
+        let state = match digest.adjudication {
+            Adjudication::NoStage => "no adjudicate stage ran",
+            Adjudication::Ran => "the adjudicator ran and decided nothing",
+            Adjudication::Undecided => "the adjudicator could not decide",
         };
         let _ = writeln!(out, "findings: {state}");
     } else {
         let _ = writeln!(out, "findings promoted:{}", inline(&digest.promoted));
         listing(&mut out, "findings killed:", &digest.killed);
     }
+    let _ = writeln!(
+        out,
+        "proposed: {} standing, oldest {} rounds, expired {}",
+        digest.proposed_standing, digest.proposed_oldest, digest.expired
+    );
     if !digest.turn_caps.is_empty() {
         listing(&mut out, "turn caps hit:", &digest.turn_caps);
+    }
+    if !digest.timeouts.is_empty() {
+        listing(&mut out, "timeouts hit:", &digest.timeouts);
     }
     listing(&mut out, "halts:", &digest.halts);
     listing(&mut out, "warnings:", &digest.warnings);
@@ -1283,6 +1545,15 @@ fn claims(verdict: &str) -> Vec<String> {
         .filter(|s| !s.contains('`') && s.split_whitespace().count() >= 5)
         .map(|s| s.trim().to_string())
         .collect()
+}
+
+// `T-13` must not be read out of the subject of `T-134`: an id is named as a whole word
+fn names(subject: &str, task: &str) -> bool {
+    subject.match_indices(task).any(|(at, _)| {
+        let before = subject[..at].chars().next_back();
+        let after = subject[at + task.len()..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+    })
 }
 
 // lowercase, one space between words: two statements of the same sentence compare equal
@@ -1425,5 +1696,6 @@ fn shell_preset() -> Preset {
         env: BTreeMap::new(),
         model_flag: None,
         effort_flag: None,
+        bypass_flag: None,
     }
 }

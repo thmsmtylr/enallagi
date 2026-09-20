@@ -1,5 +1,6 @@
 //! Builds a pull-request branch off the upstream default branch from the product commits whose subject names a landed task.
 
+use crate::probes::{contribution_policy, Finding};
 use crate::{config, gates, git, queue};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,14 +9,20 @@ use std::process::Command;
 #[derive(Debug, Default)]
 pub struct PrOpts {
     pub push: bool,
+    pub policy_read: bool,
+    /// Tasks whose branch this run already built, in build order; an unmerged blocker among them is the base, not a refusal.
+    pub stack_on: Vec<String>,
 }
 
 #[derive(Debug)]
 pub struct PrReport {
     pub branch: String,
+    /// The branch the pull request merges into: the default branch, or a blocker's `task/` branch.
+    pub base: String,
     pub description: PathBuf,
     /// The pull request's URL, or why none was opened, when `--push` ran.
     pub opened: Option<String>,
+    pub policy: Vec<Finding>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -26,6 +33,11 @@ pub enum PrError {
     Conflict { base: String, files: Vec<String> },
     #[error("the check failed in the task worktree, nothing was pushed:\n{0}")]
     Check(String),
+    #[error("enallagi pr --push refused, the contribution guide conditions generated changes; nothing was pushed:\n  {}\nread the guide, then pass --policy-read to push. The refusal is recorded in {}", .sentences.join("\n  "), .description.display())]
+    Policy {
+        sentences: Vec<String>,
+        description: PathBuf,
+    },
     #[error("the branch is pushed, and gh pr create failed: {0}")]
     Gh(String),
     #[error("{path}: {source}")]
@@ -81,6 +93,8 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     let base = format!("origin/{default}");
     let range = format!("{base}..HEAD");
     let landed = git::git(root, &["log", "--format=%B", &base])?;
+    let mut stacked: Option<usize> = None;
+    let mut on: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     for task in &tasks {
         for blocker in queue::blockers(&task.block) {
             if ids.contains(&blocker)
@@ -88,7 +102,14 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
             {
                 continue;
             }
-            if !gates::names_task(&landed, &blocker) {
+            if gates::names_task(&landed, &blocker) {
+                continue;
+            }
+            // the blocker built last is the base; that it carries the others is checked below
+            if let Some(at) = opts.stack_on.iter().position(|id| *id == blocker) {
+                on.insert(at);
+                stacked = stacked.max(Some(at));
+            } else {
                 refusals.push(format!(
                     "{} is blocked by {blocker}, whose product change is not on {base}",
                     task.id
@@ -96,9 +117,30 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
             }
         }
     }
+    // a branch has one base, so two blockers stack only when the later one already carries the earlier
+    if let Some(at) = stacked {
+        let branch = format!("task/{}", opts.stack_on[at]);
+        let history = git::git(root, &["log", "--format=%B", &branch]).unwrap_or_default();
+        for other in on.iter().filter(|o| **o != at) {
+            let id = &opts.stack_on[*other];
+            if !gates::names_task(&history, id) {
+                refusals.push(format!(
+                    "{id} and {} are both unmerged blockers, and {branch} does not carry {id}",
+                    opts.stack_on[at]
+                ));
+            }
+        }
+    }
     if !refusals.is_empty() {
         return Err(PrError::Refused(refusals));
     }
+    let (onto, base) = match stacked {
+        Some(at) => {
+            let branch = format!("task/{}", opts.stack_on[at]);
+            (branch.clone(), branch)
+        }
+        None => (default.clone(), base),
+    };
 
     let picked = commits(root, &range, ids)?;
     for id in ids {
@@ -122,7 +164,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
         root,
         &["worktree", "add", "-q", "-b", &branch, &wt_arg, &base],
     )?;
-    let built = apply_and_commit(root, &wt, &base, &cfg.check.command, &tasks, &picked);
+    let built = apply_and_commit(root, &wt, &base, &cfg, &tasks, &picked);
     git::git(root, &["worktree", "remove", "--force", &wt_arg])?;
     if let Err(err) = built {
         git::git(root, &["branch", "-D", &branch])?;
@@ -134,22 +176,60 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
         .join("pr")
         .join(format!("{}.md", ids.join("-")));
     let stat = git::git(root, &["diff", "--stat", &base, &branch])?;
-    let text = describe(root, &dir, &tasks, &picked, &stat)?;
+    let policy = contribution_policy::find(root).map_err(|e| PrError::Refused(vec![e]))?;
+    let refused = opts.push && !opts.policy_read && !policy.is_empty();
+    let mut text = describe(root, &dir, &tasks, &picked, &stat)?;
+    text.push_str(&policy_section(&policy, opts, refused));
     if let Some(parent) = description.parent() {
         fs::create_dir_all(parent).map_err(io(parent.display()))?;
     }
     fs::write(&description, text).map_err(io(description.display()))?;
+    // the description is the only record of the contribution-policy decision, so it is committed rather than left for the next tidy-up
+    let record = format!("pr/{}.md", ids.join("-"));
+    git::commit_instance(root, &dir, &[&record], &format!("pr {}", ids.join("-")))?;
+
+    if refused {
+        git::git(root, &["branch", "-D", &branch])?;
+        return Err(PrError::Policy {
+            sentences: policy.iter().map(cite).collect(),
+            description,
+        });
+    }
 
     let mut report = PrReport {
         branch,
+        base: onto,
         description,
         opened: None,
+        policy,
     };
     if opts.push {
         git::git(root, &["push", "-q", "origin", &report.branch])?;
-        report.opened = Some(open(root, &default, &report)?);
+        report.opened = Some(open(root, &report)?);
     }
     Ok(report)
+}
+
+pub fn cite(f: &Finding) -> String {
+    format!("{}:{} {}", f.path, f.line, f.message)
+}
+
+fn policy_section(policy: &[Finding], opts: &PrOpts, refused: bool) -> String {
+    if policy.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n## Contribution policy\n\n");
+    for f in policy {
+        out.push_str(&format!("- {}\n", cite(f)));
+    }
+    out.push_str(if refused {
+        "\nrefused: `enallagi pr --push` without `--policy-read`, nothing was pushed.\n"
+    } else if opts.push {
+        "\npushed with `--policy-read`: the operator read the sentences above.\n"
+    } else {
+        "\nnot pushed: `enallagi pr` ran without `--push`.\n"
+    });
+    out
 }
 
 fn parse(text: &str) -> Result<Vec<queue::Block>, PrError> {
@@ -188,7 +268,7 @@ fn apply_and_commit(
     root: &Path,
     wt: &Path,
     base: &str,
-    check: &str,
+    cfg: &config::Config,
     tasks: &[Task],
     picked: &[(String, String)],
 ) -> Result<(), PrError> {
@@ -224,18 +304,9 @@ fn apply_and_commit(
         }
     }
 
-    let out = Command::new("sh")
-        .arg("-c")
-        .arg(check)
-        .current_dir(wt)
-        .output()
-        .map_err(io("the check"))?;
-    if !out.status.success() {
-        return Err(PrError::Check(format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        )));
+    let report = gates::check_delta(wt, cfg, false);
+    if report.exit != 0 {
+        return Err(PrError::Check(report.output));
     }
 
     let round = git::git(root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
@@ -329,7 +400,7 @@ fn describe(
 }
 
 // gh missing is not a failure: the branch is pushed and the description is on disk
-fn open(root: &Path, default: &str, report: &PrReport) -> Result<String, PrError> {
+fn open(root: &Path, report: &PrReport) -> Result<String, PrError> {
     let subject = git::git(root, &["log", "-1", "--format=%s", &report.branch])?;
     let spawned = Command::new("gh")
         .current_dir(root)
@@ -337,7 +408,7 @@ fn open(root: &Path, default: &str, report: &PrReport) -> Result<String, PrError
             "pr",
             "create",
             "--base",
-            default,
+            &report.base,
             "--head",
             &report.branch,
             "--title",

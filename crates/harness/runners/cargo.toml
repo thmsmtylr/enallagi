@@ -1,0 +1,10 @@
+name = "cargo"
+detect_files = ["Cargo.toml"]
+detect_re = ""
+test_command = "cargo test"
+run_re = 'cargo test\b'
+fail_name = '^(?:test )?(\S+) (?:\.\.\. |--- )FAILED$'
+test_file_suffix_re = '\.rs$'
+test_decl_patterns = ["fn {name}("]
+source_ext = [".rs"]
+source_roots = ["src", "crates"]

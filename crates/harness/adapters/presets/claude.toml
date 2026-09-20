@@ -1,5 +1,6 @@
 name = "claude"
-argv = ["claude", "-p", "{prompt}", "--output-format", "stream-json", "--verbose", "--max-turns", "{turns}", "--append-system-prompt-file", "{context_file}", "--plugin-dir", "{harness_dir}/adapters/claude", "--settings", '{"attribution":{"commit":"","pr":""},"enabledPlugins":{plugins_off:~/.claude/settings.json},"permissions":{"deny":["Monitor","Bash(git push:*)","Bash(git reset --hard:*)","Bash(git clean:*)","Bash(rm -rf:*)","Read(./.env)","Read(./.env.local)","Read(./**/.env)","Read(./**/.env.local)"]}}', "--dangerously-skip-permissions"]
+argv = ["claude", "-p", "{prompt}", "--output-format", "stream-json", "--verbose", "--max-turns", "{turns}", "--append-system-prompt-file", "{context_file}", "--plugin-dir", "{harness_dir}/adapters/claude", "--settings", '{"attribution":{"commit":"","pr":""},"enabledPlugins":{plugins_off:~/.claude/settings.json},"permissions":{"deny":["Monitor","Bash(git push:*)","Bash(git reset --hard:*)","Bash(git clean:*)","Bash(rm -rf:*)","Read(./.env)","Read(./.env.local)","Read(./**/.env)","Read(./**/.env.local)"]}}']
+bypass_flag = "--dangerously-skip-permissions"
 turn_cap = "flag"
 model_flag = "--model"
 effort_flag = "--effort"

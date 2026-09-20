@@ -1,0 +1,10 @@
+name = "bun"
+detect_files = ["package.json", "bunfig.toml"]
+detect_re = 'bun test\b'
+test_command = "bun test"
+run_re = 'bun test\b|npm (run )?test\b'
+fail_name = '\(fail\) (.+?)(?: \[[0-9.]+m?s\])?$'
+test_file_suffix_re = '\.test\.[cm]?[jt]sx?$'
+test_decl_patterns = ["test('{name}'", 'test("{name}"', "it('{name}'", 'it("{name}"']
+source_ext = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]
+source_roots = ["src", "lib", "app"]

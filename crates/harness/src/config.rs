@@ -20,6 +20,9 @@ pub const DIR_TOKEN: &str = "__ENALLAGI_DIR__";
 pub const LEGACY_CONFIG: &str = "harness.toml";
 pub const LEGACY_ENV: &str = "HARNESS_";
 pub const LEGACY_DIR_TOKEN: &str = "__HARNESS_DIR__";
+// what a seeded document says in place of an unset check, never an empty pair a resync would match everywhere
+pub const UNSET_CHECK: &str = "check.command is unset";
+pub const UNSET_FORCE: &str = "check.force is unset";
 
 pub const ROLE_NAMES: &[&str] = &[
     "scout",
@@ -35,6 +38,7 @@ pub const GATE_NAMES: &[&str] = &[
     "verdict",
     "scope",
     "queue-intact",
+    "commit-identity",
     "check-delta",
     "commit-round",
     "adjudicator-halt",
@@ -70,7 +74,11 @@ pub enum ConfigError {
     UnknownPreset(String),
     #[error("agent preset custom needs a command list ({0})")]
     CustomWithoutCommand(String),
-    #[error("check.command is empty")]
+    #[error(
+        "agent preset {0} declares no bypass flag, so dangerously_skip_permissions cannot apply"
+    )]
+    NoBypassFlag(String),
+    #[error("check.command is empty: set it in enallagi.toml, then run `enallagi init`")]
     EmptyCheck,
     #[error("[agent.{role}] is not a role ({})", ROLE_NAMES.join(", "))]
     UnknownRole { role: String },
@@ -103,6 +111,8 @@ pub enum ConfigError {
 pub struct Config {
     pub agent: AgentConfig,
     pub check: CheckConfig,
+    pub queue: QueueConfig,
+    pub pr: PrConfig,
     pub layout: Layout,
     pub pipeline: Vec<Pipeline>,
     pub stage: Vec<Stage>,
@@ -119,6 +129,7 @@ pub struct AgentConfig {
     pub effort: Option<String>,
     pub usage: Option<UsagePaths>,
     pub rate_limit_pattern: String,
+    pub dangerously_skip_permissions: bool,
     #[serde(flatten)]
     pub roles: BTreeMap<String, AgentOverride>,
 }
@@ -171,6 +182,35 @@ fn parse_timeout(value: &str) -> Option<Duration> {
     Some(Duration::from_secs(n.checked_mul(scale)?))
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct QueueConfig {
+    /// Standing `proposed` blocks one adjudicate stage is handed, oldest first.
+    pub drain: usize,
+    /// Turns added to that stage for each block it is handed.
+    pub turns_per_block: u32,
+    /// State commits a `proposed` block may stand for before it expires.
+    pub proposed_rounds: usize,
+}
+
+// the same numbers as the `[queue]` table in harness.default.toml, for a Config built in code
+impl Default for QueueConfig {
+    fn default() -> Self {
+        QueueConfig {
+            drain: 3,
+            turns_per_block: 25,
+            proposed_rounds: 6,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrConfig {
+    /// `enallagi run` opens one pull request per landed task, as `--pr-per-task` does.
+    pub per_task: bool,
+}
+
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Layout {
@@ -187,6 +227,7 @@ pub struct Layout {
     pub source_ext: Vec<String>,
     pub test_file_suffix_re: String,
     pub test_decl_patterns: Vec<String>,
+    pub test_glob: Vec<String>,
     pub harness_files: Vec<String>,
     pub harness_globs: Vec<String>,
     pub allowed_prefixes: Vec<String>,
@@ -246,6 +287,11 @@ impl Stage {
                 value: value.to_string(),
             })
     }
+}
+
+// the digest and the turns-exhausted probe both read a cap through this, so one run never reads two ways
+pub fn spent_turn_cap(cap: u32, turns: u64) -> bool {
+    turns >= u64::from(cap)
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -493,6 +539,146 @@ fn parse_toml(text: &str, path: &str) -> Result<toml::Value, ConfigError> {
     })
 }
 
+/// The one line a written enallagi.toml carries above its keys.
+pub const DEFAULTS_NOTE: &str =
+    "# Keys left out take their value from harness.default.toml, the embedded defaults.\n";
+
+/// Drops every key that already equals the embedded default and names each one it dropped.
+pub fn prune_defaults(text: &str) -> Result<(String, Vec<String>), ConfigError> {
+    let default = parse_toml(DEFAULT_TOML, "harness.default.toml")?;
+    let mut user: toml::Value = parse_toml(text, CONFIG)?;
+    let mut dropped = Vec::new();
+    strip(&mut user, &default, "", &mut dropped);
+    dropped.sort();
+    let body = drop_lines(text, &dropped);
+    let note = if body.lines().any(|l| l == DEFAULTS_NOTE.trim_end()) {
+        ""
+    } else {
+        DEFAULTS_NOTE
+    };
+    // a key the line walk cannot place (an inline table, a quoted dotted key) falls back to the serializer
+    if parse_toml(&body, CONFIG).ok().as_ref() == Some(&user) {
+        return Ok((format!("{note}{body}"), dropped));
+    }
+    let body = toml::to_string(&user).map_err(|e: toml::ser::Error| ConfigError::Parse {
+        path: CONFIG.to_string(),
+        message: e.to_string(),
+    })?;
+    Ok((format!("{DEFAULTS_NOTE}{body}"), dropped))
+}
+
+// removes each dropped key's lines and the comment lines directly above it, so every other line survives
+fn drop_lines(text: &str, dropped: &[String]) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut keep = vec![true; lines.len()];
+    let mut table = String::new();
+    let mut whole = false;
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i].trim();
+        if line.starts_with('[') {
+            let inner = line.trim_start_matches('[');
+            table = key_path(&inner[..inner.find(']').unwrap_or(inner.len())]);
+            whole = dropped.contains(&table);
+            if whole {
+                cut(&lines, &mut keep, i, i + 1);
+            }
+            i += 1;
+            continue;
+        }
+        let Some((key, _)) = line.split_once('=').filter(|_| !line.starts_with('#')) else {
+            if whole {
+                keep[i] = false;
+            }
+            i += 1;
+            continue;
+        };
+        let mut end = i + 1;
+        while end < lines.len() && toml::from_str::<toml::Value>(&lines[i..end].join("\n")).is_err()
+        {
+            end += 1;
+        }
+        let path = match key_path(key) {
+            leaf if table.is_empty() => leaf,
+            leaf => format!("{table}.{leaf}"),
+        };
+        if whole || dropped.contains(&path) {
+            cut(&lines, &mut keep, i, end);
+        }
+        i = end;
+    }
+    drop_empty_tables(&lines, &mut keep);
+    let mut out = String::new();
+    let mut blank = true;
+    for (line, _) in lines.iter().zip(&keep).filter(|(_, k)| **k) {
+        if line.trim().is_empty() && blank {
+            continue;
+        }
+        blank = line.trim().is_empty();
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn key_path(raw: &str) -> String {
+    raw.split('.')
+        .map(|part| part.trim().trim_matches('"').trim_matches('\''))
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+fn cut(lines: &[&str], keep: &mut [bool], from: usize, to: usize) {
+    keep[from..to].iter_mut().for_each(|k| *k = false);
+    let mut above = from;
+    while above > 0 && lines[above - 1].trim().starts_with('#') {
+        above -= 1;
+        keep[above] = false;
+    }
+}
+
+// a `[table]` header whose keys were all dropped would otherwise parse as an empty table
+fn drop_empty_tables(lines: &[&str], keep: &mut [bool]) {
+    for i in 0..lines.len() {
+        let line = lines[i].trim();
+        if !keep[i] || !line.starts_with('[') || line.starts_with("[[") {
+            continue;
+        }
+        let body_empty = (i + 1..lines.len())
+            .take_while(|&j| !lines[j].trim().starts_with('['))
+            .all(|j| !keep[j] || lines[j].trim().is_empty() || lines[j].trim().starts_with('#'));
+        if body_empty {
+            cut(lines, keep, i, i + 1);
+        }
+    }
+}
+
+fn strip(user: &mut toml::Value, default: &toml::Value, at: &str, dropped: &mut Vec<String>) {
+    let (Some(user), Some(default)) = (user.as_table_mut(), default.as_table()) else {
+        return;
+    };
+    user.retain(|key, value| {
+        let path = if at.is_empty() {
+            key.to_string()
+        } else {
+            format!("{at}.{key}")
+        };
+        let Some(other) = default.get(key) else {
+            return true;
+        };
+        // recursed first, so a table equal to its default is reported leaf by leaf and not as one name
+        if value.is_table() && other.is_table() {
+            strip(value, other, &path, dropped);
+            return value.as_table().is_none_or(|t| !t.is_empty());
+        }
+        if value == other {
+            dropped.push(path);
+            return false;
+        }
+        true
+    });
+}
+
 fn merge(base: &mut toml::Value, over: &toml::Value) {
     match (base, over) {
         (toml::Value::Table(b), toml::Value::Table(o)) => {
@@ -605,6 +791,7 @@ pub fn validate(
         }
     }
     let mut checked_roles: BTreeSet<&str> = BTreeSet::new();
+    let mut unbypassed: BTreeSet<String> = BTreeSet::new();
 
     for st in &cfg.stage {
         match (&st.role, &st.command) {
@@ -649,6 +836,13 @@ pub fn validate(
         let preset = over
             .and_then(|o| o.preset.clone())
             .unwrap_or_else(|| cfg.agent.preset.clone());
+        let bypass = presets.get(&preset).map(|p| p.bypass_flag.is_some());
+        if cfg.agent.dangerously_skip_permissions
+            && (preset == "custom" || bypass == Some(false))
+            && unbypassed.insert(preset.clone())
+        {
+            errs.push(ConfigError::NoBypassFlag(preset.clone()));
+        }
         if preset == "custom" {
             let command = over
                 .and_then(|o| o.command.as_ref())
@@ -681,13 +875,46 @@ pub fn validate(
     }
 }
 
+/// The keys a repository must set before a lane runs that still have no value.
+pub fn unset_keys(cfg: &Config) -> Vec<&'static str> {
+    let (c, l) = (&cfg.check, &cfg.layout);
+    [
+        ("check.command", c.command.is_empty()),
+        ("check.force", c.force.is_empty()),
+        ("check.fail_name", c.fail_name.is_empty()),
+        ("layout.source_root", l.source_root.is_empty()),
+        (
+            "layout.test_file_suffix_re",
+            l.test_file_suffix_re.is_empty(),
+        ),
+        ("layout.test_decl_patterns", l.test_decl_patterns.is_empty()),
+    ]
+    .into_iter()
+    .filter_map(|(key, unset)| unset.then_some(key))
+    .collect()
+}
+
 pub fn subst(text: &str, cfg: &Config) -> String {
     let text = text.replace(LEGACY_DIR_TOKEN, DIR_TOKEN);
     let l = &cfg.layout;
     let cap = l.learnings_cap.to_string();
+    let or = |value: &str, unset: &str| match value.is_empty() {
+        true => unset.to_string(),
+        false => value.to_string(),
+    };
+    let check = or(&cfg.check.command, UNSET_CHECK);
+    let force = or(&cfg.check.force, UNSET_FORCE);
+    // quoted one by one: the verifier pastes the value into a shell command, and a pathspec may
+    // hold an apostrophe, which ends the quoting unless it is closed, escaped and reopened
+    let test_glob = l
+        .test_glob
+        .iter()
+        .map(|spec| format!("'{}'", spec.replace('\'', r"'\''")))
+        .collect::<Vec<_>>()
+        .join(" ");
     let mut tokens: Vec<(&str, &str)> = vec![
-        ("__CHECK__", &cfg.check.command),
-        ("__CHECK_FORCE__", &cfg.check.force),
+        ("__CHECK__", &check),
+        ("__CHECK_FORCE__", &force),
         ("__SPEC__", &l.spec),
         (DIR_TOKEN, &l.harness_dir),
         ("__CONTEXT_FILE__", &l.context_file),
@@ -698,6 +925,7 @@ pub fn subst(text: &str, cfg: &Config) -> String {
         ("__ROWS_END_HEADING__", &l.rows_end_heading),
         ("__SOURCE_ROOT__", &l.source_root),
         ("__LEARNINGS_CAP__", &cap),
+        ("__TEST_GLOB__", &test_glob),
     ];
     // unset means the preset's own directory, which only skills::skills_dir knows -- leave the token standing, not empty
     if let Some(dir) = l.skills_dir.as_deref() {
@@ -950,6 +1178,13 @@ fn toml_string(s: &str) -> String {
 mod tests {
     use super::*;
 
+    // the defaults carry no check, and validate refuses one
+    fn checked() -> Config {
+        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        c.check.command = "true".into();
+        c
+    }
+
     fn write_config(root: &Path, text: &str) {
         let path = config_path(root);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1060,7 +1295,7 @@ mod tests {
     fn defaults_load_when_no_file() {
         let d = tempfile::tempdir().unwrap();
         let c = load(d.path()).unwrap();
-        assert_eq!(c.check.command, "bun run check");
+        assert_eq!(c.check.command, "");
         assert_eq!(c.pipeline.len(), 3);
         assert_eq!(c.stage[0].turns, 120);
     }
@@ -1115,6 +1350,26 @@ mod tests {
     }
 
     #[test]
+    fn a_skip_with_no_bypass_flag_is_refused() {
+        let mut c = checked();
+        c.agent.dangerously_skip_permissions = true;
+        assert!(validate(&c, &crate::agent::presets(), &|_| Some(String::new())).is_ok());
+        c.agent.roles.insert(
+            "scout".into(),
+            AgentOverride {
+                preset: Some("pi".into()),
+                ..AgentOverride::default()
+            },
+        );
+        let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.to_string().contains("pi declares no bypass flag")),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
     fn skill_token_without_declaration_is_refused() {
         let c = load(tempfile::tempdir().unwrap().path()).unwrap();
         let errs = validate(&c, &crate::agent::presets(), &|_| {
@@ -1165,7 +1420,7 @@ mod tests {
         let c = load(tempfile::tempdir().unwrap().path()).unwrap();
         assert_eq!(
             subst("run __CHECK__ in __ENALLAGI_DIR__", &c),
-            "run bun run check in .enallagi"
+            "run check.command is unset in .enallagi"
         );
     }
 
@@ -1185,7 +1440,12 @@ mod tests {
     fn the_defaults_validate() {
         let c = load(tempfile::tempdir().unwrap().path()).unwrap();
         let roles = |_: &str| Some(String::new());
-        assert!(validate(&c, &crate::agent::presets(), &roles).is_ok());
+        let errs = validate(&c, &crate::agent::presets(), &roles).unwrap_err();
+        assert!(
+            matches!(errs.as_slice(), [ConfigError::EmptyCheck]),
+            "{errs:?}"
+        );
+        assert!(validate(&checked(), &crate::agent::presets(), &roles).is_ok());
         assert_eq!(c.skill.len(), 8);
         assert_eq!(c.layout.learnings_cap, 12);
         assert_eq!(c.layout.skills_dir, None);
@@ -1233,6 +1493,33 @@ mod tests {
         std::fs::create_dir(d.path().join(".harness")).unwrap();
         std::fs::create_dir(d.path().join(".enallagi")).unwrap();
         assert_eq!(load(d.path()).unwrap().layout.harness_dir, ".enallagi");
+    }
+
+    #[test]
+    fn an_omitted_force_follows_the_configured_command() {
+        let d = tempfile::tempdir().unwrap();
+        write_config(d.path(), "[check]\ncommand = \"npm test\"\n");
+        assert_eq!(load(d.path()).unwrap().check.force, "npm test");
+    }
+
+    #[test]
+    fn prune_defaults_keeps_only_what_differs() {
+        let (text, took) = prune_defaults(DEFAULT_TOML).unwrap();
+        assert!(text.contains("harness.default.toml"), "{text}");
+        assert_eq!(
+            toml::from_str::<toml::Value>(&text).unwrap(),
+            toml::Value::Table(Default::default())
+        );
+        assert!(took.contains(&"check.command".to_string()), "{took:?}");
+        assert!(took.contains(&"pipeline".to_string()), "{took:?}");
+
+        let mine = DEFAULT_TOML.replace("\ncommand = \"\"", "\ncommand = \"make check\"");
+        let (text, took) = prune_defaults(&mine).unwrap();
+        let kept: toml::Value = toml::from_str(&text).unwrap();
+        assert_eq!(kept["check"]["command"].as_str(), Some("make check"));
+        assert_eq!(kept.as_table().unwrap().len(), 1, "{text}");
+        assert!(!took.contains(&"check.command".to_string()), "{took:?}");
+        assert!(took.contains(&"check.force".to_string()), "{took:?}");
     }
 
     #[test]
@@ -1307,7 +1594,12 @@ mod tests {
             .map(|e| e.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("check.command is empty"), "{text}");
+        assert!(
+            text.contains(
+                "check.command is empty: set it in enallagi.toml, then run `enallagi init`"
+            ),
+            "{text}"
+        );
         assert!(text.contains("is not a predicate"), "{text}");
         assert!(text.contains("ghost"), "{text}");
         assert!(text.contains("exactly one of role or command"), "{text}");
@@ -1322,7 +1614,7 @@ mod tests {
 
     #[test]
     fn a_role_override_picks_its_own_preset() {
-        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        let mut c = checked();
         c.agent.roles.insert(
             "verifier".into(),
             AgentOverride {
@@ -1340,7 +1632,7 @@ mod tests {
 
     #[test]
     fn a_time_capped_preset_needs_a_timeout() {
-        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        let mut c = checked();
         c.agent.roles.insert(
             "verifier".into(),
             AgentOverride {
@@ -1358,7 +1650,7 @@ mod tests {
 
     #[test]
     fn custom_without_a_command_is_refused() {
-        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        let mut c = checked();
         c.agent.preset = "custom".into();
         let roles = |_: &str| Some(String::new());
         assert!(validate(&c, &crate::agent::presets(), &roles).is_err());
@@ -1368,7 +1660,7 @@ mod tests {
 
     #[test]
     fn declared_skills_satisfy_their_tokens() {
-        let c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        let c = checked();
         let roles = |_: &str| {
             Some("use {{skill:tdd}} then {{skill:tdd}} and {{skill:ponytail}}".to_string())
         };
@@ -1380,11 +1672,40 @@ mod tests {
     }
 
     #[test]
+    fn subst_quotes_each_test_glob_pathspec() {
+        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        assert!(c.layout.test_glob.is_empty());
+        c.layout.test_glob = vec!["tests/*.rs".into(), "src/*.rs".into()];
+        assert_eq!(
+            subst("git diff $BASE -- __TEST_GLOB__", &c),
+            "git diff $BASE -- 'tests/*.rs' 'src/*.rs'"
+        );
+    }
+
+    #[test]
+    fn subst_closes_a_pathspec_holding_an_apostrophe() {
+        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        c.layout.test_glob = vec!["tests/don't/*.rs".into()];
+        let line = subst("git diff $BASE -- __TEST_GLOB__", &c);
+        assert_eq!(line, r"git diff $BASE -- 'tests/don'\''t/*.rs'");
+        // the shell reads it back as the one pathspec it started as
+        let out = std::process::Command::new("sh")
+            .args([
+                "-c",
+                &format!("printf '%s\n' {}", &line[line.find("-- ").unwrap() + 3..]),
+            ])
+            .output()
+            .expect("sh");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "tests/don't/*.rs\n");
+    }
+
+    #[test]
     fn subst_covers_every_token() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
         let text = "__CHECK__|__CHECK_FORCE__|__SPEC__|__ENALLAGI_DIR__|__SKILLS_DIR__|\
                     __CONTEXT_FILE__|__CONTRACT_FILE__|__SKILL_INVOCATION__|__DRIVER_COMMAND__|\
-                    __ROWS_HEADING__|__ROWS_END_HEADING__|__SOURCE_ROOT__|__LEARNINGS_CAP__";
+                    __ROWS_HEADING__|__ROWS_END_HEADING__|__SOURCE_ROOT__|__LEARNINGS_CAP__|\
+                    __TEST_GLOB__";
         let mut out = subst(text, &c);
         assert_eq!(
             out.matches("__").count(),
@@ -1439,7 +1760,8 @@ mod tests {
             c.agent.usage.as_ref().unwrap().cost.as_deref(),
             Some("total_cost_usd")
         );
-        assert_eq!(c.check.force, "bun run check -- --force");
+        assert_eq!(c.check.command, "");
+        assert_eq!(c.check.force, "");
         assert_eq!(c.check.fail_name, r".*\(fail\) (.+)$");
         assert_eq!(c.layout.skills_dir.as_deref(), Some(".claude/skills"));
         assert_eq!(c.layout.learnings_cap, 12);
@@ -1450,7 +1772,11 @@ mod tests {
         assert_eq!(c.skill[6].gate, "queue-uncovered");
         assert_eq!(c.stage.len(), 4);
         let roles = |_: &str| Some(String::new());
-        assert!(validate(&c, &crate::agent::presets(), &roles).is_ok());
+        let errs = validate(&c, &crate::agent::presets(), &roles).unwrap_err();
+        assert!(
+            matches!(errs.as_slice(), [ConfigError::EmptyCheck]),
+            "{errs:?}"
+        );
     }
 
     #[test]
@@ -1473,7 +1799,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         write_config(
             d.path(),
-            "[agent]\npreset = 'goose'\n\n[agent.usage]\ncost = 'c'\n\n\
+            "[check]\ncommand = 'true'\n\n[agent]\npreset = 'goose'\n\n[agent.usage]\ncost = 'c'\n\n\
              [agent.verifier]\npreset = 'gemini'\nmodel = 'g'\n",
         );
         let c = load(d.path()).unwrap();
@@ -1562,7 +1888,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         write_config(
             d.path(),
-            "[[role]]\nname = 'implementer'\nsource = 'path:x'\n",
+            "[check]\ncommand = 'true'\n\n[[role]]\nname = 'implementer'\nsource = 'path:x'\n",
         );
         let c = load(d.path()).unwrap();
         let files = |role: &str| (role != "implementer").then(String::new);

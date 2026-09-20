@@ -1,5 +1,6 @@
 name = "codex"
-argv = ["codex", "exec", "{prompt}", "--json", "--dangerously-bypass-approvals-and-sandbox"]
+argv = ["codex", "exec", "{prompt}", "--json"]
+bypass_flag = "--dangerously-bypass-approvals-and-sandbox"
 turn_cap = "none"
 model_flag = "--model"
 instruction_file = "AGENTS.md"
