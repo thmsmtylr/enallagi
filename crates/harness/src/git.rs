@@ -11,6 +11,17 @@ pub enum GitError {
 
 fn cmd(root: &Path, args: &[&str]) -> Command {
     let mut c = Command::new("git");
+    // a lane exports the repository's identity to the agent, and a `cargo test` under it inherits the
+    // four variables, which beat the `user.email` a repository configures. Every git the harness runs
+    // reads the repository it is pointed at, never the process it was spawned from.
+    for var in [
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+    ] {
+        c.env_remove(var);
+    }
     c.current_dir(root).args(args);
     c
 }
@@ -218,6 +229,30 @@ mod tests {
         assert!(commit_paths(&r.root, &[".gitignore"], "ignore").unwrap());
         r.write("src/a.ts", "x");
         assert!(commit_paths(&r.root, &["src/a.ts"], "add ignored").is_err());
+    }
+
+    // a lane exports the four identity variables to the agent, a `cargo test` under it inherits them,
+    // and they beat the `user.email` the repository configures. The process is shared, so they come
+    // off the child, not off the process.
+    #[test]
+    fn a_git_command_carries_no_ambient_identity() {
+        let c = cmd(Path::new("."), &["status"]);
+        let dropped: Vec<String> = c
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+        for var in [
+            "GIT_AUTHOR_NAME",
+            "GIT_AUTHOR_EMAIL",
+            "GIT_COMMITTER_NAME",
+            "GIT_COMMITTER_EMAIL",
+        ] {
+            assert!(
+                dropped.iter().any(|k| k == var),
+                "{var} reaches git: {dropped:?}"
+            );
+        }
     }
 
     #[test]

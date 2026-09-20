@@ -188,6 +188,24 @@ fn landed(check: &str) -> (Fixture, Vec<String>) {
     (f, vec![first, rejected, second])
 }
 
+// a checkout behind its upstream is refused before any replay, so a fixture that pushes upstream
+// takes that commit into the round branch first, keeping the round's own content on every conflict
+fn absorb_upstream(f: &Fixture) {
+    git(
+        &f.root,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "merge",
+            "-q",
+            "--no-edit",
+            "-X",
+            "ours",
+            "origin/main",
+        ],
+    );
+}
+
 #[test]
 fn pr_refuses_a_task_that_is_not_done() {
     let (f, _) = landed("exit 0\n");
@@ -302,9 +320,40 @@ fn pr_refuses_a_blocker_not_yet_upstream() {
     );
     git(&f.root, &["push", "-q", "origin", "main"]);
     git(&f.root, &["checkout", "-q", "dogfood/round-1"]);
+    absorb_upstream(&f);
     let (code, out) = f.harness(&["pr", "T-003"]);
     assert_eq!(code, 0, "{out}");
     assert!(git(&f.root, &["show", "task/T-003:src/other.txt"]).contains("twelve"));
+}
+
+#[test]
+fn pr_refuses_a_checkout_behind_its_upstream() {
+    let (f, _) = landed("exit 0\n");
+    git(&f.root, &["checkout", "-q", "main"]);
+    commit(&f.root, "src/other.txt", "eleven\n", "upstream eleven");
+    commit(
+        &f.root,
+        "src/other.txt",
+        "eleven\ntwelve\n",
+        "upstream twelve",
+    );
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    git(&f.root, &["checkout", "-q", "dogfood/round-1"]);
+    let log = f.tools.join("gh.log");
+    exec(
+        &f.tools.join("gh"),
+        &format!("printf '%s\\n' \"$@\" >{}\n", log.display()),
+    );
+
+    let (code, out) = f.harness(&["pr", "T-001", "--push"]);
+    assert_ne!(code, 0, "{out}");
+    assert!(!log.exists(), "gh ran");
+    assert!(out.contains("HEAD..origin/main` -> 2"), "{out}");
+    assert!(out.contains("git merge origin/main"), "{out}");
+    assert!(!out.contains("T-001"), "{out}");
+    assert!(!out.contains("src/thing.txt"), "{out}");
+    assert!(git(&f.root, &["branch", "--list", "task/*"]).is_empty());
+    assert!(f.remote_branches().lines().all(|b| !b.contains("task/")));
 }
 
 #[test]
@@ -319,6 +368,7 @@ fn a_conflicting_diff_names_the_files_and_stops() {
     );
     git(&f.root, &["push", "-q", "origin", "main"]);
     git(&f.root, &["checkout", "-q", "dogfood/round-1"]);
+    absorb_upstream(&f);
 
     let (code, out) = f.harness(&["pr", "T-001", "--push"]);
     assert_ne!(code, 0, "{out}");

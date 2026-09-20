@@ -138,11 +138,7 @@ impl Default for Repo {
     }
 }
 
+// through git::git, so a fixture's own commits drop the ambient identity the way the harness's do
 fn run(root: &std::path::Path, args: &[&str]) {
-    let status = Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .status()
-        .expect("spawn git");
-    assert!(status.success(), "git {args:?} failed");
+    git::git(root, args).unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
 }

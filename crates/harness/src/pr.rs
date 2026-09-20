@@ -91,6 +91,14 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     let default = default_branch(root)?;
     git::git(root, &["fetch", "-q", "origin", &default])?;
     let base = format!("origin/{default}");
+    // a checkout behind its upstream makes every task's replay conflict on files that are not the task's
+    let range = format!("HEAD..{base}");
+    let ahead = git::git(root, &["rev-list", "--count", &range])?;
+    if ahead != "0" {
+        return Err(PrError::Refused(vec![format!(
+            "`git rev-list --count {range}` -> {ahead}. Reconcile the two histories before any task builds: `git merge {base}`."
+        )]));
+    }
     let range = format!("{base}..HEAD");
     let landed = git::git(root, &["log", "--format=%B", &base])?;
     let mut stacked: Option<usize> = None;
