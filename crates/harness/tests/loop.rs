@@ -1833,7 +1833,8 @@ fn a_nested_install_refuses_a_grown_baseline() {
 
     let (digest, events) = go(&r, &opts(1));
     assert!(digest.landed.is_empty(), "{events:#?}");
-    assert_eq!(nested_status(&r).as_deref(), Some("ready"));
+    // the iteration's commits are on the branch, so the block wants another verdict, not another build
+    assert_eq!(nested_status(&r).as_deref(), Some("review"));
     let refusal = events.iter().find_map(|e| match &e.kind {
         Kind::Gate {
             gate, pass, reason, ..
