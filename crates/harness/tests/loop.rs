@@ -453,7 +453,17 @@ fn a_check_with_no_count_warns_in_the_digest() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
-    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
+    // the warning is owed only by a runner whose summary the tally parses
+    let cargo = enallagi::runners::presets()
+        .into_iter()
+        .find(|p| p.name == "cargo")
+        .expect("the cargo preset")
+        .fail_name;
+    let toml = base_toml(&role_commands(&implement, &verify)).replace(
+        "[check]\ncommand = \"./src/fakecheck.sh\"",
+        &format!("[check]\ncommand = \"./src/fakecheck.sh\"\nfail_name = '{cargo}'"),
+    );
+    write_toml(&r, &toml);
     r.write("TASKS.md", TASKS);
     r.commit_all("stubs");
 

@@ -67,6 +67,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "verdict" => verdict(ctx),
         "scope" => scope(ctx),
         "queue-intact" => queue_intact(ctx),
+        "commit-identity" => commit_identity(ctx),
         "check-delta" => check_gate(ctx),
         "commit-round" => commit_round(ctx),
         "adjudicator-halt" => adjudicator_halt(ctx),
@@ -641,6 +642,34 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
 
 // a heading an agent deletes mid-edit leaves a block nothing counts: its body merges into its
 // neighbour and archive moves both out, so the id is gone with the tree still consistent (T-020, 9c0b4af)
+// a lane that sets its own author puts an identity the operator never chose into their history
+fn commit_identity(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
+        return pass("no base");
+    };
+    let Ok(want) = git(ctx.root, &["config", "--get", "user.email"]) else {
+        return pass("the repository configures no user.email");
+    };
+    if want.is_empty() {
+        return pass("the repository configures no user.email");
+    }
+    let range = format!("{base}..HEAD");
+    let log = git(ctx.root, &["log", "--no-merges", "--format=%h %ae", &range]).unwrap_or_default();
+    let strangers: Vec<String> = log
+        .lines()
+        .filter_map(|l| l.split_once(' '))
+        .filter(|(_, email)| *email != want)
+        .map(|(sha, email)| format!("{sha} by {email}"))
+        .collect();
+    if strangers.is_empty() {
+        return pass(format!("every commit on {range} is {want}"));
+    }
+    fail(format!(
+        "the repository commits as {want}, and these do not: {}",
+        strangers.join(", ")
+    ))
+}
+
 fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
     let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
         return pass("no base");
@@ -833,8 +862,9 @@ impl CheckReport {
         }
     }
 
-    // a failure the exit hid, or a check that ran and printed no count, is a number nobody can quote
-    pub fn tally_warning(&self, command: &str) -> Option<String> {
+    // a failure the exit hid, or a check that ran and printed no count, is a number nobody can quote.
+    // `counts` is whether this repository's runner prints `test result:` at all
+    pub fn tally_warning(&self, command: &str, counts: bool) -> Option<String> {
         if self.timed_out.is_some() || self.output.starts_with(NEVER_RAN) {
             return None;
         }
@@ -845,7 +875,8 @@ impl CheckReport {
                 t.failed, t.lines
             ));
         }
-        (t.lines == 0).then(|| format!("the check printed no `test result:` line: `{command}`"))
+        (counts && t.lines == 0)
+            .then(|| format!("the check printed no `test result:` line: `{command}`"))
     }
 
     // the last n non-empty lines of output, so a rejection can show what the check actually saw
@@ -1018,8 +1049,16 @@ pub fn tally(output: &str) -> Tally {
 }
 
 // the gate's copy of the tally, and the digest's warning when the tally contradicts the exit
+// the runner whose summary `tally` parses, named by the fail_name the preset pins
+fn counts_test_results(cfg: &Config) -> bool {
+    crate::runners::presets()
+        .into_iter()
+        .any(|r| r.name == "cargo" && r.fail_name == cfg.check.fail_name)
+}
+
 fn counted(ctx: &mut GateCtx, report: &CheckReport) -> Option<Tally> {
-    if let Some(warning) = report.tally_warning(&ctx.cfg.check.command) {
+    let counts = counts_test_results(ctx.cfg);
+    if let Some(warning) = report.tally_warning(&ctx.cfg.check.command, counts) {
         ctx.warnings.push(warning);
     }
     Some(report.tally)
@@ -1357,6 +1396,45 @@ mod tests {
     }
 
     #[test]
+    fn a_commit_by_a_stranger_is_refused() {
+        let mut env = Env::new("exit 0\n");
+        let base = head(&env.repo.root).expect("base");
+        env.repo.write("src/schema.ts", "export const x = 2\n");
+        git(
+            &env.repo.root,
+            &[
+                "-c",
+                "user.email=elsewhere@example.test",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qam",
+                "T-001 by someone else",
+            ],
+        )
+        .expect("a commit by someone else");
+        let mut ctx = env.ctx(Some("T-001"), Some(&base));
+        let out = commit_identity(&mut ctx);
+        assert!(!out.pass, "{}", out.reason);
+        assert!(
+            out.reason.contains("elsewhere@example.test") && out.reason.contains("t@t"),
+            "{}",
+            out.reason
+        );
+    }
+
+    #[test]
+    fn the_repositorys_own_commits_pass() {
+        let mut env = Env::new("exit 0\n");
+        let base = head(&env.repo.root).expect("base");
+        env.repo.write("src/schema.ts", "export const x = 3\n");
+        env.repo.commit_all("T-001 by the repository");
+        let mut ctx = env.ctx(Some("T-001"), Some(&base));
+        let out = commit_identity(&mut ctx);
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
     fn in_scope_matches_like_case_globs() {
         assert!(in_scope("src/a.ts", &globs(&["src/*.ts", "docs/*"])));
         assert!(!in_scope("docs/x.md", &globs(&["src/*.ts"])));
@@ -1592,12 +1670,28 @@ mod tests {
     #[test]
     fn a_check_with_no_result_line_warns() {
         let mut env = Env::new("echo built\nexit 0\n");
+        env.cfg.check.fail_name = cargo_fail_name();
         run("check-delta", &mut env.ctx(Some("T-001"), None));
         let cmd = env.cfg.check.command.clone();
         assert_eq!(
             env.warnings,
             vec![format!("the check printed no `test result:` line: `{cmd}`")]
         );
+    }
+
+    fn cargo_fail_name() -> String {
+        crate::runners::presets()
+            .into_iter()
+            .find(|r| r.name == "cargo")
+            .expect("the cargo preset")
+            .fail_name
+    }
+
+    #[test]
+    fn a_green_check_on_another_runner_is_quiet() {
+        let mut env = Env::new("echo 'Tests:       3 passed, 3 total'\nexit 0\n");
+        run("check-delta", &mut env.ctx(Some("T-001"), None));
+        assert!(env.warnings.is_empty(), "{:?}", env.warnings);
     }
 
     #[test]
@@ -1608,7 +1702,7 @@ mod tests {
             red: true,
             ..CheckReport::default()
         };
-        assert_eq!(report.tally_warning("x"), None);
+        assert_eq!(report.tally_warning("x", true), None);
     }
 
     #[test]

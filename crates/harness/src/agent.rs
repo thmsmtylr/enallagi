@@ -549,6 +549,20 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
     use std::os::unix::process::CommandExt;
     let mut command = Command::new(program);
     crate::config::drop_legacy_env(&mut command);
+    // a lane commits as the repository's configured identity; left to itself it invents one from
+    // whatever the agent's own session knows, and that identity lands in the operator's history
+    for (var, key) in [
+        ("GIT_AUTHOR_NAME", "user.name"),
+        ("GIT_COMMITTER_NAME", "user.name"),
+        ("GIT_AUTHOR_EMAIL", "user.email"),
+        ("GIT_COMMITTER_EMAIL", "user.email"),
+    ] {
+        if let Ok(value) = crate::git::git(s.cwd, &["config", "--get", key]) {
+            if !value.is_empty() {
+                command.env(var, value);
+            }
+        }
+    }
     // the agent gets its own process group, so a stop reaches the lanes and shells it spawned too
     let mut child = command
         .args(args)

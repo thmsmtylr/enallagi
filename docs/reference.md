@@ -27,6 +27,7 @@ halts the run. The names are matched in `crates/harness/src/gates.rs`.
 | `verdict` | a `done` whose work is uncommitted, or whose check is red on delta | verify |
 | `scope` | a file outside the task's `scope:` globs, or a product task editing the harness | verify |
 | `queue-intact` | a task id at the iteration's base commit that is in neither TASKS.md nor DECISIONS.md | implement, verify, adjudicate |
+| `commit-identity` | a commit in the iteration's range whose author is not the repository's configured `user.email` | implement, verify |
 | `check-delta` | a check failure that is not already in `.check-baseline` | wherever a stage's `post` names it |
 | `commit-round` | a failed commit of TASKS.md and DECISIONS.md | adjudicate |
 | `adjudicator-halt` | an adjudicator output line opening with `halt` and naming a task id, and halts the run | adjudicate |

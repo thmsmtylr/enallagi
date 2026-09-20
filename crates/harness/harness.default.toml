@@ -144,13 +144,13 @@ end_after_dry_rounds = 2
 name = "implement"
 role = "implementer"
 turns = 120
-post = ["queue-intact", "implementer-not-done"]
+post = ["queue-intact", "commit-identity", "implementer-not-done"]
 
 [[stage]]
 name = "verify"
 role = "verifier"
 turns = 100
-post = ["commit-verdict", "queue-intact", "verdict", "scope"]
+post = ["commit-verdict", "queue-intact", "commit-identity", "verdict", "scope"]
 
 [[stage]]
 name = "scout"

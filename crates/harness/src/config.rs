@@ -38,6 +38,7 @@ pub const GATE_NAMES: &[&str] = &[
     "verdict",
     "scope",
     "queue-intact",
+    "commit-identity",
     "check-delta",
     "commit-round",
     "adjudicator-halt",
@@ -903,11 +904,12 @@ pub fn subst(text: &str, cfg: &Config) -> String {
     };
     let check = or(&cfg.check.command, UNSET_CHECK);
     let force = or(&cfg.check.force, UNSET_FORCE);
-    // quoted one by one: the verifier pastes the value into a shell command
+    // quoted one by one: the verifier pastes the value into a shell command, and a pathspec may
+    // hold an apostrophe, which ends the quoting unless it is closed, escaped and reopened
     let test_glob = l
         .test_glob
         .iter()
-        .map(|spec| format!("'{spec}'"))
+        .map(|spec| format!("'{}'", spec.replace('\'', r"'\''")))
         .collect::<Vec<_>>()
         .join(" ");
     let mut tokens: Vec<(&str, &str)> = vec![
@@ -1678,6 +1680,23 @@ mod tests {
             subst("git diff $BASE -- __TEST_GLOB__", &c),
             "git diff $BASE -- 'tests/*.rs' 'src/*.rs'"
         );
+    }
+
+    #[test]
+    fn subst_closes_a_pathspec_holding_an_apostrophe() {
+        let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
+        c.layout.test_glob = vec!["tests/don't/*.rs".into()];
+        let line = subst("git diff $BASE -- __TEST_GLOB__", &c);
+        assert_eq!(line, r"git diff $BASE -- 'tests/don'\''t/*.rs'");
+        // the shell reads it back as the one pathspec it started as
+        let out = std::process::Command::new("sh")
+            .args([
+                "-c",
+                &format!("printf '%s\n' {}", &line[line.find("-- ").unwrap() + 3..]),
+            ])
+            .output()
+            .expect("sh");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "tests/don't/*.rs\n");
     }
 
     #[test]
