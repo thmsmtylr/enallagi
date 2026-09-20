@@ -1,4 +1,4 @@
-//! One lane runs in its own git worktree, fast-forwarded back onto the parent branch when its history allows it.
+//! One lane runs in its own git worktree. Its work is fast-forwarded back onto the parent branch, or, under `[pr] per_task`, left on the branch `enallagi pr` pushes.
 
 use std::path::{Path, PathBuf};
 
@@ -89,6 +89,23 @@ fn create_worktree(
     Err(WorktreeError::Create(last_dir))
 }
 
+// under `[pr] per_task` the operator reviews the branch `enallagi pr` pushed, so the lane's product
+// commits never reach the checkout's own branch. With no separate state repository the merge is also
+// the only way a verdict lands, so there it stays.
+pub fn by_branch(root: &Path, cfg: &Config) -> bool {
+    cfg.pr.per_task && git::state_root(root, &cfg.layout.harness_dir) != root
+}
+
+// the checkout's branch carries what the upstream carries and nothing else
+fn follow_upstream(root: &Path, branch: &str) -> String {
+    match git::git(root, &["fetch", "-q", "origin", branch])
+        .and_then(|_| git::git(root, &["merge", "--ff-only", "FETCH_HEAD"]))
+    {
+        Ok(out) => format!("{branch} follows origin/{branch}: {out}"),
+        Err(err) => err.to_string(),
+    }
+}
+
 // an untracked file is the operator's own and a lane never sees it, so it is named and not refused
 fn untracked_notice(paths: &[String]) -> String {
     format!(
@@ -159,8 +176,15 @@ pub fn lane(
         )));
     }
 
+    let by_branch = by_branch(root, cfg);
+    let merging: Pairs = pairs
+        .iter()
+        .filter(|(repo, _)| !(by_branch && repo.as_path() == root))
+        .cloned()
+        .collect();
+
     // checked for every repository before any merge, so one that cannot fast-forward merges neither
-    let stuck: Vec<String> = pairs
+    let stuck: Vec<String> = merging
         .iter()
         .filter(|(repo, _)| !git::git_ok(repo, &["merge-base", "--is-ancestor", "HEAD", &branch]))
         .map(|(repo, _)| format!("{branch} cannot fast-forward into {}", repo.display()))
@@ -171,7 +195,7 @@ pub fn lane(
 
     let mut said = Vec::new();
     let mut merged: Vec<(&PathBuf, String)> = Vec::new();
-    for (repo, _) in &pairs {
+    for (repo, _) in &merging {
         let pre = git::git(repo, &["rev-parse", "HEAD"])?;
         match git::git(repo, &["merge", "--ff-only", &branch]) {
             Ok(out) => {
@@ -197,6 +221,11 @@ pub fn lane(
             }
         }
     }
+    if by_branch {
+        said.push(follow_upstream(root, &parent_branch));
+    }
+    // `git branch -d` refuses an unmerged branch, so a lane delivered by branch keeps its own until
+    // `enallagi pr` has replayed it
     for (repo, wt) in &pairs {
         let _ = git::git(repo, &["worktree", "remove", &wt.to_string_lossy()]);
         let _ = git::git(repo, &["branch", "-d", &branch]);
@@ -283,6 +312,38 @@ mod tests {
         std::fs::write(state.join("events.jsonl"), "{}\n").expect("an ignored run log");
     }
 
+    fn per_task_repo() -> Repo {
+        let r = nested_repo();
+        let toml = crate::config::config_path(&r.root);
+        let text = std::fs::read_to_string(&toml).expect("enallagi.toml");
+        std::fs::write(&toml, format!("{text}\n[pr]\nper_task = true\n")).expect("write");
+        commit_in(&r.root.join(".enallagi"), "per_task");
+        r
+    }
+
+    fn origin_of(r: &Repo) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let bare = dir.path().join("origin.git");
+        git::git(
+            dir.path(),
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                &r.root.to_string_lossy(),
+                "origin.git",
+            ],
+        )
+        .expect("clone");
+        git::git(
+            &r.root,
+            &["remote", "add", "origin", &bare.to_string_lossy()],
+        )
+        .expect("remote");
+        git::git(&r.root, &["fetch", "-q", "origin"]).expect("fetch");
+        (dir, bare)
+    }
+
     fn remove_left(r: &Repo, report: &LaneReport) {
         let state = r.root.join(".enallagi");
         if let Some(left) = &report.left {
@@ -333,6 +394,74 @@ mod tests {
             let branches = git::git(repo, &["branch", "--list", "lane/*"]).expect("branch list");
             assert!(branches.trim().is_empty(), "{}: {branches}", repo.display());
         }
+    }
+
+    #[test]
+    fn per_task_leaves_the_checkout_unmoved() {
+        let r = per_task_repo();
+        let cfg = cfg(&r);
+        let state = r.root.join(".enallagi");
+        let pre_head = git::head(&r.root);
+
+        let report = lane(&r.root, &cfg, &mut |wt| {
+            land(wt, "T-001", "one.txt");
+            land(wt, "T-002", "two.txt");
+            Ok(())
+        })
+        .expect("lane");
+
+        assert!(report.merged, "reason: {}", report.reason);
+        assert_eq!(git::head(&r.root), pre_head);
+        assert!(!r.root.join("one.txt").exists() && !r.root.join("two.txt").exists());
+        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
+        assert_eq!(tasks.matches("status: done").count(), 2, "{tasks}");
+    }
+
+    #[test]
+    fn per_task_follows_the_upstream_branch() {
+        let r = per_task_repo();
+        let cfg = cfg(&r);
+        let (_origin, bare) = origin_of(&r);
+        let branch = git::git(&r.root, &["rev-parse", "--abbrev-ref", "HEAD"]).expect("branch");
+
+        // the lane pushes what `enallagi pr` pushes, and the operator merges it on the remote
+        let report = lane(&r.root, &cfg, &mut |wt| {
+            land(wt, "T-001", "one.txt");
+            git::git(wt, &["push", "-q", "origin", "HEAD:refs/heads/task/T-001"])?;
+            Ok(())
+        })
+        .expect("lane");
+        assert!(report.merged, "reason: {}", report.reason);
+        git::git(
+            &bare,
+            &[
+                "update-ref",
+                &format!("refs/heads/{branch}"),
+                "refs/heads/task/T-001",
+            ],
+        )
+        .expect("merge the pull request");
+
+        lane(&r.root, &cfg, &mut |_wt| Ok(())).expect("the next lane");
+
+        let count =
+            |range: String| git::git(&r.root, &["rev-list", "--count", &range]).expect("rev-list");
+        assert_eq!(count(format!("{branch}..origin/{branch}")), "0");
+        assert_eq!(count(format!("origin/{branch}..{branch}")), "0");
+        assert!(r.root.join("one.txt").exists());
+    }
+
+    #[test]
+    fn a_checkout_in_step_with_origin_is_unchanged() {
+        let r = per_task_repo();
+        let cfg = cfg(&r);
+        let (_origin, _bare) = origin_of(&r);
+        let pre_head = git::head(&r.root);
+
+        let report = lane(&r.root, &cfg, &mut |_wt| Ok(())).expect("lane");
+
+        assert!(report.merged, "reason: {}", report.reason);
+        assert_eq!(git::head(&r.root), pre_head);
     }
 
     #[test]

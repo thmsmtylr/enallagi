@@ -29,17 +29,16 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     })?;
 
     if report.merged {
+        let landing = if worktree::by_branch(root, &cfg) {
+            format!("left {} for `enallagi pr`", report.branch)
+        } else {
+            format!("fast-forwarded to {}", report.branch)
+        };
         if let Some(err) = &report.run_error {
-            eprintln!(
-                "worktree: fast-forwarded to {} but the lane's run failed: {err}",
-                report.branch
-            );
+            eprintln!("worktree: {landing} but the lane's run failed: {err}");
             return Ok(1);
         }
-        eprintln!(
-            "worktree: fast-forwarded to {} -- {}",
-            report.branch, report.reason
-        );
+        eprintln!("worktree: {landing} -- {}", report.reason);
         return Ok(0);
     }
 
