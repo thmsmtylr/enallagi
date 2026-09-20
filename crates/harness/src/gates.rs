@@ -416,6 +416,30 @@ fn commit_files(root: &Path, base: &str, task: &str, filter: &str) -> Vec<String
     files
 }
 
+// the baseline lines the task's own commits add and do not take back: each commit's removals are
+// netted against what the earlier ones added, so an add a later commit reverses is not growth
+fn baseline_lines_added(root: &Path, inner: &str, base: &str, task: &str) -> Vec<String> {
+    let mut added: Vec<String> = Vec::new();
+    for sha in task_commits(root, base, task) {
+        let diff = git(root, &["show", "--format=", &sha, "--", inner]).unwrap_or_default();
+        for gone in diff
+            .lines()
+            .filter(|l| l.starts_with('-') && !l.starts_with("--"))
+        {
+            if let Some(at) = added.iter().position(|line| line == &gone[1..]) {
+                added.remove(at);
+            }
+        }
+        for new in diff
+            .lines()
+            .filter(|l| l.starts_with('+') && !l.starts_with("++") && !l.starts_with("+#"))
+        {
+            added.push(new[1..].to_string());
+        }
+    }
+    added
+}
+
 fn task_commits(root: &Path, base: &str, task: &str) -> Vec<String> {
     let range = format!("{base}..HEAD");
     git(
@@ -583,12 +607,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     // the baseline only ever shrinks; a line the task's own commits ADD is a red check made green by
     // hand, whatever rows: says
     let grew = at_base(ctx, &rel(ctx, ".check-baseline")).is_some_and(|(repo, inner, base)| {
-        task_commits(&repo, &base, &task).iter().any(|sha| {
-            git(&repo, &["show", "--format=", sha, "--", &inner])
-                .unwrap_or_default()
-                .lines()
-                .any(|l| l.starts_with('+') && !l.starts_with("++") && !l.starts_with("+#"))
-        })
+        !baseline_lines_added(&repo, &inner, &base, &task).is_empty()
     });
 
     let unexplained = widening.is_some() && widened.is_empty();
@@ -1978,6 +1997,46 @@ mod tests {
         assert!(env
             .log()
             .contains("chore(T-001): harness scope gate rejected a done verdict"));
+        env.assert_rejection_events();
+    }
+
+    #[test]
+    fn scope_nets_a_baseline_line_added_then_removed() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", ".check-baseline", "none — harness");
+        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write(".check-baseline", "alpha\nbeta\n");
+        env.repo.commit_all("T-001 baseline grew");
+        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.commit_all("T-001 remove");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        assert!(env.tasks_text().contains("status: done"));
+    }
+
+    #[test]
+    fn scope_rejects_a_baseline_add_with_a_removal() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", ".check-baseline", "none — harness");
+        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write(".check-baseline", "alpha\nbeta\n");
+        env.repo.commit_all("T-001 baseline grew");
+        env.repo.write(".check-baseline", "beta\n");
+        env.repo.commit_all("T-001 drop alpha");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(
+            out.reason
+                .contains("added a line to .check-baseline, and the baseline only ever shrinks"),
+            "{}",
+            out.reason
+        );
         env.assert_rejection_events();
     }
 
