@@ -643,16 +643,20 @@ fn no_shipped_document_calls_the_binary_harness() {
     }
 }
 
+// every identifier rule reads the same two shapes: a declaration's name and a field's
+fn declared_names(text: &str) -> Vec<String> {
+    let decl = re(r"\b(?:fn|struct|enum|trait|union|mod|const|static|type)\s+([A-Za-z_]\w*)");
+    let field = re(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?([a-z_]\w*)[ \t]*:");
+    let mut names: Vec<String> = decl.captures_iter(text).map(|c| c[1].to_string()).collect();
+    names.extend(field.captures_iter(text).map(|c| c[1].to_string()));
+    names
+}
+
 #[test]
 fn no_identifier_runs_past_fifty_characters() {
     const CAP: usize = 50;
-    let decl = re(r"\b(?:fn|struct|enum|trait|union|mod|const|static|type)\s+([A-Za-z_]\w*)");
-    let field = re(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?([a-z_]\w*)[ \t]*:");
-    assert!(decl.is_match("fn a() {}"), "the scan cannot report");
-    assert!(
-        field.is_match("    name: String,"),
-        "the scan cannot report"
-    );
+    let sample = declared_names("fn a() {}\n    name: String,\n");
+    assert_eq!(sample, ["a", "name"], "the scan cannot report");
 
     let crates = repo_root().join("crates");
     let mut long = Vec::new();
@@ -660,12 +664,7 @@ fn no_identifier_runs_past_fifty_characters() {
         if rel.extension().is_none_or(|e| e != "rs") {
             continue;
         }
-        let text = read(&crates.join(&rel));
-        for name in [&decl, &field]
-            .iter()
-            .flat_map(|p| p.captures_iter(&text))
-            .map(|c| c[1].to_string())
-        {
+        for name in declared_names(&read(&crates.join(&rel))) {
             if name.len() > CAP {
                 long.push(format!("{}: {name} ({})", rel.display(), name.len()));
             }
@@ -674,6 +673,53 @@ fn no_identifier_runs_past_fifty_characters() {
     long.sort();
     long.dedup();
     assert!(long.is_empty(), "{} over {CAP}: {long:#?}", long.len());
+}
+
+#[test]
+fn no_identifier_names_a_task_or_a_step() {
+    let task = re(r"(?i)(?:^|_)t_?[0-9]{3}(?:_|$)");
+    let step =
+        re(r"(?:^|_)step_(?:one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)(?:_|$)");
+    let names = |name: &str| task.is_match(name) || step.is_match(name);
+    assert!(names("verified_t900"), "the scan cannot report");
+    assert!(names("t001_status"), "the scan cannot report");
+    assert!(
+        names("step_seven_names_both_commit_arms"),
+        "the scan cannot report"
+    );
+    // a number counting something inside the scenario is a quantity, not a position in a list
+    assert!(!names("two_lanes_in_the_same_second_do_not_collide"));
+    assert!(!names("usage_carries_four_disjoint_token_lanes"));
+    assert!(!names("the_drivers_shortfall_is_one_finding"));
+
+    let root = repo_root();
+    let shipped = tracked(&root);
+    let crates = root.join("crates");
+    let mut placed = Vec::new();
+    let mut scanned = 0;
+    for rel in walk(&crates) {
+        if rel.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        if !shipped.contains(&Path::new("crates").join(&rel)) {
+            continue;
+        }
+        scanned += 1;
+        for name in declared_names(&read(&crates.join(&rel))) {
+            if names(&name) {
+                placed.push(format!("crates/{}: {name}", rel.display()));
+            }
+        }
+    }
+    placed.sort();
+    placed.dedup();
+    assert!(
+        placed.is_empty(),
+        "{} named by position: {placed:#?}",
+        placed.len()
+    );
+    // an empty corpus is not a pass; `git ls-files 'crates/**/*.rs'` -> 77
+    assert!(scanned > 50, "{scanned} sources scanned");
 }
 
 #[test]

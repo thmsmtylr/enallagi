@@ -1449,7 +1449,7 @@ fn verifier_noting(r: &Repo, note: &str, proposed: &str) -> String {
     )
 }
 
-fn t001_status(r: &Repo) -> Option<String> {
+fn queued_status(r: &Repo) -> Option<String> {
     let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
     let blocks = enallagi::queue::parse(&text).expect("parse");
     let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
@@ -1472,7 +1472,7 @@ fn a_deferred_finding_with_no_block_is_refused() {
     });
     let reason = refusal.unwrap_or_else(|| panic!("commit-verdict passed: {events:#?}"));
     assert!(reason.contains("minor"), "{reason}");
-    assert_eq!(t001_status(&r).as_deref(), Some("review"));
+    assert_eq!(queued_status(&r).as_deref(), Some("review"));
     assert!(digest.landed.is_empty(), "{:?}", digest.landed);
     assert!(
         enallagi::git::porcelain(&r.root).is_empty(),
