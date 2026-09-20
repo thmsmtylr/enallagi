@@ -2717,8 +2717,8 @@ fn a_sigterm_stops_a_running_check() {
     );
 }
 
-#[test]
-fn a_sigterm_ends_the_limit_wait() {
+// the shape both limit-wait tests share: a limit three minutes out, then the operator ends the wait
+fn a_limit_wait_ended_by(end: impl FnOnce(&Repo, &std::process::Child)) -> Vec<Event> {
     let r = repo(&base_toml(""), TASKS);
     let reset = jiff::Zoned::now()
         .with_time_zone(jiff::tz::TimeZone::UTC)
@@ -2756,11 +2756,8 @@ fn a_sigterm_ends_the_limit_wait() {
     }
     assert_eq!(limits(&read()), 1, "no limit wait began: {:#?}", read());
 
-    let sent = std::process::Command::new("kill")
-        .args(["-TERM", &launcher.id().to_string()])
-        .status()
-        .expect("signal the launcher");
-    assert!(sent.success(), "TERM was not delivered");
+    end(&r, &launcher);
+
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while launcher.try_wait().expect("poll the launcher").is_none()
         && std::time::Instant::now() < deadline
@@ -2772,7 +2769,7 @@ fn a_sigterm_ends_the_limit_wait() {
         let _ = launcher.kill();
         let _ = launcher.wait();
     }
-    assert!(exited, "the launcher outlived the signal by 10s");
+    assert!(exited, "the launcher outlived the stop by 10s");
 
     let log = read();
     assert_eq!(limits(&log), 1, "{log:#?}");
@@ -2780,6 +2777,44 @@ fn a_sigterm_ends_the_limit_wait() {
         matches!(log.last().map(|e| &e.kind), Some(Kind::RunEnd { .. })),
         "{log:#?}"
     );
+    log
+}
+
+// a wait the operator ended is that operator's halt, never a stage that could not start
+fn assert_operator_halt(log: &[Event], halt: &str) {
+    assert!(
+        log.iter()
+            .any(|e| matches!(&e.kind, Kind::Halt { halt: h, .. } if h == halt)),
+        "no {halt} halt: {log:#?}"
+    );
+    assert!(
+        !log.iter().any(
+            |e| matches!(&e.kind, Kind::Halt { reason, .. } if reason.contains("could not start"))
+        ),
+        "{log:#?}"
+    );
+}
+
+#[test]
+fn a_sigterm_ends_the_limit_wait() {
+    let log = a_limit_wait_ended_by(|_, launcher| {
+        let sent = std::process::Command::new("kill")
+            .args(["-TERM", &launcher.id().to_string()])
+            .status()
+            .expect("signal the launcher");
+        assert!(sent.success(), "TERM was not delivered");
+    });
+    assert_operator_halt(&log, "signal");
+}
+
+#[test]
+fn a_stop_file_ends_the_limit_wait() {
+    let log = a_limit_wait_ended_by(|r, _| {
+        let dir = enallagi::config::harness_dir(&r.root);
+        let stop = enallagi::config::instance_path(&r.root, &dir, "STOP");
+        std::fs::write(&stop, b"").unwrap_or_else(|e| panic!("write {}: {e}", stop.display()));
+    });
+    assert_operator_halt(&log, "stop");
 }
 
 fn claude_args_repo(key: &str) -> Repo {
