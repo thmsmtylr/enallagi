@@ -3428,3 +3428,80 @@ fn a_red_task_branch_opens_no_pr() {
         "{out}"
     );
 }
+
+// a bare clone on disk under a URL that names a host: the probe reads real refs and calls nothing
+fn hosted_origin(r: &Repo) -> (tempfile::TempDir, String) {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let git = |root: &std::path::Path, args: &[&str]| {
+        enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+    };
+    let bare = dir.path().join("origin.git");
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            &r.root.to_string_lossy(),
+            "origin.git",
+        ],
+    );
+    git(
+        &r.root,
+        &["remote", "add", "origin", &bare.to_string_lossy()],
+    );
+    git(&r.root, &["fetch", "-q", "origin"]);
+    let branch = git(&r.root, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    git(&r.root, &["remote", "set-head", "origin", &branch]);
+    git(
+        &r.root,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://git.example.invalid/o/r.git",
+        ],
+    );
+    (dir, branch)
+}
+
+fn protection(r: &Repo) -> String {
+    let cfg = enallagi::config::load(&r.root).expect("load");
+    let check = enallagi::probes::CheckOutcome {
+        ran: true,
+        red: false,
+        output: String::new(),
+    };
+    let ctx = enallagi::probes::ProbeCtx {
+        root: &r.root,
+        cfg: &cfg,
+        check: Some(&check),
+        driver: false,
+    };
+    enallagi::probes::render(&enallagi::probes::run_all(
+        &ctx,
+        &["branch-protection".to_string()],
+    ))
+}
+
+#[test]
+fn an_iteration_lands_under_a_protection_finding() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
+    r.write("TASKS.md", TASKS);
+    r.commit_all("stubs");
+    let (_origin, _branch) = hosted_origin(&r);
+    let reported = protection(&r);
+    assert!(
+        reported.starts_with("PROBE branch-protection 1"),
+        "{reported}"
+    );
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(ends(&events).len(), 2, "{events:#?}");
+    assert!(digest.halts.is_empty(), "{:?}", digest.halts);
+    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    assert!(tasks.contains("status: done"), "{tasks}");
+}
