@@ -1848,6 +1848,48 @@ fn a_nested_install_refuses_a_grown_baseline() {
     );
 }
 
+// the implement round rewrites the block, widening scope: with no `widened:` line
+const WIDENED: &str = "cat > .enallagi/TASKS.md <<'EOF'\n\
+## [T-001] do the thing\n\
+\n\
+scope: src/thing.ts, src/other.ts\n\
+rows: none \u{2014} harness\n\
+status: review\n\
+criteria:\n\
+  - it happens\n\
+EOF\n";
+
+// the widening lands in the implement round, so a review-only round's own bases already carry it
+#[test]
+fn a_review_round_reads_the_queued_scope() {
+    let r = nested("exit 0\n", WIDENED);
+
+    let (digest, events) = go(&r, &opts(2));
+    assert!(digest.landed.is_empty(), "{events:#?}");
+    assert_eq!(nested_status(&r).as_deref(), Some("review"));
+    let refusals: Vec<String> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            Kind::Gate {
+                gate, pass, reason, ..
+            } if gate == "scope" && !*pass => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(refusals.len(), 2, "{events:#?}");
+    assert!(
+        refusals
+            .iter()
+            .all(|r| r.contains("widened scope: with src/other.ts")),
+        "{refusals:?}"
+    );
+    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
+    assert!(
+        tasks.contains("gate: ") && tasks.contains("widened scope: with src/other.ts"),
+        "{tasks}"
+    );
+}
+
 #[test]
 fn a_landed_iteration_leaves_no_instance_path() {
     let r = nested("exit 0\n", "");

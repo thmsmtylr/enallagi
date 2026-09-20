@@ -496,7 +496,13 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         field_at(ctx, &task, key, Some("HEAD")).unwrap_or_else(|| field_of(ctx, &task, key))
     };
     let pats = scope_globs(&head_block("scope"));
-    let queued = field_at(ctx, &task, "scope", None).map(|line| scope_globs(&line));
+    // the commit that queued the block, not the round's base: in a review-only round the base is the
+    // implement round's own state commit, which already carries the widening
+    let queued_rev = git::task_queued_commit(ctx.root, &ctx.cfg.layout.harness_dir, &task)
+        .ok()
+        .flatten();
+    let queued =
+        field_at(ctx, &task, "scope", queued_rev.as_deref()).map(|line| scope_globs(&line));
     let gained: Vec<String> = queued
         .map(|q| pats.iter().filter(|p| !q.contains(p)).cloned().collect())
         .unwrap_or_default();

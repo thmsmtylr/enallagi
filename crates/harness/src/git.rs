@@ -183,8 +183,13 @@ pub fn state_rev(root: &Path, harness_dir: &str, rev: &str) -> Result<String, St
         .ok_or_else(|| format!("no commit in {harness_dir} records product revision {rev} ({sha})"))
 }
 
-// the product sha to diff a task against; the root layout keeps the pickaxe the verifier ran before
-pub fn task_base(root: &Path, harness_dir: &str, task: &str) -> Result<String, String> {
+// the commit that queued a task, in the repository TASKS.md is in; None when the pickaxe finds none,
+// which a caller may never pass to `git show` as a revision: an empty one reads the index instead
+pub fn task_queued_commit(
+    root: &Path,
+    harness_dir: &str,
+    task: &str,
+) -> Result<Option<String>, String> {
     let tasks = crate::config::instance_rel(root, harness_dir, "TASKS.md");
     let (repo, inner, nested) = locate(root, harness_dir, &tasks);
     let block = crate::queue::Block {
@@ -194,37 +199,50 @@ pub fn task_base(root: &Path, harness_dir: &str, task: &str) -> Result<String, S
         body: Vec::new(),
     };
     let heading = crate::queue::block_text(&block).trim_end().to_string();
-    if !nested {
-        return git(
+    // the nested layout anchors the pickaxe, because a notes: line quoting the heading is not the
+    // commit that added the block; the root layout keeps the pickaxe the verifier ran before
+    let found = if nested {
+        let anchored = format!("^{}", regex::escape(&heading));
+        git(
+            &repo,
+            &[
+                "log",
+                "--reverse",
+                "--format=%H",
+                "--pickaxe-regex",
+                "-S",
+                &anchored,
+                "--",
+                &inner,
+            ],
+        )
+    } else {
+        git(
             &repo,
             &["log", "-1", "--format=%H", "-S", &heading, "--", &inner],
         )
-        .map_err(|e| e.to_string());
     }
-    let heading = format!("^{}", regex::escape(&heading));
-    let subjects = git(
-        &repo,
-        &[
-            "log",
-            "--reverse",
-            "--format=%s",
-            "--pickaxe-regex",
-            "-S",
-            &heading,
-            "--",
-            &inner,
-        ],
-    )
     .map_err(|e| e.to_string())?;
-    let Some(first) = subjects.lines().next() else {
+    Ok(found.lines().next().map(String::from))
+}
+
+// the product sha to diff a task against, read off the subject of the commit that queued it
+pub fn task_base(root: &Path, harness_dir: &str, task: &str) -> Result<String, String> {
+    let tasks = crate::config::instance_rel(root, harness_dir, "TASKS.md");
+    let (repo, _, nested) = locate(root, harness_dir, &tasks);
+    let Some(commit) = task_queued_commit(root, harness_dir, task)? else {
         return Ok(String::new());
     };
-    first
+    if !nested {
+        return Ok(commit);
+    }
+    let subject = git(&repo, &["log", "-1", "--format=%s", &commit]).map_err(|e| e.to_string())?;
+    subject
         .rsplit_once(" at ")
         .map(|(_, sha)| sha.to_string())
         .filter(|sha| sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()))
         .ok_or_else(|| {
-            format!("the state commit that added {task}, \"{first}\", records no product sha")
+            format!("the state commit that added {task}, \"{subject}\", records no product sha")
         })
 }
 
@@ -308,6 +326,58 @@ mod tests {
             &["worktree", "remove", "--force", &wt.to_string_lossy()],
         )
         .expect("remove");
+    }
+
+    #[test]
+    fn a_block_in_no_commit_has_no_queued_commit() {
+        let r = Repo::new();
+        r.write(
+            "TASKS.md",
+            "## [T-001] first\nscope: src/a.ts\nstatus: ready\n",
+        );
+        r.commit_all("queue: T-001");
+        assert!(task_queued_commit(&r.root, ".enallagi", "T-001")
+            .expect("pickaxe")
+            .is_some());
+        assert_eq!(task_queued_commit(&r.root, ".enallagi", "T-002"), Ok(None));
+        assert_eq!(task_base(&r.root, ".enallagi", "T-002"), Ok(String::new()));
+    }
+
+    // the archive moves a done block out of TASKS.md, so one heading can be added, removed and added again
+    #[test]
+    fn the_queued_commit_is_the_first_to_add_it() {
+        let r = Repo::new();
+        r.write(".git/info/exclude", ".enallagi/\n");
+        let block = "## [T-001] first\nscope: src/a.ts\nstatus: ready\n";
+        r.write(".enallagi/TASKS.md", block);
+        let state = r.root.join(".enallagi");
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.name", "t"],
+            &["config", "user.email", "t@t"],
+        ] {
+            git(&state, args).expect("state repo");
+        }
+        let commit = |msg: &str| {
+            git(&state, &["add", "-A"]).expect("add");
+            git(
+                &state,
+                &["-c", "commit.gpgsign=false", "commit", "-qm", msg],
+            )
+            .expect("commit");
+            git(&state, &["rev-parse", "HEAD"]).expect("head")
+        };
+        let queued = commit("queue at 0000000");
+        r.write(".enallagi/TASKS.md", "# TASKS\n");
+        commit("archive at 1111111");
+        r.write(".enallagi/TASKS.md", block);
+        let readded = commit("queue at 2222222");
+
+        assert_ne!(queued, readded);
+        assert_eq!(
+            task_queued_commit(&r.root, ".enallagi", "T-001"),
+            Ok(Some(queued))
+        );
     }
 
     #[test]

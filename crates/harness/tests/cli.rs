@@ -1071,6 +1071,20 @@ fn gate_scope_rejects_a_silent_widening() {
     );
 }
 
+// the base a review-only round runs on: the product commit the implement round left behind
+#[test]
+fn gate_scope_rejects_a_widening_from_the_work() {
+    let verdict = "scope: a.txt, b.txt\nstatus: done\n";
+    let (r, _) = verified_install_as(&["b.txt"], &[], verdict);
+    let worked = enallagi::git::git(&r.root, &["rev-parse", "HEAD"]).expect("git");
+    let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &worked]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("widened scope: with b.txt"),
+        "{out:?}"
+    );
+}
+
 #[test]
 fn gate_scope_names_a_widening_with_a_reason() {
     let verdict = "scope: a.txt, b.txt\nwidened: b.txt declares the flag\nstatus: done\n";
