@@ -2047,6 +2047,55 @@ fn digest_and_probe_agree_past_the_turn_cap() {
 }
 
 #[test]
+fn an_uncapped_stage_is_not_named_as_a_turn_cap() {
+    let toml = base_toml("").replace(
+        r#"command = ["./src/fakeagent.sh", "{prompt}", "{turns}"]"#,
+        r#"command = ["./src/fakeagent.sh", "{prompt}"]"#,
+    );
+    let r = repo(&toml, "");
+    r.write("TASKS.md", "# queue\n");
+    script(
+        &r,
+        "src/fakeagent.sh",
+        "echo '{\"total_cost_usd\":0.5,\"num_turns\":5}'\n",
+    );
+    r.commit_all("a scout whose command carries no turn flag");
+
+    let (digest, _) = go(&r, &opts(1));
+    let text = pipeline::digest_text(&digest);
+    assert!(!text.contains("turn caps hit:"), "{text}");
+}
+
+#[test]
+fn a_timed_out_stage_is_named_as_a_timeout() {
+    let toml = base_toml("")
+        .replace(
+            r#"command = ["./src/fakeagent.sh", "{prompt}", "{turns}"]"#,
+            r#"command = ["./src/fakeagent.sh", "{prompt}", "{timeout}"]"#,
+        )
+        .replace(
+            "name = \"scout\"\nrole = \"scout\"\nturns = 5\n",
+            "name = \"scout\"\nrole = \"scout\"\nturns = 5\ntimeout = \"1s\"\n",
+        );
+    let r = repo(&toml, "");
+    r.write("TASKS.md", "# queue\n");
+    script(
+        &r,
+        "src/fakeagent.sh",
+        "echo '{\"total_cost_usd\":0.5,\"num_turns\":5}'\nsleep 5\n",
+    );
+    r.commit_all("a scout that outlives its stage timeout");
+
+    let (digest, _) = go(&r, &opts(1));
+    let text = pipeline::digest_text(&digest);
+    assert!(
+        text.contains("timeouts hit:\n  scout: timeout 1s"),
+        "{text}"
+    );
+    assert!(!text.contains("turn caps hit:"), "{text}");
+}
+
+#[test]
 fn the_adjudicate_gates_run_in_a_task_round() {
     let r = repo("", "");
     draining(&r, FILED, &promotes("T-009"));
