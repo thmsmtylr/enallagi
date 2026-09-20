@@ -1306,8 +1306,13 @@ fn readme_command_failures(readme: &str) -> Vec<String> {
                 continue;
             }
         };
+        // a runner has no global git identity, and the documents' commits must still run
         let out = run
             .current_dir(&repo.root)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
             .output()
             .unwrap_or_else(|e| panic!("{cmd}: {e}"));
         if out.status.code() != Some(0) {
