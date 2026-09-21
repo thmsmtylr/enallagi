@@ -55,7 +55,7 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `queue-hygiene` | a repeated id, a missing status, an undefined blocker, or a scope entry matching nothing |
 | `friction-repeat` | a friction recorded twice that no rule or kill line covers |
 | `check-red` | a check that exits non-zero, with its first failing test |
-| `litter` | a tracked file outside the source root and the allowlists |
+| `litter` | a tracked path the repository treats as disposable, or an untracked path on no allowlist |
 | `plain-record` | a commit subject, note or printed line that comments instead of recording |
 | `install-stale` | an installed file that differs from what `enallagi init` writes now |
 | `contribution-policy` | a guide sentence that refuses or conditions generated changes |
@@ -67,6 +67,10 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `turns-exhausted` | a stage that used its whole turn cap |
 | `limit-repeat` | a rate limit hit in consecutive stages |
 | `driver` | a shortfall the built artifact reports when `layout.driver_command` runs it |
+
+`litter` reads a tracked path as disposable when `layout.machinery` names a part of it.
+The repository's own ignore rules covering a path git still tracks reads the same way.
+`layout.strict_prefixes = true` widens the tracked arm to every path outside `layout.allowed_prefixes`.
 
 `branch-protection` is advisory.
 Its host-free leg counts the non-merge first-parent commits on the remote's default branch.

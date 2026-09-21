@@ -1,8 +1,9 @@
-//! A path the repository carries that is neither product nor a document governing it, tracked or not, minus the machinery every tree has.
+//! A tracked path the repository itself treats as disposable, and an untracked path on no allowlist.
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
 use crate::git;
+use std::path::Path;
 
 fn allowed(ctx: &ProbeCtx, path: &str) -> bool {
     let layout = &ctx.cfg.layout;
@@ -22,18 +23,41 @@ fn machinery(ctx: &ProbeCtx, path: &str) -> bool {
     })
 }
 
+// the repository's own ignore rules cover it and git tracks it anyway, so the repository already calls it disposable
+fn tracked_and_ignored(root: &Path) -> Res<Vec<String>> {
+    let out = git::git(
+        root,
+        &["ls-files", "--cached", "--ignored", "--exclude-standard"],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(out
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect())
+}
+
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
     common::result(find(ctx))
 }
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let mut found = Vec::new();
+    let ignored = tracked_and_ignored(ctx.root)?;
     for path in common::tracked(ctx.root)? {
-        if !allowed(ctx, &path) {
+        if ctx.cfg.layout.strict_prefixes {
+            if !allowed(ctx, &path) {
+                found.push(common::finding(
+                    &path,
+                    0,
+                    "tracked and neither product nor a document that governs it",
+                ));
+            }
+        } else if machinery(ctx, &path) || ignored.iter().any(|i| i == &path) {
             found.push(common::finding(
                 &path,
                 0,
-                "tracked and neither product nor a document that governs it",
+                "tracked and the repository treats it as disposable",
             ));
         }
     }

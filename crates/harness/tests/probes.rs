@@ -328,6 +328,10 @@ fn skills_sync(repo: &Repo) {
 
 // the conventions a repository already carries, then the install, then what `skills sync` writes
 fn conventional() -> (Repo, Config) {
+    conventional_with("")
+}
+
+fn conventional_with(layout_extra: &str) -> (Repo, Config) {
     let repo = Repo::new();
     for name in [
         "docs/guide.md",
@@ -345,6 +349,7 @@ fn conventional() -> (Repo, Config) {
     let mut toml = String::from(
         "[check]\ncommand = \"true\"\n\n[layout]\nallowed_prefixes = [\"src/\", \"docs/\", \"bench/\", \".enallagi/\", \".claude/\", \".github/\"]\n",
     );
+    toml.push_str(layout_extra);
     toml.push_str(&vendored_skills(&repo));
     // a tracked harness directory keeps the install in the product's history, so what it writes is tracked
     repo.write(".enallagi/enallagi.toml", &toml);
@@ -394,14 +399,47 @@ fn a_root_layout_lock_is_not_litter() {
 }
 
 #[test]
-fn a_file_added_after_the_install_is_litter() {
+fn a_file_added_after_the_install_is_not_litter() {
     let (repo, cfg) = conventional();
+    repo.write("scratch.md", "x\n");
+    repo.commit_all("scratch");
+    let results = run(&repo, &cfg);
+    assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
+}
+
+#[test]
+fn strict_prefixes_reports_a_file_outside_them() {
+    let (repo, cfg) = conventional_with("strict_prefixes = true\n");
     repo.write("scratch.md", "x\n");
     repo.commit_all("scratch");
     let results = run(&repo, &cfg);
     let found = findings(&results, "litter");
     assert_eq!(found.len(), 1, "{}", render(&results));
     assert_eq!(found[0].path, "scratch.md");
+}
+
+#[test]
+fn a_tracked_machinery_path_is_litter() {
+    let (repo, cfg) = conventional();
+    repo.write("dist/bundle.js", "x\n");
+    repo.commit_all("bundle");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "litter");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, "dist/bundle.js");
+}
+
+#[test]
+fn a_tracked_file_the_ignore_rules_cover_is_litter() {
+    let (repo, cfg) = conventional();
+    repo.write("src/notes.tmp", "x\n");
+    repo.commit_all("notes");
+    repo.write(".gitignore", "*.tmp\n");
+    repo.commit_all("ignore tmp");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "litter");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, "src/notes.tmp");
 }
 
 #[test]

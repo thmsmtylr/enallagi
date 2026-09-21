@@ -232,6 +232,8 @@ pub struct Layout {
     pub harness_files: Vec<String>,
     pub harness_globs: Vec<String>,
     pub allowed_prefixes: Vec<String>,
+    /// `litter` reports every tracked path outside `allowed_prefixes`, not only the disposable ones.
+    pub strict_prefixes: bool,
     pub docs: Vec<String>,
     pub harness_allow: Vec<String>,
     pub machinery: Vec<String>,
