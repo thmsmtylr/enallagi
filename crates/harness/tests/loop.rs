@@ -15,6 +15,16 @@ criteria:
   - it happens
 ";
 
+const DONE_TASK: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.ts
+rows: none — harness
+status: done
+criteria:
+  - it happens
+";
+
 const REVIEW_TASK: &str = "\
 ## [T-001] do the thing
 
@@ -99,6 +109,11 @@ stages = ["verify"]
 name = "task"
 when = "queue.takeable"
 stages = ["implement", "verify", "adjudicate"]
+
+[[pipeline]]
+name = "triage"
+when = "queue.proposed"
+stages = ["adjudicate"]
 
 [[pipeline]]
 name = "discover"
@@ -2398,6 +2413,25 @@ fn the_shipped_task_pipeline_adjudicates() {
 }
 
 #[test]
+fn the_shipped_triage_runs_before_discover() {
+    let r = Repo::new();
+    r.write("enallagi.toml", "[check]\ncommand = \"true\"\n");
+    let cfg = enallagi::config::load(&r.root).expect("load");
+    let triage = cfg
+        .pipeline
+        .iter()
+        .find(|p| p.name == "triage")
+        .expect("the triage pipeline");
+    assert_eq!(triage.when, "queue.proposed");
+    assert_eq!(triage.stages, vec!["adjudicate"]);
+    let names: Vec<&str> = cfg.pipeline.iter().map(|p| p.name.as_str()).collect();
+    assert!(
+        names.iter().position(|n| *n == "triage") < names.iter().position(|n| *n == "discover"),
+        "{names:?}"
+    );
+}
+
+#[test]
 fn an_attended_block_waits_for_a_scout_round() {
     let r = repo("", "");
     let implement = implementer(&r, "");
@@ -2705,6 +2739,54 @@ fn an_unnamed_run_still_reaches_discover() {
         stages_started(&events).contains(&"scout".to_string()),
         "{events:#?}"
     );
+}
+
+// the block under test is the one `enallagi issue` wrote, so the fixture's gh prints the issue
+fn queued_issue(r: &Repo) {
+    script(
+        r,
+        "tools/gh",
+        &format!(
+            "printf '%s' '{}'\n",
+            include_str!("fixtures/issues/help-wanted.json")
+        ),
+    );
+    let path = format!(
+        "{}:{}",
+        r.root.join("tools").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["issue", "owner/repo#12"])
+        .current_dir(&r.root)
+        .env("PATH", path)
+        .output()
+        .expect("run enallagi");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    r.commit_all("the operator's issue");
+}
+
+#[test]
+fn a_proposed_block_is_adjudicated_before_scouting() {
+    let r = repo("", "");
+    let scout = script(&r, "src/fakescout.sh", QUIET);
+    let adj = adjudicator(&r, &promotes("T-002"));
+    let roles = format!(
+        "{}{}",
+        role_command("scout", &scout),
+        role_command("adjudicator", &adj)
+    );
+    write_toml(&r, &base_toml(&roles));
+    r.write("TASKS.md", DONE_TASK);
+    r.commit_all("stubs");
+    queued_issue(&r);
+    assert_eq!(status_of(&r, "T-002").as_deref(), Some("proposed"));
+
+    let (_, events) = go(&r, &opts(1));
+    let stages = stages_started(&events);
+    assert!(!stages.contains(&"scout".to_string()), "{stages:?}");
+    assert!(stages.contains(&"adjudicate".to_string()), "{stages:?}");
+    assert_ne!(status_of(&r, "T-002").as_deref(), Some("proposed"));
 }
 
 #[test]

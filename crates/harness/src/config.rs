@@ -53,7 +53,7 @@ pub enum ConfigError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(
-        "when: `{0}` is not a predicate (one of queue.takeable, queue.reviewing, queue.empty, task.attended, check.red, probe.<name>, optionally prefixed with !)"
+        "when: `{0}` is not a predicate (one of queue.takeable, queue.reviewing, queue.proposed, queue.empty, task.attended, check.red, probe.<name>, optionally prefixed with !)"
     )]
     BadWhen(String),
     #[error("pipeline {pipeline}: stage `{stage}` is not defined by any [[stage]]")]
@@ -333,6 +333,7 @@ impl Default for RoleDecl {
 pub enum Predicate {
     QueueTakeable,
     QueueReviewing,
+    QueueProposed,
     QueueEmpty,
     TaskAttended,
     CheckRed,
@@ -348,6 +349,7 @@ pub fn parse_when(s: &str) -> Result<Predicate, ConfigError> {
     match s {
         "queue.takeable" => Ok(Predicate::QueueTakeable),
         "queue.reviewing" => Ok(Predicate::QueueReviewing),
+        "queue.proposed" => Ok(Predicate::QueueProposed),
         "queue.empty" => Ok(Predicate::QueueEmpty),
         "task.attended" => Ok(Predicate::TaskAttended),
         "check.red" => Ok(Predicate::CheckRed),
@@ -1306,7 +1308,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let c = load(d.path()).unwrap();
         assert_eq!(c.check.command, "");
-        assert_eq!(c.pipeline.len(), 3);
+        assert_eq!(c.pipeline.len(), 4);
         assert_eq!(c.stage[0].turns, 120);
     }
 
@@ -1460,7 +1462,7 @@ mod tests {
         assert_eq!(c.layout.learnings_cap, 12);
         assert_eq!(c.layout.skills_dir, None);
         assert_eq!(c.stage[2].env["ENALLAGI_DRIVER"], "1");
-        assert_eq!(c.pipeline[2].end_after_dry_rounds, 2);
+        assert_eq!(c.pipeline[3].end_after_dry_rounds, 2);
     }
 
     // tables merge key by key; an array of tables replaces the list whole, so a user's one [[stage]] is the only stage

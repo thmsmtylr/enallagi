@@ -1634,6 +1634,25 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
                 }
             }
         }
+        // an unreadable or unparseable queue is not evidence of a block waiting on the adjudicator, so this fails closed like `takeable`
+        Predicate::QueueProposed => {
+            match std::fs::read_to_string(config::instance_path(
+                root,
+                &cfg.layout.harness_dir,
+                "TASKS.md",
+            ))
+            .map_err(|e| e.to_string())
+            .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
+            {
+                Ok(blocks) => !queue::ids_at(&blocks, "proposed").is_empty(),
+                Err(err) => {
+                    warnings.push(format!(
+                        "TASKS.md: {err}; queue.proposed treated as false (fail closed)"
+                    ));
+                    false
+                }
+            }
+        }
         // an unreadable or unparseable queue is not evidence the queue is empty, so this fails closed like `takeable`
         Predicate::QueueEmpty => {
             match std::fs::read_to_string(config::instance_path(

@@ -11,8 +11,11 @@ The defaults are in `crates/harness/harness.default.toml`.
 | --- | --- | --- |
 | `review` | `queue.reviewing` | **verify** |
 | `task` | `queue.takeable` | **implement** → **verify** → **adjudicate** |
+| `triage` | `queue.proposed` | **adjudicate** |
 | `discover` | `!queue.takeable` | **scout** → **adjudicate** |
 
+A queue holding a `proposed` block and nothing takeable takes `triage`, so a block the operator
+queued is decided before the scout files more.
 `discover` ends the run after two dry rounds.
 
 ## Gates
@@ -100,6 +103,7 @@ A task's own `model:` and `effort:` lines win over `[agent]` and `[agent.<role>]
 
 - `queue.takeable`
 - `queue.reviewing`
+- `queue.proposed`
 - `queue.empty`
 - `task.attended`
 - `check.red`

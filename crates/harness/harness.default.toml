@@ -134,6 +134,12 @@ name = "task"
 when = "queue.takeable"
 stages = ["implement", "verify", "adjudicate"]
 
+# triage runs before discover: a block already queued is adjudicated before the scout files more.
+[[pipeline]]
+name = "triage"
+when = "queue.proposed"
+stages = ["adjudicate"]
+
 [[pipeline]]
 name = "discover"
 when = "!queue.takeable"
