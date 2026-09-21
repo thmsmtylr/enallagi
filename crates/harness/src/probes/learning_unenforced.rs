@@ -17,17 +17,28 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let mut found = Vec::new();
-    let learnings = common::instance(ctx, "LEARNINGS.md");
-    for (at, text) in common::learning_entries(ctx)? {
-        if !cites_something(&text)? {
-            found.push(common::finding(
-                &learnings,
-                at,
-                format!(
-                    "entry names no file, command or hook: {}",
-                    common::cut(text.trim(), 90)
-                ),
-            ));
+    let stores = [
+        (
+            common::instance(ctx, "LEARNINGS.md"),
+            common::learning_entries(ctx)?,
+        ),
+        (
+            common::instance(ctx, "DECISIONS.md"),
+            common::earned_rules(ctx)?,
+        ),
+    ];
+    for (file, entries) in stores {
+        for (at, text) in entries {
+            if !cites_something(&text)? {
+                found.push(common::finding(
+                    &file,
+                    at,
+                    format!(
+                        "entry names no file, command or hook: {}",
+                        common::cut(text.trim(), 90)
+                    ),
+                ));
+            }
         }
     }
     Ok(found)
