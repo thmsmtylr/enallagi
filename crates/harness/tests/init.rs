@@ -357,6 +357,48 @@ fn an_appended_learning_survives_a_reinstall() {
 }
 
 #[test]
+fn init_writes_a_hash_file_for_the_config() {
+    let repo = Repo::new();
+    install(&repo);
+    let text = read(&repo, ".enallagi/test-hashes.json");
+    let keys: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(&text).expect("test-hashes.json is a flat object");
+    use sha2::Digest;
+    let digest: String = sha2::Sha256::digest(read(&repo, ".enallagi/enallagi.toml").as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(
+        keys.get(".enallagi/enallagi.toml").map(String::as_str),
+        Some(digest.as_str()),
+        "{text}"
+    );
+}
+
+#[test]
+fn an_existing_hash_file_is_kept() {
+    let repo = Repo::new();
+    let mine = "{\n  \"src/schema.ts\": \"deadbeef\"\n}\n";
+    repo.write(".enallagi/test-hashes.json", mine);
+    let report = install(&repo);
+    assert_eq!(read(&repo, ".enallagi/test-hashes.json"), mine);
+    assert!(
+        report
+            .kept
+            .contains(&".enallagi/test-hashes.json".to_string()),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn a_fresh_install_leaves_the_hash_rails_true() {
+    let repo = Repo::new();
+    install(&repo);
+    assert_eq!(findings(&repo, "rail-unenforced"), Vec::new());
+    assert_eq!(findings(&repo, "hash-uncovered"), Vec::new());
+}
+
+#[test]
 fn the_context_file_resyncs_the_check() {
     let repo = Repo::new();
     install(&repo);

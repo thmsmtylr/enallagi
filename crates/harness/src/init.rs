@@ -251,6 +251,23 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     for (name, text) in DOCS {
         seed(root, &mut plan, &mut report, &at(name), sub(text));
     }
+    // the shipped rails name test-hashes.json as their enforcement, so the installer produces it
+    let config_text = match &pending {
+        Some(text) => text.clone(),
+        None => fs::read_to_string(root.join(&toml)).map_err(io(&toml))?,
+    };
+    let mut hashes = serde_json::Map::new();
+    hashes.insert(
+        toml.clone(),
+        Value::String(skills::sha256(config_text.as_bytes())),
+    );
+    seed(
+        root,
+        &mut plan,
+        &mut report,
+        &at("test-hashes.json"),
+        pretty(&Value::Object(hashes)),
+    );
     seed_context(root, &mut plan, &mut report, &cfg, &sub);
 
     let spec = at(&cfg.layout.spec);

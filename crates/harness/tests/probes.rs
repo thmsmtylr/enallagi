@@ -148,8 +148,9 @@ fn the_row_parser_reads_the_seeded_criteria_table() {
 }
 
 #[test]
-fn a_fresh_install_has_two_unenforced_rails() {
+fn a_missing_hash_file_unenforces_two_rails() {
     let (repo, cfg) = seeded();
+    fs::remove_file(repo.root.join(".enallagi/test-hashes.json")).expect("remove the hash file");
     let results = run(&repo, &cfg);
     let found = findings(&results, "rail-unenforced");
     assert_eq!(found.len(), 2, "{}", render(&results));
@@ -246,9 +247,10 @@ fn an_undefined_piece_reports_the_whole_claim() {
 }
 
 #[test]
-fn harness_immutable_has_no_hash_key() {
+fn a_missing_hash_file_uncovers_the_config() {
     // the rail names the file that is the gate; with the launcher a binary, that file is enallagi.toml
     let (repo, cfg) = seeded();
+    fs::remove_file(repo.root.join(".enallagi/test-hashes.json")).expect("remove the hash file");
     let results = run(&repo, &cfg);
     let found = findings(&results, "hash-uncovered");
     assert_eq!(found.len(), 1, "{}", render(&results));
