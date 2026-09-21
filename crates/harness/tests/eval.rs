@@ -344,3 +344,22 @@ fn a_rule_that_only_fixes_its_case_is_accepted() {
         "GATE rule ACCEPT fixes its case, fails without itself, regresses nothing"
     );
 }
+
+#[test]
+fn an_eval_with_no_prompt_needs_no_agent() {
+    let pkg = package();
+    let dir = pkg.path().join("evals").join("case");
+    fs::create_dir_all(&dir).unwrap();
+    write_exec(&dir.join("setup.sh"), "echo done >state.txt\n");
+    write_exec(&dir.join("assert.sh"), r#"[ "$(cat state.txt)" = done ]"#);
+    // a preset that resolves to nothing: an eval carrying a prompt would be refused here
+    fs::write(
+        pkg.path().join("enallagi.toml"),
+        "[agent]\npreset = \"doesnotexist\"\n",
+    )
+    .unwrap();
+
+    let r = run_harness_eval(pkg.path(), None, None, &["case"]);
+    assert_eq!(r.code, 0, "stdout={} stderr={}", r.stdout, r.stderr);
+    assert_eq!(last_line(&r.stdout), "EVAL case PASS");
+}

@@ -5,7 +5,7 @@ One directory per eval. Each is a fixture repo, a request, and an assertion:
 | File | |
 | --- | --- |
 | `setup.sh` | builds the fixture state, cwd is a throwaway repo with enallagi installed |
-| `prompt.txt` | the request, in the shape `enallagi run` sends it |
+| `prompt.txt` | the request, in the shape `enallagi run` sends it, absent when the eval asks no role anything |
 | `assert.sh` | exits 0 when the role obeyed its rule |
 | `ablate.sh` | removes the rule from the fixture, so the gate can tell a load-bearing rule from a decorative one |
 
@@ -21,8 +21,23 @@ with the rule, fails with the rule ablated, and every other eval still passes.
 The agent comes from `EVAL_AGENT`, else `__ENALLAGI_DIR__/enallagi.toml`'s `[agent]`. With neither, `enallagi eval`
 refuses rather than reporting a result it did not measure.
 
-`verifier-findings` builds a JavaScript fixture and needs `bun` on `PATH`; without it its
+`verifier-findings` builds a JavaScript fixture and needs `bun` on `PATH`. Without it the
 `setup.sh` exits non-zero and the eval reports `ERROR`, not a result.
+
+## cold-start
+
+`cold-start` is the only eval with no `prompt.txt`. It builds an ordinary repository the harness did
+not grow up in. It then runs `enallagi init` against it with no hand editing, and asserts
+`enallagi probe` reports zero findings.
+
+It spawns no agent and reaches no network. `EVAL_AGENT` changes nothing about its result.
+
+A failure prints one `cold-start <probe> <count>` line per probe that fired, then
+`cold-start total <n>`. That total is the measure: every finding is the harness reporting a healthy
+tree as unhealthy. The eval passes when the total is zero.
+
+It counts nothing until it establishes that `enallagi probe` ran. A non-zero exit, no `PROBE` line,
+or a `PROBE <name> ERROR` line each fail it before any total is printed.
 
 ## A REJECT
 
