@@ -16,7 +16,7 @@ use crate::probes::{self, CheckOutcome, ProbeCtx};
 use crate::queue::{self, Queue};
 use crate::roles;
 use crate::skills::{self, ResolveOpts};
-use crate::{archive, git, pr};
+use crate::{archive, git, pr, review};
 
 // A lane running ps to check for competing writers must ignore its parent.
 const LANE: &str = "You are this loop's own lane, spawned by the harness. There is no human in this session
@@ -546,6 +546,7 @@ impl<'a> Loop<'a> {
             return false;
         }
 
+        self.read_reviews();
         // a block a human queued by hand is recorded against the product HEAD it was written at
         self.commit_state("queue");
         self.unblock();
@@ -1247,6 +1248,54 @@ impl<'a> Loop<'a> {
         // rather than warning that a role left none -- a verify-only round has no other record
         if file_len(&self.file("PROGRESS.md")) <= progress_before {
             self.progress_stub(task, pipeline, status.as_deref());
+        }
+    }
+
+    // the loop cannot wait on a reviewer: an anchored comment becomes a proposed block the next lane takes
+    fn read_reviews(&mut self) {
+        let pulls = match review::open_pulls(self.root) {
+            Ok(pulls) => pulls,
+            Err(err) => {
+                self.digest.warnings.push(err.to_string());
+                return;
+            }
+        };
+        let queue = Queue {
+            path: self.file("TASKS.md"),
+        };
+        let decisions = std::fs::read_to_string(self.file("DECISIONS.md")).unwrap_or_default();
+        for pull in &pulls {
+            let found = match review::read(&pull.url) {
+                Ok(found) => found,
+                Err(err) => {
+                    self.digest.warnings.push(err.to_string());
+                    continue;
+                }
+            };
+            if found.short {
+                self.digest.warnings.push(format!(
+                    "{}: only the first 100 reviews, threads and comments were read",
+                    pull.url
+                ));
+            }
+            let appended = queue
+                .read()
+                .map_err(|e| e.to_string())
+                .and_then(|text| {
+                    review::append(&text, &decisions, &found).map_err(|e| e.to_string())
+                })
+                .and_then(|a| match a.blocks.len() {
+                    0 => Ok(0),
+                    n => queue.write(&a.queue).map(|()| n).map_err(|e| e.to_string()),
+                });
+            match appended {
+                Ok(0) => {}
+                Ok(n) => println!("  proposed: {n} from {}", pull.url),
+                Err(err) => self
+                    .digest
+                    .warnings
+                    .push(format!("{}: {err}", queue.path.display())),
+            }
         }
     }
 

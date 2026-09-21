@@ -18,6 +18,11 @@ A queue holding a `proposed` block and nothing takeable takes `triage`, so a blo
 queued is decided before the scout files more.
 `discover` ends the run after two dry rounds.
 
+Before selecting a task, an iteration reads the review comments on open pull requests
+from its own `task/` branches.
+Each unresolved comment lands as a `proposed` block.
+No host tool, no such branch, or a failed host call is a warning, never a halt.
+
 ## Gates
 
 `[[stage]].post` names the gates run after a stage. A failed gate sends the task back to `ready` or

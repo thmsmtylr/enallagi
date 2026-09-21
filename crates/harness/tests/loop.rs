@@ -3629,3 +3629,124 @@ fn an_iteration_lands_under_a_protection_finding() {
     let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
     assert!(tasks.contains("status: done"), "{tasks}");
 }
+
+// the second head is a branch this checkout never built, so the step must not read it
+const OPEN_PULL: &str = concat!(
+    r#"[{"url":"https://github.com/owner/repo/pull/13","headRefName":"task/T-001"},"#,
+    r#"{"url":"https://github.com/owner/repo/pull/14","headRefName":"feature/elsewhere"}]"#,
+);
+const PLAIN_REVIEW: &str = include_str!("fixtures/reviews/plain.json");
+
+// one line per invocation, so the log counts the host calls the step made
+fn gh_recording(r: &Repo, list: &str, graphql: &str) -> String {
+    let log = r.root.join("gh.log");
+    script(
+        r,
+        "tools/gh",
+        &format!(
+            "printf '%s\\n' \"$*\" >>'{log}'\n\
+             case \"$1\" in\n\
+             pr) printf '%s' '{list}' ;;\n\
+             *) printf '%s' '{graphql}' ;;\n\
+             esac\n",
+            log = log.display(),
+        ),
+    );
+    format!(
+        "{}:{}",
+        r.root.join("tools").display(),
+        std::env::var("PATH").unwrap_or_default()
+    )
+}
+
+// every directory holding gh is dropped; git, bash and sh are linked back in case one held them too
+fn without_gh(r: &Repo) -> String {
+    let dir = r.root.join("nogh");
+    std::fs::create_dir_all(&dir).expect("nogh");
+    let path = std::env::var("PATH").unwrap_or_default();
+    for name in ["git", "bash", "sh"] {
+        let found = path
+            .split(':')
+            .map(|d| std::path::Path::new(d).join(name))
+            .find(|p| p.exists())
+            .unwrap_or_else(|| panic!("{name} is not on PATH"));
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&found, dir.join(name)).expect("link");
+    }
+    let kept: Vec<&str> = path
+        .split(':')
+        .filter(|d| !std::path::Path::new(d).join("gh").exists())
+        .collect();
+    format!("{}:{}", dir.display(), kept.join(":"))
+}
+
+// gh is found on PATH, which an in-process run cannot set per test, so these drive the binary
+fn run_with_path(r: &Repo, path: &str) -> String {
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["run", "--no-tui", "--iterations", "1"])
+        .current_dir(&r.root)
+        .env_remove("CI")
+        .env("PATH", path)
+        .output()
+        .expect("run enallagi");
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    text
+}
+
+fn driven_repo(tasks: &str) -> Repo {
+    let r = Repo::new();
+    script(&r, "src/fakecheck.sh", "exit 0\n");
+    script(&r, "src/fakeagent.sh", QUIET);
+    installed(&r);
+    write_toml_at(&r, ".enallagi/enallagi.toml", &base_toml(""));
+    r.write(".enallagi/TASKS.md", tasks);
+    installed(&r);
+    r.commit_all("a fixture the binary drives");
+    r
+}
+
+fn pull_branch(r: &Repo) {
+    enallagi::git::git(&r.root, &["branch", "task/T-001"]).expect("branch");
+}
+
+#[test]
+fn an_iteration_queues_an_open_review_comment() {
+    let r = driven_repo(DONE_TASK);
+    pull_branch(&r);
+    let path = gh_recording(&r, OPEN_PULL, PLAIN_REVIEW);
+    let out = run_with_path(&r, &path);
+
+    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
+    assert!(
+        tasks.contains("parse drops the timezone here"),
+        "{tasks}\n{out}"
+    );
+    assert!(tasks.contains("#discussion_r1000000003"), "{tasks}");
+    assert!(tasks.contains("status: proposed"), "{tasks}");
+
+    let log = std::fs::read_to_string(r.root.join("gh.log")).expect("gh ran");
+    let calls: Vec<&str> = log.lines().collect();
+    assert_eq!(calls.len(), 2, "{log}");
+    assert!(calls[0].starts_with("pr list"), "{log}");
+    assert!(calls[1].starts_with("api graphql"), "{log}");
+}
+
+#[test]
+fn a_checkout_with_no_pull_branch_calls_no_host() {
+    let r = driven_repo(DONE_TASK);
+    let path = gh_recording(&r, OPEN_PULL, PLAIN_REVIEW);
+    let out = run_with_path(&r, &path);
+    assert!(!r.root.join("gh.log").exists(), "{out}");
+}
+
+#[test]
+fn a_missing_host_tool_warns_and_the_run_goes_on() {
+    let r = driven_repo(DONE_TASK);
+    pull_branch(&r);
+    let out = run_with_path(&r, &without_gh(&r));
+    assert!(out.contains("gh pr list"), "{out}");
+    assert!(!out.contains("HALT"), "{out}");
+    let log = std::fs::read_to_string(r.root.join(".enallagi/events.jsonl")).unwrap_or_default();
+    assert!(log.contains("stage.start"), "{out}");
+}
