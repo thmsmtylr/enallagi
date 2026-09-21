@@ -72,6 +72,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "commit-round" => commit_round(ctx),
         "adjudicator-halt" => adjudicator_halt(ctx),
         "dry-round" => dry_round(ctx),
+        "install-stale" => install_stale(ctx),
         other => fail(format!("no such gate: {other}")),
     };
     let task = ctx.task.clone().unwrap_or_default();
@@ -1233,6 +1234,57 @@ fn judged(report: &CheckReport) -> GateOutcome {
     fail(format!(
         "check RED, not on the baseline: {}; check tail: {tail3}",
         report.unforgiven.join(", ")
+    ))
+}
+
+// the probe answers from the templates its own binary compiled in, so the gate spawns the binary
+// the check just rebuilt instead of reading them in this process
+fn install_stale(ctx: &mut GateCtx) -> GateOutcome {
+    let spawned = std::env::current_exe()
+        .map_err(|e| e.to_string())
+        .and_then(|exe| {
+            Command::new(exe)
+                .args(["probe", "install-stale"])
+                .current_dir(ctx.root)
+                .output()
+                .map_err(|e| e.to_string())
+        });
+    let text = match spawned {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).into_owned(),
+        Err(err) => return fail(format!("`enallagi probe install-stale` did not run: {err}")),
+    };
+    let first = match stale_path(&text) {
+        Err(reason) => return fail(reason),
+        Ok(None) => return pass("`enallagi probe install-stale` -> PROBE install-stale 0"),
+        Ok(Some(path)) => path,
+    };
+    let reason = format!("the install is stale at {first}; re-run `enallagi init`");
+    ctx.warnings.push(reason.clone());
+    fail(reason)
+}
+
+// an absent count is never a zero: the probe has to have said what it read
+fn stale_path(text: &str) -> Result<Option<String>, String> {
+    let counted = text
+        .lines()
+        .find_map(|l| l.strip_prefix("PROBE install-stale "))
+        .and_then(|rest| rest.trim().parse::<usize>().ok());
+    let Some(count) = counted else {
+        return Err(format!(
+            "`enallagi probe install-stale` printed no count: {}",
+            text.replace('\n', " ").trim()
+        ));
+    };
+    if count == 0 {
+        return Ok(None);
+    }
+    Ok(Some(
+        text.lines()
+            .find_map(|l| l.strip_prefix("FINDING install-stale "))
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|at| at.rsplit_once(':'))
+            .map(|(path, _)| path.to_string())
+            .unwrap_or_else(|| format!("{count} file(s) the FINDING lines did not name")),
     ))
 }
 
@@ -2476,6 +2528,24 @@ mod tests {
             std::fs::read_to_string(repo.root.join("ran.txt")).expect("ran.txt"),
             "forced\nplain\n"
         );
+    }
+
+    #[test]
+    fn a_count_of_zero_leaves_no_stale_path() {
+        assert_eq!(stale_path("PROBE install-stale 0\n"), Ok(None));
+    }
+
+    #[test]
+    fn the_first_finding_line_names_the_path() {
+        let text = "PROBE install-stale 2\n\
+                    FINDING install-stale .enallagi/RAILS.md:0 the installed copy differs\n\
+                    FINDING install-stale .enallagi/roles/scout.md:0 the installed copy differs\n";
+        assert_eq!(stale_path(text), Ok(Some(".enallagi/RAILS.md".to_string())));
+    }
+
+    #[test]
+    fn a_run_with_no_count_line_is_an_error() {
+        assert!(stale_path("running 0 tests\n").is_err());
     }
 
     #[test]
