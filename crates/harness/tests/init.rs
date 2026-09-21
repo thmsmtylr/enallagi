@@ -27,6 +27,10 @@ fn read(repo: &Repo, rel: &str) -> String {
 }
 
 fn stale(repo: &Repo) -> Vec<Finding> {
+    findings(repo, "install-stale")
+}
+
+fn findings(repo: &Repo, name: &str) -> Vec<Finding> {
     let cfg = enallagi::config::load(&repo.root).expect("config");
     let check = CheckOutcome {
         ran: true,
@@ -39,12 +43,12 @@ fn stale(repo: &Repo) -> Vec<Finding> {
         check: Some(&check),
         driver: false,
     };
-    match probes::run_all(&ctx, &["install-stale".to_string()])
+    match probes::run_all(&ctx, &[name.to_string()])
         .into_iter()
-        .find(|(name, _)| name == "install-stale")
+        .find(|(ran, _)| ran == name)
     {
         Some((_, ProbeResult::Count(found))) => found,
-        other => panic!("install-stale did not report a count: {other:?}"),
+        other => panic!("{name} did not report a count: {other:?}"),
     }
 }
 
@@ -1341,6 +1345,7 @@ fn init_names_the_file_a_detected_value_came_from() {
         "layout.test_decl_patterns",
         "layout.source_root",
         "layout.allowed_prefixes",
+        "layout.test_glob",
     ] {
         let line = detected(&report, key);
         assert!(
@@ -1423,4 +1428,65 @@ fn a_tree_with_no_runner_keeps_the_defaults() {
         "{:?}",
         report.notes
     );
+}
+
+#[test]
+fn prefixes_come_from_the_tracked_tree() {
+    let repo = node_repo();
+    repo.write("docs/guide.md", "# guide\n");
+    repo.write("ADOPTERS.md", "none yet\n");
+    repo.commit_all("a tracked directory and a tracked root file holding no code");
+    install(&repo);
+    let written: toml::Value =
+        toml::from_str(&read(&repo, ".enallagi/enallagi.toml")).expect("parse");
+    let prefixes = written["layout"]["allowed_prefixes"]
+        .as_array()
+        .expect("array");
+    for want in ["src/", "tests/", "docs/", "ADOPTERS.md", "package.json"] {
+        assert!(
+            prefixes.iter().any(|p| p.as_str() == Some(want)),
+            "{want}: {prefixes:?}"
+        );
+    }
+}
+
+#[test]
+fn a_code_only_tree_gains_no_other_prefix() {
+    let repo = node_repo();
+    install(&repo);
+    let written: toml::Value =
+        toml::from_str(&read(&repo, ".enallagi/enallagi.toml")).expect("parse");
+    let prefixes = written["layout"]["allowed_prefixes"]
+        .as_array()
+        .expect("array");
+    for entry in prefixes {
+        let entry = entry.as_str().expect("string");
+        assert!(
+            entry.starts_with('.') || ["src/", "tests/", "package.json"].contains(&entry),
+            "{entry}: {prefixes:?}"
+        );
+    }
+}
+
+#[test]
+fn init_writes_the_test_glob_it_detected() {
+    let repo = node_repo();
+    install(&repo);
+    let written: toml::Value =
+        toml::from_str(&read(&repo, ".enallagi/enallagi.toml")).expect("parse");
+    let globs: Vec<&str> = written["layout"]["test_glob"]
+        .as_array()
+        .expect("array")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect();
+    assert_eq!(globs, vec!["tests/*.ts"]);
+}
+
+#[test]
+fn a_fresh_install_leaves_no_unmatched_glob() {
+    let repo = node_repo();
+    install(&repo);
+    let found = findings(&repo, "prompt-unsubstituted");
+    assert_eq!(found, Vec::new(), "{found:?}");
 }
