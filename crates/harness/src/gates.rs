@@ -422,17 +422,21 @@ fn baseline_lines_added(root: &Path, inner: &str, base: &str, task: &str) -> Vec
     let mut added: Vec<String> = Vec::new();
     for sha in task_commits(root, base, task) {
         let diff = git(root, &["show", "--format=", &sha, "--", inner]).unwrap_or_default();
-        for gone in diff
+        // a failure name may itself start with + or -, so the file headers are told apart by
+        // position, not by a doubled prefix: everything before the first hunk is a header
+        let body: Vec<&str> = diff
             .lines()
-            .filter(|l| l.starts_with('-') && !l.starts_with("--"))
-        {
+            .skip_while(|l| !l.starts_with("@@"))
+            .filter(|l| !l.starts_with("@@"))
+            .collect();
+        for gone in body.iter().filter(|l| l.starts_with('-')) {
             if let Some(at) = added.iter().position(|line| line == &gone[1..]) {
                 added.remove(at);
             }
         }
-        for new in diff
-            .lines()
-            .filter(|l| l.starts_with('+') && !l.starts_with("++") && !l.starts_with("+#"))
+        for new in body
+            .iter()
+            .filter(|l| l.starts_with('+') && !l.starts_with("+#"))
         {
             added.push(new[1..].to_string());
         }
@@ -2038,6 +2042,44 @@ mod tests {
             out.reason
         );
         env.assert_rejection_events();
+    }
+
+    #[test]
+    fn scope_rejects_a_plus_prefixed_baseline_add() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", ".check-baseline", "none — harness");
+        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write(".check-baseline", "alpha\n+beta\n");
+        env.repo.commit_all("T-001 baseline grew");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(
+            out.reason
+                .contains("added a line to .check-baseline, and the baseline only ever shrinks"),
+            "{}",
+            out.reason
+        );
+        env.assert_rejection_events();
+    }
+
+    #[test]
+    fn scope_nets_a_minus_prefixed_baseline_add() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", ".check-baseline", "none — harness");
+        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write(".check-baseline", "alpha\n-beta\n");
+        env.repo.commit_all("T-001 baseline grew");
+        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.commit_all("T-001 remove");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        assert!(env.tasks_text().contains("status: done"));
     }
 
     #[test]
