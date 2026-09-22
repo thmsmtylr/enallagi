@@ -628,6 +628,19 @@ fn a_longer_rewrite_of_one_friction_is_reported() {
     );
 }
 
+// two unrelated frictions whose only shared long words are connective prose: `because`, `expected`, `nobody`, `which`
+const PROSE_SHARE_FIXTURE: &str = "
+friction: the build failed because clippy flagged an unused import which nobody expected
+friction: the fixture date drifted because the clock changed, which nobody expected
+";
+
+#[test]
+fn frictions_sharing_only_prose_are_not_repeats() {
+    let (repo, cfg) = seeded();
+    append(&repo, "PROGRESS.md", PROSE_SHARE_FIXTURE);
+    assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
+}
+
 fn with_driver(body: &str) -> (Repo, Config) {
     let (repo, cfg) =
         seeded_with("[layout]\ndriver_command = \"$ENALLAGI_ROOT/src/fakedriver.sh\"\n");
