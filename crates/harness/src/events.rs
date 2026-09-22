@@ -133,9 +133,13 @@ pub struct Log {
 }
 
 impl Log {
+    // a lane runs in a linked worktree that is removed when the lane ends, and an ignored file cannot
+    // ride a fast-forward, so the log resolves to the main worktree and every reader finds it there
     pub fn open(harness_dir: &Path) -> Log {
+        let dir = crate::git::main_worktree_path(harness_dir)
+            .unwrap_or_else(|| harness_dir.to_path_buf());
         Log {
-            path: harness_dir.join("events.jsonl"),
+            path: dir.join("events.jsonl"),
         }
     }
 
@@ -143,13 +147,16 @@ impl Log {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let line = serde_json::to_string(e)
+        let mut line = serde_json::to_string(e)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        line.push('\n');
         let mut f = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)?;
-        writeln!(f, "{line}")
+        // lanes of one run append to the same log, and an append is atomic only per write, so the
+        // newline rides the record: `writeln!` emits it separately and another lane splits the line
+        f.write_all(line.as_bytes())
     }
 
     pub fn read_lines(&self) -> io::Result<(Vec<(String, Event)>, usize)> {
@@ -476,6 +483,35 @@ mod tests {
         assert_eq!(skipped, 0);
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].0, serde_json::to_string(&pairs[0].1).unwrap());
+    }
+
+    #[test]
+    fn concurrent_appends_leave_every_line_whole() {
+        let d = tempfile::tempdir().unwrap();
+        let log = Log::open(d.path());
+        std::thread::scope(|s| {
+            for lane in 0..8u32 {
+                let log = &log;
+                s.spawn(move || {
+                    for seq in 0..60u64 {
+                        log.append(&Event {
+                            ts: "2026-01-01T00:00:00Z".into(),
+                            run: format!("lane-{lane}"),
+                            iter: 1,
+                            seq,
+                            kind: Kind::StageOutput {
+                                stage: "implement".into(),
+                                chunk: "x".repeat(200),
+                            },
+                        })
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        let (events, skipped) = log.read_report().unwrap();
+        assert_eq!(skipped, 0, "a concurrent append split a line");
+        assert_eq!(events.len(), 8 * 60);
     }
 
     #[test]
