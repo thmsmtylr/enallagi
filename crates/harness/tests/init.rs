@@ -1249,14 +1249,14 @@ fn node_repo() -> Repo {
     let repo = Repo::new();
     repo.write(
         "package.json",
-        "{\n  \"name\": \"adhd\",\n  \"scripts\": {\n    \"typecheck\": \"tsc --noEmit\",\n    \"test\": \"node --import tsx --test tests/*.test.ts\"\n  }\n}\n",
+        "{\n  \"name\": \"fixture\",\n  \"scripts\": {\n    \"typecheck\": \"tsc --noEmit\",\n    \"test\": \"node --import tsx --test tests/*.test.ts\"\n  }\n}\n",
     );
     repo.write(
         ".github/workflows/ci.yml",
         "name: ci\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - run: npm run typecheck\n      - run: npm test\n",
     );
     repo.write("tests/date.test.ts", "test('a date parses', () => {})\n");
-    repo.commit_all("adhd");
+    repo.commit_all("a node tree");
     repo
 }
 
@@ -1353,7 +1353,7 @@ fn init_names_the_file_a_detected_value_came_from() {
 #[test]
 fn two_runners_in_one_tree_write_no_keys() {
     let repo = node_repo();
-    repo.write("Cargo.toml", "[package]\nname = \"adhd\"\n");
+    repo.write("Cargo.toml", "[package]\nname = \"fixture\"\n");
     repo.commit_all("two runners");
     let report = install(&repo);
     let written = read(&repo, ".enallagi/enallagi.toml");
