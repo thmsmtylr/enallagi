@@ -35,6 +35,8 @@ pub struct LaneReport {
     pub branch: String,
     // recorded but never used to decide whether the lane merges: only the worktree's committed state does that
     pub run_error: Option<String>,
+    // the checkout did not follow its upstream: the lane's own work may still have merged
+    pub follow_error: Option<String>,
 }
 
 // (parent repository, lane worktree) pairs, the state repository first: it sits inside the product worktree
@@ -114,14 +116,21 @@ pub fn by_branch(root: &Path, cfg: &Config) -> bool {
 
 // the checkout's branch carries what its own tracking ref carries and nothing else, so a branch
 // named for neither its remote nor its upstream still follows the ref `enallagi pr` builds onto
-fn follow_upstream(root: &Path, branch: &str) -> String {
-    let followed = || -> Result<String, git::GitError> {
-        let upstream = git::git(root, &["rev-parse", "--abbrev-ref", "@{upstream}"])?;
-        git::git(root, &["fetch", "-q"])?;
-        let out = git::git(root, &["merge", "--ff-only", "@{upstream}"])?;
-        Ok(format!("{branch} follows {upstream}: {out}"))
+fn follow_upstream(root: &Path, branch: &str) -> Result<String, String> {
+    // the caller decides what a failure costs, so each step names itself rather than returning prose
+    let step = |what: &str, r: Result<String, git::GitError>| {
+        r.map_err(|e| format!("{branch} did not follow its upstream, {what} failed: {e}"))
     };
-    followed().unwrap_or_else(|err| err.to_string())
+    let upstream = step(
+        "git rev-parse --abbrev-ref @{upstream}",
+        git::git(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+    )?;
+    step("git fetch", git::git(root, &["fetch", "-q"]))?;
+    let out = step(
+        "git merge --ff-only @{upstream}",
+        git::git(root, &["merge", "--ff-only", "@{upstream}"]),
+    )?;
+    Ok(format!("{branch} follows {upstream}: {out}"))
 }
 
 // under `[pr] per_task` the checkout's branch never carries the lane's product commits, so a task
@@ -195,7 +204,11 @@ pub fn lane(
     // before the worktree, never after: a lane branched from a checkout behind its upstream builds
     // a pull request `enallagi pr` then refuses, and no later fast-forward reaches that lane
     let by_branch = by_branch(root, cfg);
-    let followed = by_branch.then(|| follow_upstream(root, &parent_branch));
+    let (followed, follow_error) = match by_branch.then(|| follow_upstream(root, &parent_branch)) {
+        None => (None, None),
+        Some(Ok(said)) => (Some(said), None),
+        Some(Err(err)) => (Some(err.clone()), Some(err)),
+    };
 
     let ts = jiff::Timestamp::now().strftime("%Y%m%d-%H%M%S").to_string();
     let base = format!("{ts}-{}", std::process::id());
@@ -210,6 +223,7 @@ pub fn lane(
         reason,
         branch: branch.clone(),
         run_error: run_error.clone(),
+        follow_error: follow_error.clone(),
     };
 
     // Uncommitted work in the lane is the lane's to finish, not ours to throw away.
@@ -277,6 +291,7 @@ pub fn lane(
         reason: said.join("\n"),
         branch,
         run_error,
+        follow_error,
     })
 }
 
@@ -477,6 +492,29 @@ mod tests {
         assert!(!r.root.join("one.txt").exists() && !r.root.join("two.txt").exists());
         let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
         assert_eq!(tasks.matches("status: done").count(), 2, "{tasks}");
+    }
+
+    // the reviewer on pull request #33: a checkout that did not follow its upstream reported success
+    #[test]
+    fn a_follow_that_fails_is_carried_to_the_caller() {
+        let r = per_task_repo();
+        let cfg = cfg(&r);
+
+        // no origin and no upstream, so the first step of the follow fails
+        let report = lane(&r.root, &cfg, &mut |wt| {
+            land(wt, "T-001", "one.txt");
+            Ok(())
+        })
+        .expect("lane");
+
+        let err = report.follow_error.expect("the follow failed and said so");
+        assert!(err.contains("did not follow its upstream"), "{err}");
+        assert!(err.contains("@{upstream}"), "{err}");
+        assert!(
+            report.reason.contains("did not follow its upstream"),
+            "{}",
+            report.reason
+        );
     }
 
     #[test]
