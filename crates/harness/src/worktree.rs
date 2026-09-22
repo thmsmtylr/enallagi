@@ -494,7 +494,7 @@ mod tests {
         assert_eq!(tasks.matches("status: done").count(), 2, "{tasks}");
     }
 
-    // the reviewer on pull request #33: a checkout that did not follow its upstream reported success
+    // a reviewer caught this: a checkout that did not follow its upstream reported success
     #[test]
     fn a_follow_that_fails_is_carried_to_the_caller() {
         let r = per_task_repo();
