@@ -135,6 +135,7 @@ mod tests {
             cache_creation_input_tokens: None,
             cache_read_input_tokens: None,
             turns: None,
+            turn_cap: None,
         });
         let (pairs, _) = w.log.read_lines().unwrap();
         let kept = filter_role(pairs, "implementer");

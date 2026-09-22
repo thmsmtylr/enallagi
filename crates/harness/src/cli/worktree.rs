@@ -28,18 +28,29 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         Ok(())
     })?;
 
-    if report.merged {
-        if let Some(err) = &report.run_error {
+    // a checkout that did not follow its upstream is a failure even when the lane's own work landed:
+    // the next lane starts behind its upstream and every `enallagi pr` replay conflicts there
+    if let Some(err) = &report.follow_error {
+        eprintln!("worktree: {err}");
+        if report.merged {
             eprintln!(
-                "worktree: fast-forwarded to {} but the lane's run failed: {err}",
+                "worktree: {} landed, so the work is in the repository; the checkout is not up to date",
                 report.branch
             );
+        }
+        return Ok(1);
+    }
+    if report.merged {
+        let landing = if worktree::by_branch(root, &cfg) {
+            format!("left {} for `enallagi pr`", report.branch)
+        } else {
+            format!("fast-forwarded to {}", report.branch)
+        };
+        if let Some(err) = &report.run_error {
+            eprintln!("worktree: {landing} but the lane's run failed: {err}");
             return Ok(1);
         }
-        eprintln!(
-            "worktree: fast-forwarded to {} -- {}",
-            report.branch, report.reason
-        );
+        eprintln!("worktree: {landing} -- {}", report.reason);
         return Ok(0);
     }
 
@@ -87,6 +98,7 @@ mod tests {
             reason: "lane/x cannot fast-forward into /r/.enallagi".to_string(),
             branch: "lane/x".to_string(),
             run_error: None,
+            follow_error: None,
         };
         let msg = left_message(Path::new("/r"), ".enallagi", "main", &report);
         for want in [
