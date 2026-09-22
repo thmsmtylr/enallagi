@@ -1229,3 +1229,50 @@ fn no_comment_cites_an_issue_number() {
     // an empty corpus is not a pass; `git ls-files 'crates/**/*.rs'` -> 77
     assert!(scanned > 50, "{scanned} sources scanned");
 }
+
+// the citation floor above catches a comment, not a fixture, and a fixture is where the foreign name
+// was. A manifest a fixture writes names one of a few neutral words, so putting a real repository's
+// name back in one fails here.
+#[test]
+fn no_fixture_manifest_names_another_repository() {
+    // ponytail: the two manifests a fixture writes, package.json and Cargo.toml, inside a Rust string
+    // literal, which is the shape the rule has been broken in
+    let json = re(r#"\\"name\\":\s*\\"([a-z0-9][a-z0-9._-]*)\\""#);
+    let cargo = re(r#"\[package\]\\n\s*name = \\"([a-z0-9][a-z0-9._-]*)\\""#);
+    let sample = String::from("let t = \"{\\\"name\\\": \\\"") + "ad" + "hd\\\"}\";";
+    assert!(json.is_match(&sample), "the scan cannot report: {sample}");
+
+    const NEUTRAL: &[&str] = &[
+        "fixture", "example", "demo", "test", "sample", "thing", "product", "pkg", "enallagi",
+        "harness", "a", "b", "old", "new",
+    ];
+    let root = repo_root();
+    let shipped = tracked(&root);
+    let crates = root.join("crates");
+    let mut foreign: Vec<String> = Vec::new();
+    let mut scanned = 0;
+    for rel in walk(&crates) {
+        if rel.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        if !shipped.contains(&Path::new("crates").join(&rel)) {
+            continue;
+        }
+        scanned += 1;
+        let text = read(&crates.join(&rel));
+        for caught in json
+            .captures_iter(text.as_str())
+            .chain(cargo.captures_iter(text.as_str()))
+        {
+            let name = caught[1].to_string();
+            if !NEUTRAL.contains(&name.as_str()) {
+                foreign.push(format!("crates/{}: {name}", rel.display()));
+            }
+        }
+    }
+    foreign.sort();
+    foreign.dedup();
+    assert_eq!(foreign, Vec::<String>::new());
+    // an empty corpus is not a pass; `git ls-files 'crates/**/*.rs'` -> 77
+    assert!(scanned > 50, "{scanned} sources scanned");
+}
