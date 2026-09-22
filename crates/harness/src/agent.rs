@@ -354,12 +354,13 @@ fn month_number(name: &str) -> Option<i8> {
     i8::try_from(index + 1).ok()
 }
 
-/// The dated part of a reset notice, `Sep 20 at 4am`, in the notice's own words.
+/// The dated part of a reset notice, `Sep 20 at 4am (Australia/Melbourne)`, in the notice's own words.
 pub fn dated_reset(notice: &str) -> Option<String> {
     let caps = reset_pattern().captures(notice)?;
     let month = caps.get(1)?;
     month_number(month.as_str())?;
-    Some(notice[month.start()..caps.get(5)?.end()].to_string())
+    // to the end of the whole match, not the meridiem: without the zone the time it names is ambiguous
+    Some(notice[month.start()..caps.get(0)?.end()].to_string())
 }
 
 // without this a session-limit notice reads as a finished iteration and burns the rest of the run doing nothing
@@ -1051,6 +1052,18 @@ mod tests {
         assert!(seconds_until_reset("resets Hax 20 at 4am (UTC)", now.clone()).is_none());
         assert!(seconds_until_reset("resets Feb 30 at 4am (UTC)", now.clone()).is_none());
         assert!(seconds_until_reset("resets Sep 20 at 4am (Mars/Olympus)", now).is_none());
+    }
+
+    #[test]
+    fn dated_reset_keeps_the_zone() {
+        assert_eq!(
+            dated_reset(
+                "You've hit your weekly limit \u{b7} resets Sep 20 at 4am (Australia/Melbourne)"
+            )
+            .as_deref(),
+            Some("Sep 20 at 4am (Australia/Melbourne)")
+        );
+        assert!(dated_reset("resets 4am (UTC)").is_none());
     }
 
     fn fix_now(zoned: jiff::Zoned) {
