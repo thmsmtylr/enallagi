@@ -1366,7 +1366,7 @@ fn a_refusal_in_a_heading_is_reported() {
 #[test]
 fn a_heading_lends_no_terms_to_its_body() {
     let (repo, cfg) = seeded();
-    repo.write("CONTRIBUTING.md", "# AI\nWe welcome every pull request.\n");
+    repo.write("CONTRIBUTING.md", "# AI\nWe will close it.\n");
     assert_eq!(policy(&repo, &cfg), Vec::new());
 }
 
