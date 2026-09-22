@@ -2082,6 +2082,54 @@ fn digest_and_probe_agree_past_the_turn_cap() {
     assert_eq!(in_digest, in_probe, "digest {in_digest}, probe {in_probe}");
 }
 
+// turns = 20 and one block handed at turns_per_block = 25 is a cap of 45, not 20
+fn adjudicating_at_turns(reported: u64) -> Repo {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = rejecting_verifier(&r);
+    let adj = script(
+        &r,
+        "src/fakeadj.sh",
+        &format!("echo '{{\"total_cost_usd\":0.5,\"num_turns\":{reported}}}'\n"),
+    );
+    let roles = format!(
+        "{}{}",
+        role_commands(&implement, &verify),
+        role_command("adjudicator", &adj)
+    );
+    let toml = base_toml(&roles)
+        .replace("[check]", "[queue]\nturns_per_block = 25\n\n[check]")
+        .replace(
+            "name = \"adjudicate\"\nrole = \"adjudicator\"\nturns = 5\n",
+            "name = \"adjudicate\"\nrole = \"adjudicator\"\nturns = 20\n",
+        );
+    write_toml(&r, &toml);
+    r.write("TASKS.md", TASKS);
+    r.write("src/filed.md", FILED);
+    r.commit_all("stubs");
+    r
+}
+
+#[test]
+fn a_handed_adjudicator_reads_one_turn_cap() {
+    use enallagi::probes::telemetry::{turns_exhausted, ProbeResult};
+    for (reported, named) in [(30, false), (45, true)] {
+        let r = adjudicating_at_turns(reported);
+        let (digest, _) = go(&r, &opts(1));
+        let in_digest = pipeline::digest_text(&digest).contains("adjudicate: turns");
+        let cfg = enallagi::config::load(&r.root).expect("config");
+        let log = enallagi::events::Log::open(&r.root.join(".enallagi"));
+        let ProbeResult::Count(findings) = turns_exhausted(&log, &cfg) else {
+            panic!("turns_exhausted could not read the log");
+        };
+        let in_probe = findings
+            .iter()
+            .any(|f| f.message.contains("stage adjudicate"));
+        assert_eq!(in_digest, named, "digest at {reported} turns");
+        assert_eq!(in_probe, named, "probe at {reported} turns");
+    }
+}
+
 #[test]
 fn an_uncapped_stage_is_not_named_as_a_turn_cap() {
     let toml = base_toml("").replace(

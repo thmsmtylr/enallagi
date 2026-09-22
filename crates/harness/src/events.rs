@@ -59,6 +59,9 @@ pub enum Kind {
         #[serde(default)]
         cache_read_input_tokens: Option<u64>,
         turns: Option<u64>,
+        // the cap this stage ran under, which a handed adjudicator raises; a log written before the field reads as None
+        #[serde(default)]
+        turn_cap: Option<u32>,
     },
     #[serde(rename = "gate")]
     Gate {
@@ -331,10 +334,25 @@ mod tests {
             cache_creation_input_tokens: None,
             cache_read_input_tokens: None,
             turns: None,
+            turn_cap: None,
         });
         let j = serde_json::to_string(&e).unwrap();
         assert!(j.contains("\"kind\":\"stage.end\""));
         assert!(j.contains("\"cost\":0.5"));
+    }
+
+    #[test]
+    fn a_stage_end_written_before_the_cap_parses() {
+        let line = r#"{"ts":"2026-09-21T00:00:00Z","run":"r","iter":1,"seq":1,"kind":"stage.end","stage":"adjudicate","task":null,"seconds":1,"exit":0,"cost":null,"input_tokens":null,"output_tokens":null,"turns":30}"#;
+        let e: Event = serde_json::from_str(line).expect("a stage.end with no turn_cap key");
+        let Kind::StageEnd {
+            turn_cap, turns, ..
+        } = e.kind
+        else {
+            panic!("a stage.end");
+        };
+        assert_eq!(turn_cap, None);
+        assert_eq!(turns, Some(30));
     }
 
     #[test]
@@ -363,6 +381,7 @@ mod tests {
             cache_read_input_tokens: Some(505740),
             output_tokens: Some(6233),
             turns: None,
+            turn_cap: None,
         });
         let l = render_line(&e);
         assert!(l.contains("cache_creation_input_tokens=54825"), "{l}");

@@ -813,6 +813,7 @@ impl<'a> Loop<'a> {
             cache_creation_input_tokens: result.usage.cache_creation_input_tokens,
             cache_read_input_tokens: result.usage.cache_read_input_tokens,
             turns: result.usage.turns,
+            turn_cap: Some(turns),
         });
 
         let flow = if let Some(signal) = agent::stop_signal() {
