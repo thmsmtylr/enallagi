@@ -190,3 +190,34 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         })
         .collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn counted(words: &[&str]) -> usize {
+        let pair: BTreeSet<String> = words.iter().map(|w| w.to_string()).collect();
+        let spread: HashMap<String, usize> = words.iter().map(|w| (w.to_string(), 2)).collect();
+        rare_shared(&pair, &pair, &spread)
+    }
+
+    #[test]
+    fn each_prose_word_is_dropped_from_rare_shared() {
+        for word in PROSE_WORDS {
+            // an entry under RARE_WORD_LEN reads as cover the length filter already gives
+            assert!(word.len() >= RARE_WORD_LEN, "{word}");
+            assert_eq!(counted(&[word]), 0, "{word}");
+        }
+        assert_eq!(counted(&["clippy"]), 1);
+    }
+
+    #[test]
+    fn prose_words_never_carry_a_pair_to_rare_shared() {
+        let content = ["clippy", "fixture", "unused"];
+        let mut shared = PROSE_WORDS.to_vec();
+        shared.extend(&content[..RARE_SHARED - 1]);
+        assert_eq!(counted(&shared), RARE_SHARED - 1);
+        shared.push(content[RARE_SHARED - 1]);
+        assert_eq!(counted(&shared), RARE_SHARED);
+    }
+}
