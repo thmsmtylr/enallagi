@@ -730,7 +730,8 @@ impl<'a> Loop<'a> {
         };
         let stage_bases = (snapshot(self.root), snapshot(&self.state_root()));
         let stop_file = self.file("STOP");
-        let result = match agent::spawn(&spawn, &mut self.writer, &stop_file, &self.rate_limit) {
+        let mut result = match agent::spawn(&spawn, &mut self.writer, &stop_file, &self.rate_limit)
+        {
             Ok(result) => result,
             Err(err) => {
                 self.halt("stage", format!("{} could not start: {err}", stage.name));
@@ -815,10 +816,20 @@ impl<'a> Loop<'a> {
             turns: result.usage.turns,
         });
 
+        let beyond_wait = result.reset_beyond_wait.take();
         let flow = if let Some(signal) = agent::stop_signal() {
             self.halt(
                 "signal",
                 format!("{} was stopped by {signal}, exiting.", stage.name),
+            );
+            Flow::Stop
+        } else if let Some(reset) = beyond_wait {
+            self.halt(
+                "stage",
+                format!(
+                    "{} hit a rate limit that resets {reset}, further out than the wait ceiling.",
+                    stage.name
+                ),
             );
             Flow::Stop
         } else if result.exit != 0 {

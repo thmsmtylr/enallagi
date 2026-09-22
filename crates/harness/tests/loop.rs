@@ -2782,6 +2782,37 @@ fn a_sigterm_ends_the_limit_wait() {
     );
 }
 
+#[test]
+fn a_weekly_limit_halt_still_books_the_stage() {
+    let r = repo(&base_toml(""), TASKS);
+    // two days out is past the wait ceiling, so the stage halts where a nearer reset would sleep
+    let reset = jiff::Zoned::now()
+        .with_time_zone(jiff::tz::TimeZone::UTC)
+        .checked_add(jiff::Span::new().days(2))
+        .expect("two days ahead")
+        .strftime("%b %d at %I:%M%p")
+        .to_string();
+    script(
+        &r,
+        "src/fakeagent.sh",
+        &format!("echo 'hit your session limit resets {reset} (UTC)'\n{QUIET}"),
+    );
+    r.commit_all("a weekly-limited agent");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(digest.stages_run, 1, "{digest:#?}");
+    assert_eq!(digest.cost, 0.5, "{digest:#?}");
+    assert_eq!(ends(&events).len(), 1, "{events:#?}");
+    assert!(
+        digest
+            .halts
+            .iter()
+            .any(|h| h.contains(&reset) && h.contains("(UTC)")),
+        "{:?}",
+        digest.halts
+    );
+}
+
 fn claude_args_repo(key: &str) -> Repo {
     let toml = base_toml("").replacen(
         "preset = \"custom\"\ncommand = [\"./src/fakeagent.sh\", \"{prompt}\", \"{turns}\"]",

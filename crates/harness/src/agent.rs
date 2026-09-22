@@ -74,8 +74,6 @@ pub enum AgentError {
     EmptyCommand,
     #[error("preset {0} declares no bypass flag, so dangerously_skip_permissions cannot apply")]
     NoBypassFlag(String),
-    #[error("the rate limit resets {0}, further out than the wait ceiling")]
-    ResetBeyondWait(String),
 }
 
 const PRESET_FILES: &[(&str, &str)] = &[
@@ -435,6 +433,8 @@ pub struct StageResult {
     pub output: String,
     pub usage: UsageValues,
     pub timed_out: bool,
+    /// The dated reset of a notice further out than the wait ceiling, once the stage has run.
+    pub reset_beyond_wait: Option<String>,
 }
 
 const POLL: Duration = Duration::from_millis(200);
@@ -526,12 +526,13 @@ pub fn spawn(
     let started = Instant::now();
     loop {
         let (exit, output, timed_out) = run_once(s, events)?;
-        let result = StageResult {
+        let mut result = StageResult {
             exit,
             seconds: started.elapsed().as_secs(),
             usage: extract_usage(&output, &s.preset.usage),
             output,
             timed_out,
+            reset_beyond_wait: None,
         };
         if attempt >= 2 {
             return Ok(result);
@@ -546,11 +547,9 @@ pub fn spawn(
         };
         let waited = seconds_until_reset(&matched, stage_now());
         let Some(sleep_seconds) = waited.filter(|s| *s <= MAX_WAIT) else {
-            // a dated notice says when work can resume, so the halt says it too instead of reading as a failed stage
-            return match dated_reset(&matched).filter(|_| waited.is_some()) {
-                Some(reset) => Err(AgentError::ResetBeyondWait(reset)),
-                None => Ok(result),
-            };
+            // the stage ran, so its seconds, usage and StageEnd are owed before the halt reads the reset
+            result.reset_beyond_wait = dated_reset(&matched).filter(|_| waited.is_some());
+            return Ok(result);
         };
         events.emit(Kind::Limit {
             stage: s.stage.clone(),
@@ -1402,14 +1401,18 @@ mod tests {
             "echo 'hit your weekly limit resets Sep 20 at 4am (Australia/Melbourne)'; exit 1",
         );
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
-        let err = spawn(
+        let res = spawn(
             &spawner(argv, &r.root),
             &mut w,
             &stop_file(&r.root),
             &Regex::new("hit your weekly limit").unwrap(),
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("Sep 20 at 4am"), "{err}");
+        .unwrap();
+        assert_eq!(
+            res.reset_beyond_wait.as_deref(),
+            Some("Sep 20 at 4am (Australia/Melbourne)")
+        );
+        assert_eq!(res.exit, 1);
         assert!(!w
             .log
             .read()
