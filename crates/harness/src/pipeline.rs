@@ -734,7 +734,12 @@ impl<'a> Loop<'a> {
         {
             Ok(result) => result,
             Err(err) => {
-                self.halt("stage", format!("{} could not start: {err}", stage.name));
+                // Stopped means the operator ended a rate-limit wait, which is their halt and not a stage that could not start
+                let stopped =
+                    matches!(err, agent::AgentError::Stopped) && self.halt_operator_stop();
+                if !stopped {
+                    self.halt("stage", format!("{} could not start: {err}", stage.name));
+                }
                 return Flow::Stop;
             }
         };
@@ -814,6 +819,7 @@ impl<'a> Loop<'a> {
             cache_creation_input_tokens: result.usage.cache_creation_input_tokens,
             cache_read_input_tokens: result.usage.cache_read_input_tokens,
             turns: result.usage.turns,
+            turn_cap: Some(turns),
         });
 
         let beyond_wait = result.reset_beyond_wait.take();
@@ -1071,17 +1077,25 @@ impl<'a> Loop<'a> {
         }
     }
 
-    // order matters: a signal, then the STOP file, then budgets, then a new needs-spec task
-    fn boundary(&mut self, needs_spec: bool) -> bool {
-        if self.stopped {
-            return true;
-        }
+    // one wording for the operator's two halts, read here and by the spawn arm in stage
+    fn halt_operator_stop(&mut self) -> bool {
         if let Some(signal) = agent::stop_signal() {
             self.halt("signal", format!("stopped by {signal}, exiting."));
             return true;
         }
         if self.file("STOP").is_file() {
             self.halt("stop", "STOP file found, exiting.".to_string());
+            return true;
+        }
+        false
+    }
+
+    // order matters: a signal, then the STOP file, then budgets, then a new needs-spec task
+    fn boundary(&mut self, needs_spec: bool) -> bool {
+        if self.stopped {
+            return true;
+        }
+        if self.halt_operator_stop() {
             return true;
         }
         if let Some(reason) = self.over_budget() {
