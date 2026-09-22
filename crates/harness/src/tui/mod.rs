@@ -356,6 +356,7 @@ mod tests {
                 cache_creation_input_tokens: None,
                 cache_read_input_tokens: None,
                 turns: None,
+                turn_cap: None,
             }),
             w.emit(Kind::Gate {
                 gate: "verdict".into(),
