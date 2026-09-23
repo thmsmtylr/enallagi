@@ -99,10 +99,19 @@ fn lane_repo(tools: &Path) -> Repo {
     for (key, value) in [("user.email", "t@t"), ("user.name", "t")] {
         git(&state, &["config", key, value]);
     }
+    // init commits the state itself; the second init over the stub config may leave nothing more
     git(&state, &["add", "-A"]);
     git(
         &state,
-        &["-c", "commit.gpgsign=false", "commit", "-q", "-m", "queue"],
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "queue",
+        ],
     );
     r
 }

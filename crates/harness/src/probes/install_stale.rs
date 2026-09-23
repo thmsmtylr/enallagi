@@ -15,6 +15,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         &InitOpts {
             adapter: None,
             dry_run: true,
+            ..InitOpts::default()
         },
     )
     .map_err(|e| format!("enallagi init could not plan this tree: {e}"))?;

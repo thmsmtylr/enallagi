@@ -74,8 +74,42 @@ pub fn detect(root: &Path) -> Detection {
     }
     if let [(runner, origin)] = matched.as_slice() {
         found.keys = keys(root, runner, origin);
+    } else if matched.is_empty() {
+        found.keys = layout_from_tree(root);
     }
     found
+}
+
+// no runner matched, so the tree alone answers the two layout keys a lane cannot run without: the
+// conventional source directory, and the test files a git pathspec over the conventional test
+// directory reaches; the check itself is the operator's to name
+fn layout_from_tree(root: &Path) -> Vec<Detected> {
+    let paths = tracked(root);
+    let first_under = |dir: &str| {
+        paths
+            .iter()
+            .find(|rel| rel.starts_with(&format!("{dir}/")))
+            .cloned()
+    };
+    let mut out = Vec::new();
+    if let Some((dir, file)) = ["src", "lib", "app"]
+        .iter()
+        .find_map(|dir| first_under(dir).map(|file| (dir.to_string(), file)))
+    {
+        out.push(at("layout.source_root", dir, &format!("{file}:1")));
+    }
+    let mut globs: Vec<String> = Vec::new();
+    let mut origin: Option<String> = None;
+    for dir in ["tests", "test", "spec"] {
+        if let Some(file) = first_under(dir) {
+            globs.push(format!("{dir}/*"));
+            origin.get_or_insert(file);
+        }
+    }
+    if let Some(origin) = origin {
+        out.push(at("layout.test_glob", globs, &format!("{origin}:1")));
+    }
+    out
 }
 
 fn detect_at(root: &Path, runner: &Runner) -> Option<String> {
@@ -400,23 +434,25 @@ pub fn apply(text: &str, keys: &[Detected]) -> String {
 
 /// One line per detected value, or per candidate when the tree does not name exactly one runner.
 pub fn notes(found: &Detection) -> Vec<String> {
-    if !found.keys.is_empty() {
-        return found
-            .keys
-            .iter()
-            .map(|k| format!("detected: {} = {} ({})", k.key, k.value, k.origin))
-            .collect();
-    }
+    let detected = found
+        .keys
+        .iter()
+        .map(|k| format!("detected: {} = {} ({})", k.key, k.value, k.origin));
     let refusal = match found.candidates.len() {
-        0 => "no test runner detected; check.command and the layout keys keep their defaults",
-        _ => "more than one test runner matches; check.command and the layout keys keep their defaults",
+        1 => None,
+        0 => Some("no test runner detected; check.command keeps its default and the layout keys come from the tree"),
+        _ => Some("more than one test runner matches; check.command and the layout keys keep their defaults"),
     };
-    std::iter::once(refusal.to_string())
+    refusal
+        .map(str::to_string)
+        .into_iter()
         .chain(
             found
                 .candidates
                 .iter()
+                .filter(|_| found.candidates.len() != 1)
                 .map(|c| format!("candidate: {} ({})", c.name, c.origin)),
         )
+        .chain(detected)
         .collect()
 }

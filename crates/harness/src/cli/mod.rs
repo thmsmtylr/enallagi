@@ -36,11 +36,12 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Install into this repository
+    /// Install into this repository in one pass
     ///
-    /// Seeds the documents, writes enallagi.toml, and wires the adapter named by --adapter.
+    /// Detects the check, asks for what it cannot decide, writes enallagi.toml and every rendered
+    /// file, wires the configured agent's hooks, vendors the skills, commits the state, and probes.
     Init {
-        /// Agent preset whose hook and instruction files to write (claude, codex, gemini, copilot, cursor, qwen, …)
+        /// Agent preset whose hook and instruction files to write; defaults to agent.preset
         #[arg(long)]
         adapter: Option<String>,
         /// Print what would be written and write nothing
@@ -52,6 +53,30 @@ pub enum Command {
         /// Rewrite enallagi.toml without the keys that equal their default
         #[arg(long)]
         prune_defaults: bool,
+        /// Take every default without asking; a stdin that is not a terminal does the same
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Answer agent.preset without being asked
+        #[arg(long)]
+        preset: Option<String>,
+        /// Answer check.command without being asked
+        #[arg(long)]
+        check: Option<String>,
+        /// Answer check.fail_name without being asked
+        #[arg(long)]
+        fail_name: Option<String>,
+        /// Answer layout.source_root without being asked
+        #[arg(long)]
+        source_root: Option<String>,
+        /// Vendor the declared skills even when stdin is not a terminal
+        #[arg(long, conflicts_with = "frozen")]
+        sync: bool,
+        /// Vendor nothing, as CI does
+        #[arg(long)]
+        frozen: bool,
+        /// Append this GitHub issue as a proposed block once installed
+        #[arg(long, value_name = "URL")]
+        issue: Option<String>,
     },
     /// Remove from this repository and leave no trace
     ///
@@ -234,11 +259,29 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             dry_run,
             move_files,
             prune_defaults,
+            yes,
+            preset,
+            check,
+            fail_name,
+            source_root,
+            sync,
+            frozen,
+            issue,
         } => init::run(&init::Args {
             adapter,
             dry_run,
             move_files,
             prune_defaults,
+            yes,
+            answers: crate::init::Answers {
+                preset,
+                check,
+                fail_name,
+                source_root,
+            },
+            sync,
+            frozen,
+            issue,
         }),
         Command::Eject {
             dry_run,
@@ -321,11 +364,19 @@ mod tests {
         "skills", "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 27] = [
+    const FLAGS: [&str; 35] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
         "init --prune-defaults",
+        "init --yes",
+        "init --preset",
+        "init --check",
+        "init --fail-name",
+        "init --source-root",
+        "init --sync",
+        "init --frozen",
+        "init --issue",
         "eject --dry-run",
         "eject --keep-record",
         "eject --delete",

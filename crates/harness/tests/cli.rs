@@ -886,7 +886,11 @@ fn gate_scope_refuses_a_grown_nested_baseline() {
         "{out:?}"
     );
 
-    let unrecorded = git(&r.root, &["rev-parse", "HEAD~2"]);
+    // init's own state commit records the revision it installed at, so an unrecorded one is a
+    // product commit the state never saw
+    r.write("b.txt", "later\n");
+    r.commit_all("unrelated");
+    let unrecorded = git(&r.root, &["rev-parse", "HEAD"]);
     let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &unrecorded]);
     assert_eq!(out.status.code(), Some(2), "{out:?}");
     assert!(
@@ -1202,7 +1206,15 @@ fn a_legacy_config_name_warns_about_the_rename() {
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
 }
 
-const DOC_UNRUNNABLE: [(&str, &str); 13] = [
+const DOC_UNRUNNABLE: [(&str, &str); 12] = [
+    (
+        "enallagi init --issue https://github.com/owner/repo/issues/12",
+        "reads a GitHub issue over the network with gh",
+    ),
+    (
+        "enallagi run --pr-per-task --iterations 1",
+        "spawns the agent CLI, which no test may call",
+    ),
     (
         "curl -LO https://github.com/thmsmtylr/enallagi/releases/latest/download/enallagi-aarch64-apple-darwin",
         "downloads a release asset over the network",
@@ -1216,10 +1228,6 @@ const DOC_UNRUNNABLE: [(&str, &str); 13] = [
         "installs system-wide as root",
     ),
     (
-        "$EDITOR .enallagi/enallagi.toml",
-        "opens an interactive editor",
-    ),
-    (
         "enallagi run --pipeline task --iterations 1",
         "spawns the agent CLI, which no test may call",
     ),
@@ -1231,7 +1239,6 @@ const DOC_UNRUNNABLE: [(&str, &str); 13] = [
         "enallagi issue owner/repo#12",
         "reads a GitHub issue over the network with gh",
     ),
-    ("$EDITOR .enallagi/TASKS.md", "opens an interactive editor"),
     (
         "cargo install --locked --git https://github.com/thmsmtylr/enallagi enallagi",
         "builds from the network and installs outside the tree",
@@ -1244,10 +1251,6 @@ const DOC_UNRUNNABLE: [(&str, &str); 13] = [
     (
         "enallagi pr T-001 --push",
         "pushes a branch and opens a pull request",
-    ),
-    (
-        "enallagi skills sync",
-        "clones the shipped skills from GitHub over the network",
     ),
 ];
 
@@ -1412,6 +1415,17 @@ impl GhRepo {
         let repo = enallagi::fixture::Repo::new();
         repo.init_harness("");
         let state = repo.root.join(".enallagi");
+        // init seeds no block; one standing task gives every appended block the next id
+        let tasks = state.join("TASKS.md");
+        let seeded = std::fs::read_to_string(&tasks).expect("TASKS.md");
+        std::fs::write(
+            &tasks,
+            format!(
+                "{}\n## [T-001] the first task\nscope: src/a.ts\nblockedBy: none\nstatus: ready\nrows: none \u{2014} harness\ncriteria:\n  - it happens\nnotes:\n",
+                seeded.trim_end()
+            ),
+        )
+        .expect("TASKS.md");
         for (name, text) in files {
             std::fs::write(state.join(name), text).expect("write state");
         }

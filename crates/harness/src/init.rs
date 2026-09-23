@@ -75,7 +75,31 @@ const GITIGNORE: &str = "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\
 pub struct InitOpts {
     pub adapter: Option<String>,
     pub dry_run: bool,
+    /// Answers given on the command line; each skips its question.
+    pub answers: Answers,
+    /// Take every default without asking; a stdin that is not a terminal is the same.
+    pub yes: bool,
 }
+
+/// The four keys detection cannot always decide, answered by a flag, a prompt, or the default.
+#[derive(Debug, Default, Clone)]
+pub struct Answers {
+    pub preset: Option<String>,
+    pub check: Option<String>,
+    pub fail_name: Option<String>,
+    pub source_root: Option<String>,
+}
+
+/// The questions init asks on a fresh install, in the order it asks them.
+pub const QUESTIONS: [(&str, &str); 4] = [
+    ("agent.preset", "the agent CLI the lanes run"),
+    ("check.command", "the one command that means done"),
+    (
+        "check.fail_name",
+        "the pattern that names a failing test in its output",
+    ),
+    ("layout.source_root", "where the code lives"),
+];
 
 #[derive(Debug, Default)]
 pub struct InitReport {
@@ -185,7 +209,7 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     let mut plan: Vec<Planned> = Vec::new();
     let mut report = InitReport::default();
 
-    let pending = seed_config(root, &mut plan, &mut report)?;
+    let pending = seed_config(root, &mut plan, &mut report, opts)?;
     let mut cfg = match &pending {
         Some(text) => config_from(text)?,
         None => config::load(root)?,
@@ -280,13 +304,15 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         seed(root, &mut plan, &mut report, &spec, sub(SPEC_SECTION));
     }
 
+    // --adapter overrides; otherwise the configured preset names the tool, so one init writes
+    // its hook and instruction files without a second flag
     let tool = match &opts.adapter {
         Some(name) => Some(
             presets
                 .get(name)
                 .ok_or_else(|| InitError::UnknownAdapter(name.clone()))?,
         ),
-        None => None,
+        None => presets.get(&cfg.agent.preset),
     };
     let spawned = tool.cloned().or_else(|| {
         agent::resolve(&cfg.agent, "default", &presets)
@@ -426,10 +452,27 @@ fn seed_config(
     root: &Path,
     plan: &mut Vec<Planned>,
     report: &mut InitReport,
+    opts: &InitOpts,
 ) -> Result<Option<String>, InitError> {
     let path = config::config_path(root);
     if has_content(&path) {
         audit_config(root, &path, report)?;
+        let given: Vec<&str> = [
+            ("--preset", opts.answers.preset.is_some()),
+            ("--check", opts.answers.check.is_some()),
+            ("--fail-name", opts.answers.fail_name.is_some()),
+            ("--source-root", opts.answers.source_root.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(flag, set)| set.then_some(flag))
+        .collect();
+        if !given.is_empty() {
+            report.notes.push(format!(
+                "{} already holds the answers; {} ignored. Edit the file, then re-run.",
+                config_rel(root),
+                given.join(" ")
+            ));
+        }
         return Ok(None);
     }
     let json = root.join("harness.json");
@@ -449,11 +492,84 @@ fn seed_config(
         // only the fresh file is detected into; a migrated one already carries the operator's answers
         let found = runners::detect(root);
         report.notes.extend(runners::notes(&found));
-        runners::apply(config::DEFAULT_TOML, &found.keys)
+        let detected = runners::apply(config::DEFAULT_TOML, &found.keys);
+        let answered = answer(&detected, &found.keys, opts, report)?;
+        runners::apply(&detected, &answered)
     };
     let (text, _) = config::prune_defaults(&text)?;
     plan.push(write(config_rel(root), text.clone()));
     Ok(Some(text))
+}
+
+// the four keys a fresh install may still have to be told: a flag answers without asking, a
+// question defaults to what detection found or the shipped default, and `--yes` or a stdin that is
+// not a terminal takes every default so an unattended init never blocks
+fn answer(
+    detected_toml: &str,
+    detected: &[runners::Detected],
+    opts: &InitOpts,
+    report: &mut InitReport,
+) -> Result<Vec<runners::Detected>, InitError> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let doc: toml::Value =
+        toml::from_str(detected_toml).unwrap_or(toml::Value::Table(Default::default()));
+    let current = |key: &str| -> String {
+        let (table, leaf) = key.split_once('.').unwrap_or((key, ""));
+        doc.get(table)
+            .and_then(|t| t.get(leaf))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let flag = |key: &str| -> Option<String> {
+        match key {
+            "agent.preset" => opts.answers.preset.clone(),
+            "check.command" => opts.answers.check.clone(),
+            "check.fail_name" => opts.answers.fail_name.clone(),
+            "layout.source_root" => opts.answers.source_root.clone(),
+            _ => None,
+        }
+    };
+    let ask = !opts.yes && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let mut out = Vec::new();
+    for (key, what) in QUESTIONS {
+        let default = current(key);
+        let how = if detected.iter().any(|d| d.key == key) {
+            "detected"
+        } else {
+            "default"
+        };
+        let (value, how) = match flag(key) {
+            Some(value) => (value, "flag"),
+            None if ask => {
+                print!("  {key}, {what} [{default}]: ");
+                std::io::stdout().flush().map_err(io("stdout"))?;
+                let mut line = String::new();
+                std::io::stdin()
+                    .lock()
+                    .read_line(&mut line)
+                    .map_err(io("stdin"))?;
+                let line = line.trim();
+                if line.is_empty() {
+                    (default.clone(), how)
+                } else {
+                    (line.to_string(), "answer")
+                }
+            }
+            None => (default.clone(), how),
+        };
+        report
+            .notes
+            .push(format!("took: {key} = {value:?} ({how})"));
+        if value != default {
+            out.push(runners::Detected {
+                key: key.to_string(),
+                value: toml::Value::String(value),
+                origin: how.to_string(),
+            });
+        }
+    }
+    Ok(out)
 }
 
 // an older init wrote every default into the file, so a later edit to check.command left force behind

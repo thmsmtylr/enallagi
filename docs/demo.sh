@@ -96,9 +96,19 @@ INSTALL=$("$ENALLAGI_BIN" init 2>&1) || {
 # the count, not the 30-line file list: the reader learns nothing from the list
 printf 'installed %s files\n' "$(printf '%s\n' "$INSTALL" | grep -c '^  wrote: ')"
 
-# The seeded T-001 ships with an empty scope: line. Give it one, so the scope gate below has
+# init seeds no task. The demo queues one with a scope: line, so the scope gate below has
 # something to judge the lane's diff against.
-sed -i.bak 's|^scope:$|scope: src/allowed.ts|' .enallagi/TASKS.md && rm -f .enallagi/TASKS.md.bak
+cat >>.enallagi/TASKS.md <<'BLOCK'
+
+## [T-001] the demo task
+scope: src/allowed.ts
+blockedBy: none
+status: ready
+rows: none — harness
+criteria:
+  - the demo lane writes src/allowed.ts
+notes:
+BLOCK
 git add -A && git commit -qm 'chore: T-001 setup' >/dev/null
 
 # `CI` forces --frozen, which refuses a stage whose skills are not already vendored and locked, so

@@ -824,6 +824,7 @@ fn main_tracks_no_instance_file() {
         let opts = InitOpts {
             adapter: Some(name.clone()),
             dry_run: true,
+            ..InitOpts::default()
         };
         let planned = init::planned_files(&repo.root, &opts).expect("plan an install");
         instance.extend(planned.into_iter().map(|(path, _)| path));

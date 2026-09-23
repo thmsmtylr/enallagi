@@ -40,19 +40,18 @@ Releasing is one procedure, stated in
 [docs/setup.md](docs/setup.md) walks the same path on a real repository, step by step.
 
 ```bash
-enallagi init                     # seeds the documents and writes .enallagi/enallagi.toml
-$EDITOR .enallagi/enallagi.toml   # set agent.preset and check.command
-enallagi init                     # re-run to apply the edited answers
+enallagi init                  # one pass: detects the check, asks what it cannot decide, writes and commits everything
+enallagi init --yes            # or takes every default, as a stdin that is not a terminal does
 ```
 
 Turn an issue into a task:
 
 ```bash
-enallagi issue owner/repo#12   # appends a proposed block to .enallagi/TASKS.md
-$EDITOR .enallagi/TASKS.md     # fill scope: and criteria:, then set status: ready
+enallagi issue owner/repo#12   # appends a proposed block to .enallagi/TASKS.md; `init --issue <url>` does the same
 ```
 
-The block quotes the issue in `notes:`. It stays `proposed` until you write what done means.
+The block quotes the issue in `notes:`. The first run's adjudicator writes what done means and
+sets it `ready`; `$EDITOR .enallagi/TASKS.md` does the same by hand.
 
 Or write a task into `.enallagi/TASKS.md` by hand:
 

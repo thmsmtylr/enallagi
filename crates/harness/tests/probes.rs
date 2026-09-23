@@ -144,7 +144,20 @@ fn check_unnamed_reports_an_unset_check() {
 #[test]
 fn the_row_parser_reads_the_seeded_criteria_table() {
     let (repo, cfg) = seeded();
+    // the seeded table is empty and still a table: read, and nothing to report
+    assert_eq!(count(&run(&repo, &cfg), "spec-untested"), Some(0));
+    seeded_row(&repo, &cfg);
     assert_eq!(count(&run(&repo, &cfg), "spec-untested"), Some(1));
+}
+
+// one row under the seeded table's header, naming a test the tree lacks
+fn seeded_row(repo: &Repo, cfg: &Config) {
+    let path = config::instance_path(&repo.root, &cfg.layout.harness_dir, &cfg.layout.spec);
+    let text = fs::read_to_string(&path).expect("SPEC.md");
+    let header = "| Behaviour | Test |\n| --- | --- |\n";
+    let at = text.find(header).expect("the seeded table header") + header.len();
+    let row = "| the thing happens | `src/thing.test.ts::a name copied from your suite` |\n";
+    fs::write(&path, format!("{}{}{}", &text[..at], row, &text[at..])).expect("SPEC.md");
 }
 
 #[test]
@@ -160,8 +173,10 @@ fn a_missing_hash_file_unenforces_two_rails() {
 }
 
 #[test]
-fn the_seeded_criterion_is_untested() {
+fn an_unclaimed_row_is_uncovered() {
     let (repo, cfg) = seeded();
+    assert_eq!(count(&run(&repo, &cfg), "queue-uncovered"), Some(0));
+    seeded_row(&repo, &cfg);
     assert_eq!(count(&run(&repo, &cfg), "queue-uncovered"), Some(1));
 }
 
@@ -456,6 +471,7 @@ fn no_adapter_install_reports_its_own_files() {
             &enallagi::init::InitOpts {
                 adapter: Some(name.clone()),
                 dry_run: false,
+                ..enallagi::init::InitOpts::default()
             },
         )
         .expect("install");
@@ -483,6 +499,7 @@ fn a_traceless_install_leaves_no_litter() {
             &enallagi::init::InitOpts {
                 adapter: Some(name.clone()),
                 dry_run: false,
+                ..enallagi::init::InitOpts::default()
             },
         )
         .expect("install");
