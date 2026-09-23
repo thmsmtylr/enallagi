@@ -129,7 +129,7 @@ Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGE
 
 ## Commands
 
-- `init` installs into a repository. `eject` removes it and leaves no trace.
+- `init` installs into a repository. `eject` removes it and keeps the record outside it.
 - `run` drives the pipelines in place. `worktree` drives them in an isolated checkout.
 - `watch` attaches to a live loop. `events` queries the log.
 - `tasks` reads and edits the queue. `base` prints the commit a task was queued against.

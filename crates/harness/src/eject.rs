@@ -99,6 +99,28 @@ pub fn eject(root: &Path, opts: &EjectOpts) -> Result<EjectReport, EjectError> {
     Ok(report)
 }
 
+/// Where `eject` keeps the record when no `--keep-record` is given:
+/// `$XDG_DATA_HOME/enallagi/ejected/<repository>-<stamp>`, `~/.local/share` when the variable is
+/// unset. The parent is created; the leaf must not exist, which `eject` refuses on its own.
+pub fn default_record(root: &Path) -> Result<PathBuf, EjectError> {
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        .ok_or_else(|| EjectError::Io {
+            path: "$XDG_DATA_HOME".to_string(),
+            source: std::io::Error::other("neither XDG_DATA_HOME nor HOME is set"),
+        })?;
+    let parent = data.join("enallagi").join("ejected");
+    fs::create_dir_all(&parent).map_err(io(parent.display()))?;
+    let name = fs::canonicalize(root)
+        .ok()
+        .and_then(|r| r.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "repository".to_string());
+    let stamp = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S");
+    Ok(parent.join(format!("{name}-{stamp}")))
+}
+
 // every registered worktree under the harness directory is a lane, left or running
 fn lanes(root: &Path, dir: &str) -> Result<Vec<String>, EjectError> {
     let Ok(under) = fs::canonicalize(root.join(dir).join("worktrees")) else {

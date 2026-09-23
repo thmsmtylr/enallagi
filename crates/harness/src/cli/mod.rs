@@ -55,14 +55,18 @@ pub enum Command {
     },
     /// Remove from this repository and leave no trace
     ///
-    /// Removes the harness directory, the untracked entry points init wrote, and the exclude block.
+    /// Removes the untracked entry points init wrote and the exclude block, and moves the harness
+    /// directory, the run's record, under $XDG_DATA_HOME/enallagi/ejected.
     Eject {
         /// Print what would be removed and remove nothing
         #[arg(long)]
         dry_run: bool,
-        /// Move the harness directory to this path outside the repository instead of deleting it
-        #[arg(long)]
+        /// Move the harness directory to this path outside the repository instead of the data directory
+        #[arg(long, conflicts_with = "delete")]
         keep_record: Option<std::path::PathBuf>,
+        /// Delete the harness directory instead of keeping it; the record is gone with it
+        #[arg(long)]
+        delete: bool,
     },
     /// Run the pipelines in this checkout
     ///
@@ -239,9 +243,11 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         Command::Eject {
             dry_run,
             keep_record,
+            delete,
         } => eject::run(&eject::Args {
             dry_run,
             keep_record,
+            delete,
         }),
         Command::Run {
             iterations,
@@ -315,13 +321,14 @@ mod tests {
         "skills", "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 26] = [
+    const FLAGS: [&str; 27] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
         "init --prune-defaults",
         "eject --dry-run",
         "eject --keep-record",
+        "eject --delete",
         "run --iterations",
         "run --pipeline",
         "run --budget-usd",

@@ -123,6 +123,10 @@ A skill or role `source` is `github:owner/repo`, `git+file://` or `path:`.
 `enallagi init` writes these, relative to the repo root, with `.enallagi` as `layout.harness_dir`.
 The plan is built in `crates/harness/src/init.rs`.
 
+`enallagi eject` removes them and moves the harness directory, the run's record, to
+`$XDG_DATA_HOME/enallagi/ejected/<repository>-<stamp>` (`~/.local/share/...` when unset);
+`--keep-record <path>` names the place instead, and `--delete` is the one way to remove it.
+
 | Path | What |
 | --- | --- |
 | `.enallagi/roles/{scout,adjudicator,implementer,verifier,researcher}.md` | the five role prompts, always resubstituted |
