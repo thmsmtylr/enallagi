@@ -2082,6 +2082,54 @@ fn digest_and_probe_agree_past_the_turn_cap() {
     assert_eq!(in_digest, in_probe, "digest {in_digest}, probe {in_probe}");
 }
 
+// turns = 20 and one block handed at turns_per_block = 25 is a cap of 45, not 20
+fn adjudicating_at_turns(reported: u64) -> Repo {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = rejecting_verifier(&r);
+    let adj = script(
+        &r,
+        "src/fakeadj.sh",
+        &format!("echo '{{\"total_cost_usd\":0.5,\"num_turns\":{reported}}}'\n"),
+    );
+    let roles = format!(
+        "{}{}",
+        role_commands(&implement, &verify),
+        role_command("adjudicator", &adj)
+    );
+    let toml = base_toml(&roles)
+        .replace("[check]", "[queue]\nturns_per_block = 25\n\n[check]")
+        .replace(
+            "name = \"adjudicate\"\nrole = \"adjudicator\"\nturns = 5\n",
+            "name = \"adjudicate\"\nrole = \"adjudicator\"\nturns = 20\n",
+        );
+    write_toml(&r, &toml);
+    r.write("TASKS.md", TASKS);
+    r.write("src/filed.md", FILED);
+    r.commit_all("stubs");
+    r
+}
+
+#[test]
+fn a_handed_adjudicator_reads_one_turn_cap() {
+    use enallagi::probes::telemetry::{turns_exhausted, ProbeResult};
+    for (reported, named) in [(30, false), (45, true)] {
+        let r = adjudicating_at_turns(reported);
+        let (digest, _) = go(&r, &opts(1));
+        let in_digest = pipeline::digest_text(&digest).contains("adjudicate: turns");
+        let cfg = enallagi::config::load(&r.root).expect("config");
+        let log = enallagi::events::Log::open(&r.root.join(".enallagi"));
+        let ProbeResult::Count(findings) = turns_exhausted(&log, &cfg) else {
+            panic!("turns_exhausted could not read the log");
+        };
+        let in_probe = findings
+            .iter()
+            .any(|f| f.message.contains("stage adjudicate"));
+        assert_eq!(in_digest, named, "digest at {reported} turns");
+        assert_eq!(in_probe, named, "probe at {reported} turns");
+    }
+}
+
 #[test]
 fn an_uncapped_stage_is_not_named_as_a_turn_cap() {
     let toml = base_toml("").replace(
@@ -2717,8 +2765,8 @@ fn a_sigterm_stops_a_running_check() {
     );
 }
 
-#[test]
-fn a_sigterm_ends_the_limit_wait() {
+// the shape both limit-wait tests share: a limit three minutes out, then the operator ends the wait
+fn a_limit_wait_ended_by(end: impl FnOnce(&Repo, &std::process::Child)) -> Vec<Event> {
     let r = repo(&base_toml(""), TASKS);
     let reset = jiff::Zoned::now()
         .with_time_zone(jiff::tz::TimeZone::UTC)
@@ -2756,11 +2804,8 @@ fn a_sigterm_ends_the_limit_wait() {
     }
     assert_eq!(limits(&read()), 1, "no limit wait began: {:#?}", read());
 
-    let sent = std::process::Command::new("kill")
-        .args(["-TERM", &launcher.id().to_string()])
-        .status()
-        .expect("signal the launcher");
-    assert!(sent.success(), "TERM was not delivered");
+    end(&r, &launcher);
+
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while launcher.try_wait().expect("poll the launcher").is_none()
         && std::time::Instant::now() < deadline
@@ -2772,13 +2817,82 @@ fn a_sigterm_ends_the_limit_wait() {
         let _ = launcher.kill();
         let _ = launcher.wait();
     }
-    assert!(exited, "the launcher outlived the signal by 10s");
+    assert!(exited, "the launcher outlived the stop by 10s");
 
     let log = read();
     assert_eq!(limits(&log), 1, "{log:#?}");
     assert!(
         matches!(log.last().map(|e| &e.kind), Some(Kind::RunEnd { .. })),
         "{log:#?}"
+    );
+    log
+}
+
+// a wait the operator ended is that operator's halt, never a stage that could not start
+fn assert_operator_halt(log: &[Event], halt: &str) {
+    assert!(
+        log.iter()
+            .any(|e| matches!(&e.kind, Kind::Halt { halt: h, .. } if h == halt)),
+        "no {halt} halt: {log:#?}"
+    );
+    assert!(
+        !log.iter().any(
+            |e| matches!(&e.kind, Kind::Halt { reason, .. } if reason.contains("could not start"))
+        ),
+        "{log:#?}"
+    );
+}
+
+#[test]
+fn a_sigterm_ends_the_limit_wait() {
+    let log = a_limit_wait_ended_by(|_, launcher| {
+        let sent = std::process::Command::new("kill")
+            .args(["-TERM", &launcher.id().to_string()])
+            .status()
+            .expect("signal the launcher");
+        assert!(sent.success(), "TERM was not delivered");
+    });
+    assert_operator_halt(&log, "signal");
+}
+
+#[test]
+fn a_stop_file_ends_the_limit_wait() {
+    let log = a_limit_wait_ended_by(|r, _| {
+        let dir = enallagi::config::harness_dir(&r.root);
+        let stop = enallagi::config::instance_path(&r.root, &dir, "STOP");
+        std::fs::write(&stop, b"").unwrap_or_else(|e| panic!("write {}: {e}", stop.display()));
+    });
+    assert_operator_halt(&log, "stop");
+}
+
+#[test]
+fn a_weekly_limit_halt_still_books_the_stage() {
+    let r = repo(&base_toml(""), TASKS);
+    // two days out is past the wait ceiling, so the stage halts where a nearer reset would sleep
+    let reset = jiff::Zoned::now()
+        .with_time_zone(jiff::tz::TimeZone::UTC)
+        .checked_add(jiff::Span::new().days(2))
+        .expect("two days ahead")
+        .strftime("%b %d at %I:%M%p")
+        .to_string();
+    script(
+        &r,
+        "src/fakeagent.sh",
+        &format!("echo 'hit your session limit resets {reset} (UTC)'\n{QUIET}"),
+    );
+    r.commit_all("a weekly-limited agent");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(digest.stages_run, 1, "{digest:#?}");
+    assert_eq!(digest.cost, 0.5, "{digest:#?}");
+    assert_eq!(ends(&events).len(), 1, "{events:#?}");
+    assert!(
+        digest
+            .halts
+            .iter()
+            .any(|h| h.contains(&reset) && h.contains("(UTC)")),
+        "{:?}",
+        digest.halts
     );
 }
 

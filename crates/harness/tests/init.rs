@@ -575,6 +575,55 @@ fn prune_keeps_the_comments_of_kept_keys() {
 }
 
 #[test]
+fn prune_keeps_a_blank_run_no_cut_touched() {
+    let repo = Repo::new();
+    seeded(
+        &repo,
+        "[check]\ncommand = \"make check\"\n\n\n# spaced out on purpose\nfail_name = \"x\"\ntimeout = \"30m\"\n",
+    );
+    let dropped = init::prune(&repo.root, false).expect("prune");
+    assert_eq!(dropped, ["check.timeout"]);
+    let text = read(&repo, ".enallagi/enallagi.toml");
+    let run: Vec<&str> = text
+        .lines()
+        .skip_while(|l| *l != "command = \"make check\"")
+        .take(4)
+        .collect();
+    assert_eq!(
+        run,
+        [
+            "command = \"make check\"",
+            "",
+            "",
+            "# spaced out on purpose"
+        ],
+        "{text}"
+    );
+}
+
+#[test]
+fn prune_collapses_a_blank_run_a_cut_made() {
+    let repo = Repo::new();
+    seeded(
+        &repo,
+        "[check]\ncommand = \"make check\"\n\ntimeout = \"30m\"\n\nfail_name = \"x\"\n",
+    );
+    let dropped = init::prune(&repo.root, false).expect("prune");
+    assert_eq!(dropped, ["check.timeout"]);
+    let text = read(&repo, ".enallagi/enallagi.toml");
+    let run: Vec<&str> = text
+        .lines()
+        .skip_while(|l| *l != "command = \"make check\"")
+        .take(3)
+        .collect();
+    assert_eq!(
+        run,
+        ["command = \"make check\"", "", "fail_name = \"x\""],
+        "{text}"
+    );
+}
+
+#[test]
 fn prune_drops_every_line_of_a_multiline_array() {
     let default = enallagi::config::DEFAULT_TOML;
     let start = default.find("harness_files = [").expect("harness_files");
@@ -1200,14 +1249,14 @@ fn node_repo() -> Repo {
     let repo = Repo::new();
     repo.write(
         "package.json",
-        "{\n  \"name\": \"adhd\",\n  \"scripts\": {\n    \"typecheck\": \"tsc --noEmit\",\n    \"test\": \"node --import tsx --test tests/*.test.ts\"\n  }\n}\n",
+        "{\n  \"name\": \"fixture\",\n  \"scripts\": {\n    \"typecheck\": \"tsc --noEmit\",\n    \"test\": \"node --import tsx --test tests/*.test.ts\"\n  }\n}\n",
     );
     repo.write(
         ".github/workflows/ci.yml",
         "name: ci\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - run: npm run typecheck\n      - run: npm test\n",
     );
     repo.write("tests/date.test.ts", "test('a date parses', () => {})\n");
-    repo.commit_all("adhd");
+    repo.commit_all("a node tree");
     repo
 }
 
@@ -1304,7 +1353,7 @@ fn init_names_the_file_a_detected_value_came_from() {
 #[test]
 fn two_runners_in_one_tree_write_no_keys() {
     let repo = node_repo();
-    repo.write("Cargo.toml", "[package]\nname = \"adhd\"\n");
+    repo.write("Cargo.toml", "[package]\nname = \"fixture\"\n");
     repo.commit_all("two runners");
     let report = install(&repo);
     let written = read(&repo, ".enallagi/enallagi.toml");

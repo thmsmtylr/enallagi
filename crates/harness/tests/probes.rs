@@ -96,7 +96,7 @@ fn probes_exit_0_every_probe_ran() {
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     assert_eq!(errors(&results), Vec::<&str>::new());
-    assert_eq!(results.len(), 24, "{}", render(&results));
+    assert_eq!(results.len(), 25, "{}", render(&results));
 }
 
 #[test]
@@ -626,6 +626,19 @@ fn a_longer_rewrite_of_one_friction_is_reported() {
         "{}",
         found[0].message
     );
+}
+
+// two unrelated frictions whose only shared long words are connective prose: `because`, `expected`, `nobody`, `which`
+const PROSE_SHARE_FIXTURE: &str = "
+friction: the build failed because clippy flagged an unused import which nobody expected
+friction: the fixture date drifted because the clock changed, which nobody expected
+";
+
+#[test]
+fn frictions_sharing_only_prose_are_not_repeats() {
+    let (repo, cfg) = seeded();
+    append(&repo, "PROGRESS.md", PROSE_SHARE_FIXTURE);
+    assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
 }
 
 fn with_driver(body: &str) -> (Repo, Config) {
@@ -1353,7 +1366,7 @@ fn a_refusal_in_a_heading_is_reported() {
 #[test]
 fn a_heading_lends_no_terms_to_its_body() {
     let (repo, cfg) = seeded();
-    repo.write("CONTRIBUTING.md", "# AI\nWe welcome every pull request.\n");
+    repo.write("CONTRIBUTING.md", "# AI\nWe will close it.\n");
     assert_eq!(policy(&repo, &cfg), Vec::new());
 }
 
@@ -1497,5 +1510,92 @@ fn a_done_block_naming_a_removed_test_is_quiet() {
         found.iter().all(|f| !f.message.contains("T-002")),
         "{}",
         render(&results)
+    );
+}
+
+fn drift(repo: &Repo, cfg: &Config) -> ProbeResult {
+    let ctx = ProbeCtx {
+        root: &repo.root,
+        cfg,
+        check: Some(&GREEN),
+        driver: false,
+    };
+    probes::run_all(&ctx, &["upstream-drift".to_string()])
+        .pop()
+        .expect("one result")
+        .1
+}
+
+fn git(root: &std::path::Path, args: &[&str]) -> String {
+    enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+}
+
+// a bare clone on disk, so the probe reads real refs and makes no network call
+fn tracked_clone(repo: &Repo) -> (tempfile::TempDir, String) {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let bare = dir.path().join("origin.git");
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            &repo.root.to_string_lossy(),
+            "origin.git",
+        ],
+    );
+    git(
+        &repo.root,
+        &["remote", "add", "origin", &bare.to_string_lossy()],
+    );
+    git(&repo.root, &["fetch", "-q", "origin"]);
+    let branch = git(&repo.root, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    git(
+        &repo.root,
+        &["branch", &format!("--set-upstream-to=origin/{branch}")],
+    );
+    (dir, branch)
+}
+
+#[test]
+fn a_branch_with_no_upstream_is_off() {
+    let (repo, cfg) = seeded();
+    let result = drift(&repo, &cfg);
+    assert!(
+        matches!(&result, ProbeResult::Off(m) if m.contains("tracks no upstream")),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn a_diverged_upstream_is_one_finding() {
+    let (repo, cfg) = seeded();
+    let (_origin, branch) = tracked_clone(&repo);
+    let base = git(&repo.root, &["rev-parse", "HEAD"]);
+    assert!(matches!(drift(&repo, &cfg), ProbeResult::Count(f) if f.is_empty()));
+
+    // the upstream moves on its own, and a checkout only behind it is no drift
+    repo.write("upstream.txt", "x");
+    repo.commit_all("the upstream's own commit");
+    git(&repo.root, &["push", "-q", "origin", &branch]);
+    git(&repo.root, &["reset", "-q", "--hard", &base]);
+    git(&repo.root, &["fetch", "-q", "origin"]);
+    assert!(matches!(drift(&repo, &cfg), ProbeResult::Count(f) if f.is_empty()));
+
+    repo.write("local.txt", "x");
+    repo.commit_all("the checkout's own commit");
+    let ProbeResult::Count(found) = drift(&repo, &cfg) else {
+        panic!("{:?}", drift(&repo, &cfg));
+    };
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].path, ".git/HEAD");
+    assert!(
+        found[0].message.contains(&format!(
+            "`git rev-list --count origin/{branch}..{branch}` -> 1"
+        )) && found[0].message.contains(&format!(
+            "`git rev-list --count {branch}..origin/{branch}` -> 1"
+        )),
+        "{}",
+        found[0].message
     );
 }
