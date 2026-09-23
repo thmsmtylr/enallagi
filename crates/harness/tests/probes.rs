@@ -525,6 +525,26 @@ fn learning_unenforced_reads_earned_rules() {
 }
 
 #[test]
+fn a_heading_that_only_starts_the_same_is_not_it() {
+    let (repo, cfg) = seeded();
+    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "DECISIONS.md");
+    let sections = "## Earned rules archive\n\n- [2026-09-20] an archived rule (`git log`).\n\n## Earned rules\n\n- [2026-09-20] a rule that names no file, no command and no hook.\n";
+    let text =
+        fs::read_to_string(&path)
+            .expect("decisions")
+            .replacen("## Earned rules\n", sections, 1);
+    fs::write(&path, &text).expect("write");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "learning-unenforced");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    let at = text
+        .lines()
+        .position(|l| l.starts_with("- [2026-09-20] a rule that names no file"))
+        .expect("rule");
+    assert_eq!(found[0].line, at + 1, "{}", render(&results));
+}
+
+#[test]
 fn an_earned_rule_counts_against_the_cap() {
     let (repo, cfg) = seeded();
     let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "DECISIONS.md");

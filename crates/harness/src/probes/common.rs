@@ -276,7 +276,7 @@ pub fn earned_rules(ctx: &ProbeCtx) -> Res<Vec<(usize, String)>> {
     let lines = lines_of(ctx.root, &decisions)?;
     Ok(entries_of(
         numbered(&lines)
-            .skip_while(|(_, line)| !line.starts_with("## Earned rules"))
+            .skip_while(|(_, line)| line.trim() != "## Earned rules")
             .skip(1)
             .take_while(|(_, line)| !line.starts_with("## ")),
     ))
