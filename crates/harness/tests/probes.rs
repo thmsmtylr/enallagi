@@ -1260,6 +1260,23 @@ fn a_verdict_first_in_a_rejection_is_not_read() {
 }
 
 #[test]
+fn a_dated_verdict_first_rejection_is_reported() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        &reviewed_block(
+            "T-002",
+            "review",
+            "  REJECTED 2026-09-21: Passed counts do not reproduce.\n",
+        ),
+    );
+    let found = rejection_stale(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("T-002"), "{}", found[0]);
+}
+
+#[test]
 fn a_mid_line_answer_silences_a_rejection() {
     let (repo, cfg) = seeded();
     let block = format!(

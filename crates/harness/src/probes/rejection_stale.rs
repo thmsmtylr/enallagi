@@ -6,6 +6,9 @@ use super::{Finding, ProbeCtx, ProbeResult};
 // every verdict and answer is written into notes: in turn, so only the last one is still open
 const VERDICTS: [&str; 5] = ["REJECTED", "VERIFIED", "VERIFIER", "IMPLEMENTER", "Passed"];
 
+// only a role names who wrote a note; a verdict before the date is that note's own verdict
+const ROLES: [&str; 2] = ["VERIFIER", "IMPLEMENTER"];
+
 // a later paragraph quotes an earlier verdict as `REJECTED:`, so only bare text is read
 fn outside_code(notes: &str) -> String {
     notes.split('`').step_by(2).collect::<Vec<_>>().join(" ")
@@ -23,14 +26,14 @@ fn is_date(word: &str) -> bool {
 }
 
 // `VERIFIER 2026-09-18:` and `2026-09-18 verifier:` both label a note, and the verdict is what follows.
-// The date is what makes the prefix a label: a bare `REJECTED:` opens that rejection's own reasons.
+// A date plus a role is what makes the prefix a label: `REJECTED 2026-09-18:` opens its own reasons.
 fn after_label(sentence: &str) -> Option<&str> {
     let (label, rest) = sentence.split_once(':')?;
     let words: Vec<&str> = label.split_whitespace().collect();
     let labelled = words.iter().any(|word| is_date(word))
         && words
             .iter()
-            .all(|word| is_date(word) || VERDICTS.iter().any(|v| v.eq_ignore_ascii_case(word)));
+            .all(|word| is_date(word) || ROLES.iter().any(|v| v.eq_ignore_ascii_case(word)));
     labelled.then(|| rest.trim_start())
 }
 
