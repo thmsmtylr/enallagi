@@ -286,18 +286,20 @@ pub fn turns_exhausted(log: &Log, cfg: &Config) -> ProbeResult {
         if let Kind::StageEnd {
             stage,
             turns: Some(t),
+            turn_cap,
             ..
         } = &e.kind
         {
-            if let Some(s) = cfg.stage.iter().find(|s| &s.name == stage) {
-                if crate::config::spent_turn_cap(s.turns, *t) {
-                    findings.push(cite(
-                        log,
-                        &events,
-                        &[i],
-                        &format!("stage {stage} exhausted its turn cap of {t}"),
-                    ));
-                }
+            // the cap a handed adjudicator ran under is the recorded one; config is read only for a log written before the field
+            let cap =
+                turn_cap.or_else(|| cfg.stage.iter().find(|s| &s.name == stage).map(|s| s.turns));
+            if cap.is_some_and(|cap| crate::config::spent_turn_cap(cap, *t)) {
+                findings.push(cite(
+                    log,
+                    &events,
+                    &[i],
+                    &format!("stage {stage} exhausted its turn cap of {t}"),
+                ));
             }
         }
     }
@@ -404,6 +406,7 @@ mod tests {
             cache_creation_input_tokens: None,
             cache_read_input_tokens: None,
             turns,
+            turn_cap: None,
         }
     }
 

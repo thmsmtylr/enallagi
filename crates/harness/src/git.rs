@@ -77,6 +77,26 @@ pub fn commit_paths(root: &Path, paths: &[&str], msg: &str) -> Result<bool, GitE
     Ok(true)
 }
 
+// the same directory as the main worktree names it, or None when this already is the main worktree.
+// A linked worktree is removed when its lane ends, so a file written there goes with it.
+pub fn main_worktree_path(dir: &Path) -> Option<PathBuf> {
+    // --show-prefix is empty when dir is a worktree's own top, and git() trims the trailing newline
+    // but not a leading empty line, so the prefix is asked for first or an empty one is lost
+    let out = git(dir, &["rev-parse", "--show-prefix", "--show-toplevel"]).ok()?;
+    let (prefix, top) = out.split_once('\n')?;
+    let listed = git(dir, &["worktree", "list", "--porcelain"]).ok()?;
+    // git lists the main worktree first
+    let main = listed.lines().next()?.strip_prefix("worktree ")?;
+    if main == top {
+        return None;
+    }
+    let mut path = PathBuf::from(main);
+    if !prefix.is_empty() {
+        path.push(prefix.trim_end_matches('/'));
+    }
+    Some(path)
+}
+
 // the harness directory's own repository once it has one; until then instance files share the product's
 pub fn state_root(root: &Path, harness_dir: &str) -> PathBuf {
     let dir = root.join(harness_dir);
@@ -253,6 +273,39 @@ mod tests {
                 "{var} reaches git: {dropped:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_linked_worktree_resolves_to_the_main_one() {
+        let r = Repo::new();
+        let wt = r.root.join("lane");
+        git(
+            &r.root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "lane/x",
+                &wt.to_string_lossy(),
+            ],
+        )
+        .expect("worktree add");
+        let real = |p: &Path| std::fs::canonicalize(p).expect("canonicalize");
+
+        assert_eq!(main_worktree_path(&r.root), None);
+        assert_eq!(main_worktree_path(&wt), Some(real(&r.root)));
+        std::fs::create_dir_all(wt.join(".enallagi")).expect("harness dir");
+        assert_eq!(
+            main_worktree_path(&wt.join(".enallagi")),
+            Some(real(&r.root).join(".enallagi"))
+        );
+
+        git(
+            &r.root,
+            &["worktree", "remove", "--force", &wt.to_string_lossy()],
+        )
+        .expect("remove");
     }
 
     #[test]
