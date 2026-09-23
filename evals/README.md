@@ -39,6 +39,10 @@ tree as unhealthy. The eval passes when the total is zero.
 It counts nothing until it establishes that `enallagi probe` ran. A non-zero exit, no `PROBE` line,
 or a `PROBE <name> ERROR` line each fail it before any total is printed.
 
+A probe that reports `OFF` never looked, so it adds nothing to the total, and the eval prints
+`cold-start off <count> <names>` before the total so the zero says which probes it covers. A run
+in which every probe reports `OFF` fails, because nothing was measured.
+
 ## A REJECT
 
 Run against `claude -p` on 2026-09-02, `--gate verifier` rejected the rule it was holding:
