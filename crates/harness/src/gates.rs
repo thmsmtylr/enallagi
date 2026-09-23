@@ -659,17 +659,18 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     }
     let why = parts.join("; ");
     let reason = format!("the verifier returned done and the scope gate rejected it: {why}");
-    // to review, not ready: the iteration's commits are on the branch, so what the block needs is
-    // another verdict, and `ready` hands the next implementer a task its own tree already carries
+    // to ready, not review: every scope refusal is answered by a code or block edit, and the
+    // implementer is the one role that may make it; its confirm-only arm finds the iteration's
+    // commits already on the branch and adds the `widened:` line or reverts the stray file
     force_back(
         ctx,
         "scope",
         &task,
-        "review",
+        "ready",
         &reason,
         &format!("chore({task}): harness scope gate rejected a done verdict"),
         &format!(
-            "{task} was forced back to review by the scope gate: {why}. The iteration's commits for {task} are on the branch."
+            "{task} was forced back to ready by the scope gate: {why}. The iteration's commits for {task} are on the branch; the next implement stage confirms them and answers the gate."
         ),
     )
 }
@@ -1474,7 +1475,14 @@ mod tests {
             assert!(events.iter().any(|e| matches!(&e.kind,
                 Kind::Gate { gate, pass, .. } if gate == "scope" && !*pass)));
             assert!(events.iter().any(|e| matches!(&e.kind,
-                Kind::TaskStatus { to, by, .. } if to == "review" && by == "scope")));
+                Kind::TaskStatus { to, by, .. } if to == "ready" && by == "scope")));
+            // the reason rides in the block, where the next implement stage reads it first
+            assert!(
+                self.tasks_text()
+                    .contains("gate: the verifier returned done and the scope gate rejected it"),
+                "{}",
+                self.tasks_text()
+            );
         }
     }
 
@@ -1975,11 +1983,11 @@ mod tests {
             "{}",
             out.reason
         );
-        assert!(env.tasks_text().contains("status: review"));
+        assert!(env.tasks_text().contains("status: ready"));
         assert!(
             env.warnings
                 .iter()
-                .any(|w| w.contains("forced back to review")
+                .any(|w| w.contains("forced back to ready")
                     && w.contains("commits for T-001 are on the branch")),
             "{:?}",
             env.warnings
@@ -1987,6 +1995,7 @@ mod tests {
         assert!(env
             .log()
             .contains("chore(T-001): harness scope gate rejected a done verdict"));
+        env.assert_rejection_events();
     }
 
     #[test]
@@ -2044,7 +2053,7 @@ mod tests {
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
         assert!(out.reason.contains("touched the harness"), "{}", out.reason);
-        assert!(env.tasks_text().contains("status: review"));
+        assert!(env.tasks_text().contains("status: ready"));
         assert!(env
             .log()
             .contains("chore(T-001): harness scope gate rejected a done verdict"));

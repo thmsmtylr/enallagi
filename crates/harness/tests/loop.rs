@@ -1848,8 +1848,8 @@ fn a_nested_install_refuses_a_grown_baseline() {
 
     let (digest, events) = go(&r, &opts(1));
     assert!(digest.landed.is_empty(), "{events:#?}");
-    // the iteration's commits are on the branch, so the block wants another verdict, not another build
-    assert_eq!(nested_status(&r).as_deref(), Some("review"));
+    // back to the implementer, the one role that can remove the line; the commits stay on the branch
+    assert_eq!(nested_status(&r).as_deref(), Some("ready"));
     let refusal = events.iter().find_map(|e| match &e.kind {
         Kind::Gate {
             gate, pass, reason, ..
@@ -1874,14 +1874,63 @@ criteria:\n\
   - it happens\n\
 EOF\n";
 
-// the widening lands in the implement round, so a review-only round's own bases already carry it
+// the implement round that follows a scope refusal finds its commits on the branch and answers the
+// gate: it adds the `widened:` line, commits no product change, and the task lands on the widening
+#[test]
+fn a_scope_refusal_is_answered_by_the_next_implement() {
+    let confirm = format!(
+        "if grep -q 'scope gate rejected it' .enallagi/TASKS.md; then\n\
+         awk '{{print}} /^scope: src\\/thing.ts, src\\/other.ts$/{{print \"widened: src/other.ts holds the flag\"}}' .enallagi/TASKS.md >.enallagi/TASKS.new\n\
+         mv .enallagi/TASKS.new .enallagi/TASKS.md\n\
+         else\n{WIDENED}fi\n"
+    );
+    let r = nested("exit 0\n", &confirm);
+
+    let (digest, events) = go(&r, &opts(3));
+    assert_eq!(digest.landed, vec!["T-001".to_string()], "{events:#?}");
+    let refusals = events
+        .iter()
+        .filter(|e| matches!(&e.kind, Kind::Gate { gate, pass, .. } if gate == "scope" && !*pass))
+        .count();
+    assert_eq!(refusals, 1, "{events:#?}");
+    assert!(events.iter().any(|e| matches!(&e.kind,
+        Kind::TaskStatus { to, by, .. } if to == "ready" && by == "scope")));
+    // one product commit: the confirm round committed nothing
+    let subjects = in_dir(&r.root, &["log", "--format=%s"]);
+    assert_eq!(
+        subjects.lines().filter(|l| *l == "T-001: stub").count(),
+        1,
+        "{subjects}"
+    );
+    let passed = events.iter().find_map(|e| match &e.kind {
+        Kind::Gate {
+            gate, pass, reason, ..
+        } if gate == "scope" && *pass && reason.contains("widened scope") => Some(reason.clone()),
+        _ => None,
+    });
+    let reason = passed.unwrap_or_else(|| panic!("no pass on the widening: {events:#?}"));
+    assert!(reason.contains("holds the flag"), "{reason}");
+    assert!(digest.halts.is_empty(), "{:?}", digest.halts);
+}
+
+// the widening lands in the first implement round, so the second round's own bases already carry
+// it and only the queued commit still shows it; a lane that widens silently twice halts the run
 #[test]
 fn a_review_round_reads_the_queued_scope() {
     let r = nested("exit 0\n", WIDENED);
 
-    let (digest, events) = go(&r, &opts(2));
+    let (digest, events) = go(&r, &opts(3));
     assert!(digest.landed.is_empty(), "{events:#?}");
-    assert_eq!(nested_status(&r).as_deref(), Some("review"));
+    assert_eq!(nested_status(&r).as_deref(), Some("ready"));
+    assert!(
+        digest
+            .halts
+            .iter()
+            .any(|h| h.contains("T-001 was refused by the scope gate twice this run")),
+        "{:?}",
+        digest.halts
+    );
+    assert_eq!(digest.iterations, 2, "{events:#?}");
     let refusals: Vec<String> = events
         .iter()
         .filter_map(|e| match &e.kind {

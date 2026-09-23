@@ -1064,7 +1064,7 @@ fn gate_scope_rejects_a_silent_widening() {
     assert!(stdout.contains("a `widened:` line"), "{out:?}");
     let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
     let block = &tasks[tasks.find("## [T-900]").expect("T-900")..];
-    assert!(block.contains("status: review"), "{block}");
+    assert!(block.contains("status: ready"), "{block}");
     assert!(
         block.contains("gate: ") && block.contains("widened scope: with b.txt"),
         "{block}"
