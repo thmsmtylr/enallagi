@@ -134,11 +134,12 @@ name = "task"
 when = "queue.takeable"
 stages = ["implement", "verify", "adjudicate"]
 
-# triage runs before discover: a block already queued is adjudicated before the scout files more.
+# triage runs before discover: a queued block is adjudicated before the scout files more, one dry round then discover.
 [[pipeline]]
 name = "triage"
 when = "queue.proposed"
 stages = ["adjudicate"]
+end_after_dry_rounds = 1
 
 [[pipeline]]
 name = "discover"

@@ -859,7 +859,7 @@ pub fn validate(
             let command = over
                 .and_then(|o| o.command.as_ref())
                 .or(cfg.agent.command.as_ref());
-            if !command.is_some_and(|c| !c.is_empty()) {
+            if command.is_none_or(|c| c.is_empty()) {
                 errs.push(ConfigError::CustomWithoutCommand(role.clone()));
             }
         } else {
@@ -1462,6 +1462,7 @@ mod tests {
         assert_eq!(c.layout.learnings_cap, 12);
         assert_eq!(c.layout.skills_dir, None);
         assert_eq!(c.stage[2].env["ENALLAGI_DRIVER"], "1");
+        assert_eq!(c.pipeline[2].end_after_dry_rounds, 1);
         assert_eq!(c.pipeline[3].end_after_dry_rounds, 2);
     }
 

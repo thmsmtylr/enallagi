@@ -408,6 +408,7 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         proposed_at_start: Vec::new(),
         dry_rounds: 0,
         dry_pipeline: None,
+        spent: Vec::new(),
         stopped: false,
         built: Vec::new(),
     };
@@ -439,6 +440,9 @@ struct Loop<'a> {
     proposed_at_start: Vec<String>,
     dry_rounds: u32,
     dry_pipeline: Option<String>,
+    // pipelines whose end_after_dry_rounds this run has spent; `choose` passes over them until a
+    // round leaves takeable work again
+    spent: Vec<String>,
     stopped: bool,
     // tasks whose pull-request branch this run built, in order, so a dependent task stacks on one
     built: Vec<String>,
@@ -642,8 +646,26 @@ impl<'a> Loop<'a> {
         if self.stopped {
             return false;
         }
+        // a round that left takeable work re-opens every pipeline a dry streak closed
+        if self.dry_rounds == 0 {
+            self.spent.clear();
+        }
         // an empty queue isn't exhaustion by itself; only end_after_dry_rounds consecutive empties are
-        pipeline.end_after_dry_rounds == 0 || self.dry_rounds < pipeline.end_after_dry_rounds
+        if pipeline.end_after_dry_rounds == 0 || self.dry_rounds < pipeline.end_after_dry_rounds {
+            return true;
+        }
+        // a spent ceiling closes this pipeline, not the run: the run goes on while a later
+        // pipeline's `when` still holds, so a block the adjudicator cannot decide hands the next
+        // round to discover rather than holding every round at triage
+        self.spent.push(pipeline.name.clone());
+        let next = self.choose();
+        if let Some(next) = &next {
+            self.digest.warnings.push(format!(
+                "{} spent its {} dry round(s); the next round takes {}.",
+                pipeline.name, pipeline.end_after_dry_rounds, next.name
+            ));
+        }
+        next.is_some()
     }
 
     fn state_root(&self) -> PathBuf {
@@ -1193,6 +1215,9 @@ impl<'a> Loop<'a> {
             if !self.opts.pipelines.is_empty()
                 && !self.opts.pipelines.contains(&self.cfg.pipeline[i].name)
             {
+                continue;
+            }
+            if self.spent.contains(&self.cfg.pipeline[i].name) {
                 continue;
             }
             let Ok(when) = config::parse_when(&self.cfg.pipeline[i].when) else {

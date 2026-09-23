@@ -17,6 +17,8 @@ The defaults are in `crates/harness/harness.default.toml`.
 A queue holding a `proposed` block and nothing takeable takes `triage`, so a block the operator
 queued is decided before the scout files more.
 `discover` ends the run after two dry rounds.
+`triage` has one: a round that leaves its proposed block undecided hands the next round to
+`discover`, and a round that leaves takeable work reopens it.
 
 Before selecting a task, an iteration reads the review comments on open pull requests
 from its own `task/` branches.

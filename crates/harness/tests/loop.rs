@@ -2789,6 +2789,60 @@ fn a_proposed_block_is_adjudicated_before_scouting() {
     assert_ne!(status_of(&r, "T-002").as_deref(), Some("proposed"));
 }
 
+// the shipped pipelines, not base_toml's copy: the ceiling under test is the default's own
+fn default_pipelines_toml(extra: &str) -> String {
+    let full = base_toml(extra);
+    let cut = full
+        .find("[[pipeline]]")
+        .expect("base_toml declares pipelines");
+    let stages = full.find("[[stage]]").expect("base_toml declares stages");
+    let rest = &full[stages..];
+    let after_stages = rest.find("\n[agent.").map(|i| &rest[i..]).unwrap_or("");
+    format!("{}{}", &full[..cut], after_stages)
+}
+
+#[test]
+fn an_undecided_block_hands_the_round_to_discover() {
+    let r = repo("", "");
+    let scout = script(&r, "src/fakescout.sh", QUIET);
+    let adj = adjudicator(&r, "");
+    let roles = format!(
+        "{}{}",
+        role_command("scout", &scout),
+        role_command("adjudicator", &adj)
+    );
+    write_toml(&r, &default_pipelines_toml(&roles));
+    r.write("TASKS.md", DONE_TASK);
+    r.commit_all("stubs");
+    queued_issue(&r);
+    installed(&r);
+    assert_eq!(status_of(&r, "T-002").as_deref(), Some("proposed"));
+
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["run", "--no-tui", "--iterations", "3"])
+        .current_dir(&r.root)
+        .env_remove("CI")
+        .output()
+        .expect("run enallagi run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let started: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains(" stage.start "))
+        .map(|l| {
+            if l.contains("stage=scout") {
+                "scout"
+            } else {
+                "other"
+            }
+        })
+        .collect();
+    // the queued block is decided first, then a round the adjudicator left dry goes to the scout
+    assert_eq!(started.first(), Some(&"other"), "{stdout}");
+    assert!(stdout.contains("stage=scout"), "{stdout}");
+    assert!(stdout.contains("triage spent its 1 dry round"), "{stdout}");
+    assert_eq!(status_of(&r, "T-002").as_deref(), Some("proposed"));
+}
+
 #[test]
 fn an_unknown_pipeline_name_is_refused() {
     let r = repo(&base_toml(""), TASKS);
