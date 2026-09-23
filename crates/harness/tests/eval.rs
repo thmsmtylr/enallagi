@@ -363,3 +363,19 @@ fn an_eval_with_no_prompt_needs_no_agent() {
     assert_eq!(r.code, 0, "stdout={} stderr={}", r.stdout, r.stderr);
     assert_eq!(last_line(&r.stdout), "EVAL case PASS");
 }
+
+#[test]
+fn a_prompt_that_is_not_a_file_is_a_fixture_error() {
+    let pkg = package();
+    let dir = pkg.path().join("evals").join("case");
+    write_exec(&dir.join("setup.sh"), "true");
+    write_exec(&dir.join("assert.sh"), "true");
+    fs::create_dir_all(dir.join("prompt.txt")).unwrap();
+
+    let r = run_eval(pkg.path(), "/bin/true {prompt}", &["case"]);
+    assert_eq!(r.code, 1, "stdout={} stderr={}", r.stdout, r.stderr);
+    assert_eq!(
+        last_line(&r.stdout),
+        "EVAL case ERROR (the fixture could not be built — nothing was measured)"
+    );
+}

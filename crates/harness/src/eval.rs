@@ -43,7 +43,12 @@ fn eval_dir(pkg: &Path, name: &str) -> PathBuf {
 }
 
 fn needs_agent(pkg: &Path, name: &str) -> bool {
-    eval_dir(pkg, name).join("prompt.txt").is_file()
+    // presence, not readability: a prompt.txt that is a directory or a broken symlink is a broken
+    // fixture, and reading it fails below, where is_file() would have silently skipped the agent
+    eval_dir(pkg, name)
+        .join("prompt.txt")
+        .symlink_metadata()
+        .is_ok()
 }
 
 fn list_evals(pkg: &Path) -> Vec<String> {
