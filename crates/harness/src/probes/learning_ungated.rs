@@ -31,7 +31,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         ));
     }
 
-    let held = entries.len() + earned(ctx, &decisions)?;
+    let held = entries.len() + common::earned_rules(ctx)?.len();
     if held > cap {
         found.push(common::finding(
             &learnings,
@@ -42,17 +42,4 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         ));
     }
     Ok(found)
-}
-
-fn earned(ctx: &ProbeCtx, decisions: &str) -> Res<usize> {
-    if !common::is_file(ctx.root, decisions) {
-        return Ok(0);
-    }
-    Ok(common::lines_of(ctx.root, decisions)?
-        .iter()
-        .skip_while(|line| !line.starts_with("## Earned rules"))
-        .skip(1)
-        .take_while(|line| !line.starts_with("## "))
-        .filter(|line| line.starts_with("- "))
-        .count())
 }
