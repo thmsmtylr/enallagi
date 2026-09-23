@@ -1301,12 +1301,13 @@ fn stale_path(text: &str) -> Result<Option<String>, String> {
     if count == 0 {
         return Ok(None);
     }
+    // an installed path may hold spaces, so it ends at the `:line` the probe printed, not at a space
+    let at_line = regex::Regex::new(r"^(.+?):[0-9]+( |$)").ok();
     Ok(Some(
         text.lines()
             .find_map(|l| l.strip_prefix("FINDING install-stale "))
-            .and_then(|rest| rest.split_whitespace().next())
-            .and_then(|at| at.rsplit_once(':'))
-            .map(|(path, _)| path.to_string())
+            .zip(at_line)
+            .and_then(|(rest, at)| Some(at.captures(rest)?[1].to_string()))
             .unwrap_or_else(|| format!("{count} file(s) the FINDING lines did not name")),
     ))
 }
@@ -2642,6 +2643,13 @@ mod tests {
                     FINDING install-stale .enallagi/RAILS.md:0 the installed copy differs\n\
                     FINDING install-stale .enallagi/roles/scout.md:0 the installed copy differs\n";
         assert_eq!(stale_path(text), Ok(Some(".enallagi/RAILS.md".to_string())));
+    }
+
+    #[test]
+    fn a_stale_path_may_hold_spaces() {
+        let text = "PROBE install-stale 1\n\
+                    FINDING install-stale my skills/foo.md:0 the installed copy differs\n";
+        assert_eq!(stale_path(text), Ok(Some("my skills/foo.md".to_string())));
     }
 
     #[test]
