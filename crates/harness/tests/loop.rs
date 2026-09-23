@@ -2432,6 +2432,19 @@ fn the_implement_prompt_names_a_rejected_attempt() {
 }
 
 #[test]
+fn the_implement_prompt_refuses_a_resent_diff() {
+    let r = repo("", "");
+    implementing(&r, REJECTED_TASK);
+    r.write("src/thing.ts", "first attempt\n");
+    r.commit_all("T-001: first attempt");
+
+    go(&r, &opts(1));
+    let prompt = implement_prompt(&r);
+    assert!(prompt.contains("Do not re-send a diff"), "{prompt}");
+    assert!(prompt.contains("rejected for the same reason"), "{prompt}");
+}
+
+#[test]
 fn a_task_with_no_attempt_leaves_the_prompt_alone() {
     let r = repo("", "");
     implementing(&r, REJECTED_TASK);
