@@ -42,6 +42,15 @@ fn eval_dir(pkg: &Path, name: &str) -> PathBuf {
     pkg.join("evals").join(name)
 }
 
+fn needs_agent(pkg: &Path, name: &str) -> bool {
+    // presence, not readability: a prompt.txt that is a directory or a broken symlink is a broken
+    // fixture, and reading it fails below, where is_file() would have silently skipped the agent
+    eval_dir(pkg, name)
+        .join("prompt.txt")
+        .symlink_metadata()
+        .is_ok()
+}
+
 fn list_evals(pkg: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(pkg.join("evals"))
         .map(|rd| {
@@ -140,13 +149,16 @@ fn run_one(pkg: &Path, name: &str, agent_argv: &[String], ablate: bool) -> Outco
         return Outcome::FixtureError;
     }
 
-    let prompt = match std::fs::read_to_string(dir.join("prompt.txt")) {
-        Ok(p) => p,
-        Err(_) => return Outcome::FixtureError,
-    };
-    // An agent that did not run is not a role that disobeyed.
-    if !run_agent(agent_argv, &prompt, &repo.root) {
-        return Outcome::AgentError;
+    // no prompt.txt is an eval that asks a role nothing, so no agent is spawned and none need be configured
+    if needs_agent(pkg, name) {
+        let prompt = match std::fs::read_to_string(dir.join("prompt.txt")) {
+            Ok(p) => p,
+            Err(_) => return Outcome::FixtureError,
+        };
+        // An agent that did not run is not a role that disobeyed.
+        if !run_agent(agent_argv, &prompt, &repo.root) {
+            return Outcome::AgentError;
+        }
     }
 
     if run_script(&dir.join("assert.sh"), &repo.root, None) {
@@ -190,11 +202,6 @@ const NO_AGENT: [&str; 2] = [
 ];
 
 pub fn run(pkg: &Path, names: &[String], agent: Option<Vec<String>>) -> anyhow::Result<bool> {
-    let agent_argv = match agent.or_else(|| resolve_agent(pkg)) {
-        Some(a) => a,
-        None => return Err(refuse(&NO_AGENT)),
-    };
-
     let names: Vec<String> = if names.is_empty() {
         list_evals(pkg)
     } else {
@@ -202,7 +209,7 @@ pub fn run(pkg: &Path, names: &[String], agent: Option<Vec<String>>) -> anyhow::
     };
     if names.is_empty() {
         let msg = format!(
-            "evals: nothing under {} to run. An eval is a directory with setup.sh, prompt.txt and assert.sh.",
+            "evals: nothing under {} to run. An eval is a directory with setup.sh and assert.sh, plus a prompt.txt when it asks a role something.",
             pkg.join("evals").display()
         );
         return Err(refuse(&[
@@ -210,6 +217,12 @@ pub fn run(pkg: &Path, names: &[String], agent: Option<Vec<String>>) -> anyhow::
             "evals: refusing to report a result for something that was never run.",
         ]));
     }
+
+    let agent_argv = match agent.or_else(|| resolve_agent(pkg)) {
+        Some(a) => a,
+        None if !names.iter().any(|n| needs_agent(pkg, n)) => Vec::new(),
+        None => return Err(refuse(&NO_AGENT)),
+    };
 
     let mut all_pass = true;
     for name in &names {
