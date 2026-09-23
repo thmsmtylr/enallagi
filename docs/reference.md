@@ -32,6 +32,7 @@ halts the run. The names are matched in `crates/harness/src/gates.rs`.
 | `commit-round` | a failed commit of TASKS.md and DECISIONS.md | adjudicate |
 | `adjudicator-halt` | an adjudicator output line opening with `halt` and naming a task id, and halts the run | adjudicate |
 | `dry-round` | a round that leaves no ready unattended task, counted toward `end_after_dry_rounds` | adjudicate |
+| `install-stale` | an installed file that drifted from what `enallagi init` writes now, read by spawning the binary | verify |
 
 ## Probes
 

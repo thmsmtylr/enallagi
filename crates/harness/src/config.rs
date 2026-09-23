@@ -43,6 +43,7 @@ pub const GATE_NAMES: &[&str] = &[
     "commit-round",
     "adjudicator-halt",
     "dry-round",
+    "install-stale",
 ];
 
 #[derive(Debug, thiserror::Error)]

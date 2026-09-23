@@ -891,6 +891,55 @@ fn a_stale_install_refuses_the_run_until_init() {
     assert!(out.contains("stage.start"), "{out}");
 }
 
+// the gate spawns current_exe(), which in-process would be the test binary, so this drives enallagi
+#[test]
+fn a_stale_install_fails_the_verify_stage() {
+    let r = Repo::new();
+    script(&r, "src/fakecheck.sh", "exit 0\n");
+    script(&r, "src/fakeagent.sh", QUIET);
+    let verify = script(
+        &r,
+        "src/fakeverify.sh",
+        &format!(
+            "printf 'drift\\n' >>.enallagi/RAILS.md\n\
+             {bin} tasks set-status T-001 done 'stub verified'\n{QUIET}",
+            bin = env!("CARGO_BIN_EXE_enallagi"),
+        ),
+    );
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+
+    let toml = base_toml(&format!(
+        "\n[agent.verifier]\ncommand = [\"{verify}\", \"{{prompt}}\", \"{{turns}}\"]\n"
+    ))
+    .replace(
+        r#"post = ["commit-verdict", "verdict", "scope"]"#,
+        r#"post = ["install-stale"]"#,
+    );
+    write_toml_at(&r, ".enallagi/enallagi.toml", &toml);
+    r.write(".enallagi/TASKS.md", REVIEW_TASK);
+    // the toml the install was rendered from just changed, and preflight refuses a stale install
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+    r.commit_all("a verifier that drifts the install");
+
+    let (_, out) = harness(&r.root, &["run", "--no-tui", "--iterations", "1"]);
+    let listed = out
+        .split_once("\nwarnings:\n")
+        .and_then(|(_, rest)| rest.split_once("Loop finished"))
+        .map(|(warnings, _)| warnings.to_string())
+        .unwrap_or_default();
+    assert!(listed.contains(".enallagi/RAILS.md"), "{out}");
+    assert!(listed.contains("re-run `enallagi init`"), "{out}");
+
+    let (_, events) = harness(&r.root, &["events", "--task", "T-001"]);
+    let gate = events
+        .lines()
+        .find(|l| l.contains("gate=install-stale"))
+        .unwrap_or_else(|| panic!("{events}"));
+    assert!(gate.contains("pass=false"), "{gate}");
+}
+
 const SKILL: &str = r#"
 [[skill]]
 id = "tdd"
