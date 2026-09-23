@@ -1243,6 +1243,40 @@ fn a_verdict_word_later_in_a_rejection_is_not_read() {
 }
 
 #[test]
+fn a_verdict_first_in_a_rejection_is_not_read() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        &reviewed_block(
+            "T-002",
+            "review",
+            "  REJECTED: Passed counts do not reproduce.\n",
+        ),
+    );
+    let found = rejection_stale(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("T-002"), "{}", found[0]);
+}
+
+#[test]
+fn a_dated_verdict_first_rejection_is_reported() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        &reviewed_block(
+            "T-002",
+            "review",
+            "  REJECTED 2026-09-21: Passed counts do not reproduce.\n",
+        ),
+    );
+    let found = rejection_stale(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("T-002"), "{}", found[0]);
+}
+
+#[test]
 fn a_mid_line_answer_silences_a_rejection() {
     let (repo, cfg) = seeded();
     let block = format!(
@@ -1251,6 +1285,63 @@ fn a_mid_line_answer_silences_a_rejection() {
     );
     append(&repo, "TASKS.md", &block);
     assert_eq!(rejection_stale(&repo, &cfg), Vec::<String>::new());
+}
+
+#[test]
+fn a_rejection_behind_a_role_label_is_reported() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        &reviewed_block(
+            "T-002",
+            "review",
+            "  VERIFIER 2026-09-18: REJECTED: the gate is red.\n",
+        ),
+    );
+    let found = rejection_stale(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("T-002"), "{}", found[0]);
+}
+
+#[test]
+fn a_prose_colon_prefix_is_not_a_rejection_label() {
+    let (repo, cfg) = seeded();
+    for (id, prose) in [
+        ("T-004", "the rejection point stands"),
+        ("T-005", "Reproduced at 2026-09-20"),
+    ] {
+        append(
+            &repo,
+            "TASKS.md",
+            &reviewed_block(
+                id,
+                "review",
+                &format!("{REJECTION}  {prose}: VERIFIED was never printed.\n"),
+            ),
+        );
+    }
+    let found = rejection_stale(&repo, &cfg);
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found[0].contains("T-004"), "{}", found[0]);
+    assert!(found[1].contains("T-005"), "{}", found[1]);
+}
+
+#[test]
+fn a_rejection_behind_a_dated_label_is_reported() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        &reviewed_block(
+            "T-003",
+            "review",
+            "  2026-09-18 verifier: REJECTED: the gate is red.\n",
+        ),
+    );
+    let found = rejection_stale(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("T-003"), "{}", found[0]);
 }
 
 #[test]
