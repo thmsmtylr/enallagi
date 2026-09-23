@@ -891,6 +891,55 @@ fn a_stale_install_refuses_the_run_until_init() {
     assert!(out.contains("stage.start"), "{out}");
 }
 
+// the gate spawns current_exe(), which in-process would be the test binary, so this drives enallagi
+#[test]
+fn a_stale_install_fails_the_verify_stage() {
+    let r = Repo::new();
+    script(&r, "src/fakecheck.sh", "exit 0\n");
+    script(&r, "src/fakeagent.sh", QUIET);
+    let verify = script(
+        &r,
+        "src/fakeverify.sh",
+        &format!(
+            "printf 'drift\\n' >>.enallagi/RAILS.md\n\
+             {bin} tasks set-status T-001 done 'stub verified'\n{QUIET}",
+            bin = env!("CARGO_BIN_EXE_enallagi"),
+        ),
+    );
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+
+    let toml = base_toml(&format!(
+        "\n[agent.verifier]\ncommand = [\"{verify}\", \"{{prompt}}\", \"{{turns}}\"]\n"
+    ))
+    .replace(
+        r#"post = ["commit-verdict", "verdict", "scope"]"#,
+        r#"post = ["install-stale"]"#,
+    );
+    write_toml_at(&r, ".enallagi/enallagi.toml", &toml);
+    r.write(".enallagi/TASKS.md", REVIEW_TASK);
+    // the toml the install was rendered from just changed, and preflight refuses a stale install
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+    r.commit_all("a verifier that drifts the install");
+
+    let (_, out) = harness(&r.root, &["run", "--no-tui", "--iterations", "1"]);
+    let listed = out
+        .split_once("\nwarnings:\n")
+        .and_then(|(_, rest)| rest.split_once("Loop finished"))
+        .map(|(warnings, _)| warnings.to_string())
+        .unwrap_or_default();
+    assert!(listed.contains(".enallagi/RAILS.md"), "{out}");
+    assert!(listed.contains("re-run `enallagi init`"), "{out}");
+
+    let (_, events) = harness(&r.root, &["events", "--task", "T-001"]);
+    let gate = events
+        .lines()
+        .find(|l| l.contains("gate=install-stale"))
+        .unwrap_or_else(|| panic!("{events}"));
+    assert!(gate.contains("pass=false"), "{gate}");
+}
+
 const SKILL: &str = r#"
 [[skill]]
 id = "tdd"
@@ -2082,6 +2131,54 @@ fn digest_and_probe_agree_past_the_turn_cap() {
     assert_eq!(in_digest, in_probe, "digest {in_digest}, probe {in_probe}");
 }
 
+// turns = 20 and one block handed at turns_per_block = 25 is a cap of 45, not 20
+fn adjudicating_at_turns(reported: u64) -> Repo {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = rejecting_verifier(&r);
+    let adj = script(
+        &r,
+        "src/fakeadj.sh",
+        &format!("echo '{{\"total_cost_usd\":0.5,\"num_turns\":{reported}}}'\n"),
+    );
+    let roles = format!(
+        "{}{}",
+        role_commands(&implement, &verify),
+        role_command("adjudicator", &adj)
+    );
+    let toml = base_toml(&roles)
+        .replace("[check]", "[queue]\nturns_per_block = 25\n\n[check]")
+        .replace(
+            "name = \"adjudicate\"\nrole = \"adjudicator\"\nturns = 5\n",
+            "name = \"adjudicate\"\nrole = \"adjudicator\"\nturns = 20\n",
+        );
+    write_toml(&r, &toml);
+    r.write("TASKS.md", TASKS);
+    r.write("src/filed.md", FILED);
+    r.commit_all("stubs");
+    r
+}
+
+#[test]
+fn a_handed_adjudicator_reads_one_turn_cap() {
+    use enallagi::probes::telemetry::{turns_exhausted, ProbeResult};
+    for (reported, named) in [(30, false), (45, true)] {
+        let r = adjudicating_at_turns(reported);
+        let (digest, _) = go(&r, &opts(1));
+        let in_digest = pipeline::digest_text(&digest).contains("adjudicate: turns");
+        let cfg = enallagi::config::load(&r.root).expect("config");
+        let log = enallagi::events::Log::open(&r.root.join(".enallagi"));
+        let ProbeResult::Count(findings) = turns_exhausted(&log, &cfg) else {
+            panic!("turns_exhausted could not read the log");
+        };
+        let in_probe = findings
+            .iter()
+            .any(|f| f.message.contains("stage adjudicate"));
+        assert_eq!(in_digest, named, "digest at {reported} turns");
+        assert_eq!(in_probe, named, "probe at {reported} turns");
+    }
+}
+
 #[test]
 fn an_uncapped_stage_is_not_named_as_a_turn_cap() {
     let toml = base_toml("").replace(
@@ -2730,8 +2827,8 @@ fn a_sigterm_stops_a_running_check() {
     );
 }
 
-#[test]
-fn a_sigterm_ends_the_limit_wait() {
+// the shape both limit-wait tests share: a limit three minutes out, then the operator ends the wait
+fn a_limit_wait_ended_by(end: impl FnOnce(&Repo, &std::process::Child)) -> Vec<Event> {
     let r = repo(&base_toml(""), TASKS);
     let reset = jiff::Zoned::now()
         .with_time_zone(jiff::tz::TimeZone::UTC)
@@ -2769,11 +2866,8 @@ fn a_sigterm_ends_the_limit_wait() {
     }
     assert_eq!(limits(&read()), 1, "no limit wait began: {:#?}", read());
 
-    let sent = std::process::Command::new("kill")
-        .args(["-TERM", &launcher.id().to_string()])
-        .status()
-        .expect("signal the launcher");
-    assert!(sent.success(), "TERM was not delivered");
+    end(&r, &launcher);
+
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while launcher.try_wait().expect("poll the launcher").is_none()
         && std::time::Instant::now() < deadline
@@ -2785,13 +2879,82 @@ fn a_sigterm_ends_the_limit_wait() {
         let _ = launcher.kill();
         let _ = launcher.wait();
     }
-    assert!(exited, "the launcher outlived the signal by 10s");
+    assert!(exited, "the launcher outlived the stop by 10s");
 
     let log = read();
     assert_eq!(limits(&log), 1, "{log:#?}");
     assert!(
         matches!(log.last().map(|e| &e.kind), Some(Kind::RunEnd { .. })),
         "{log:#?}"
+    );
+    log
+}
+
+// a wait the operator ended is that operator's halt, never a stage that could not start
+fn assert_operator_halt(log: &[Event], halt: &str) {
+    assert!(
+        log.iter()
+            .any(|e| matches!(&e.kind, Kind::Halt { halt: h, .. } if h == halt)),
+        "no {halt} halt: {log:#?}"
+    );
+    assert!(
+        !log.iter().any(
+            |e| matches!(&e.kind, Kind::Halt { reason, .. } if reason.contains("could not start"))
+        ),
+        "{log:#?}"
+    );
+}
+
+#[test]
+fn a_sigterm_ends_the_limit_wait() {
+    let log = a_limit_wait_ended_by(|_, launcher| {
+        let sent = std::process::Command::new("kill")
+            .args(["-TERM", &launcher.id().to_string()])
+            .status()
+            .expect("signal the launcher");
+        assert!(sent.success(), "TERM was not delivered");
+    });
+    assert_operator_halt(&log, "signal");
+}
+
+#[test]
+fn a_stop_file_ends_the_limit_wait() {
+    let log = a_limit_wait_ended_by(|r, _| {
+        let dir = enallagi::config::harness_dir(&r.root);
+        let stop = enallagi::config::instance_path(&r.root, &dir, "STOP");
+        std::fs::write(&stop, b"").unwrap_or_else(|e| panic!("write {}: {e}", stop.display()));
+    });
+    assert_operator_halt(&log, "stop");
+}
+
+#[test]
+fn a_weekly_limit_halt_still_books_the_stage() {
+    let r = repo(&base_toml(""), TASKS);
+    // two days out is past the wait ceiling, so the stage halts where a nearer reset would sleep
+    let reset = jiff::Zoned::now()
+        .with_time_zone(jiff::tz::TimeZone::UTC)
+        .checked_add(jiff::Span::new().days(2))
+        .expect("two days ahead")
+        .strftime("%b %d at %I:%M%p")
+        .to_string();
+    script(
+        &r,
+        "src/fakeagent.sh",
+        &format!("echo 'hit your session limit resets {reset} (UTC)'\n{QUIET}"),
+    );
+    r.commit_all("a weekly-limited agent");
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(digest.stages_run, 1, "{digest:#?}");
+    assert_eq!(digest.cost, 0.5, "{digest:#?}");
+    assert_eq!(ends(&events).len(), 1, "{events:#?}");
+    assert!(
+        digest
+            .halts
+            .iter()
+            .any(|h| h.contains(&reset) && h.contains("(UTC)")),
+        "{:?}",
+        digest.halts
     );
 }
 
@@ -2929,6 +3092,29 @@ fn sync_prunes_a_removed_skill() {
         r.root.join(".enallagi/skills/mine/SKILL.md").is_file(),
         "an unlocked skill was pruned"
     );
+}
+
+#[test]
+fn sync_prunes_nothing_on_a_bad_lock_id() {
+    let r = synced_extra_skill();
+    let lock = enallagi::skills::lock_path(&r.root, ".enallagi");
+    let text = std::fs::read_to_string(&lock).expect("lock");
+    std::fs::write(
+        &lock,
+        format!(
+            "{text}\n[[skill]]\nid = \"zz/../victim\"\nsource = \"path:vendor/victim\"\nsha256 = \"0\"\n"
+        ),
+    )
+    .expect("append a bad lock id");
+
+    write_toml(&r, &base_toml(""));
+    let (code, out) = harness(&r.root, &["skills", "sync"]);
+    assert_ne!(code, 0, "{out}");
+    assert!(
+        r.root.join(".enallagi/skills/security/SKILL.md").is_file(),
+        "a pruned directory went before the bad id was read: {out}"
+    );
+    assert_eq!(locked_rev(&r, "security").as_deref(), Some("v1"), "{out}");
 }
 
 #[test]

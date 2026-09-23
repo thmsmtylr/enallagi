@@ -11,6 +11,63 @@ const FRICTION_OVERLAP: f64 = 0.5;
 const RARE_SHARED: usize = 3;
 // shorter words are the connective prose that a near-miss pair shares, `lane` and `time` in FRICTION_FIXTURE
 const RARE_WORD_LEN: usize = 5;
+// PROSE_WORDS: closed-class words of RARE_WORD_LEN or more, dropped before RARE_SHARED counts; PROSE_SHARE_FIXTURE's pair falls 4 -> 1, LONG_REPEAT_FIXTURE's 7 -> 6, this repo's PROGRESS.md:136 and :199 hold at 3
+const PROSE_WORDS: [&str; 54] = [
+    "about",
+    "after",
+    "again",
+    "against",
+    "already",
+    "although",
+    "always",
+    "another",
+    "anything",
+    "because",
+    "before",
+    "being",
+    "below",
+    "between",
+    "cannot",
+    "could",
+    "during",
+    "either",
+    "enough",
+    "every",
+    "everything",
+    "except",
+    "further",
+    "however",
+    "instead",
+    "itself",
+    "might",
+    "neither",
+    "nobody",
+    "nothing",
+    "other",
+    "others",
+    "rather",
+    "really",
+    "should",
+    "since",
+    "something",
+    "still",
+    "their",
+    "there",
+    "these",
+    "those",
+    "through",
+    "under",
+    "until",
+    "where",
+    "whether",
+    "which",
+    "while",
+    "whose",
+    "within",
+    "without",
+    "would",
+    "yourself",
+];
 
 struct Group {
     first: BTreeSet<String>,
@@ -42,7 +99,11 @@ fn rare_shared(
     spread: &HashMap<String, usize>,
 ) -> usize {
     a.intersection(b)
-        .filter(|w| w.len() >= RARE_WORD_LEN && spread.get(*w) == Some(&2))
+        .filter(|w| {
+            w.len() >= RARE_WORD_LEN
+                && spread.get(*w) == Some(&2)
+                && !PROSE_WORDS.contains(&w.as_str())
+        })
         .count()
 }
 
@@ -128,4 +189,35 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             ))
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn counted(words: &[&str]) -> usize {
+        let pair: BTreeSet<String> = words.iter().map(|w| w.to_string()).collect();
+        let spread: HashMap<String, usize> = words.iter().map(|w| (w.to_string(), 2)).collect();
+        rare_shared(&pair, &pair, &spread)
+    }
+
+    #[test]
+    fn each_prose_word_is_dropped_from_rare_shared() {
+        for word in PROSE_WORDS {
+            // an entry under RARE_WORD_LEN reads as cover the length filter already gives
+            assert!(word.len() >= RARE_WORD_LEN, "{word}");
+            assert_eq!(counted(&[word]), 0, "{word}");
+        }
+        assert_eq!(counted(&["clippy"]), 1);
+    }
+
+    #[test]
+    fn prose_words_never_carry_a_pair_to_rare_shared() {
+        let content = ["clippy", "fixture", "unused"];
+        let mut shared = PROSE_WORDS.to_vec();
+        shared.extend(&content[..RARE_SHARED - 1]);
+        assert_eq!(counted(&shared), RARE_SHARED - 1);
+        shared.push(content[RARE_SHARED - 1]);
+        assert_eq!(counted(&shared), RARE_SHARED);
+    }
 }

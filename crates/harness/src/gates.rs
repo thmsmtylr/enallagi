@@ -72,6 +72,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "commit-round" => commit_round(ctx),
         "adjudicator-halt" => adjudicator_halt(ctx),
         "dry-round" => dry_round(ctx),
+        "install-stale" => install_stale(ctx),
         other => fail(format!("no such gate: {other}")),
     };
     let task = ctx.task.clone().unwrap_or_default();
@@ -416,6 +417,34 @@ fn commit_files(root: &Path, base: &str, task: &str, filter: &str) -> Vec<String
     files
 }
 
+// the baseline lines the task's own commits add and do not take back: each commit's removals are
+// netted against what the earlier ones added, so an add a later commit reverses is not growth
+fn baseline_lines_added(root: &Path, inner: &str, base: &str, task: &str) -> Vec<String> {
+    let mut added: Vec<String> = Vec::new();
+    for sha in task_commits(root, base, task) {
+        let diff = git(root, &["show", "--format=", &sha, "--", inner]).unwrap_or_default();
+        // a failure name may itself start with + or -, so the file headers are told apart by
+        // position, not by a doubled prefix: everything before the first hunk is a header
+        let body: Vec<&str> = diff
+            .lines()
+            .skip_while(|l| !l.starts_with("@@"))
+            .filter(|l| !l.starts_with("@@"))
+            .collect();
+        for gone in body.iter().filter(|l| l.starts_with('-')) {
+            if let Some(at) = added.iter().position(|line| line == &gone[1..]) {
+                added.remove(at);
+            }
+        }
+        for new in body
+            .iter()
+            .filter(|l| l.starts_with('+') && !l.starts_with("+#"))
+        {
+            added.push(new[1..].to_string());
+        }
+    }
+    added
+}
+
 fn task_commits(root: &Path, base: &str, task: &str) -> Vec<String> {
     let range = format!("{base}..HEAD");
     git(
@@ -583,12 +612,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     // the baseline only ever shrinks; a line the task's own commits ADD is a red check made green by
     // hand, whatever rows: says
     let grew = at_base(ctx, &rel(ctx, ".check-baseline")).is_some_and(|(repo, inner, base)| {
-        task_commits(&repo, &base, &task).iter().any(|sha| {
-            git(&repo, &["show", "--format=", sha, "--", &inner])
-                .unwrap_or_default()
-                .lines()
-                .any(|l| l.starts_with('+') && !l.starts_with("++") && !l.starts_with("+#"))
-        })
+        !baseline_lines_added(&repo, &inner, &base, &task).is_empty()
     });
 
     let unexplained = widening.is_some() && widened.is_empty();
@@ -1233,6 +1257,58 @@ fn judged(report: &CheckReport) -> GateOutcome {
     fail(format!(
         "check RED, not on the baseline: {}; check tail: {tail3}",
         report.unforgiven.join(", ")
+    ))
+}
+
+// the probe answers from the templates its own binary compiled in, so the gate spawns the binary
+// the check just rebuilt instead of reading them in this process
+fn install_stale(ctx: &mut GateCtx) -> GateOutcome {
+    let spawned = std::env::current_exe()
+        .map_err(|e| e.to_string())
+        .and_then(|exe| {
+            Command::new(exe)
+                .args(["probe", "install-stale"])
+                .current_dir(ctx.root)
+                .output()
+                .map_err(|e| e.to_string())
+        });
+    let text = match spawned {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).into_owned(),
+        Err(err) => return fail(format!("`enallagi probe install-stale` did not run: {err}")),
+    };
+    let first = match stale_path(&text) {
+        Err(reason) => return fail(reason),
+        Ok(None) => return pass("`enallagi probe install-stale` -> PROBE install-stale 0"),
+        Ok(Some(path)) => path,
+    };
+    let reason = format!("the install is stale at {first}; re-run `enallagi init`");
+    ctx.warnings.push(reason.clone());
+    fail(reason)
+}
+
+// an absent count is never a zero: the probe has to have said what it read
+fn stale_path(text: &str) -> Result<Option<String>, String> {
+    let counted = text
+        .lines()
+        .find_map(|l| l.strip_prefix("PROBE install-stale "))
+        .and_then(|rest| rest.trim().parse::<usize>().ok());
+    let Some(count) = counted else {
+        return Err(format!(
+            "`enallagi probe install-stale` printed no count: {}",
+            text.replace('\n', " ").trim()
+        ));
+    };
+    if count == 0 {
+        return Ok(None);
+    }
+    // an installed path may hold spaces, so it ends at the `:line` the probe printed, not at a space
+    let at_line = regex::Regex::new(r"^(.+?):[0-9]+( |$)").ok();
+    Ok(Some(
+        text.lines()
+            .find_map(|l| l.strip_prefix("FINDING install-stale "))
+            .zip(at_line)
+            .and_then(|(rest, at)| Some(at.captures(rest)?[1].to_string()))
+            .unwrap_or_else(|| format!("{count} file(s) the FINDING lines did not name")),
     ))
 }
 
@@ -1982,6 +2058,84 @@ mod tests {
     }
 
     #[test]
+    fn scope_nets_a_baseline_line_added_then_removed() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", ".check-baseline", "none — harness");
+        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write(".check-baseline", "alpha\nbeta\n");
+        env.repo.commit_all("T-001 baseline grew");
+        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.commit_all("T-001 remove");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        assert!(env.tasks_text().contains("status: done"));
+    }
+
+    #[test]
+    fn scope_rejects_a_baseline_add_with_a_removal() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", ".check-baseline", "none — harness");
+        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write(".check-baseline", "alpha\nbeta\n");
+        env.repo.commit_all("T-001 baseline grew");
+        env.repo.write(".check-baseline", "beta\n");
+        env.repo.commit_all("T-001 drop alpha");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(
+            out.reason
+                .contains("added a line to .check-baseline, and the baseline only ever shrinks"),
+            "{}",
+            out.reason
+        );
+        env.assert_rejection_events();
+    }
+
+    #[test]
+    fn scope_rejects_a_plus_prefixed_baseline_add() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", ".check-baseline", "none — harness");
+        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write(".check-baseline", "alpha\n+beta\n");
+        env.repo.commit_all("T-001 baseline grew");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(
+            out.reason
+                .contains("added a line to .check-baseline, and the baseline only ever shrinks"),
+            "{}",
+            out.reason
+        );
+        env.assert_rejection_events();
+    }
+
+    #[test]
+    fn scope_nets_a_minus_prefixed_baseline_add() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", ".check-baseline", "none — harness");
+        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write(".check-baseline", "alpha\n-beta\n");
+        env.repo.commit_all("T-001 baseline grew");
+        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.commit_all("T-001 remove");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        assert!(env.tasks_text().contains("status: done"));
+    }
+
+    #[test]
     fn scope_ignores_an_operator_baseline_line() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", ".check-baseline", "none — harness");
@@ -2476,6 +2630,31 @@ mod tests {
             std::fs::read_to_string(repo.root.join("ran.txt")).expect("ran.txt"),
             "forced\nplain\n"
         );
+    }
+
+    #[test]
+    fn a_count_of_zero_leaves_no_stale_path() {
+        assert_eq!(stale_path("PROBE install-stale 0\n"), Ok(None));
+    }
+
+    #[test]
+    fn the_first_finding_line_names_the_path() {
+        let text = "PROBE install-stale 2\n\
+                    FINDING install-stale .enallagi/RAILS.md:0 the installed copy differs\n\
+                    FINDING install-stale .enallagi/roles/scout.md:0 the installed copy differs\n";
+        assert_eq!(stale_path(text), Ok(Some(".enallagi/RAILS.md".to_string())));
+    }
+
+    #[test]
+    fn a_stale_path_may_hold_spaces() {
+        let text = "PROBE install-stale 1\n\
+                    FINDING install-stale my skills/foo.md:0 the installed copy differs\n";
+        assert_eq!(stale_path(text), Ok(Some("my skills/foo.md".to_string())));
+    }
+
+    #[test]
+    fn a_run_with_no_count_line_is_an_error() {
+        assert!(stale_path("running 0 tests\n").is_err());
     }
 
     #[test]
