@@ -142,12 +142,14 @@ pub fn prune(
     if gone.is_empty() {
         return Ok(Vec::new());
     }
-    let base = root.join(skills_dir(cfg, preset));
+    // a hand-edited lock id becomes a directory to delete, so every id is checked before any directory goes
     for e in &gone {
-        // a hand-edited lock id becomes a directory to delete, so it gets the same check as a declared one
         if !valid_id(&e.id) {
             return Err(SkillError::BadId { id: e.id.clone() });
         }
+    }
+    let base = root.join(skills_dir(cfg, preset));
+    for e in &gone {
         match fs::remove_dir_all(base.join(&e.id)) {
             Err(err) if err.kind() != std::io::ErrorKind::NotFound => return Err(err.into()),
             _ => {}

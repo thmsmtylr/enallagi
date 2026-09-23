@@ -32,6 +32,7 @@ halts the run. The names are matched in `crates/harness/src/gates.rs`.
 | `commit-round` | a failed commit of TASKS.md and DECISIONS.md | adjudicate |
 | `adjudicator-halt` | an adjudicator output line opening with `halt` and naming a task id, and halts the run | adjudicate |
 | `dry-round` | a round that leaves no ready unattended task, counted toward `end_after_dry_rounds` | adjudicate |
+| `install-stale` | an installed file that drifted from what `enallagi init` writes now, read by spawning the binary | verify |
 
 ## Probes
 
@@ -58,6 +59,7 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `plain-record` | a commit subject, note or printed line that comments instead of recording |
 | `install-stale` | an installed file that differs from what `enallagi init` writes now |
 | `contribution-policy` | a guide sentence that refuses or conditions generated changes |
+| `upstream-drift` | the checkout's branch and its upstream each carrying commits the other lacks |
 | `verdict-flip` | a task flipped from `done` to `ready` more than once in one run |
 | `rejection-repeat` | one rejection reason repeated across tasks |
 | `stage-outlier` | a stage over twice its role's median time or cost |
@@ -74,6 +76,14 @@ Unknown keys are refused per table.
 The fields are declared in `crates/harness/src/config.rs`.
 
 Every table and key, with its default, is in [configuration.md](configuration.md).
+
+`[pr] per_task = true` hands the operator one pushed branch per landed task.
+The checkout's own branch then follows its own tracking ref and carries nothing else.
+With `per_task = false` a lane fast-forwards the checkout's branch and pushes nothing.
+
+That split needs the harness documents in a repository of their own.
+When they share the product repository, `by_branch` is false even under `per_task = true`.
+Lane commits then fast-forward into the checkout, exactly as they do under `per_task = false`.
 
 A task's own `model:` and `effort:` lines win over `[agent]` and `[agent.<role>]`.
 

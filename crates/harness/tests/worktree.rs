@@ -84,18 +84,16 @@ fn harness(root: &Path, args: &[&str]) -> (i32, String) {
     (out.status.code().unwrap_or(-1), text)
 }
 
-#[test]
-fn the_lane_worktree_is_named_for_watch() {
+fn lane_repo(tools: &Path) -> Repo {
     let r = Repo::new();
-    let tools = tempfile::tempdir().expect("tools");
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
-    std::fs::write(
-        r.root.join(".enallagi/enallagi.toml"),
-        stub_config(tools.path()),
-    )
-    .expect("config");
+    std::fs::write(r.root.join(".enallagi/enallagi.toml"), stub_config(tools)).expect("config");
     std::fs::write(r.root.join(".enallagi/TASKS.md"), "# TASKS\n").expect("queue");
+    // the rendered files name the configured check, so the install is rebuilt on the stub one or
+    // the lane's run refuses before its first stage
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
     let state = r.root.join(".enallagi");
     // the nested state repo is created by init with no identity, and a CI runner has no global one
     for (key, value) in [("user.email", "t@t"), ("user.name", "t")] {
@@ -106,6 +104,27 @@ fn the_lane_worktree_is_named_for_watch() {
         &state,
         &["-c", "commit.gpgsign=false", "commit", "-q", "-m", "queue"],
     );
+    r
+}
+
+fn remove_lanes(r: &Repo) {
+    for repo in [&r.root, &r.root.join(".enallagi")] {
+        if let Ok(listed) = enallagi::git::git(repo, &["worktree", "list"]) {
+            for wt in listed.lines().filter_map(|l| l.split_whitespace().next()) {
+                if wt.contains("/worktrees/lane-") {
+                    let _ = enallagi::git::git(repo, &["worktree", "remove", "--force", wt]);
+                }
+            }
+        }
+        let _ = enallagi::git::git(repo, &["branch", "-D", "--", "lane"]);
+    }
+}
+
+#[test]
+fn the_lane_worktree_is_named_for_watch() {
+    let tools = tempfile::tempdir().expect("tools");
+    let r = lane_repo(tools.path());
+    let state = r.root.join(".enallagi");
 
     let (_code, out) = harness(&r.root, &["worktree", "1"]);
 
@@ -126,14 +145,32 @@ fn the_lane_worktree_is_named_for_watch() {
     );
     assert!(line.ends_with(" && enallagi watch"), "{line}");
 
-    for repo in [&r.root, &state] {
-        if let Ok(listed) = enallagi::git::git(repo, &["worktree", "list"]) {
-            for wt in listed.lines().filter_map(|l| l.split_whitespace().next()) {
-                if wt.contains("/worktrees/lane-") {
-                    let _ = enallagi::git::git(repo, &["worktree", "remove", "--force", wt]);
-                }
-            }
-        }
-        let _ = enallagi::git::git(repo, &["branch", "-D", "--", "lane"]);
+    remove_lanes(&r);
+}
+
+// the lane worktree is removed when the lane ends and the log is ignored, so a log the lane wrote
+// inside it is a run nobody can read back
+#[test]
+fn a_lanes_events_land_in_the_parents_log() {
+    let tools = tempfile::tempdir().expect("tools");
+    let r = lane_repo(tools.path());
+    let state = r.root.join(".enallagi");
+
+    let (code, out) = harness(&r.root, &["worktree", "1"]);
+    assert_eq!(code, 0, "{out}");
+
+    let log = std::fs::read_to_string(state.join("events.jsonl")).expect("the parent's log");
+    for kind in [r#""kind":"run.start""#, r#""kind":"run.end""#] {
+        assert!(log.contains(kind), "{kind} missing from:\n{log}");
     }
+
+    // `enallagi events` knows nothing about worktrees: it reads the log the lane wrote
+    let (code, printed) = harness(&r.root, &["events"]);
+    assert_eq!(code, 0, "{printed}");
+    assert!(printed.contains("run.start"), "{printed}");
+
+    let tracked = git(&state, &["ls-files"]);
+    assert!(!tracked.contains("events.jsonl"), "{tracked}");
+
+    remove_lanes(&r);
 }

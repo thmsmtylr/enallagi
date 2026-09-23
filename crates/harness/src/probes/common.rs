@@ -263,14 +263,38 @@ pub fn rail_rows(ctx: &ProbeCtx) -> Res<Vec<RailRow>> {
 }
 
 pub fn learning_entries(ctx: &ProbeCtx) -> Res<Vec<(usize, String)>> {
-    let mut entries: Vec<(usize, String)> = Vec::new();
-    let mut open_at: Option<usize> = None;
-    for (index, line) in lines_of(ctx.root, &instance(ctx, "LEARNINGS.md"))?
+    let lines = lines_of(ctx.root, &instance(ctx, "LEARNINGS.md"))?;
+    Ok(entries_of(numbered(&lines)))
+}
+
+// a rule the loop earned sits under `## Earned rules` in DECISIONS.md, and `## Rejected findings` below it is not one
+pub fn earned_rules(ctx: &ProbeCtx) -> Res<Vec<(usize, String)>> {
+    let decisions = instance(ctx, "DECISIONS.md");
+    if !is_file(ctx.root, &decisions) {
+        return Ok(Vec::new());
+    }
+    let lines = lines_of(ctx.root, &decisions)?;
+    Ok(entries_of(
+        numbered(&lines)
+            .skip_while(|(_, line)| line.trim() != "## Earned rules")
+            .skip(1)
+            .take_while(|(_, line)| !line.starts_with("## ")),
+    ))
+}
+
+fn numbered(lines: &[String]) -> impl Iterator<Item = (usize, &String)> {
+    lines
         .iter()
         .enumerate()
-    {
+        .map(|(index, line)| (index + 1, line))
+}
+
+fn entries_of<'a>(lines: impl Iterator<Item = (usize, &'a String)>) -> Vec<(usize, String)> {
+    let mut entries: Vec<(usize, String)> = Vec::new();
+    let mut open_at: Option<usize> = None;
+    for (line_no, line) in lines {
         if line.starts_with("- ") {
-            entries.push((index + 1, line.clone()));
+            entries.push((line_no, line.clone()));
             open_at = Some(entries.len() - 1);
         } else if let Some(at) = open_at {
             if line.starts_with("  ") && !line.trim().is_empty() {
@@ -283,7 +307,7 @@ pub fn learning_entries(ctx: &ProbeCtx) -> Res<Vec<(usize, String)>> {
             open_at = None;
         }
     }
-    Ok(entries)
+    entries
 }
 
 pub struct TaskBlock {
