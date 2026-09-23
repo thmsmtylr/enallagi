@@ -22,6 +22,7 @@ mod rail_unenforced;
 mod rejection_stale;
 mod skill_ungated;
 mod spec_untested;
+mod upstream_drift;
 
 use crate::config::Config;
 use std::path::Path;
@@ -74,6 +75,7 @@ pub const NAMES: &[&str] = &[
     "install-stale",
     "prompt-unsubstituted",
     "contribution-policy",
+    "upstream-drift",
     "verdict-flip",
     "rejection-repeat",
     "stage-outlier",
@@ -84,7 +86,7 @@ pub const NAMES: &[&str] = &[
 
 type ProbeFn = fn(&ProbeCtx) -> ProbeResult;
 
-fn registry() -> [(&'static str, ProbeFn); 24] {
+fn registry() -> [(&'static str, ProbeFn); 25] {
     [
         ("spec-untested", spec_untested::probe),
         ("queue-uncovered", queue_uncovered::probe),
@@ -104,6 +106,7 @@ fn registry() -> [(&'static str, ProbeFn); 24] {
         ("install-stale", install_stale::probe),
         ("prompt-unsubstituted", prompt_unsubstituted::probe),
         ("contribution-policy", contribution_policy::probe),
+        ("upstream-drift", upstream_drift::probe),
         ("verdict-flip", telemetry_probe::verdict_flip),
         ("rejection-repeat", telemetry_probe::rejection_repeat),
         ("stage-outlier", telemetry_probe::stage_outlier),

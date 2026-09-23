@@ -610,12 +610,19 @@ fn drop_lines(text: &str, dropped: &[String]) -> String {
     }
     drop_empty_tables(&lines, &mut keep);
     let mut out = String::new();
+    // a blank run collapses only where a cut sat inside it, so an operator's own spacing survives; the head of the file counts as a cut, which is what drops a leading blank line
     let mut blank = true;
-    for (line, _) in lines.iter().zip(&keep).filter(|(_, k)| **k) {
-        if line.trim().is_empty() && blank {
+    let mut cut_above = true;
+    for (line, kept) in lines.iter().zip(&keep) {
+        if !*kept {
+            cut_above = true;
+            continue;
+        }
+        if line.trim().is_empty() && blank && cut_above {
             continue;
         }
         blank = line.trim().is_empty();
+        cut_above = false;
         out.push_str(line);
         out.push('\n');
     }
