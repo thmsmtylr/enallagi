@@ -1,3 +1,5 @@
+//! `enallagi watch` -- attaches the TUI to the live round, which is the newest lane's log when the parent is not running one.
+
 use std::path::{Path, PathBuf};
 
 pub fn run() -> anyhow::Result<i32> {

@@ -1,3 +1,5 @@
+//! The check exited non-zero. The finding names the first failing target and the first failure inside it, so the log is not the only record of what went red.
+
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
 

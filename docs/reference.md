@@ -60,12 +60,17 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `install-stale` | an installed file that differs from what `enallagi init` writes now |
 | `contribution-policy` | a guide sentence that refuses or conditions generated changes |
 | `upstream-drift` | the checkout's branch and its upstream each carrying commits the other lacks |
+| `branch-protection` | what this checkout and a host tool can establish about the default branch |
 | `verdict-flip` | a task flipped from `done` to `ready` more than once in one run |
 | `rejection-repeat` | one rejection reason repeated across tasks |
 | `stage-outlier` | a stage over twice its role's median time or cost |
 | `turns-exhausted` | a stage that used its whole turn cap |
 | `limit-repeat` | a rate limit hit in consecutive stages |
 | `driver` | a shortfall the built artifact reports when `layout.driver_command` runs it |
+
+`branch-protection` is advisory.
+Its host-free leg counts the non-merge first-parent commits on the remote's default branch.
+Its host leg quotes what a host tool answered, or `unknown` when that tool exited non-zero.
 
 ## Configuration
 

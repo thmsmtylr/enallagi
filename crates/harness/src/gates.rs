@@ -496,7 +496,13 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         field_at(ctx, &task, key, Some("HEAD")).unwrap_or_else(|| field_of(ctx, &task, key))
     };
     let pats = scope_globs(&head_block("scope"));
-    let queued = field_at(ctx, &task, "scope", None).map(|line| scope_globs(&line));
+    // the commit that queued the block, not the round's base: in a review-only round the base is the
+    // implement round's own state commit, which already carries the widening
+    let queued_rev = git::task_queued_commit(ctx.root, &ctx.cfg.layout.harness_dir, &task)
+        .ok()
+        .flatten();
+    let queued =
+        field_at(ctx, &task, "scope", queued_rev.as_deref()).map(|line| scope_globs(&line));
     let gained: Vec<String> = queued
         .map(|q| pats.iter().filter(|p| !q.contains(p)).cloned().collect())
         .unwrap_or_default();
@@ -653,14 +659,18 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     }
     let why = parts.join("; ");
     let reason = format!("the verifier returned done and the scope gate rejected it: {why}");
+    // to review, not ready: the iteration's commits are on the branch, so what the block needs is
+    // another verdict, and `ready` hands the next implementer a task its own tree already carries
     force_back(
         ctx,
         "scope",
         &task,
-        "ready",
+        "review",
         &reason,
         &format!("chore({task}): harness scope gate rejected a done verdict"),
-        &format!("{task} was forced back to ready by the scope gate: {why}."),
+        &format!(
+            "{task} was forced back to review by the scope gate: {why}. The iteration's commits for {task} are on the branch."
+        ),
     )
 }
 
@@ -1464,7 +1474,7 @@ mod tests {
             assert!(events.iter().any(|e| matches!(&e.kind,
                 Kind::Gate { gate, pass, .. } if gate == "scope" && !*pass)));
             assert!(events.iter().any(|e| matches!(&e.kind,
-                Kind::TaskStatus { to, by, .. } if to == "ready" && by == "scope")));
+                Kind::TaskStatus { to, by, .. } if to == "review" && by == "scope")));
         }
     }
 
@@ -1965,7 +1975,15 @@ mod tests {
             "{}",
             out.reason
         );
-        assert!(env.tasks_text().contains("status: ready"));
+        assert!(env.tasks_text().contains("status: review"));
+        assert!(
+            env.warnings
+                .iter()
+                .any(|w| w.contains("forced back to review")
+                    && w.contains("commits for T-001 are on the branch")),
+            "{:?}",
+            env.warnings
+        );
         assert!(env
             .log()
             .contains("chore(T-001): harness scope gate rejected a done verdict"));
@@ -2026,7 +2044,7 @@ mod tests {
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
         assert!(out.reason.contains("touched the harness"), "{}", out.reason);
-        assert!(env.tasks_text().contains("status: ready"));
+        assert!(env.tasks_text().contains("status: review"));
         assert!(env
             .log()
             .contains("chore(T-001): harness scope gate rejected a done verdict"));

@@ -643,16 +643,20 @@ fn no_shipped_document_calls_the_binary_harness() {
     }
 }
 
+// every identifier rule reads the same two shapes: a declaration's name and a field's
+fn declared_names(text: &str) -> Vec<String> {
+    let decl = re(r"\b(?:fn|struct|enum|trait|union|mod|const|static|type)\s+([A-Za-z_]\w*)");
+    let field = re(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?([a-z_]\w*)[ \t]*:");
+    let mut names: Vec<String> = decl.captures_iter(text).map(|c| c[1].to_string()).collect();
+    names.extend(field.captures_iter(text).map(|c| c[1].to_string()));
+    names
+}
+
 #[test]
 fn no_identifier_runs_past_fifty_characters() {
     const CAP: usize = 50;
-    let decl = re(r"\b(?:fn|struct|enum|trait|union|mod|const|static|type)\s+([A-Za-z_]\w*)");
-    let field = re(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?([a-z_]\w*)[ \t]*:");
-    assert!(decl.is_match("fn a() {}"), "the scan cannot report");
-    assert!(
-        field.is_match("    name: String,"),
-        "the scan cannot report"
-    );
+    let sample = declared_names("fn a() {}\n    name: String,\n");
+    assert_eq!(sample, ["a", "name"], "the scan cannot report");
 
     let crates = repo_root().join("crates");
     let mut long = Vec::new();
@@ -660,12 +664,7 @@ fn no_identifier_runs_past_fifty_characters() {
         if rel.extension().is_none_or(|e| e != "rs") {
             continue;
         }
-        let text = read(&crates.join(&rel));
-        for name in [&decl, &field]
-            .iter()
-            .flat_map(|p| p.captures_iter(&text))
-            .map(|c| c[1].to_string())
-        {
+        for name in declared_names(&read(&crates.join(&rel))) {
             if name.len() > CAP {
                 long.push(format!("{}: {name} ({})", rel.display(), name.len()));
             }
@@ -674,6 +673,128 @@ fn no_identifier_runs_past_fifty_characters() {
     long.sort();
     long.dedup();
     assert!(long.is_empty(), "{} over {CAP}: {long:#?}", long.len());
+}
+
+#[test]
+fn no_identifier_names_a_task_or_a_step() {
+    let task = re(r"(?i)(?:^|_)t_?[0-9]{3}(?:_|$)");
+    let step =
+        re(r"(?:^|_)step_(?:one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)(?:_|$)");
+    let names = |name: &str| task.is_match(name) || step.is_match(name);
+    assert!(names("verified_t900"), "the scan cannot report");
+    assert!(names("t001_status"), "the scan cannot report");
+    assert!(
+        names("step_seven_names_both_commit_arms"),
+        "the scan cannot report"
+    );
+    // a number counting something inside the scenario is a quantity, not a position in a list
+    assert!(!names("two_lanes_in_the_same_second_do_not_collide"));
+    assert!(!names("usage_carries_four_disjoint_token_lanes"));
+    assert!(!names("the_drivers_shortfall_is_one_finding"));
+
+    let root = repo_root();
+    let shipped = tracked(&root);
+    let crates = root.join("crates");
+    let mut placed = Vec::new();
+    let mut scanned = 0;
+    for rel in walk(&crates) {
+        if rel.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        if !shipped.contains(&Path::new("crates").join(&rel)) {
+            continue;
+        }
+        scanned += 1;
+        for name in declared_names(&read(&crates.join(&rel))) {
+            if names(&name) {
+                placed.push(format!("crates/{}: {name}", rel.display()));
+            }
+        }
+    }
+    placed.sort();
+    placed.dedup();
+    assert!(
+        placed.is_empty(),
+        "{} named by position: {placed:#?}",
+        placed.len()
+    );
+    // an empty corpus is not a pass; `git ls-files 'crates/**/*.rs'` -> 77
+    assert!(scanned > 50, "{scanned} sources scanned");
+}
+
+// `//!` is the only comment `cargo doc` renders onto the module's own page, so a summary written as
+// `//` or `///` does not count. No module is exempt, dispatchers included, and a header that only
+// repeats the path it sits at says nothing the reader did not already have.
+fn module_summary(rel: &Path, text: &str) -> Result<(), String> {
+    let Some(header) = text.lines().next().and_then(|l| l.strip_prefix("//!")) else {
+        return Err("no `//!` summary line".to_string());
+    };
+    let own: Vec<String> = rel
+        .with_extension("")
+        .components()
+        .flat_map(|c| {
+            c.as_os_str()
+                .to_string_lossy()
+                .to_lowercase()
+                .split('_')
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let header = header.to_lowercase();
+    let said = re("[a-z0-9]+")
+        .find_iter(&header)
+        .any(|w| w.as_str() != "rs" && !own.iter().any(|part| part == w.as_str()));
+    if said {
+        Ok(())
+    } else {
+        Err(format!("`//!{header}` restates the path"))
+    }
+}
+
+#[test]
+fn every_module_says_what_it_is() {
+    let at = |name: &str| PathBuf::from(name);
+    assert!(
+        module_summary(&at("git.rs"), "use std::path::Path;\n").is_err(),
+        "the scan cannot report"
+    );
+    assert!(
+        module_summary(&at("git.rs"), "//! git\n").is_err(),
+        "the scan cannot report"
+    );
+    assert!(
+        module_summary(&at("cli/mod.rs"), "//! cli/mod.rs\n").is_err(),
+        "the scan cannot report"
+    );
+    assert!(module_summary(&at("git.rs"), "//! Every command the loop runs.\n").is_ok());
+
+    let root = repo_root();
+    let shipped = tracked(&root);
+    let src = Path::new("crates/harness/src");
+    let mut blank = Vec::new();
+    let mut scanned = Vec::new();
+    for (rel, text) in crate_sources() {
+        if !shipped.contains(&src.join(&rel)) {
+            continue;
+        }
+        scanned.push(rel.display().to_string());
+        if let Err(why) = module_summary(&rel, &text) {
+            blank.push(format!("{}/{}: {why}", src.display(), rel.display()));
+        }
+    }
+    blank.sort();
+    assert!(
+        blank.is_empty(),
+        "{} without a summary: {blank:#?}",
+        blank.len()
+    );
+    // the two dispatchers are covered like every other module, not exempted
+    for named in ["cli/mod.rs", "main.rs"] {
+        assert!(scanned.contains(&named.to_string()), "{named} unscanned");
+    }
+    // an empty corpus is not a pass; `find crates/harness/src -name '*.rs' | wc -l` -> 66
+    assert!(scanned.len() > 60, "{} modules scanned", scanned.len());
 }
 
 #[test]

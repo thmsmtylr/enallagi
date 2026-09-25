@@ -1,3 +1,5 @@
+//! `enallagi tasks <verb>` -- the queue read and written from a shell, one verb per question a role asks of it.
+
 use crate::queue::{self, Queue, QueueError};
 use std::path::{Path, PathBuf};
 

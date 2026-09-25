@@ -1,3 +1,5 @@
+//! `enallagi hook <name>` -- reads the agent's payload on stdin and exits with the code the named hook returns.
+
 use std::io::Read;
 use std::path::PathBuf;
 

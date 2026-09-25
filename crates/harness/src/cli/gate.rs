@@ -1,3 +1,5 @@
+//! `enallagi gate verdict|scope <task>` -- runs one gate by hand against a base revision, and exits 2 when it does not pass.
+
 use crate::config;
 use crate::events::{Log, Writer};
 use crate::gates::{self, GateCtx};

@@ -229,7 +229,7 @@ fn immutable_refuses_an_edit_to_a_role() {
 
 // the arm lives on step 7 itself, so the assertion reads that line and not the whole prompt
 #[test]
-fn step_seven_names_both_commit_arms() {
+fn the_commit_step_names_both_arms() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/implementer.md");
     let text = fs::read_to_string(&source).expect("read roles/implementer.md");
     let step = text
@@ -249,7 +249,7 @@ fn step_seven_names_both_commit_arms() {
 
 // plain_record.rs closes a rejection region only at an author marker, so step 6 must ask for one
 #[test]
-fn step_six_requires_the_author_marker() {
+fn the_notes_step_requires_the_author_marker() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/implementer.md");
     let text = fs::read_to_string(&source).expect("read roles/implementer.md");
     let step = text

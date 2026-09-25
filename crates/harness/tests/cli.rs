@@ -975,12 +975,12 @@ fn gate_scope_rejects_a_rewritten_vendored_skill() {
 
 // a nested install with T-900 verified done; `product` rides the work commit and `state` the
 // verify commit, the way the launcher's state commit carries a STOP written mid-run
-fn verified_t900(product: &[&str], state: &[&str]) -> (enallagi::fixture::Repo, String) {
-    verified_t900_as(product, state, "scope: a.txt\nstatus: done\n")
+fn verified_install(product: &[&str], state: &[&str]) -> (enallagi::fixture::Repo, String) {
+    verified_install_as(product, state, "scope: a.txt\nstatus: done\n")
 }
 
 // `verdict` is the block's body as the verifier leaves it, so a test can widen its scope: line
-fn verified_t900_as(
+fn verified_install_as(
     product: &[&str],
     state: &[&str],
     verdict: &str,
@@ -1034,7 +1034,7 @@ fn verified_t900_as(
 
 #[test]
 fn gate_scope_exempts_the_halt_marker() {
-    let (r, queued) = verified_t900(&[], &[".enallagi/STOP"]);
+    let (r, queued) = verified_install(&[], &[".enallagi/STOP"]);
     let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert!(
@@ -1045,7 +1045,7 @@ fn gate_scope_exempts_the_halt_marker() {
 
 #[test]
 fn gate_scope_rejects_a_file_off_the_scope_line() {
-    let (r, queued) = verified_t900(&["b.txt"], &[".enallagi/STOP"]);
+    let (r, queued) = verified_install(&["b.txt"], &[".enallagi/STOP"]);
     let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
     assert_eq!(out.status.code(), Some(2), "{out:?}");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -1056,7 +1056,7 @@ fn gate_scope_rejects_a_file_off_the_scope_line() {
 #[test]
 fn gate_scope_rejects_a_silent_widening() {
     let verdict = "scope: a.txt, b.txt\nstatus: done\n";
-    let (r, queued) = verified_t900_as(&["b.txt"], &[], verdict);
+    let (r, queued) = verified_install_as(&["b.txt"], &[], verdict);
     let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
     assert_eq!(out.status.code(), Some(2), "{out:?}");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -1064,17 +1064,31 @@ fn gate_scope_rejects_a_silent_widening() {
     assert!(stdout.contains("a `widened:` line"), "{out:?}");
     let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
     let block = &tasks[tasks.find("## [T-900]").expect("T-900")..];
-    assert!(block.contains("status: ready"), "{block}");
+    assert!(block.contains("status: review"), "{block}");
     assert!(
         block.contains("gate: ") && block.contains("widened scope: with b.txt"),
         "{block}"
     );
 }
 
+// the base a review-only round runs on: the product commit the implement round left behind
+#[test]
+fn gate_scope_rejects_a_widening_from_the_work() {
+    let verdict = "scope: a.txt, b.txt\nstatus: done\n";
+    let (r, _) = verified_install_as(&["b.txt"], &[], verdict);
+    let worked = enallagi::git::git(&r.root, &["rev-parse", "HEAD"]).expect("git");
+    let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &worked]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("widened scope: with b.txt"),
+        "{out:?}"
+    );
+}
+
 #[test]
 fn gate_scope_names_a_widening_with_a_reason() {
     let verdict = "scope: a.txt, b.txt\nwidened: b.txt declares the flag\nstatus: done\n";
-    let (r, queued) = verified_t900_as(&["b.txt"], &[], verdict);
+    let (r, queued) = verified_install_as(&["b.txt"], &[], verdict);
     let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     let stdout = String::from_utf8_lossy(&out.stdout);
