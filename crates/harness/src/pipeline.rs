@@ -1282,6 +1282,7 @@ impl<'a> Loop<'a> {
                 if self.opts.pr_per_task || self.cfg.pr.per_task {
                     self.open_pull(task);
                 }
+                self.settle_thread(task);
             }
             other => self.digest.warnings.push(format!(
                 "{task} ended the iteration at {}, not done.",
@@ -1292,6 +1293,39 @@ impl<'a> Loop<'a> {
         // rather than warning that a role left none -- a verify-only round has no other record
         if file_len(&self.file("PROGRESS.md")) <= progress_before {
             self.progress_stub(task, pipeline, status.as_deref());
+        }
+    }
+
+    // a landed block answers the thread that raised it, or the next read queues the same comment again
+    fn settle_thread(&mut self, task: &str) {
+        let thread = self
+            .blocks()
+            .iter()
+            .find(|b| b.id == task)
+            .and_then(review::thread_of);
+        let Some(thread) = thread else {
+            return;
+        };
+        let sha = git::git(
+            self.root,
+            &[
+                "log",
+                "-1",
+                "--format=%H",
+                "--fixed-strings",
+                "--grep",
+                task,
+            ],
+        )
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| git::git(self.root, &["rev-parse", "HEAD"]).ok())
+        .unwrap_or_default();
+        if let Err(err) = review::settle(self.root, &thread, sha.trim()) {
+            self.digest
+                .warnings
+                .push(format!("{task}: thread {thread} was left open: {err}"));
         }
     }
 

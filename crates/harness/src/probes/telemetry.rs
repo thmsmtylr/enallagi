@@ -282,6 +282,25 @@ pub fn turns_exhausted(log: &Log, cfg: &Config) -> ProbeResult {
         Err(msg) => return ProbeResult::Error(msg),
     };
     let mut findings = Vec::new();
+    let presets = crate::agent::presets();
+    // a cap binds only where the preset spawned was handed the number: None passes no cap, Config reads
+    // one from the agent's own file and Time spends a clock, as the digest decides at pipeline.rs
+    let flag_capped = |stage: &str| {
+        cfg.stage
+            .iter()
+            .find(|s| s.name == stage)
+            .and_then(|s| s.role.as_deref())
+            .and_then(|role| {
+                crate::agent::resolve_task(
+                    &cfg.agent,
+                    role,
+                    &presets,
+                    &crate::agent::Levels::default(),
+                )
+                .ok()
+            })
+            .is_some_and(|r| matches!(r.preset.turn_cap, crate::agent::TurnCap::Flag))
+    };
     for (i, e) in events.iter().enumerate() {
         if let Kind::StageEnd {
             stage,
@@ -290,6 +309,9 @@ pub fn turns_exhausted(log: &Log, cfg: &Config) -> ProbeResult {
             ..
         } = &e.kind
         {
+            if !flag_capped(stage) {
+                continue;
+            }
             // the cap a handed adjudicator ran under is the recorded one; config is read only for a log written before the field
             let cap =
                 turn_cap.or_else(|| cfg.stage.iter().find(|s| &s.name == stage).map(|s| s.turns));
@@ -583,6 +605,40 @@ mod tests {
         }
     }
 
+    // a custom command carrying {turns} is the Flag arm, with no preset file read
+    fn flag_capped_agent() -> crate::config::AgentConfig {
+        crate::config::AgentConfig {
+            preset: "custom".into(),
+            command: Some(vec!["./agent".into(), "{prompt}".into(), "{turns}".into()]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn turns_exhausted_is_quiet_for_an_uncapped_stage() {
+        let (dir, mut w) = writer();
+        w.emit(start("implement"));
+        w.emit(end("implement", 60, None, Some(120)));
+
+        let log = Log::open(dir.path());
+        let mut agent = flag_capped_agent();
+        agent.command = Some(vec!["./agent".into(), "{prompt}".into()]);
+        let cfg = Config {
+            stage: vec![Stage {
+                name: "implement".into(),
+                turns: 120,
+                role: Some("implementer".into()),
+                ..Default::default()
+            }],
+            agent,
+            ..Default::default()
+        };
+        match turns_exhausted(&log, &cfg) {
+            ProbeResult::Count(findings) => assert_eq!(findings.len(), 0),
+            ProbeResult::Error(e) => panic!("expected findings, got error: {e}"),
+        }
+    }
+
     #[test]
     fn turns_exhausted_matches_the_stage_ceiling() {
         let (dir, mut w) = writer();
@@ -594,8 +650,10 @@ mod tests {
             stage: vec![Stage {
                 name: "implement".into(),
                 turns: 120,
+                role: Some("implementer".into()),
                 ..Default::default()
             }],
+            agent: flag_capped_agent(),
             ..Default::default()
         };
         match turns_exhausted(&log, &cfg) {
@@ -616,8 +674,10 @@ mod tests {
             stage: vec![Stage {
                 name: "implement".into(),
                 turns: 120,
+                role: Some("implementer".into()),
                 ..Default::default()
             }],
+            agent: flag_capped_agent(),
             ..Default::default()
         };
         match turns_exhausted(&log, &cfg) {

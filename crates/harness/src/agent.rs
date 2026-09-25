@@ -565,7 +565,8 @@ pub fn spawn(
 fn sleep_until(seconds: u64, stop_file: &Path) -> Result<(), AgentError> {
     let deadline = Instant::now() + Duration::from_secs(seconds);
     while let Some(left) = deadline.checked_duration_since(Instant::now()) {
-        if stop_file.exists() || stop_signal().is_some() {
+        // the same predicate the halt reads: every writer of the marker writes a file, never a directory
+        if stop_file.is_file() || stop_signal().is_some() {
             return Err(AgentError::Stopped);
         }
         std::thread::sleep(left.min(POLL));
@@ -1065,12 +1066,39 @@ mod tests {
         assert!(dated_reset("resets 4am (UTC)").is_none());
     }
 
+    // the notice's own minutes and casing survive, so a text rebuilt from the captures fails here
+    #[test]
+    fn dated_reset_is_the_notice_verbatim() {
+        assert_eq!(
+            dated_reset("resets SEPT 20 at 04:05PM (UTC)").as_deref(),
+            Some("SEPT 20 at 04:05PM (UTC)")
+        );
+    }
+
     fn fix_now(zoned: jiff::Zoned) {
         FIXED_NOW.with(|n| *n.borrow_mut() = Some(zoned));
     }
 
     fn stop_file(root: &std::path::Path) -> std::path::PathBuf {
         crate::config::instance_path(root, ".enallagi", "STOP")
+    }
+
+    #[test]
+    fn a_stop_directory_ends_no_wait() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stop = dir.path().join("STOP");
+        std::fs::create_dir(&stop).expect("mkdir");
+        assert!(sleep_until(1, &stop).is_ok());
+    }
+
+    #[test]
+    fn a_stop_file_ends_the_wait_at_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stop = dir.path().join("STOP");
+        std::fs::write(&stop, b"").expect("write");
+        let started = Instant::now();
+        assert!(matches!(sleep_until(60, &stop), Err(AgentError::Stopped)));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     fn spawner<'a>(argv: Vec<String>, root: &'a std::path::Path) -> StageSpawn<'a> {

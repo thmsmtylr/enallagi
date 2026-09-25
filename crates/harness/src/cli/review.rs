@@ -1,4 +1,4 @@
-//! `enallagi review <ref>` -- appends one block per open review comment, and exits 1 when more than a page went unread.
+//! `enallagi review <ref>` -- appends one block per open review thread, and exits 1 when more than a page went unread.
 
 use crate::config;
 use crate::queue::Queue;
@@ -37,6 +37,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     }
     println!("  skipped: {} with no path", found.unanchored);
     println!("  skipped: {} resolved or outdated", found.settled);
+    println!("  folded: {} later in a thread", found.folded);
     // what was read is kept; the exit code is what says the rest was never read
     if !args.dry_run {
         queue.write(&appended.queue)?;

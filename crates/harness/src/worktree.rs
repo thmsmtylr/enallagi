@@ -147,10 +147,17 @@ fn resumable_base(root: &Path) -> Option<String> {
         ],
     )
     .ok()?;
+    // a lane branch is resumed while it carries commits HEAD does not: an upstream commit moves
+    // HEAD off the branch without delivering its work, and a branch whose commits reached HEAD
+    // carries none
     listed
         .lines()
         .map(str::trim)
-        .find(|b| !b.is_empty() && git::git_ok(root, &["merge-base", "--is-ancestor", "HEAD", b]))
+        .find(|b| {
+            !b.is_empty()
+                && git::git(root, &["rev-list", "--count", &format!("HEAD..{b}")])
+                    .is_ok_and(|n| n.trim() != "0")
+        })
         .map(str::to_string)
 }
 
@@ -163,18 +170,21 @@ fn absorbed_by(repo: &Path, branch: &str) -> String {
         .join("; ")
 }
 
-// a merge commit needs an identity the state repository rarely configures, so it borrows the
-// product's own, exactly as `git::commit_instance` does at `git.rs:146`
-fn merge_into(repo: &Path, root: &Path, branch: &str, ff: bool) -> Result<String, git::GitError> {
+// a merge git refused before it began has nothing to abort, and its stderr names what stood in the way
+struct Unmerged {
+    err: git::GitError,
+    aborted: bool,
+}
+
+// a merge commit needs an identity the state repository rarely configures, so it borrows the product's
+fn merge_into(repo: &Path, root: &Path, branch: &str, ff: bool) -> Result<String, Unmerged> {
     if ff {
-        return git::git(repo, &["merge", "--ff-only", branch]);
+        return git::git(repo, &["merge", "--ff-only", branch]).map_err(|err| Unmerged {
+            err,
+            aborted: false,
+        });
     }
-    let mut args: Vec<String> = Vec::new();
-    for key in ["user.name", "user.email"] {
-        if let Ok(value) = git::git(root, &["config", key]) {
-            args.extend(["-c".to_string(), format!("{key}={value}")]);
-        }
-    }
+    let mut args = git::identity_args(root);
     args.extend(
         [
             "-c",
@@ -187,12 +197,12 @@ fn merge_into(repo: &Path, root: &Path, branch: &str, ff: bool) -> Result<String
         .map(String::from),
     );
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let merged = git::git(repo, &args);
-    if merged.is_err() {
-        // git leaves the conflict in the index and the tree, and a parent left mid-merge is worse than an unmerged lane
-        let _ = git::git(repo, &["merge", "--abort"]);
-    }
-    merged
+    git::git(repo, &args).map_err(|err| {
+        // git leaves the conflict in the index and the tree, and a parent left mid-merge is worse than
+        // an unmerged lane; `--abort` itself says whether a merge had started
+        let aborted = git::git(repo, &["merge", "--abort"]).is_ok();
+        Unmerged { err, aborted }
+    })
 }
 
 // an untracked file is the operator's own and a lane never sees it, so it is named and not refused
@@ -309,13 +319,13 @@ pub fn lane(
                 });
                 merged.push((repo, pre));
             }
-            Err(err) => {
+            Err(Unmerged { err, aborted }) => {
                 let reason = match &err {
-                    git::GitError::Failed { stderr, .. } if ff => Some(stderr.clone()),
-                    git::GitError::Failed { .. } => Some(format!(
+                    git::GitError::Failed { .. } if aborted => Some(format!(
                         "{branch} conflicts with {} over {absorbed}, and the merge was aborted",
                         repo.display()
                     )),
+                    git::GitError::Failed { stderr, .. } => Some(stderr.clone()),
                     _ => None,
                 };
                 // a merge git refuses after the ancestry check (a dirty parent tree) undoes the ones before it
@@ -683,6 +693,35 @@ mod tests {
         );
     }
 
+    // an upstream commit moves HEAD off the lane branch; the task at review is still on it
+    #[test]
+    fn an_unfinished_task_survives_upstream_work() {
+        let r = per_task_repo();
+        let cfg = cfg(&r);
+        let (_origin, bare) = origin_of(&r);
+
+        let first = lane(&r.root, &cfg, &mut |wt| {
+            land_at(wt, "T-001", "one.txt", "review");
+            Ok(())
+        })
+        .expect("the first lane");
+        assert!(first.merged, "reason: {}", first.reason);
+        let _clone = commit_on_origin(&bare, "unrelated.txt");
+
+        let mut seen = false;
+        let second = lane(&r.root, &cfg, &mut |wt| {
+            seen = wt.join("one.txt").exists();
+            Ok(())
+        })
+        .expect("the second lane");
+
+        assert!(
+            seen,
+            "the second lane started without T-001's implementation: {}",
+            second.reason
+        );
+    }
+
     #[test]
     fn a_checkout_in_step_with_origin_is_unchanged() {
         let r = per_task_repo();
@@ -731,6 +770,34 @@ mod tests {
         let lane_tasks =
             std::fs::read_to_string(left.join(".enallagi/TASKS.md")).expect("TASKS.md");
         assert!(lane_tasks.contains("status: done"));
+        remove_left(&r, &report);
+    }
+
+    #[test]
+    fn a_dirty_state_parent_names_the_file() {
+        let r = nested_repo();
+        let cfg = cfg(&r);
+        let state = r.root.join(".enallagi");
+        let pre_head = git::head(&r.root);
+
+        let report = lane(&r.root, &cfg, &mut |wt| {
+            land(wt, "T-001", "one.txt");
+            std::fs::write(state.join("moved.txt"), "y").expect("write");
+            commit_in(&state, "a second writer moved the state");
+            // an operator's edit arriving mid-run: tracked, uncommitted, and what git refuses to overwrite
+            std::fs::write(state.join("TASKS.md"), "# TASKS\n\nedited mid-run\n").expect("write");
+            Ok(())
+        })
+        .expect("lane");
+
+        assert!(!report.merged, "reason: {}", report.reason);
+        assert!(report.reason.contains("TASKS.md"), "{}", report.reason);
+        assert!(
+            !report.reason.contains("conflicts with"),
+            "{}",
+            report.reason
+        );
+        assert_eq!(git::head(&r.root), pre_head);
         remove_left(&r, &report);
     }
 

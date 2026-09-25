@@ -1451,6 +1451,24 @@ fn a_rejection_behind_a_dated_label_is_reported() {
     assert!(found[0].contains("T-003"), "{}", found[0]);
 }
 
+// the label's own first word is the verdict, and the reasons after the colon are not an answer to it
+#[test]
+fn a_rejection_dated_in_its_own_label_is_reported() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        &reviewed_block(
+            "T-003",
+            "review",
+            "  REJECTED 2026-09-21: Passed counts do not reproduce.\n",
+        ),
+    );
+    let found = rejection_stale(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("T-003"), "{}", found[0]);
+}
+
 #[test]
 fn check_red_says_nothing_for_a_timed_out_check() {
     let (repo, mut cfg) = seeded();
@@ -1681,6 +1699,67 @@ fn a_criterion_naming_a_removed_test_is_found() {
         found[0].message
     );
     assert_eq!(found[0].path, ".enallagi/TASKS.md");
+}
+
+// rewrites T-002 in place, so one fixture is read under each filter
+fn filtered_criterion(repo: &Repo, filter: &str, names: &str) {
+    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "TASKS.md");
+    let text = fs::read_to_string(&path).expect("TASKS.md");
+    let kept = text.split("\n## [T-002]").next().expect("the seeded queue");
+    fs::write(&path, kept).expect("rewrite");
+    append(
+        repo,
+        "TASKS.md",
+        &format!("\n## [T-002] the block whose criteria run a filter\nscope: src/a.rs\nblockedBy: none\nstatus: ready\nrows: none — harness\ncriteria:\n  - `cargo test -q -p enallagi --test probes {filter}` passes, with {names} in its run\n  - the check exits 0\nnotes: none\n"),
+    );
+}
+
+fn filter_findings(repo: &Repo, cfg: &Config) -> Vec<String> {
+    let results = run(repo, cfg);
+    findings(&results, "queue-uncovered")
+        .iter()
+        .filter(|f| f.message.contains("T-002"))
+        .map(|f| f.message.clone())
+        .collect()
+}
+
+#[test]
+fn a_criterion_filter_that_selects_no_test_is_found() {
+    let (repo, cfg) = seeded_with("[layout]\nsource_root = \"src\"\n");
+    repo.write(
+        "src/a.rs",
+        "#[test]\nfn the_learning_rule() {}\n\n#[test]\nfn an_earned_rule_counts() {}\n",
+    );
+    repo.commit_all("two tests");
+    filtered_criterion(
+        &repo,
+        "learning",
+        "`the_learning_rule` and `an_earned_rule_counts`",
+    );
+    let found = filter_findings(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("an_earned_rule_counts"), "{}", found[0]);
+    assert!(!found[0].contains("the_learning_rule"), "{}", found[0]);
+
+    filtered_criterion(
+        &repo,
+        "rule",
+        "`the_learning_rule` and `an_earned_rule_counts`",
+    );
+    assert_eq!(filter_findings(&repo, &cfg).len(), 0);
+
+    repo.write(
+        "src/a.rs",
+        "#[test]\nfn the_learning_rule() {}\n\n#[test]\nfn an_earned_rule_counts() {}\n\nfn a_helper_rule_reader() {}\n",
+    );
+    repo.commit_all("a helper");
+    filtered_criterion(
+        &repo,
+        "learning",
+        "`the_learning_rule`, `an_earned_rule_counts` and `a_helper_rule_reader`",
+    );
+    let found = filter_findings(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
 }
 
 #[test]
@@ -1935,5 +2014,69 @@ fn a_host_tool_error_reads_unknown() {
     assert!(
         out.contains("-> unknown, exit 1: gh: Not Found (HTTP 404)"),
         "{out}"
+    );
+}
+
+// a host tool that never answers is killed with what it spawned after the bound, and the leg
+// reports the bound rather than an elapsed reading; the test polls the binary against a ceiling of
+// its own so a lost bound fails instead of hanging
+#[test]
+fn a_hung_host_tool_reads_unknown_after_the_bound() {
+    let (repo, _cfg) = seeded_with(TRUE_CHECK);
+    let (_origin, _branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
+    let bins = tempfile::TempDir::new().expect("tempdir");
+    let path = bin_dir(bins.path(), Some("/bin/sleep 600\n"));
+    let mut child = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["probe", "branch-protection"])
+        .current_dir(&repo.root)
+        .env("PATH", &path)
+        .stdout(std::process::Stdio::piped())
+        // nothing of cargo's is inherited: a stub left behind would otherwise hold its pipe open
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("probe");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = std::process::Command::new("pkill")
+                .args(["-f", "/bin/sleep 600"])
+                .status();
+            panic!("the probe outlived the ceiling: the host leg has no bound");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    };
+    let mut out = String::new();
+    std::io::Read::read_to_string(child.stdout.as_mut().expect("stdout"), &mut out).expect("read");
+    assert!(status.success(), "{out}");
+    assert!(out.contains("-> unknown, no answer in 10s"), "{out}");
+    // killed is not yet reaped: a zombie the container's init has not collected still answers pgrep
+    let alive = || {
+        let out = std::process::Command::new("ps")
+            .args(["-eo", "pid=,stat=,args="])
+            .output()
+            .expect("ps");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| {
+                let mut cols = l.split_whitespace();
+                let (_, stat) = (cols.next(), cols.next().unwrap_or(""));
+                let args: Vec<&str> = cols.collect();
+                args == ["/bin/sleep", "600"] && !stat.starts_with('Z')
+            })
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !alive().is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(
+        alive().is_empty(),
+        "the stub's sleep outlived the probe: {:?}",
+        alive()
     );
 }

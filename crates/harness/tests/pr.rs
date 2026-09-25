@@ -605,3 +605,35 @@ fn pr_commits_its_description_to_the_state_repo() {
         git(&state, &["status", "--porcelain"])
     );
 }
+
+// `enallagi pr` runs outside a stage, where the operator may hold uncommitted queue edits; the
+// record is committed alone and those stay where they were
+#[test]
+fn pr_commits_the_record_and_leaves_operator_edits() {
+    let (f, _) = landed("exit 0");
+    write(
+        &f.root,
+        ".enallagi/PROGRESS.md",
+        "# progress\n\nan edit in flight\n",
+    );
+    let (code, out) = f.harness(&["pr", "T-001"]);
+    assert_eq!(code, 0, "{out}");
+    let state = f.root.join(".enallagi");
+    let named = git(&state, &["log", "-1", "--name-only", "--format="]);
+    assert_eq!(named.trim(), "pr/T-001.md", "{named}");
+    let porcelain = git(&state, &["status", "--porcelain"]);
+    assert!(porcelain.contains("PROGRESS.md"), "{porcelain}");
+}
+
+// the sweep a stage relies on is unchanged: an empty names list still stages everything dirty
+#[test]
+fn an_empty_names_list_still_sweeps_the_state_repo() {
+    let (f, _) = landed("exit 0");
+    write(&f.root, ".enallagi/PROGRESS.md", "# progress\n\nswept\n");
+    let committed =
+        enallagi::git::commit_instance(&f.root, ".enallagi", &[], "msg").expect("commit");
+    assert!(committed);
+    let state = f.root.join(".enallagi");
+    let named = git(&state, &["log", "-1", "--name-only", "--format="]);
+    assert!(named.lines().any(|l| l == "PROGRESS.md"), "{named}");
+}

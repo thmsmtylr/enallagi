@@ -22,7 +22,9 @@ queued is decided before the scout files more.
 
 Before selecting a task, an iteration reads the review comments on open pull requests
 from its own `task/` branches.
-Each unresolved comment lands as a `proposed` block.
+Each unresolved thread lands as one `proposed` block carrying its thread id, and the same
+finding raised twice on the same lines is one block.
+When that block lands, the launcher replies on the thread with the sha and resolves it.
 No host tool, no such branch, or a failed host call is a warning, never a halt.
 
 ## Gates
@@ -33,7 +35,7 @@ halts the run. The names are matched in `crates/harness/src/gates.rs`.
 | Gate | Refuses | Runs after |
 | --- | --- | --- |
 | `implementer-not-done` | a `done` from anyone but the verifier, or an implementer that stopped short of `review` | implement |
-| `commit-verdict` | a verdict whose new notes defer a finding and add no `proposed` block, or a failed commit of TASKS.md | verify |
+| `commit-verdict` | a verdict whose `deferred:` line or new prose defers a finding and adds no `proposed` block, or a failed commit of TASKS.md | verify |
 | `verdict` | a `done` whose work is uncommitted, or whose check is red on delta | verify |
 | `scope` | a file outside the task's `scope:` globs, or a product task editing the harness | verify |
 | `queue-intact` | a task id at the iteration's base commit that is in neither TASKS.md nor DECISIONS.md | implement, verify, adjudicate |

@@ -1544,6 +1544,60 @@ fn a_verdict_of_no_findings_is_committed() {
     a_verdict_noting("VERIFIED. No findings, minor or otherwise.");
 }
 
+#[test]
+fn a_quoted_minor_is_not_the_verdict() {
+    a_verdict_noting("VERIFIED.\\n> implementer: one minor edge left, handled");
+}
+
+#[test]
+fn a_file_named_minor_is_not_the_verdict() {
+    a_verdict_noting("VERIFIED. src/minor.test.ts and lib/for-later.ts pass.");
+}
+
+#[test]
+fn a_test_named_minor_is_not_the_verdict() {
+    a_verdict_noting("VERIFIED. `a_minor_case` and the_minor_path_is_covered pass.");
+}
+
+fn a_verdict_refused_for(note: &str) -> String {
+    let r = repo(&base_toml(""), REVIEW_TASK);
+    let verify = verifier_noting(&r, note, "");
+    with_verifier(&r, &verify);
+    r.commit_all("stubs");
+
+    let (_, events) = go(&r, &opts(1));
+    let refusal = events.iter().find_map(|e| match &e.kind {
+        Kind::Gate {
+            gate, pass, reason, ..
+        } if gate == "commit-verdict" && !*pass => Some(reason.clone()),
+        _ => None,
+    });
+    assert_eq!(queued_status(&r).as_deref(), Some("review"), "{note}");
+    refusal.unwrap_or_else(|| panic!("commit-verdict passed: {events:#?}"))
+}
+
+#[test]
+fn a_deferred_line_with_no_block_names_the_field() {
+    let reason = a_verdict_refused_for(
+        "VERIFIED.\\ndeferred: the test never removes the entry it registers",
+    );
+    assert!(
+        reason.starts_with("the verdict's `deferred:` line"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("the test never removes the entry it registers"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn a_prose_deferral_is_told_the_field() {
+    let reason = a_verdict_refused_for("VERIFIED. Minor: the fixture leaks a file.");
+    assert!(reason.contains("\"minor\""), "{reason}");
+    assert!(reason.contains("`deferred:`"), "{reason}");
+}
+
 const IMPLEMENTER_NOTE: &str = "printf '  implementer: one minor edge left\\n' >>TASKS.md\n";
 
 fn a_clean_verdict_after_the_implementer(r: &Repo, implement: &str) {
@@ -2236,6 +2290,35 @@ fn digest_and_probe_agree_past_the_turn_cap() {
     };
     let in_probe = findings.iter().any(|f| f.message.contains("stage scout"));
     assert_eq!(in_digest, in_probe, "digest {in_digest}, probe {in_probe}");
+}
+
+#[test]
+fn digest_and_probe_agree_on_an_uncapped_stage() {
+    use enallagi::probes::telemetry::{turns_exhausted, ProbeResult};
+    let toml = base_toml("").replacen(
+        "command = [\"./src/fakeagent.sh\", \"{prompt}\", \"{turns}\"]",
+        "command = [\"./src/fakeagent.sh\", \"{prompt}\"]",
+        1,
+    );
+    let r = repo(&toml, "");
+    r.write("TASKS.md", "# queue\n");
+    script(
+        &r,
+        "src/fakeagent.sh",
+        "echo '{\"total_cost_usd\":0.5,\"num_turns\":6}'\n",
+    );
+    r.commit_all("a scout reporting one turn past a cap it was never handed");
+
+    let (digest, _) = go(&r, &opts(1));
+    let in_digest = pipeline::digest_text(&digest).contains("scout: turns 5");
+    let cfg = enallagi::config::load(&r.root).expect("config");
+    let log = enallagi::events::Log::open(&r.root.join(".enallagi"));
+    let ProbeResult::Count(findings) = turns_exhausted(&log, &cfg) else {
+        panic!("turns_exhausted could not read the log");
+    };
+    let in_probe = findings.iter().any(|f| f.message.contains("stage scout"));
+    assert_eq!(in_digest, in_probe, "digest {in_digest}, probe {in_probe}");
+    assert!(!in_probe, "the probe reported an uncapped stage");
 }
 
 // turns = 20 and one block handed at turns_per_block = 25 is a cap of 45, not 20
@@ -3184,6 +3267,16 @@ fn a_weekly_limit_halt_still_books_the_stage() {
         "{:?}",
         digest.halts
     );
+    // the stage ran and printed the notice, so it is not a stage that could not start
+    assert!(
+        digest
+            .halts
+            .iter()
+            .any(|h| h.contains("further out than the wait ceiling")
+                && !h.contains("could not start")),
+        "{:?}",
+        digest.halts
+    );
 }
 
 fn claude_args_repo(key: &str) -> Repo {
@@ -3583,6 +3676,67 @@ impl Pulls {
     }
 }
 
+const THREADED_TASK: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.ts
+rows: none — harness
+status: ready
+criteria:
+  - it happens
+notes: https://github.com/owner/repo/pull/13#discussion_r1000000007
+  thread: PRRT_kwDOA1
+";
+
+// the block a review thread raised, with the gh the read uses standing in for the host
+fn threaded(gh: &str) -> Pulls {
+    let p = pulls("", "exit 0\n");
+    p.repo.write("TASKS.md", THREADED_TASK);
+    p.repo.commit_all("a block from a review thread");
+    let stub = p.tools.path().join("gh");
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" >{dir}/gh.log\n{gh}",
+            dir = p.tools.path().display()
+        ),
+    )
+    .expect("gh");
+    p
+}
+
+#[test]
+fn a_landed_block_answers_its_thread() {
+    let p = threaded("exit 0\n");
+    let (_, out) = p.run(&[]);
+    assert!(out.contains("tasks landed: T-001"), "{out}");
+    let args = p.gh().unwrap_or_else(|| panic!("gh never ran:\n{out}"));
+    assert!(args.starts_with("api\ngraphql\n"), "{args}");
+    assert!(args.contains("resolveReviewThread"), "{args}");
+    assert!(args.contains("\nthread=PRRT_kwDOA1\n"), "{args}");
+    let sha = args
+        .lines()
+        .find_map(|l| l.strip_prefix("body=Answered in "))
+        .and_then(|l| l.split_whitespace().next())
+        .unwrap_or_else(|| panic!("no sha in the reply: {args}"));
+    let subject = enallagi::git::git(&p.repo.root, &["log", "-1", "--format=%s", sha])
+        .unwrap_or_else(|e| panic!("{sha} is not a commit here: {e}"));
+    assert!(subject.contains("T-001"), "{subject}");
+}
+
+#[test]
+fn an_unanswered_thread_is_a_warning_not_a_halt() {
+    let p = threaded("echo 'gh: could not resolve' >&2\nexit 1\n");
+    let (_, out) = p.run(&[]);
+    assert!(out.contains("tasks landed: T-001"), "{out}");
+    assert!(
+        out.contains("T-001: thread PRRT_kwDOA1 was left open: "),
+        "{out}"
+    );
+    assert!(out.contains("could not resolve"), "{out}");
+    assert!(out.contains(" halts= landed=T-001 "), "{out}");
+}
+
 #[test]
 fn pr_per_task_opens_one_from_the_launcher() {
     let p = pulls("", "exit 0\n");
@@ -3809,8 +3963,50 @@ fn driven_repo(tasks: &str) -> Repo {
     r
 }
 
+// one commit past HEAD, since a branch HEAD already carries is a merged pull request
 fn pull_branch(r: &Repo) {
     enallagi::git::git(&r.root, &["branch", "task/T-001"]).expect("branch");
+    advance(r, "task/T-001");
+}
+
+fn advance(r: &Repo, branch: &str) {
+    let git = |args: &[&str]| enallagi::git::git(&r.root, args).expect("git");
+    let tree = git(&["rev-parse", &format!("{branch}^{{tree}}")]);
+    let commit = git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit-tree",
+        tree.trim(),
+        "-p",
+        branch,
+        "-m",
+        "T-001: more",
+    ]);
+    git(&["update-ref", &format!("refs/heads/{branch}"), commit.trim()]);
+}
+
+#[test]
+fn a_merged_pull_branch_calls_no_host() {
+    let r = driven_repo(DONE_TASK);
+    enallagi::git::git(&r.root, &["branch", "task/T-001"]).expect("branch");
+    let path = gh_recording(&r, OPEN_PULL, PLAIN_REVIEW);
+    let out = run_with_path(&r, &path);
+    assert!(!r.root.join("gh.log").exists(), "{out}");
+}
+
+#[test]
+fn an_unmerged_pull_branch_is_still_asked_about() {
+    let r = driven_repo(DONE_TASK);
+    enallagi::git::git(&r.root, &["branch", "task/T-001"]).expect("branch");
+    advance(&r, "task/T-001");
+    let path = gh_recording(&r, "[]", PLAIN_REVIEW);
+    let out = run_with_path(&r, &path);
+    let log = std::fs::read_to_string(r.root.join("gh.log")).unwrap_or_else(|_| panic!("{out}"));
+    let calls: Vec<&str> = log.lines().collect();
+    assert_eq!(calls.len(), 1, "{log}");
+    assert!(calls[0].starts_with("pr list"), "{log}");
 }
 
 #[test]
