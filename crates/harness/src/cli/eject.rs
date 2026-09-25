@@ -7,6 +7,7 @@ use crate::eject::{self, EjectOpts};
 pub struct Args {
     pub dry_run: bool,
     pub keep_record: Option<PathBuf>,
+    pub delete: bool,
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
@@ -15,9 +16,16 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         Ok(top) => PathBuf::from(top),
         Err(_) => cwd.clone(),
     };
+    // the record is kept by default: the events, verdicts and PROGRESS.md are what says why a run
+    // ended where it did, and `--delete` is the one way to lose them
+    let keep_record = match (&args.keep_record, args.delete) {
+        (Some(dir), _) => Some(cwd.join(dir)),
+        (None, true) => None,
+        (None, false) => Some(eject::default_record(&root)?),
+    };
     let opts = EjectOpts {
         dry_run: args.dry_run,
-        keep_record: args.keep_record.as_ref().map(|dir| cwd.join(dir)),
+        keep_record,
     };
     let dir = crate::config::harness_dir(&root);
     let report = match eject::eject(&root, &opts) {

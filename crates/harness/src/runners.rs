@@ -74,8 +74,42 @@ pub fn detect(root: &Path) -> Detection {
     }
     if let [(runner, origin)] = matched.as_slice() {
         found.keys = keys(root, runner, origin);
+    } else if matched.is_empty() {
+        found.keys = layout_from_tree(root);
     }
     found
+}
+
+// no runner matched, so the tree alone answers the two layout keys a lane cannot run without: the
+// conventional source directory, and the test files a git pathspec over the conventional test
+// directory reaches; the check itself is the operator's to name
+fn layout_from_tree(root: &Path) -> Vec<Detected> {
+    let paths = tracked(root);
+    let first_under = |dir: &str| {
+        paths
+            .iter()
+            .find(|rel| rel.starts_with(&format!("{dir}/")))
+            .cloned()
+    };
+    let mut out = Vec::new();
+    if let Some((dir, file)) = ["src", "lib", "app"]
+        .iter()
+        .find_map(|dir| first_under(dir).map(|file| (dir.to_string(), file)))
+    {
+        out.push(at("layout.source_root", dir, &format!("{file}:1")));
+    }
+    let mut globs: Vec<String> = Vec::new();
+    let mut origin: Option<String> = None;
+    for dir in ["tests", "test", "spec"] {
+        if let Some(file) = first_under(dir) {
+            globs.push(format!("{dir}/*"));
+            origin.get_or_insert(file);
+        }
+    }
+    if let Some(origin) = origin {
+        out.push(at("layout.test_glob", globs, &format!("{origin}:1")));
+    }
+    out
 }
 
 fn detect_at(root: &Path, runner: &Runner) -> Option<String> {
@@ -124,23 +158,76 @@ fn keys(root: &Path, runner: &Runner, origin: &str) -> Vec<Detected> {
         ),
     ];
     let dirs = source_dirs(root, runner);
+    let paths = tracked(root);
     if let Some((dir, file)) = source_root(runner, &dirs) {
         out.push(at("layout.source_root", dir, &format!("{file}:1")));
     }
-    if let Some((_, file)) = dirs.first() {
-        let prefixes: Vec<String> = allowed_prefixes(&dirs);
+    let from = dirs
+        .first()
+        .map(|(_, file)| file.clone())
+        .or_else(|| paths.first().cloned());
+    if let Some(file) = from {
+        let prefixes: Vec<String> = allowed_prefixes(&dirs, &paths);
         out.push(at(
             "layout.allowed_prefixes",
             prefixes,
             &format!("{file}:1"),
         ));
     }
+    if let Some((globs, file)) = test_globs(runner, &paths) {
+        out.push(at("layout.test_glob", globs, &format!("{file}:1")));
+    }
     out
 }
 
+/// Every path git tracks, sorted; empty where the tree is no repository or holds no commit yet.
+fn tracked(root: &Path) -> Vec<String> {
+    let mut out: Vec<String> = crate::git::git(root, &["ls-files"])
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(String::from)
+        .collect();
+    out.sort();
+    out
+}
+
+/// One pathspec per top-level directory holding a tracked test file, with the first such file.
+fn test_globs(runner: &Runner, paths: &[String]) -> Option<(Vec<String>, String)> {
+    let is_test = regex::Regex::new(&runner.test_file_suffix_re).ok()?;
+    let mut out: Vec<String> = Vec::new();
+    let mut origin: Option<String> = None;
+    for rel in paths.iter().filter(|rel| is_test.is_match(rel)) {
+        let Some((_, ext)) = rel.rsplit_once('.') else {
+            continue;
+        };
+        // a git pathspec `*` crosses `/`, so one glob per top-level directory reads the whole tree under it
+        let spec = match rel.split_once('/') {
+            Some((dir, _)) => format!("{dir}/*.{ext}"),
+            None => format!("*.{ext}"),
+        };
+        if !out.contains(&spec) {
+            out.push(spec);
+        }
+        origin.get_or_insert_with(|| rel.clone());
+    }
+    out.sort();
+    Some((out, origin?))
+}
+
 // every dot-directory the defaults allow stays allowed: the harness's own files live under one
-fn allowed_prefixes(dirs: &[(String, String)]) -> Vec<String> {
+fn allowed_prefixes(dirs: &[(String, String)], paths: &[String]) -> Vec<String> {
     let mut out: Vec<String> = dirs.iter().map(|(dir, _)| format!("{dir}/")).collect();
+    // a tracked directory holding no source file, and a tracked root file, are product too
+    for rel in paths {
+        let entry = match rel.split_once('/') {
+            Some((dir, _)) => format!("{dir}/"),
+            None => rel.clone(),
+        };
+        if !out.contains(&entry) {
+            out.push(entry);
+        }
+    }
     let defaults: Vec<String> = toml::from_str::<toml::Value>(crate::config::DEFAULT_TOML)
         .ok()
         .and_then(|v| {
@@ -347,23 +434,25 @@ pub fn apply(text: &str, keys: &[Detected]) -> String {
 
 /// One line per detected value, or per candidate when the tree does not name exactly one runner.
 pub fn notes(found: &Detection) -> Vec<String> {
-    if !found.keys.is_empty() {
-        return found
-            .keys
-            .iter()
-            .map(|k| format!("detected: {} = {} ({})", k.key, k.value, k.origin))
-            .collect();
-    }
+    let detected = found
+        .keys
+        .iter()
+        .map(|k| format!("detected: {} = {} ({})", k.key, k.value, k.origin));
     let refusal = match found.candidates.len() {
-        0 => "no test runner detected; check.command and the layout keys keep their defaults",
-        _ => "more than one test runner matches; check.command and the layout keys keep their defaults",
+        1 => None,
+        0 => Some("no test runner detected; check.command keeps its default and the layout keys come from the tree"),
+        _ => Some("more than one test runner matches; check.command and the layout keys keep their defaults"),
     };
-    std::iter::once(refusal.to_string())
+    refusal
+        .map(str::to_string)
+        .into_iter()
         .chain(
             found
                 .candidates
                 .iter()
+                .filter(|_| found.candidates.len() != 1)
                 .map(|c| format!("candidate: {} ({})", c.name, c.origin)),
         )
+        .chain(detected)
         .collect()
 }

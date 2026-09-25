@@ -25,6 +25,13 @@ const SKILLS: [&str; 8] = [
     "caveman-commit",
 ];
 
+// where an eject in these tests keeps its record: never the user's own data directory
+fn data_home() -> &'static Path {
+    static DATA: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    DATA.get_or_init(|| tempfile::tempdir().expect("data home"))
+        .path()
+}
+
 fn harness(root: &Path, args: &[&str]) -> (i32, String) {
     let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(args)
@@ -32,6 +39,7 @@ fn harness(root: &Path, args: &[&str]) -> (i32, String) {
         .env_remove("ENALLAGI_DIR")
         // CI sets frozen, which refuses the fixture's path: skills before anything locks them
         .env_remove("CI")
+        .env("XDG_DATA_HOME", data_home())
         .output()
         .expect("spawn harness");
     let text = format!(
@@ -189,10 +197,10 @@ fn an_ejected_repository_looks_untouched() {
     let log = git(&r.root, &["log", "--format=%s"]);
     assert!(log.lines().any(|s| s == "T-001: stub"), "{log}\n{out}");
 
-    let (code, dry) = harness(&r.root, &["eject", "--dry-run"]);
+    let (code, dry) = harness(&r.root, &["eject", "--dry-run", "--delete"]);
     assert_eq!(code, 0, "{dry}");
     assert!(r.root.join(".enallagi").is_dir(), "{dry}");
-    let (code, out) = harness(&r.root, &["eject"]);
+    let (code, out) = harness(&r.root, &["eject", "--delete"]);
     assert_eq!(code, 0, "{out}");
     assert!(
         removed(&out, "removed").contains(&".enallagi".to_string()),
@@ -340,4 +348,72 @@ fn eject_keep_record_moves_the_directory_out() {
     assert!(!r.root.join(".enallagi").exists(), "{out}");
     assert_eq!(git(&r.root, &["status", "--porcelain", "--ignored"]), "");
     assert!(!exclude(&r.root).contains("# >>> harness"));
+}
+
+// the record outlives the install: the events, verdicts and progress are what says why a run
+// ended where it did, and only --delete removes them
+#[test]
+fn eject_keeps_the_record_in_the_data_directory() {
+    let r = Repo::new();
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+    let events = "{\"kind\":\"run.start\"}\n{\"kind\":\"run.end\"}\n";
+    r.write(".enallagi/events.jsonl", events);
+    r.write(".enallagi/PROGRESS.md", "# progress\n\nT-001 landed\n");
+    r.write(".enallagi/DECISIONS.md", "# decisions\n\n## [T-001] done\n");
+    let data = tempfile::tempdir().expect("data");
+
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["eject"])
+        .current_dir(&r.root)
+        .env_remove("ENALLAGI_DIR")
+        .env_remove("CI")
+        .env("XDG_DATA_HOME", data.path())
+        .output()
+        .expect("spawn harness");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    let ejected = data.path().join("enallagi").join("ejected");
+    let records: Vec<PathBuf> = std::fs::read_dir(&ejected)
+        .expect("ejected dir")
+        .map(|e| e.expect("entry").path())
+        .collect();
+    assert_eq!(records.len(), 1, "{records:?}");
+    let record = &records[0];
+    assert!(text.contains(&record.display().to_string()), "{text}");
+    for (name, body) in [
+        ("events.jsonl", events),
+        ("PROGRESS.md", "# progress\n\nT-001 landed\n"),
+        ("DECISIONS.md", "# decisions\n\n## [T-001] done\n"),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(record.join(name)).expect(name),
+            body,
+            "{name}"
+        );
+    }
+    assert!(!r.root.join(".enallagi").exists(), "{text}");
+    assert_eq!(git(&r.root, &["status", "--porcelain", "--ignored"]), "");
+}
+
+#[test]
+fn eject_delete_leaves_no_record() {
+    let r = Repo::new();
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+    let data = tempfile::tempdir().expect("data");
+
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["eject", "--delete"])
+        .current_dir(&r.root)
+        .env_remove("ENALLAGI_DIR")
+        .env_remove("CI")
+        .env("XDG_DATA_HOME", data.path())
+        .output()
+        .expect("spawn harness");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(!r.root.join(".enallagi").exists(), "{text}");
+    assert!(!data.path().join("enallagi").exists(), "{text}");
+    assert!(text.contains("removed: .enallagi"), "{text}");
 }

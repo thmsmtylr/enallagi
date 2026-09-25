@@ -58,27 +58,26 @@ fn run_dry_run_prints_the_plan_and_exits_0() {
     let repo = installed();
     let out = run(&repo, &["run", "--iterations", "1", "--dry-run"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
-    // discover's `when` negates task's, so exactly one of the pair is ever planned
+    // init seeds no task, so the plan is discovery; discover's `when` negates task's, so exactly
+    // one of the pair is ever planned
     assert!(
         out.stdout
-            .contains("=== pipeline task (queue.takeable) ==="),
+            .contains("=== pipeline discover (!queue.takeable) ==="),
         "{}",
         out.stdout
     );
-    for stage in ["implement as role implementer", "verify as role verifier"] {
+    for stage in ["scout as role scout", "adjudicate as role adjudicator"] {
         assert!(out.stdout.contains(stage), "no {stage} in:\n{}", out.stdout);
     }
 }
 
+// init seeds no placeholder block: a `ready` one would be taken before anything the operator queued
 #[test]
 fn tasks_list_prints_the_seeded_queue() {
     let repo = installed();
     let out = run(&repo, &["tasks", "list"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
-    let rows: Vec<&str> = out.stdout.lines().collect();
-    assert_eq!(rows.len(), 1, "{}", out.stdout);
-    assert!(rows[0].starts_with("T-001  "), "{}", rows[0]);
-    assert!(rows[0].ends_with("\u{2192} ready"), "{}", rows[0]);
+    assert_eq!(out.stdout.trim(), "", "{}", out.stdout);
 }
 
 #[test]

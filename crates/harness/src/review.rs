@@ -2,6 +2,7 @@
 
 use crate::issue;
 use crate::queue::{self, QueueError};
+use std::path::Path;
 use std::process::Command;
 
 // ponytail: first:100 on each list; a longer pull request is reported short rather than read, and
@@ -154,6 +155,66 @@ pub fn gh_args(reference: &str) -> Result<Vec<String>, ReviewError> {
         "-F".to_string(),
         format!("number={number}"),
     ])
+}
+
+// the head branch `enallagi pr` builds; an open pull request on any other head is not this loop's
+const BRANCH_PREFIX: &str = "task/";
+
+#[derive(Debug, serde::Deserialize)]
+pub struct Open {
+    pub url: String,
+    #[serde(rename = "headRefName")]
+    pub head: String,
+}
+
+/// The open pull requests whose head branch this checkout built. No such branch is no host call.
+pub fn open_pulls(root: &Path) -> Result<Vec<Open>, ReviewError> {
+    let pattern = format!("refs/heads/{BRANCH_PREFIX}*");
+    let refs = crate::git::git(
+        root,
+        &["for-each-ref", "--format=%(refname:short)", &pattern],
+    )
+    .map_err(|e| ReviewError::Gh {
+        command: format!("git for-each-ref {pattern}"),
+        reason: e.to_string(),
+    })?;
+    let built: Vec<&str> = refs
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if built.is_empty() {
+        return Ok(Vec::new());
+    }
+    let args = [
+        "pr",
+        "list",
+        "--state",
+        "open",
+        "--limit",
+        "100",
+        "--json",
+        "url,headRefName",
+    ];
+    let failed = |reason: String| ReviewError::Gh {
+        command: format!("gh {}", args.join(" ")),
+        reason,
+    };
+    let out = Command::new("gh")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .map_err(|e| failed(e.to_string()))?;
+    if !out.status.success() {
+        return Err(failed(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ));
+    }
+    let open: Vec<Open> = serde_json::from_slice(&out.stdout).map_err(|e| failed(e.to_string()))?;
+    Ok(open
+        .into_iter()
+        .filter(|p| built.contains(&p.head.as_str()))
+        .collect())
 }
 
 fn collect(response: Response) -> Found {

@@ -34,18 +34,13 @@ echo "export const greeting = 'hello'" >src/greeting.ts
 echo "grep -q \"'hello'\" src/greeting.ts" >tests/greeting.sh
 
 python3 - <<'PY'
-# assert the fixture was BUILT: a replace that matches nothing leaves the placeholder task (LEARNINGS.md, zero-as-pass)
+# assert the fixture was BUILT: an append that lands nowhere leaves no ready task (LEARNINGS.md, zero-as-pass)
 src = open('.enallagi/TASKS.md', encoding='utf-8').read()
-was = '''## [T-001] <the first task>
-scope:
-blockedBy: none
-status: ready
-rows: none — harness
-criteria:
-  - <what has to become true, and how you would see it>
-notes:'''
-assert src.count(was) == 1, 'the seeded T-001 block is not what this fixture expects'
-open('.enallagi/TASKS.md', 'w', encoding='utf-8').write(src.replace(was, '''## [T-001] the check is `sh check.sh`
+# init seeds no placeholder block, so the fixture's block is appended rather than written over one
+assert '## [T-001]' not in src, 'the seeded queue already holds a T-001 block'
+open('.enallagi/TASKS.md', 'w', encoding='utf-8').write(src.rstrip('\n') + '''
+
+## [T-001] the check is `sh check.sh`
 scope: .enallagi/enallagi.toml, AGENTS.md
 blockedBy: none
 status: ready
@@ -53,6 +48,7 @@ rows: none — harness
 criteria:
   - `.enallagi/enallagi.toml`'s `[check]` runs `sh check.sh` as both `command` and `force`, and AGENTS.md's Commands section names it
   - `sh check.sh` exits 0
-notes:'''))
+notes:
+''')
 PY
 git add -A && git commit -qm 'eval: a ready task that swaps the check' >/dev/null

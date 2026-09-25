@@ -15,6 +15,16 @@ criteria:
   - it happens
 ";
 
+const DONE_TASK: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.ts
+rows: none — harness
+status: done
+criteria:
+  - it happens
+";
+
 const REVIEW_TASK: &str = "\
 ## [T-001] do the thing
 
@@ -99,6 +109,11 @@ stages = ["verify"]
 name = "task"
 when = "queue.takeable"
 stages = ["implement", "verify", "adjudicate"]
+
+[[pipeline]]
+name = "triage"
+when = "queue.proposed"
+stages = ["adjudicate"]
 
 [[pipeline]]
 name = "discover"
@@ -1833,8 +1848,8 @@ fn a_nested_install_refuses_a_grown_baseline() {
 
     let (digest, events) = go(&r, &opts(1));
     assert!(digest.landed.is_empty(), "{events:#?}");
-    // the iteration's commits are on the branch, so the block wants another verdict, not another build
-    assert_eq!(nested_status(&r).as_deref(), Some("review"));
+    // back to the implementer, the one role that can remove the line; the commits stay on the branch
+    assert_eq!(nested_status(&r).as_deref(), Some("ready"));
     let refusal = events.iter().find_map(|e| match &e.kind {
         Kind::Gate {
             gate, pass, reason, ..
@@ -1859,14 +1874,63 @@ criteria:\n\
   - it happens\n\
 EOF\n";
 
-// the widening lands in the implement round, so a review-only round's own bases already carry it
+// the implement round that follows a scope refusal finds its commits on the branch and answers the
+// gate: it adds the `widened:` line, commits no product change, and the task lands on the widening
+#[test]
+fn a_scope_refusal_is_answered_by_the_next_implement() {
+    let confirm = format!(
+        "if grep -q 'scope gate rejected it' .enallagi/TASKS.md; then\n\
+         awk '{{print}} /^scope: src\\/thing.ts, src\\/other.ts$/{{print \"widened: src/other.ts holds the flag\"}}' .enallagi/TASKS.md >.enallagi/TASKS.new\n\
+         mv .enallagi/TASKS.new .enallagi/TASKS.md\n\
+         else\n{WIDENED}fi\n"
+    );
+    let r = nested("exit 0\n", &confirm);
+
+    let (digest, events) = go(&r, &opts(3));
+    assert_eq!(digest.landed, vec!["T-001".to_string()], "{events:#?}");
+    let refusals = events
+        .iter()
+        .filter(|e| matches!(&e.kind, Kind::Gate { gate, pass, .. } if gate == "scope" && !*pass))
+        .count();
+    assert_eq!(refusals, 1, "{events:#?}");
+    assert!(events.iter().any(|e| matches!(&e.kind,
+        Kind::TaskStatus { to, by, .. } if to == "ready" && by == "scope")));
+    // one product commit: the confirm round committed nothing
+    let subjects = in_dir(&r.root, &["log", "--format=%s"]);
+    assert_eq!(
+        subjects.lines().filter(|l| *l == "T-001: stub").count(),
+        1,
+        "{subjects}"
+    );
+    let passed = events.iter().find_map(|e| match &e.kind {
+        Kind::Gate {
+            gate, pass, reason, ..
+        } if gate == "scope" && *pass && reason.contains("widened scope") => Some(reason.clone()),
+        _ => None,
+    });
+    let reason = passed.unwrap_or_else(|| panic!("no pass on the widening: {events:#?}"));
+    assert!(reason.contains("holds the flag"), "{reason}");
+    assert!(digest.halts.is_empty(), "{:?}", digest.halts);
+}
+
+// the widening lands in the first implement round, so the second round's own bases already carry
+// it and only the queued commit still shows it; a lane that widens silently twice halts the run
 #[test]
 fn a_review_round_reads_the_queued_scope() {
     let r = nested("exit 0\n", WIDENED);
 
-    let (digest, events) = go(&r, &opts(2));
+    let (digest, events) = go(&r, &opts(3));
     assert!(digest.landed.is_empty(), "{events:#?}");
-    assert_eq!(nested_status(&r).as_deref(), Some("review"));
+    assert_eq!(nested_status(&r).as_deref(), Some("ready"));
+    assert!(
+        digest
+            .halts
+            .iter()
+            .any(|h| h.contains("T-001 was refused by the scope gate twice this run")),
+        "{:?}",
+        digest.halts
+    );
+    assert_eq!(digest.iterations, 2, "{events:#?}");
     let refusals: Vec<String> = events
         .iter()
         .filter_map(|e| match &e.kind {
@@ -2398,6 +2462,25 @@ fn the_shipped_task_pipeline_adjudicates() {
 }
 
 #[test]
+fn the_shipped_triage_runs_before_discover() {
+    let r = Repo::new();
+    r.write("enallagi.toml", "[check]\ncommand = \"true\"\n");
+    let cfg = enallagi::config::load(&r.root).expect("load");
+    let triage = cfg
+        .pipeline
+        .iter()
+        .find(|p| p.name == "triage")
+        .expect("the triage pipeline");
+    assert_eq!(triage.when, "queue.proposed");
+    assert_eq!(triage.stages, vec!["adjudicate"]);
+    let names: Vec<&str> = cfg.pipeline.iter().map(|p| p.name.as_str()).collect();
+    assert!(
+        names.iter().position(|n| *n == "triage") < names.iter().position(|n| *n == "discover"),
+        "{names:?}"
+    );
+}
+
+#[test]
 fn an_attended_block_waits_for_a_scout_round() {
     let r = repo("", "");
     let implement = implementer(&r, "");
@@ -2705,6 +2788,108 @@ fn an_unnamed_run_still_reaches_discover() {
         stages_started(&events).contains(&"scout".to_string()),
         "{events:#?}"
     );
+}
+
+// the block under test is the one `enallagi issue` wrote, so the fixture's gh prints the issue
+fn queued_issue(r: &Repo) {
+    script(
+        r,
+        "tools/gh",
+        &format!(
+            "printf '%s' '{}'\n",
+            include_str!("fixtures/issues/help-wanted.json")
+        ),
+    );
+    let path = format!(
+        "{}:{}",
+        r.root.join("tools").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["issue", "owner/repo#12"])
+        .current_dir(&r.root)
+        .env("PATH", path)
+        .output()
+        .expect("run enallagi");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    r.commit_all("the operator's issue");
+}
+
+#[test]
+fn a_proposed_block_is_adjudicated_before_scouting() {
+    let r = repo("", "");
+    let scout = script(&r, "src/fakescout.sh", QUIET);
+    let adj = adjudicator(&r, &promotes("T-002"));
+    let roles = format!(
+        "{}{}",
+        role_command("scout", &scout),
+        role_command("adjudicator", &adj)
+    );
+    write_toml(&r, &base_toml(&roles));
+    r.write("TASKS.md", DONE_TASK);
+    r.commit_all("stubs");
+    queued_issue(&r);
+    assert_eq!(status_of(&r, "T-002").as_deref(), Some("proposed"));
+
+    let (_, events) = go(&r, &opts(1));
+    let stages = stages_started(&events);
+    assert!(!stages.contains(&"scout".to_string()), "{stages:?}");
+    assert!(stages.contains(&"adjudicate".to_string()), "{stages:?}");
+    assert_ne!(status_of(&r, "T-002").as_deref(), Some("proposed"));
+}
+
+// the shipped pipelines, not base_toml's copy: the ceiling under test is the default's own
+fn default_pipelines_toml(extra: &str) -> String {
+    let full = base_toml(extra);
+    let cut = full
+        .find("[[pipeline]]")
+        .expect("base_toml declares pipelines");
+    let stages = full.find("[[stage]]").expect("base_toml declares stages");
+    let rest = &full[stages..];
+    let after_stages = rest.find("\n[agent.").map(|i| &rest[i..]).unwrap_or("");
+    format!("{}{}", &full[..cut], after_stages)
+}
+
+#[test]
+fn an_undecided_block_hands_the_round_to_discover() {
+    let r = repo("", "");
+    let scout = script(&r, "src/fakescout.sh", QUIET);
+    let adj = adjudicator(&r, "");
+    let roles = format!(
+        "{}{}",
+        role_command("scout", &scout),
+        role_command("adjudicator", &adj)
+    );
+    write_toml(&r, &default_pipelines_toml(&roles));
+    r.write("TASKS.md", DONE_TASK);
+    r.commit_all("stubs");
+    queued_issue(&r);
+    installed(&r);
+    assert_eq!(status_of(&r, "T-002").as_deref(), Some("proposed"));
+
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["run", "--no-tui", "--iterations", "3"])
+        .current_dir(&r.root)
+        .env_remove("CI")
+        .output()
+        .expect("run enallagi run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let started: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains(" stage.start "))
+        .map(|l| {
+            if l.contains("stage=scout") {
+                "scout"
+            } else {
+                "other"
+            }
+        })
+        .collect();
+    // the queued block is decided first, then a round the adjudicator left dry goes to the scout
+    assert_eq!(started.first(), Some(&"other"), "{stdout}");
+    assert!(stdout.contains("stage=scout"), "{stdout}");
+    assert!(stdout.contains("triage spent its 1 dry round"), "{stdout}");
+    assert_eq!(status_of(&r, "T-002").as_deref(), Some("proposed"));
 }
 
 #[test]
@@ -3546,4 +3731,125 @@ fn an_iteration_lands_under_a_protection_finding() {
     assert!(digest.halts.is_empty(), "{:?}", digest.halts);
     let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
     assert!(tasks.contains("status: done"), "{tasks}");
+}
+
+// the second head is a branch this checkout never built, so the step must not read it
+const OPEN_PULL: &str = concat!(
+    r#"[{"url":"https://github.com/owner/repo/pull/13","headRefName":"task/T-001"},"#,
+    r#"{"url":"https://github.com/owner/repo/pull/14","headRefName":"feature/elsewhere"}]"#,
+);
+const PLAIN_REVIEW: &str = include_str!("fixtures/reviews/plain.json");
+
+// one line per invocation, so the log counts the host calls the step made
+fn gh_recording(r: &Repo, list: &str, graphql: &str) -> String {
+    let log = r.root.join("gh.log");
+    script(
+        r,
+        "tools/gh",
+        &format!(
+            "printf '%s\\n' \"$*\" >>'{log}'\n\
+             case \"$1\" in\n\
+             pr) printf '%s' '{list}' ;;\n\
+             *) printf '%s' '{graphql}' ;;\n\
+             esac\n",
+            log = log.display(),
+        ),
+    );
+    format!(
+        "{}:{}",
+        r.root.join("tools").display(),
+        std::env::var("PATH").unwrap_or_default()
+    )
+}
+
+// every directory holding gh is dropped; git, bash and sh are linked back in case one held them too
+fn without_gh(r: &Repo) -> String {
+    let dir = r.root.join("nogh");
+    std::fs::create_dir_all(&dir).expect("nogh");
+    let path = std::env::var("PATH").unwrap_or_default();
+    for name in ["git", "bash", "sh"] {
+        let found = path
+            .split(':')
+            .map(|d| std::path::Path::new(d).join(name))
+            .find(|p| p.exists())
+            .unwrap_or_else(|| panic!("{name} is not on PATH"));
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&found, dir.join(name)).expect("link");
+    }
+    let kept: Vec<&str> = path
+        .split(':')
+        .filter(|d| !std::path::Path::new(d).join("gh").exists())
+        .collect();
+    format!("{}:{}", dir.display(), kept.join(":"))
+}
+
+// gh is found on PATH, which an in-process run cannot set per test, so these drive the binary
+fn run_with_path(r: &Repo, path: &str) -> String {
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["run", "--no-tui", "--iterations", "1"])
+        .current_dir(&r.root)
+        .env_remove("CI")
+        .env("PATH", path)
+        .output()
+        .expect("run enallagi");
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    text
+}
+
+fn driven_repo(tasks: &str) -> Repo {
+    let r = Repo::new();
+    script(&r, "src/fakecheck.sh", "exit 0\n");
+    script(&r, "src/fakeagent.sh", QUIET);
+    installed(&r);
+    write_toml_at(&r, ".enallagi/enallagi.toml", &base_toml(""));
+    r.write(".enallagi/TASKS.md", tasks);
+    installed(&r);
+    r.commit_all("a fixture the binary drives");
+    r
+}
+
+fn pull_branch(r: &Repo) {
+    enallagi::git::git(&r.root, &["branch", "task/T-001"]).expect("branch");
+}
+
+#[test]
+fn an_iteration_queues_an_open_review_comment() {
+    let r = driven_repo(DONE_TASK);
+    pull_branch(&r);
+    let path = gh_recording(&r, OPEN_PULL, PLAIN_REVIEW);
+    let out = run_with_path(&r, &path);
+
+    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
+    assert!(
+        tasks.contains("parse drops the timezone here"),
+        "{tasks}\n{out}"
+    );
+    assert!(tasks.contains("#discussion_r1000000003"), "{tasks}");
+    assert!(tasks.contains("status: proposed"), "{tasks}");
+
+    let log = std::fs::read_to_string(r.root.join("gh.log")).expect("gh ran");
+    let calls: Vec<&str> = log.lines().collect();
+    assert_eq!(calls.len(), 2, "{log}");
+    assert!(calls[0].starts_with("pr list"), "{log}");
+    assert!(calls[1].starts_with("api graphql"), "{log}");
+}
+
+#[test]
+fn a_checkout_with_no_pull_branch_calls_no_host() {
+    let r = driven_repo(DONE_TASK);
+    let path = gh_recording(&r, OPEN_PULL, PLAIN_REVIEW);
+    let out = run_with_path(&r, &path);
+    assert!(!r.root.join("gh.log").exists(), "{out}");
+}
+
+#[test]
+fn a_missing_host_tool_warns_and_the_run_goes_on() {
+    let r = driven_repo(DONE_TASK);
+    pull_branch(&r);
+    let out = run_with_path(&r, &without_gh(&r));
+    assert!(out.contains("gh pr list"), "{out}");
+    assert!(!out.contains("HALT"), "{out}");
+    let log = std::fs::read_to_string(r.root.join(".enallagi/events.jsonl")).unwrap_or_default();
+    assert!(log.contains("stage.start"), "{out}");
 }

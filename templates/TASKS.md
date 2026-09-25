@@ -29,12 +29,3 @@ A directory in `scope:` is written `dir/**`. A bare `dir` matches only itself, n
 `attended: true` marks a task needing a human credential and no launcher auto-selects it.
 
 ---
-
-## [T-001] <the first task>
-scope:
-blockedBy: none
-status: ready
-rows: none — harness
-criteria:
-  - <what has to become true, and how you would see it>
-notes:

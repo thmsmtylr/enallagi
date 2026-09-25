@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # An ordinary repository the harness did not grow up in: source, tests, docs, a README, a licence,
-# a lockfile and a green check. `enallagi init` runs against it exactly once, with no hand editing.
+# a lockfile and a green check. `enallagi init` runs against it exactly once, with no hand editing
+# and no second run.
 set -e
 
 mkdir -p fixture/src fixture/tests fixture/docs
@@ -24,7 +25,9 @@ git add -A
 git -c commit.gpgsign=false commit -qm "widget"
 
 bash check.sh
-enallagi init --adapter claude
+# one pass, told the one thing no runner preset can detect, its check; the answers a person would
+# type at the prompts are flags here, and a stdin that is not a terminal takes every other default
+enallagi init --check 'bash check.sh' --frozen
 # init ignores the harness directory rather than tracking it, so there may be nothing to commit
 git add -A
 git diff --cached --quiet || git -c commit.gpgsign=false commit -qm "enallagi init"

@@ -5,19 +5,21 @@
 # thing that closes it to its word.
 set -u
 python3 - <<'PY'
-# assert the fixture was BUILT, never merely that nothing failed: a replace that silently matches
-# nothing leaves the task at `ready`, the assertion reads `ready`, and the eval passes having
-# measured nothing (LEARNINGS.md, zero-as-pass).
+# assert the fixture was BUILT, never merely that nothing failed: an append that lands nowhere
+# leaves no task at `review`, the assertion reads nothing, and the eval passes having measured
+# nothing (LEARNINGS.md, zero-as-pass). init seeds no placeholder block, so the block is appended.
 src = open('.enallagi/TASKS.md').read()
-was = '''## [T-001] <the first task>
-scope:
-blockedBy: none
-status: ready'''
-assert src.count(was) == 1, 'the seeded T-001 block is not what this fixture expects'
-open('.enallagi/TASKS.md', 'w').write(src.replace(was, '''## [T-001] add the greeting
+assert '## [T-001]' not in src, 'the seeded queue already holds a T-001 block'
+open('.enallagi/TASKS.md', 'w').write(src.rstrip('\n') + '''
+
+## [T-001] add the greeting
 scope: src/greeting.ts
 blockedBy: none
-status: review'''))
+status: review
+rows: none — harness
+criteria:
+  - <what has to become true, and how you would see it>
+''')
 PY
 # the work exists in the tree and on no commit: this is what a terminated lane leaves behind
 echo "export const greeting = 'hello'" >src/greeting.ts

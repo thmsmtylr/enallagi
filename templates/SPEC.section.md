@@ -59,8 +59,11 @@ here carries no backtick, and the file name before `::` is matched against the t
 `__ENALLAGI_DIR__/enallagi.toml` configures. The heading above and its terminator are what that
 file points the probes at — rename it there if you rename it here.
 
+The table starts empty, since a row nothing has earned is a finding and not a placeholder. A row
+is two cells, the behaviour and the backticked test:
+`<what must be true>` beside `src/thing.test.ts::a name copied from your suite`.
+
 | Behaviour | Test |
 | --- | --- |
-| <what must be true> | `src/thing.test.ts::a name copied from your suite` |
 
 ## 12. Out of scope

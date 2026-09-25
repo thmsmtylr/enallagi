@@ -11,9 +11,19 @@ The defaults are in `crates/harness/harness.default.toml`.
 | --- | --- | --- |
 | `review` | `queue.reviewing` | **verify** |
 | `task` | `queue.takeable` | **implement** → **verify** → **adjudicate** |
+| `triage` | `queue.proposed` | **adjudicate** |
 | `discover` | `!queue.takeable` | **scout** → **adjudicate** |
 
+A queue holding a `proposed` block and nothing takeable takes `triage`, so a block the operator
+queued is decided before the scout files more.
 `discover` ends the run after two dry rounds.
+`triage` has one: a round that leaves its proposed block undecided hands the next round to
+`discover`, and a round that leaves takeable work reopens it.
+
+Before selecting a task, an iteration reads the review comments on open pull requests
+from its own `task/` branches.
+Each unresolved comment lands as a `proposed` block.
+No host tool, no such branch, or a failed host call is a warning, never a halt.
 
 ## Gates
 
@@ -55,7 +65,7 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `queue-hygiene` | a repeated id, a missing status, an undefined blocker, or a scope entry matching nothing |
 | `friction-repeat` | a friction recorded twice that no rule or kill line covers |
 | `check-red` | a check that exits non-zero, with its first failing test |
-| `litter` | a tracked file outside the source root and the allowlists |
+| `litter` | a tracked path the repository treats as disposable, or an untracked path on no allowlist |
 | `plain-record` | a commit subject, note or printed line that comments instead of recording |
 | `install-stale` | an installed file that differs from what `enallagi init` writes now |
 | `contribution-policy` | a guide sentence that refuses or conditions generated changes |
@@ -67,6 +77,10 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `turns-exhausted` | a stage that used its whole turn cap |
 | `limit-repeat` | a rate limit hit in consecutive stages |
 | `driver` | a shortfall the built artifact reports when `layout.driver_command` runs it |
+
+`litter` reads a tracked path as disposable when `layout.machinery` names a part of it.
+The repository's own ignore rules covering a path git still tracks reads the same way.
+`layout.strict_prefixes = true` widens the tracked arm to every path outside `layout.allowed_prefixes`.
 
 `branch-protection` is advisory.
 Its host-free leg counts the non-merge first-parent commits on the remote's default branch.
@@ -96,6 +110,7 @@ A task's own `model:` and `effort:` lines win over `[agent]` and `[agent.<role>]
 
 - `queue.takeable`
 - `queue.reviewing`
+- `queue.proposed`
 - `queue.empty`
 - `task.attended`
 - `check.red`
@@ -107,6 +122,10 @@ A skill or role `source` is `github:owner/repo`, `git+file://` or `path:`.
 
 `enallagi init` writes these, relative to the repo root, with `.enallagi` as `layout.harness_dir`.
 The plan is built in `crates/harness/src/init.rs`.
+
+`enallagi eject` removes them and moves the harness directory, the run's record, to
+`$XDG_DATA_HOME/enallagi/ejected/<repository>-<stamp>` (`~/.local/share/...` when unset);
+`--keep-record <path>` names the place instead, and `--delete` is the one way to remove it.
 
 | Path | What |
 | --- | --- |

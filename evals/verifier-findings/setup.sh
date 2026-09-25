@@ -22,17 +22,7 @@ open('.enallagi/SPEC.md', 'w').write(spec.replace(stages.group(0),
     '`bun run check` runs `bun test` and nothing else. This project has no typecheck, lint,\n'
     'precheck or trace stage, and none is owed.\n\n'))
 src = open('.enallagi/TASKS.md').read()
-was = '''## [T-001] <the first task>
-scope:
-blockedBy: none
-status: ready
-rows: none — harness
-criteria:
-  - <what has to become true, and how you would see it>
-notes:
-'''
-assert src.count(was) == 1, 'the seeded T-001 block is not what this fixture expects'
-open('.enallagi/TASKS.md', 'w').write(src.replace(was, ''))
+assert '## [T-001]' not in src, 'the seeded queue already holds a T-001 block'
 PY
 git add package.json .enallagi/SPEC.md .enallagi/TASKS.md && git commit -qm 'eval: a bun project' >/dev/null
 

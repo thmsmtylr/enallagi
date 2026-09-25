@@ -11,7 +11,7 @@ You implement ONE task from __ENALLAGI_DIR__/TASKS.md per invocation. Skills, ea
 - {{skill:caveman-commit}} — the register for the commit message at step 7.
 
 Protocol:
-1. Read __CONTEXT_FILE__, __SPEC__, __ENALLAGI_DIR__/LEARNINGS.md and the task block. Restate the acceptance criteria in one sentence. If the task carries verifier rejection notes, address them first.
+1. Read __CONTEXT_FILE__, __SPEC__, __ENALLAGI_DIR__/LEARNINGS.md and the task block. Restate the acceptance criteria in one sentence. If the task carries verifier rejection notes or a `gate:` line, address them first: a gate's reason names a file off `scope:` or a widening with no `widened:` line, and the iteration's commits it judged are already on the branch.
 2. Read every file in scope BEFORE editing, plus `__CONTRACT_FILE__`.
 3. Red: write tests that directly encode the acceptance criteria, named exactly as __SPEC__ names them, and watch them fail.
 4. Green: implement the smallest change that passes. Do not refactor neighbouring code, do not add features not in the criteria, do not touch files outside `scope:` unless you add them to it with a one-line `widened:` reason in the block, which the verifier grades and the scope gate requires.

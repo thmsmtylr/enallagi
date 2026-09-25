@@ -5,6 +5,12 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `enallagi init` is one pass: it asks for the four keys detection cannot decide (`--yes`, `--check`, `--fail-name`, `--source-root`, `--preset` answer without asking), renders every copy from the answers, writes the configured preset's adapter, vendors skills at a terminal (`--sync`, `--frozen`), commits the state, takes `--issue <url>`, and ends with a probe; it seeds no placeholder task and no placeholder spec row
+- a tree no runner preset matches still gets `layout.source_root` and `layout.test_glob` from its `src/` and `tests/`
+- `enallagi eject` keeps the harness directory under `$XDG_DATA_HOME/enallagi/ejected` unless `--delete` is passed
+- a `done` the scope gate refuses returns to `ready` with the reason on the block, and a second refusal in one run halts it
+- `triage` spends one dry round on an undecided block, then the round goes to `discover`
+- the cold-start eval names the probes that reported `OFF` and fails when every probe did
 - `enallagi worktree` refuses a lane while the parent checkout has uncommitted work, naming the repository and the porcelain lines
 - a task block's `model:` and `effort:` reach the lane that implements it, and `run --dry-run` prints both on every stage line
 - the crate, binary, config file and environment variables are named `enallagi`; the `harness` names are read as a fallback

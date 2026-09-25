@@ -22,8 +22,13 @@ Run init at the repository root:
 enallagi init
 ```
 
-Init seeds `.enallagi/` and writes `.enallagi/enallagi.toml`.
-It detects the test runner from the files the repository carries.
+One pass does everything a lane needs, and `--issue <url>` queues the issue the loop will work:
+
+```bash
+enallagi init --issue https://github.com/owner/repo/issues/12
+```
+
+Init detects the test runner from the files the repository carries.
 Each detected key is printed with the `file:line` that decided it.
 Four of the six lines read:
 
@@ -34,66 +39,26 @@ Four of the six lines read:
   detected: layout.source_root = "src" (src/date.ts:1)
 ```
 
-A tree that matches no runner, or more than one, keeps the defaults.
-Init then names the candidates it found.
+A tree that matches no runner, or more than one, is asked four questions instead: `agent.preset`,
+`check.command`, `check.fail_name` and `layout.source_root`, each defaulting to what detection
+found. `--check`, `--fail-name`, `--source-root` and `--preset` answer a question without asking
+it, and `--yes` takes every default. A stdin that is not a terminal never asks.
+
+```bash
+enallagi init --yes
+```
 The seven runners and their `fail_name` patterns are in [configuration.md](configuration.md#checkfail_name).
 
-## 3. Set the keys detection cannot
+Init then writes `.enallagi/enallagi.toml` and renders the role prompts, `RAILS.md`, the loop's
+skill and the Commands section of `AGENTS.md` from the answers, in the same pass. It writes the
+hook and instruction files for the configured agent, `--adapter` overriding the preset, vendors
+the declared skills when stdin is a terminal (`--sync` forces it, `--frozen` forbids it), commits
+`.enallagi/` in its own repository, appends the issue as a `proposed` block, and prints what
+`enallagi probe` reports. `PROBE install-stale 0` is the state it leaves.
 
-Open `.enallagi/enallagi.toml` and set these by hand:
-
-- `agent.preset`, when your agent CLI is not `claude`.
-- `check.command`, when detection found no runner or more than one.
-- `check.fail_name`, for the same reason.
-- `layout.source_root`, when the code does not live under `src`.
-
-Every key and its default is in [configuration.md](configuration.md).
-
-## 4. Re-run `enallagi init` after every config edit
-
-Init renders the role prompts, `RAILS.md` and the loop's skill with the configured check.
-An edit to `enallagi.toml` leaves those copies naming the old values.
-
-```bash
-enallagi init
-enallagi probe install-stale
-```
-
-`enallagi probe install-stale` prints `PROBE install-stale 0` once every copy matches.
-Skipped, it names each stale file, and `enallagi run` refuses to start.
-
-Init keeps `.enallagi/AGENTS.md` as you left it.
-After a check change, edit its Commands section to name the new check.
-The `check-unnamed` probe reports it until you do.
-
-## 5. Pick the adapter
-
-`--adapter` writes the hook and instruction files for one agent CLI:
-
-```bash
-enallagi init --adapter claude
-```
-
-The presets are listed in `enallagi init --help`.
-
-## 6. Vendor the skills
-
-```bash
-enallagi skills sync
-```
-
-Sync fetches every `[[skill]]` at its pinned `rev` and records it in `.enallagi/harness.lock`.
-Replacing or removing a skill is in [pipeline.md](pipeline.md#skills).
-
-## 7. Queue a task
-
-Turn an issue into a `proposed` block, or edit the `T-001` placeholder init seeded:
-
-```bash
-enallagi issue owner/repo#12
-```
-
-The block stays `proposed` until you fill `scope:` and `criteria:` and set `status: ready`.
+The block stays `proposed` until the first run: the adjudicator writes `scope:` and `criteria:`
+and sets it `ready` before anything else happens. To queue one by hand instead, append a block to
+`.enallagi/TASKS.md`:
 
 ```markdown
 ## [T-001] the date parser drops a timezone
@@ -111,44 +76,41 @@ notes:
 - `rows:` is a token the queue reads, never prose. Write `none — harness` or a spec row's exact name.
 - A spec row name carries no comma, since `rows:` splits on commas.
 
-## 8. Commit every instance edit
+`.enallagi/` is its own git repository, excluded from yours, and the verdict gate fails a task
+while a file there carries an uncommitted edit. Init commits what it wrote; a block you append is
+yours to commit, with `git -C .enallagi commit -am "queue T-001"`.
 
-`.enallagi/` is its own git repository, excluded from yours.
-The verdict gate fails a task while a file there carries an uncommitted edit.
+Edit `.enallagi/enallagi.toml` later and the rendered copies name the old values; re-run
+`enallagi init` and it re-renders them, or `enallagi probe install-stale` names each stale file
+and `enallagi run` refuses to start.
 
-```bash
-git -C .enallagi add enallagi.toml TASKS.md SPEC.md AGENTS.md
-git -C .enallagi commit -m "queue T-001"
-```
-
-## 9. Run one task
+## 3. Run
 
 ```bash
-enallagi run --pipeline task --iterations 1
+enallagi run --pr-per-task --iterations 1
 ```
 
-The implementer commits and sets the task to `review`.
-The verifier returns `done` or a rejection.
+The adjudicator decides the proposed block, the implementer commits and sets it to `review`, the
+verifier returns `done` or a rejection, and a landed task is pushed to its own branch and opened
+as a pull request. `pr` branches off the upstream default branch, carries only the commits naming
+the task, and reads the target's contribution guide before it pushes. The pull request is merged
+by a person, never by the binary.
 
-## 10. Read a rejection
+```bash
+enallagi tasks list
+enallagi skills list
+enallagi probe install-stale
+```
+
+## 4. Read a rejection
 
 A rejected task goes back to `ready` with the verifier's reasons in `notes:`.
 
 ```bash
-enallagi tasks block T-001
+enallagi tasks rejections
 enallagi events --task T-001
 ```
 
-`tasks block` prints the block with its notes.
+`tasks rejections` prints every open rejection with its reasons, and `tasks block T-001` one block.
 `events --task` prints each stage and gate the task went through.
 Answer each point in the criteria or the scope, commit, and run again.
-
-## 11. Open the pull request
-
-```bash
-enallagi pr T-001 --push
-```
-
-`pr` branches off the upstream default branch and carries only the commits naming the task.
-It reads the target's contribution guide before it pushes.
-The pull request is merged by a person, never by the binary.

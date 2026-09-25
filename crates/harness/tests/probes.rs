@@ -144,12 +144,26 @@ fn check_unnamed_reports_an_unset_check() {
 #[test]
 fn the_row_parser_reads_the_seeded_criteria_table() {
     let (repo, cfg) = seeded();
+    // the seeded table is empty and still a table: read, and nothing to report
+    assert_eq!(count(&run(&repo, &cfg), "spec-untested"), Some(0));
+    seeded_row(&repo, &cfg);
     assert_eq!(count(&run(&repo, &cfg), "spec-untested"), Some(1));
 }
 
+// one row under the seeded table's header, naming a test the tree lacks
+fn seeded_row(repo: &Repo, cfg: &Config) {
+    let path = config::instance_path(&repo.root, &cfg.layout.harness_dir, &cfg.layout.spec);
+    let text = fs::read_to_string(&path).expect("SPEC.md");
+    let header = "| Behaviour | Test |\n| --- | --- |\n";
+    let at = text.find(header).expect("the seeded table header") + header.len();
+    let row = "| the thing happens | `src/thing.test.ts::a name copied from your suite` |\n";
+    fs::write(&path, format!("{}{}{}", &text[..at], row, &text[at..])).expect("SPEC.md");
+}
+
 #[test]
-fn a_fresh_install_has_two_unenforced_rails() {
+fn a_missing_hash_file_unenforces_two_rails() {
     let (repo, cfg) = seeded();
+    fs::remove_file(repo.root.join(".enallagi/test-hashes.json")).expect("remove the hash file");
     let results = run(&repo, &cfg);
     let found = findings(&results, "rail-unenforced");
     assert_eq!(found.len(), 2, "{}", render(&results));
@@ -159,8 +173,10 @@ fn a_fresh_install_has_two_unenforced_rails() {
 }
 
 #[test]
-fn the_seeded_criterion_is_untested() {
+fn an_unclaimed_row_is_uncovered() {
     let (repo, cfg) = seeded();
+    assert_eq!(count(&run(&repo, &cfg), "queue-uncovered"), Some(0));
+    seeded_row(&repo, &cfg);
     assert_eq!(count(&run(&repo, &cfg), "queue-uncovered"), Some(1));
 }
 
@@ -246,9 +262,10 @@ fn an_undefined_piece_reports_the_whole_claim() {
 }
 
 #[test]
-fn harness_immutable_has_no_hash_key() {
+fn a_missing_hash_file_uncovers_the_config() {
     // the rail names the file that is the gate; with the launcher a binary, that file is enallagi.toml
     let (repo, cfg) = seeded();
+    fs::remove_file(repo.root.join(".enallagi/test-hashes.json")).expect("remove the hash file");
     let results = run(&repo, &cfg);
     let found = findings(&results, "hash-uncovered");
     assert_eq!(found.len(), 1, "{}", render(&results));
@@ -328,6 +345,10 @@ fn skills_sync(repo: &Repo) {
 
 // the conventions a repository already carries, then the install, then what `skills sync` writes
 fn conventional() -> (Repo, Config) {
+    conventional_with("")
+}
+
+fn conventional_with(layout_extra: &str) -> (Repo, Config) {
     let repo = Repo::new();
     for name in [
         "docs/guide.md",
@@ -345,6 +366,7 @@ fn conventional() -> (Repo, Config) {
     let mut toml = String::from(
         "[check]\ncommand = \"true\"\n\n[layout]\nallowed_prefixes = [\"src/\", \"docs/\", \"bench/\", \".enallagi/\", \".claude/\", \".github/\"]\n",
     );
+    toml.push_str(layout_extra);
     toml.push_str(&vendored_skills(&repo));
     // a tracked harness directory keeps the install in the product's history, so what it writes is tracked
     repo.write(".enallagi/enallagi.toml", &toml);
@@ -394,14 +416,47 @@ fn a_root_layout_lock_is_not_litter() {
 }
 
 #[test]
-fn a_file_added_after_the_install_is_litter() {
+fn a_file_added_after_the_install_is_not_litter() {
     let (repo, cfg) = conventional();
+    repo.write("scratch.md", "x\n");
+    repo.commit_all("scratch");
+    let results = run(&repo, &cfg);
+    assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
+}
+
+#[test]
+fn strict_prefixes_reports_a_file_outside_them() {
+    let (repo, cfg) = conventional_with("strict_prefixes = true\n");
     repo.write("scratch.md", "x\n");
     repo.commit_all("scratch");
     let results = run(&repo, &cfg);
     let found = findings(&results, "litter");
     assert_eq!(found.len(), 1, "{}", render(&results));
     assert_eq!(found[0].path, "scratch.md");
+}
+
+#[test]
+fn a_tracked_machinery_path_is_litter() {
+    let (repo, cfg) = conventional();
+    repo.write("dist/bundle.js", "x\n");
+    repo.commit_all("bundle");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "litter");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, "dist/bundle.js");
+}
+
+#[test]
+fn a_tracked_file_the_ignore_rules_cover_is_litter() {
+    let (repo, cfg) = conventional();
+    repo.write("src/notes.tmp", "x\n");
+    repo.commit_all("notes");
+    repo.write(".gitignore", "*.tmp\n");
+    repo.commit_all("ignore tmp");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "litter");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, "src/notes.tmp");
 }
 
 #[test]
@@ -416,6 +471,7 @@ fn no_adapter_install_reports_its_own_files() {
             &enallagi::init::InitOpts {
                 adapter: Some(name.clone()),
                 dry_run: false,
+                ..enallagi::init::InitOpts::default()
             },
         )
         .expect("install");
@@ -443,6 +499,7 @@ fn a_traceless_install_leaves_no_litter() {
             &enallagi::init::InitOpts {
                 adapter: Some(name.clone()),
                 dry_run: false,
+                ..enallagi::init::InitOpts::default()
             },
         )
         .expect("install");

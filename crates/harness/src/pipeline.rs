@@ -16,7 +16,7 @@ use crate::probes::{self, CheckOutcome, ProbeCtx};
 use crate::queue::{self, Queue};
 use crate::roles;
 use crate::skills::{self, ResolveOpts};
-use crate::{archive, git, pr};
+use crate::{archive, git, pr, review};
 
 // A lane running ps to check for competing writers must ignore its parent.
 const LANE: &str = "You are this loop's own lane, spawned by the harness. There is no human in this session
@@ -408,6 +408,8 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         proposed_at_start: Vec::new(),
         dry_rounds: 0,
         dry_pipeline: None,
+        spent: Vec::new(),
+        scope_refusals: std::collections::HashMap::new(),
         stopped: false,
         built: Vec::new(),
     };
@@ -439,6 +441,11 @@ struct Loop<'a> {
     proposed_at_start: Vec<String>,
     dry_rounds: u32,
     dry_pipeline: Option<String>,
+    // pipelines whose end_after_dry_rounds this run has spent; `choose` passes over them until a
+    // round leaves takeable work again
+    spent: Vec<String>,
+    // scope refusals per task this run: a second one is a widening no lane will explain
+    scope_refusals: std::collections::HashMap<String, u32>,
     stopped: bool,
     // tasks whose pull-request branch this run built, in order, so a dependent task stacks on one
     built: Vec<String>,
@@ -546,6 +553,7 @@ impl<'a> Loop<'a> {
             return false;
         }
 
+        self.read_reviews();
         // a block a human queued by hand is recorded against the product HEAD it was written at
         self.commit_state("queue");
         self.unblock();
@@ -641,8 +649,26 @@ impl<'a> Loop<'a> {
         if self.stopped {
             return false;
         }
+        // a round that left takeable work re-opens every pipeline a dry streak closed
+        if self.dry_rounds == 0 {
+            self.spent.clear();
+        }
         // an empty queue isn't exhaustion by itself; only end_after_dry_rounds consecutive empties are
-        pipeline.end_after_dry_rounds == 0 || self.dry_rounds < pipeline.end_after_dry_rounds
+        if pipeline.end_after_dry_rounds == 0 || self.dry_rounds < pipeline.end_after_dry_rounds {
+            return true;
+        }
+        // a spent ceiling closes this pipeline, not the run: the run goes on while a later
+        // pipeline's `when` still holds, so a block the adjudicator cannot decide hands the next
+        // round to discover rather than holding every round at triage
+        self.spent.push(pipeline.name.clone());
+        let next = self.choose();
+        if let Some(next) = &next {
+            self.digest.warnings.push(format!(
+                "{} spent its {} dry round(s); the next round takes {}.",
+                pipeline.name, pipeline.end_after_dry_rounds, next.name
+            ));
+        }
+        next.is_some()
     }
 
     fn state_root(&self) -> PathBuf {
@@ -895,6 +921,22 @@ impl<'a> Loop<'a> {
             if outcome.halt {
                 self.stopped = true;
                 return Flow::Stop;
+            }
+            // the first refusal hands the task back to the implementer with the reason; a second
+            // in the same run means no lane will answer it, and the run is not spent finding out
+            if gate == "scope" && !outcome.pass {
+                if let Some(task) = &task {
+                    let seen = self.scope_refusals.entry(task.clone()).or_insert(0);
+                    *seen += 1;
+                    if *seen >= 2 {
+                        let reason = format!(
+                            "{task} was refused by the scope gate twice this run, and the implement round between them did not answer it: {}",
+                            outcome.reason
+                        );
+                        self.halt(task, reason);
+                        return Flow::Stop;
+                    }
+                }
             }
             if outcome.skip_rest {
                 return Flow::SkipRest;
@@ -1194,6 +1236,9 @@ impl<'a> Loop<'a> {
             {
                 continue;
             }
+            if self.spent.contains(&self.cfg.pipeline[i].name) {
+                continue;
+            }
             let Ok(when) = config::parse_when(&self.cfg.pipeline[i].when) else {
                 continue;
             };
@@ -1247,6 +1292,54 @@ impl<'a> Loop<'a> {
         // rather than warning that a role left none -- a verify-only round has no other record
         if file_len(&self.file("PROGRESS.md")) <= progress_before {
             self.progress_stub(task, pipeline, status.as_deref());
+        }
+    }
+
+    // the loop cannot wait on a reviewer: an anchored comment becomes a proposed block the next lane takes
+    fn read_reviews(&mut self) {
+        let pulls = match review::open_pulls(self.root) {
+            Ok(pulls) => pulls,
+            Err(err) => {
+                self.digest.warnings.push(err.to_string());
+                return;
+            }
+        };
+        let queue = Queue {
+            path: self.file("TASKS.md"),
+        };
+        let decisions = std::fs::read_to_string(self.file("DECISIONS.md")).unwrap_or_default();
+        for pull in &pulls {
+            let found = match review::read(&pull.url) {
+                Ok(found) => found,
+                Err(err) => {
+                    self.digest.warnings.push(err.to_string());
+                    continue;
+                }
+            };
+            if found.short {
+                self.digest.warnings.push(format!(
+                    "{}: only the first 100 reviews, threads and comments were read",
+                    pull.url
+                ));
+            }
+            let appended = queue
+                .read()
+                .map_err(|e| e.to_string())
+                .and_then(|text| {
+                    review::append(&text, &decisions, &found).map_err(|e| e.to_string())
+                })
+                .and_then(|a| match a.blocks.len() {
+                    0 => Ok(0),
+                    n => queue.write(&a.queue).map(|()| n).map_err(|e| e.to_string()),
+                });
+            match appended {
+                Ok(0) => {}
+                Ok(n) => println!("  proposed: {n} from {}", pull.url),
+                Err(err) => self
+                    .digest
+                    .warnings
+                    .push(format!("{}: {err}", queue.path.display())),
+            }
         }
     }
 
@@ -1629,6 +1722,25 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
                 Err(err) => {
                     warnings.push(format!(
                         "TASKS.md: {err}; queue.reviewing treated as false (fail closed)"
+                    ));
+                    false
+                }
+            }
+        }
+        // an unreadable or unparseable queue is not evidence of a block waiting on the adjudicator, so this fails closed like `takeable`
+        Predicate::QueueProposed => {
+            match std::fs::read_to_string(config::instance_path(
+                root,
+                &cfg.layout.harness_dir,
+                "TASKS.md",
+            ))
+            .map_err(|e| e.to_string())
+            .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
+            {
+                Ok(blocks) => !queue::ids_at(&blocks, "proposed").is_empty(),
+                Err(err) => {
+                    warnings.push(format!(
+                        "TASKS.md: {err}; queue.proposed treated as false (fail closed)"
                     ));
                     false
                 }
