@@ -471,6 +471,46 @@ fn a_tracked_file_the_ignore_rules_cover_is_litter() {
     );
 }
 
+// the harness directory as its own repository: what its ignore rules cover and git tracks anyway is litter too
+#[test]
+fn a_state_repo_ignored_path_is_litter() {
+    let repo = Repo::new();
+    let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
+    repo.write("src/main.rs", "fn main() {}\n");
+    repo.write(".git/info/exclude", ".enallagi/\n");
+    repo.commit_all("product");
+    let toml = format!(
+        "[check]\ncommand = \"true\"\n\n[layout]\nallowed_prefixes = [\"src/\", \".enallagi/\", \".claude/\"]\n{}",
+        vendored_skills(&repo)
+    );
+    repo.write(".enallagi/enallagi.toml", &toml);
+    repo.write(".enallagi/.gitignore", "*.tmp\n");
+    repo.write(".enallagi/scratch.tmp", "x\n");
+    let state = repo.root.join(".enallagi");
+    git(&state, &["init", "-q"]);
+    git(&state, &["config", "user.name", "t"]);
+    git(&state, &["config", "user.email", "t@t"]);
+    git(&state, &["add", "-A"]);
+    git(&state, &["add", "-f", "scratch.tmp"]);
+    git(
+        &state,
+        &["-c", "commit.gpgsign=false", "commit", "-qm", "state"],
+    );
+
+    let cfg = config::load(&repo.root).expect("config");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "litter");
+    let scratch: Vec<_> = found
+        .iter()
+        .filter(|f| f.path == ".enallagi/scratch.tmp")
+        .collect();
+    assert_eq!(scratch.len(), 1, "{}", render(&results));
+    assert_eq!(
+        scratch[0].message,
+        "tracked and the repository treats it as disposable"
+    );
+}
+
 #[test]
 fn an_untracked_file_on_no_allowlist_is_litter() {
     let (repo, cfg) = conventional();
