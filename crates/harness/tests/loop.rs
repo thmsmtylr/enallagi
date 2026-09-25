@@ -1544,6 +1544,60 @@ fn a_verdict_of_no_findings_is_committed() {
     a_verdict_noting("VERIFIED. No findings, minor or otherwise.");
 }
 
+#[test]
+fn a_quoted_minor_is_not_the_verdict() {
+    a_verdict_noting("VERIFIED.\\n> implementer: one minor edge left, handled");
+}
+
+#[test]
+fn a_file_named_minor_is_not_the_verdict() {
+    a_verdict_noting("VERIFIED. src/minor.test.ts and lib/for-later.ts pass.");
+}
+
+#[test]
+fn a_test_named_minor_is_not_the_verdict() {
+    a_verdict_noting("VERIFIED. `a_minor_case` and the_minor_path_is_covered pass.");
+}
+
+fn a_verdict_refused_for(note: &str) -> String {
+    let r = repo(&base_toml(""), REVIEW_TASK);
+    let verify = verifier_noting(&r, note, "");
+    with_verifier(&r, &verify);
+    r.commit_all("stubs");
+
+    let (_, events) = go(&r, &opts(1));
+    let refusal = events.iter().find_map(|e| match &e.kind {
+        Kind::Gate {
+            gate, pass, reason, ..
+        } if gate == "commit-verdict" && !*pass => Some(reason.clone()),
+        _ => None,
+    });
+    assert_eq!(queued_status(&r).as_deref(), Some("review"), "{note}");
+    refusal.unwrap_or_else(|| panic!("commit-verdict passed: {events:#?}"))
+}
+
+#[test]
+fn a_deferred_line_with_no_block_names_the_field() {
+    let reason = a_verdict_refused_for(
+        "VERIFIED.\\ndeferred: the test never removes the entry it registers",
+    );
+    assert!(
+        reason.starts_with("the verdict's `deferred:` line"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("the test never removes the entry it registers"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn a_prose_deferral_is_told_the_field() {
+    let reason = a_verdict_refused_for("VERIFIED. Minor: the fixture leaks a file.");
+    assert!(reason.contains("\"minor\""), "{reason}");
+    assert!(reason.contains("`deferred:`"), "{reason}");
+}
+
 const IMPLEMENTER_NOTE: &str = "printf '  implementer: one minor edge left\\n' >>TASKS.md\n";
 
 fn a_clean_verdict_after_the_implementer(r: &Repo, implement: &str) {

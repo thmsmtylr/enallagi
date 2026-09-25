@@ -246,10 +246,16 @@ fn commit_verdict(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
     };
-    if let Some(phrase) = deferred_finding(ctx, &task) {
-        let reason = format!(
-            "the verdict's notes say \"{phrase}\" and it added no status: proposed block; write that finding as a proposed block with the command that shows it"
-        );
+    if let Some(deferred) = deferred_finding(ctx, &task) {
+        let phrase = &deferred.phrase;
+        let reason = match deferred.source {
+            DeferredIn::Field => format!(
+                "the verdict's `deferred:` line says \"{phrase}\" and it added no status: proposed block; write that finding as a proposed block with the command that shows it"
+            ),
+            DeferredIn::Notes => format!(
+                "the verdict's notes say \"{phrase}\" and it added no status: proposed block; write that finding as a proposed block with the command that shows it, and name it on a `deferred:` line"
+            ),
+        };
         let mut out = force_back(
             ctx,
             "commit-verdict",
@@ -265,8 +271,18 @@ fn commit_verdict(ctx: &mut GateCtx) -> GateOutcome {
     commit(ctx, &["TASKS.md"], &format!("verify: {task} verdict"))
 }
 
+enum DeferredIn {
+    Field,
+    Notes,
+}
+
+struct Deferred {
+    phrase: String,
+    source: DeferredIn,
+}
+
 // a finding left only in notes is archived with its block and never reaches the queue
-fn deferred_finding(ctx: &GateCtx, task: &str) -> Option<String> {
+fn deferred_finding(ctx: &GateCtx, task: &str) -> Option<Deferred> {
     at_base(ctx, &rel(ctx, "TASKS.md"))?;
     let before = show_at(ctx, &rel(ctx, "TASKS.md"), None).unwrap_or_default();
     let before = queue::parse(&before).unwrap_or_default();
@@ -283,6 +299,24 @@ fn deferred_finding(ctx: &GateCtx, task: &str) -> Option<String> {
         .filter(|b| b.id == task)
         .flat_map(|b| b.body.iter().map(|(_, l)| l.as_str()))
         .collect();
+    let added: Vec<&str> = now
+        .iter()
+        .filter(|b| b.id == task)
+        .flat_map(|b| b.body.iter().map(|(_, l)| l.as_str()))
+        .filter(|l| !old.contains(l))
+        .collect();
+    // the field is the verifier's own word; prose is read only when no field was written
+    if let Some(phrase) = added
+        .iter()
+        .find_map(|l| l.trim().strip_prefix("deferred:"))
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        return Some(Deferred {
+            phrase: phrase.to_string(),
+            source: DeferredIn::Field,
+        });
+    }
     let re = regex::Regex::new(
         r"(?i)\b(not a reason for rejection|not a rejection reason|minor|for later)\b",
     )
@@ -290,14 +324,43 @@ fn deferred_finding(ctx: &GateCtx, task: &str) -> Option<String> {
     // "no minor issues" says there is nothing to propose
     let negated =
         regex::Regex::new(r"(?i)\b(no|nothing)\s+minor\b|\bminor\s+or\s+otherwise\b").ok()?;
-    now.iter()
-        .filter(|b| b.id == task)
-        .flat_map(|b| b.body.iter().map(|(_, l)| l.as_str()))
-        .filter(|l| !old.contains(l))
+    added
+        .iter()
+        .filter(|l| !l.trim_start().starts_with('>'))
         .find_map(|l| {
-            re.find(&negated.replace_all(l, ""))
+            re.find(&negated.replace_all(&prose_only(l), ""))
                 .map(|m| m.as_str().to_lowercase())
         })
+        .map(|phrase| Deferred {
+            phrase,
+            source: DeferredIn::Notes,
+        })
+}
+
+// a file, a path, a test name or a code span is not the verifier talking
+fn prose_only(line: &str) -> String {
+    let mut out = String::new();
+    let mut in_code = false;
+    for word in line.split_inclusive('`') {
+        let (text, tick) = match word.strip_suffix('`') {
+            Some(t) => (t, true),
+            None => (word, false),
+        };
+        if !in_code {
+            out.push_str(text);
+            out.push(' ');
+        }
+        if tick {
+            in_code = !in_code;
+        }
+    }
+    out.split_whitespace()
+        .filter(|w| {
+            let w = w.trim_end_matches(['.', ',', ';', ':', ')', ']']);
+            !(w.contains('/') || w.contains('.') || w.contains('_') || w.contains("::"))
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn commit_round(ctx: &mut GateCtx) -> GateOutcome {
