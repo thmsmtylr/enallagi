@@ -1701,6 +1701,67 @@ fn a_criterion_naming_a_removed_test_is_found() {
     assert_eq!(found[0].path, ".enallagi/TASKS.md");
 }
 
+// rewrites T-002 in place, so one fixture is read under each filter
+fn filtered_criterion(repo: &Repo, filter: &str, names: &str) {
+    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "TASKS.md");
+    let text = fs::read_to_string(&path).expect("TASKS.md");
+    let kept = text.split("\n## [T-002]").next().expect("the seeded queue");
+    fs::write(&path, kept).expect("rewrite");
+    append(
+        repo,
+        "TASKS.md",
+        &format!("\n## [T-002] the block whose criteria run a filter\nscope: src/a.rs\nblockedBy: none\nstatus: ready\nrows: none — harness\ncriteria:\n  - `cargo test -q -p enallagi --test probes {filter}` passes, with {names} in its run\n  - the check exits 0\nnotes: none\n"),
+    );
+}
+
+fn filter_findings(repo: &Repo, cfg: &Config) -> Vec<String> {
+    let results = run(repo, cfg);
+    findings(&results, "queue-uncovered")
+        .iter()
+        .filter(|f| f.message.contains("T-002"))
+        .map(|f| f.message.clone())
+        .collect()
+}
+
+#[test]
+fn a_criterion_filter_that_selects_no_test_is_found() {
+    let (repo, cfg) = seeded_with("[layout]\nsource_root = \"src\"\n");
+    repo.write(
+        "src/a.rs",
+        "#[test]\nfn the_learning_rule() {}\n\n#[test]\nfn an_earned_rule_counts() {}\n",
+    );
+    repo.commit_all("two tests");
+    filtered_criterion(
+        &repo,
+        "learning",
+        "`the_learning_rule` and `an_earned_rule_counts`",
+    );
+    let found = filter_findings(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("an_earned_rule_counts"), "{}", found[0]);
+    assert!(!found[0].contains("the_learning_rule"), "{}", found[0]);
+
+    filtered_criterion(
+        &repo,
+        "rule",
+        "`the_learning_rule` and `an_earned_rule_counts`",
+    );
+    assert_eq!(filter_findings(&repo, &cfg).len(), 0);
+
+    repo.write(
+        "src/a.rs",
+        "#[test]\nfn the_learning_rule() {}\n\n#[test]\nfn an_earned_rule_counts() {}\n\nfn a_helper_rule_reader() {}\n",
+    );
+    repo.commit_all("a helper");
+    filtered_criterion(
+        &repo,
+        "learning",
+        "`the_learning_rule`, `an_earned_rule_counts` and `a_helper_rule_reader`",
+    );
+    let found = filter_findings(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+}
+
 #[test]
 fn a_criterion_naming_a_live_or_new_test_is_quiet() {
     let (repo, cfg) = seeded_with("[layout]\nsource_root = \"src\"\n");

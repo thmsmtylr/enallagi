@@ -119,6 +119,27 @@ fn stale_criteria(
         if !inside {
             continue;
         }
+        if let Some(filter) = test_filter(text) {
+            let files = match tree {
+                Some(files) => files,
+                None => tree.insert(source_texts(ctx)?),
+            };
+            let declared = declared_tests(files)?;
+            // a cargo filter is a substring of the test path, so a name it is not part of is never run
+            for name in token.find_iter(&code_spans(text)) {
+                let name = name.as_str();
+                if declared.contains(name) && !name.contains(&filter) {
+                    found.push(common::finding(
+                        tasks,
+                        *line,
+                        format!(
+                            "{} criteria run cargo test with the filter {filter} and name {name}, which that filter does not select",
+                            block.id
+                        ),
+                    ));
+                }
+            }
+        }
         for m in token.find_iter(text) {
             let name = m.as_str();
             if !seen.insert(name.to_string()) {
@@ -148,6 +169,54 @@ fn stale_criteria(
         }
     }
     Ok(found)
+}
+
+// the text inside backticks, one span per line: a command or a name is quoted, prose is not
+fn code_spans(text: &str) -> String {
+    text.split('`')
+        .skip(1)
+        .step_by(2)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+// the positional filter of a `cargo test ... --test <file> <filter>` invocation, when the line carries one
+fn test_filter(text: &str) -> Option<String> {
+    let spans = code_spans(text);
+    let words: Vec<&str> = spans
+        .split('\n')
+        .find(|span| span.contains("cargo test") && span.contains("--test"))?
+        .split_whitespace()
+        .collect();
+    let start = words.windows(2).position(|w| w == ["cargo", "test"])? + 2;
+    let mut rest = words[start..].iter();
+    while let Some(word) = rest.next() {
+        match *word {
+            "--" => return None,
+            "-p" | "--package" | "--test" | "--bin" | "--features" => {
+                rest.next();
+            }
+            flag if flag.starts_with('-') => {}
+            filter => return Some(filter.to_string()),
+        }
+    }
+    None
+}
+
+// a name is a test only under a #[test] attribute; a helper named beside one is not
+fn declared_tests(files: &[String]) -> Res<BTreeSet<String>> {
+    let re = common::re(
+        r"#\[test\]\s*(?:#\[[^\]]*\]\s*)*(?:pub\s+)?(?:async\s+)?fn\s+([a-z][a-z0-9_]*)",
+    )?;
+    Ok(files
+        .iter()
+        .flat_map(|f| {
+            re.captures_iter(f)
+                .filter_map(|c| c.get(1))
+                .map(|m| m.as_str().to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect())
 }
 
 fn source_texts(ctx: &ProbeCtx) -> Res<Vec<String>> {
