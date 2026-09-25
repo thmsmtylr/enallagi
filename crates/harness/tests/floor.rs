@@ -1037,6 +1037,7 @@ fn the_changelog_lists_unreleased_and_the_tag() {
         "{headings:?}"
     );
 
+    // a release commit empties `## Unreleased`, so an empty section is the state right after a cut
     let entries: Vec<&str> = text
         .lines()
         .skip_while(|l| *l != "## Unreleased")
@@ -1044,10 +1045,50 @@ fn the_changelog_lists_unreleased_and_the_tag() {
         .take_while(|l| !l.starts_with("## "))
         .filter(|l| !l.trim().is_empty())
         .collect();
-    assert!(!entries.is_empty(), "{text}");
     for line in &entries {
         assert!(line.starts_with("- "), "{line}");
     }
+}
+
+// merging a version bump is the release, so the bump must carry its changelog section
+#[test]
+fn the_changelog_names_the_crate_version() {
+    let version = crate_version_in(&read(&repo_root().join("crates/harness/Cargo.toml")));
+    let text = read(&repo_root().join("CHANGELOG.md"));
+    let heading = format!("## v{version} (");
+    let section: Vec<&str> = text
+        .lines()
+        .skip_while(|l| !l.starts_with(&heading))
+        .skip(1)
+        .take_while(|l| !l.starts_with("## "))
+        .filter(|l| l.starts_with("- "))
+        .collect();
+    assert!(
+        text.lines().any(|l| l.starts_with(&heading)),
+        "CHANGELOG.md has no {heading}...) section for the crate version"
+    );
+    assert!(!section.is_empty(), "{heading}...) lists no change");
+}
+
+#[test]
+fn the_release_runs_when_main_gains_a_new_version() {
+    let yml = release_yml();
+    let tag = job_block(&yml, "tag");
+    for step in [
+        "crates/harness/Cargo.toml",
+        "git tag -a",
+        "git push origin",
+        "GITHUB_OUTPUT",
+    ] {
+        assert!(tag.contains(step), "the tag job has no {step}:\n{tag}");
+    }
+    let release = job_block(&yml, "release");
+    assert!(release.contains("needs: tag"), "{release}");
+    assert!(release.contains("RELEASE_TAG"), "{release}");
+    assert!(
+        yml.contains("      - main\n"),
+        "release.yml does not run on main"
+    );
 }
 
 #[test]
@@ -1085,16 +1126,18 @@ fn the_release_job_checks_the_tag_version() {
         .find("cargo zigbuild")
         .unwrap_or_else(|| panic!("no build step:\n{block}"));
     assert!(check < build, "{block}");
-    assert_eq!(switched_off(&block), 0, "{block}");
+    // the job's own `if:` decides whether there is a tag to release; no step under it is switched off
+    let steps = &block[block.find("    steps:").unwrap_or(0)..];
+    assert_eq!(switched_off(steps), 0, "{block}");
 }
 
-// GITHUB_REF_NAME is unset outside the release job, and a check that cannot read what it compares
-// fails rather than passes
+// RELEASE_TAG is set only in the release job, and a check that cannot read what it compares fails
+// rather than passes
 #[test]
-#[ignore = "release only: release.yml runs it on a tag push"]
+#[ignore = "release only: release.yml runs it on the tag it releases"]
 fn the_tag_equals_the_crate_version() {
-    let tag = std::env::var("GITHUB_REF_NAME").unwrap_or_default();
-    assert!(!tag.is_empty(), "GITHUB_REF_NAME is unset");
+    let tag = std::env::var("RELEASE_TAG").unwrap_or_default();
+    assert!(!tag.is_empty(), "RELEASE_TAG is unset");
     let version = crate_version_in(&read(&repo_root().join("crates/harness/Cargo.toml")));
     assert_eq!(tag_mismatch(&tag, &version), None);
 }

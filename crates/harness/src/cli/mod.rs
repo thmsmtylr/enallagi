@@ -579,7 +579,7 @@ jobs:
     fn every_ci_job_id_names_what_it_runs() {
         let mut jobs = job_steps(CI);
         jobs.extend(job_steps(RELEASE));
-        assert_eq!(jobs.len(), 8, "jobs found: {:?}", jobs);
+        assert_eq!(jobs.len(), 9, "jobs found: {:?}", jobs);
         for (id, steps) in &jobs {
             assert!(!steps.is_empty(), "{id} has no named step");
             for word in id.split('-') {
