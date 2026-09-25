@@ -1196,6 +1196,36 @@ fn every_workflow_exact_names_a_declared_test() {
     assert_eq!(undeclared_exact(unparsed, &root).len(), 1);
 }
 
+// without it cargo stops at the first failing test binary and every later one goes unreported
+fn fail_fast_steps(workflow: &str) -> Vec<String> {
+    workflow
+        .lines()
+        .map(|l| l.split('#').next().unwrap_or(""))
+        .filter(|l| l.contains("cargo test") && !l.contains("name:"))
+        // after `--` the flag goes to the test binary, which rejects it
+        .filter(|l| {
+            !l.split(" -- ")
+                .next()
+                .unwrap_or("")
+                .contains("--no-fail-fast")
+        })
+        .map(|l| l.trim().to_string())
+        .collect()
+}
+
+#[test]
+fn every_ci_cargo_test_runs_every_binary() {
+    assert!(invokes_floor(&ci()));
+    assert_eq!(fail_fast_steps(&ci()), Vec::<String>::new());
+
+    let bare = "      - run: cargo test --workspace\n";
+    let late = "      - run: cargo test -p enallagi -- --no-fail-fast\n";
+    let named = "      - name: cargo test --workspace\n        run: cargo test --workspace --no-fail-fast\n";
+    assert_eq!(fail_fast_steps(bare).len(), 1);
+    assert_eq!(fail_fast_steps(late).len(), 1);
+    assert_eq!(fail_fast_steps(named), Vec::<String>::new());
+}
+
 fn default_keys() -> Vec<String> {
     let default: toml::Table = toml::from_str(enallagi::config::DEFAULT_TOML).expect("defaults");
     let mut keys = Vec::new();
