@@ -193,10 +193,12 @@ pub fn open_pulls(root: &Path) -> Result<Vec<Open>, ReviewError> {
         command: format!("git for-each-ref {pattern}"),
         reason: e.to_string(),
     })?;
+    // a branch whose tip HEAD already carries was merged, and its pull request is closed
     let built: Vec<&str> = refs
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
+        .filter(|b| !crate::git::git_ok(root, &["merge-base", "--is-ancestor", b, "HEAD"]))
         .collect();
     if built.is_empty() {
         return Ok(Vec::new());

@@ -3924,8 +3924,50 @@ fn driven_repo(tasks: &str) -> Repo {
     r
 }
 
+// one commit past HEAD, since a branch HEAD already carries is a merged pull request
 fn pull_branch(r: &Repo) {
     enallagi::git::git(&r.root, &["branch", "task/T-001"]).expect("branch");
+    advance(r, "task/T-001");
+}
+
+fn advance(r: &Repo, branch: &str) {
+    let git = |args: &[&str]| enallagi::git::git(&r.root, args).expect("git");
+    let tree = git(&["rev-parse", &format!("{branch}^{{tree}}")]);
+    let commit = git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit-tree",
+        tree.trim(),
+        "-p",
+        branch,
+        "-m",
+        "T-001: more",
+    ]);
+    git(&["update-ref", &format!("refs/heads/{branch}"), commit.trim()]);
+}
+
+#[test]
+fn a_merged_pull_branch_calls_no_host() {
+    let r = driven_repo(DONE_TASK);
+    enallagi::git::git(&r.root, &["branch", "task/T-001"]).expect("branch");
+    let path = gh_recording(&r, OPEN_PULL, PLAIN_REVIEW);
+    let out = run_with_path(&r, &path);
+    assert!(!r.root.join("gh.log").exists(), "{out}");
+}
+
+#[test]
+fn an_unmerged_pull_branch_is_still_asked_about() {
+    let r = driven_repo(DONE_TASK);
+    enallagi::git::git(&r.root, &["branch", "task/T-001"]).expect("branch");
+    advance(&r, "task/T-001");
+    let path = gh_recording(&r, "[]", PLAIN_REVIEW);
+    let out = run_with_path(&r, &path);
+    let log = std::fs::read_to_string(r.root.join("gh.log")).unwrap_or_else(|_| panic!("{out}"));
+    let calls: Vec<&str> = log.lines().collect();
+    assert_eq!(calls.len(), 1, "{log}");
+    assert!(calls[0].starts_with("pr list"), "{log}");
 }
 
 #[test]
