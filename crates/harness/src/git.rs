@@ -155,6 +155,52 @@ pub fn commit_instance(
     Ok(true)
 }
 
+// the named instance paths and nothing else, for a caller outside a stage: `enallagi pr` runs while
+// the operator may hold uncommitted queue edits, and those are not the record it is committing
+pub fn commit_instance_only(
+    root: &Path,
+    harness_dir: &str,
+    names: &[&str],
+    msg: &str,
+) -> Result<bool, GitError> {
+    let state = state_root(root, harness_dir);
+    if state == root {
+        return commit_instance(root, harness_dir, names, msg);
+    }
+    let sha = git(root, &["rev-parse", "HEAD"])?;
+    let msg = format!("{msg} at {sha}");
+    let mut add = vec!["add", "--"];
+    add.extend(names);
+    git(&state, &add)?;
+    let mut diff = vec!["diff", "--cached", "--quiet", "--"];
+    diff.extend(names);
+    if git_ok(&state, &diff) {
+        return Ok(false);
+    }
+    let mut args: Vec<String> = Vec::new();
+    for key in ["user.name", "user.email"] {
+        if let Ok(value) = git(root, &["config", key]) {
+            args.extend(["-c".to_string(), format!("{key}={value}")]);
+        }
+    }
+    args.extend(
+        [
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            &msg,
+            "--",
+        ]
+        .map(String::from),
+    );
+    args.extend(names.iter().map(|n| n.to_string()));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    git(&state, &args)?;
+    Ok(true)
+}
+
 // a product revision as the state repository's own: the first state commit recorded at it, or an Err, never a revision that repository lacks
 pub fn state_rev(root: &Path, harness_dir: &str, rev: &str) -> Result<String, String> {
     let state = state_root(root, harness_dir);
