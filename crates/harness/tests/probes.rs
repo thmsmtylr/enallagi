@@ -96,7 +96,7 @@ fn probes_exit_0_every_probe_ran() {
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     assert_eq!(errors(&results), Vec::<&str>::new());
-    assert_eq!(results.len(), 26, "{}", render(&results));
+    assert_eq!(results.len(), 27, "{}", render(&results));
 }
 
 #[test]
@@ -1514,6 +1514,49 @@ fn a_rejection_behind_a_dated_label_is_reported() {
     let found = rejection_stale(&repo, &cfg);
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(found[0].contains("T-003"), "{}", found[0]);
+}
+
+const LONG_TITLE: &str = "a task/ branch that outlives its merged pull request calls gh pr list once every iteration for good";
+
+#[test]
+fn a_title_past_the_cap_is_reported_with_its_count() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        &format!("\n## [T-002] merged task/ branch still polls gh pr list every iteration\nscope: src/a.rs\nstatus: ready\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n"),
+    );
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "title-length");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, ".enallagi/TASKS.md");
+    assert_eq!(
+        found[0].message,
+        format!(
+            "T-003 title runs to {} characters, past the 72 cap",
+            LONG_TITLE.chars().count()
+        )
+    );
+    assert!(LONG_TITLE.chars().count() > 72);
+}
+
+#[test]
+fn a_title_written_before_the_cap_is_left_alone() {
+    let (repo, mut cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n"),
+    );
+    cfg.queue.title_cap_from = 3;
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "title-length");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0].message.starts_with("T-003 "),
+        "{}",
+        found[0].message
+    );
 }
 
 // the label's own first word is the verdict, and the reasons after the colon are not an answer to it

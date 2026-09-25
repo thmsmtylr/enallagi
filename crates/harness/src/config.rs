@@ -192,6 +192,8 @@ pub struct QueueConfig {
     pub turns_per_block: u32,
     /// State commits a `proposed` block may stand for before it expires.
     pub proposed_rounds: usize,
+    /// The first block id the 72-character title cap applies to; earlier titles are the record as written.
+    pub title_cap_from: u32,
 }
 
 // the same numbers as the `[queue]` table in harness.default.toml, for a Config built in code
@@ -201,6 +203,7 @@ impl Default for QueueConfig {
             drain: 3,
             turns_per_block: 25,
             proposed_rounds: 6,
+            title_cap_from: 1,
         }
     }
 }

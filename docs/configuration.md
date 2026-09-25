@@ -78,6 +78,7 @@ go test, from go1.26.2:
 - `queue.drain`: how many standing `proposed` blocks one adjudicate stage takes, oldest first. Default `3`.
 - `queue.turns_per_block`: turns added to that stage for each block. Default `25`.
 - `queue.proposed_rounds`: how many state commits a `proposed` block stands before it expires. Default `6`.
+- `queue.title_cap_from`: the first block id `title-length` holds to the 72-character cap; titles below it are the record as written. Default `1`.
 
 ## `[pr]`
 

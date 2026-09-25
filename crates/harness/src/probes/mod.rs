@@ -23,6 +23,7 @@ mod rail_unenforced;
 mod rejection_stale;
 mod skill_ungated;
 mod spec_untested;
+mod title_length;
 mod upstream_drift;
 
 use crate::config::Config;
@@ -68,6 +69,7 @@ pub const NAMES: &[&str] = &[
     "skill-ungated",
     "ponytail-ceiling",
     "rejection-stale",
+    "title-length",
     "queue-hygiene",
     "friction-repeat",
     "check-red",
@@ -88,7 +90,7 @@ pub const NAMES: &[&str] = &[
 
 type ProbeFn = fn(&ProbeCtx) -> ProbeResult;
 
-fn registry() -> [(&'static str, ProbeFn); 26] {
+fn registry() -> [(&'static str, ProbeFn); 27] {
     [
         ("spec-untested", spec_untested::probe),
         ("queue-uncovered", queue_uncovered::probe),
@@ -100,6 +102,7 @@ fn registry() -> [(&'static str, ProbeFn); 26] {
         ("skill-ungated", skill_ungated::probe),
         ("ponytail-ceiling", ponytail_ceiling::probe),
         ("rejection-stale", rejection_stale::probe),
+        ("title-length", title_length::probe),
         ("queue-hygiene", queue_hygiene::probe),
         ("friction-repeat", friction_repeat::probe),
         ("check-red", check_red::probe),
