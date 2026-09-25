@@ -58,7 +58,7 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 // truncated at #[cfg(test)] so a fixture string in a test module isn't mistaken for real launcher code
 fn crate_sources() -> Vec<(PathBuf, String)> {
     let src = repo_root().join("crates/harness/src");
-    walk(&src)
+    let sources: Vec<(PathBuf, String)> = walk(&src)
         .into_iter()
         .filter(|p| p.extension().is_some_and(|e| e == "rs"))
         .map(|rel| {
@@ -66,7 +66,14 @@ fn crate_sources() -> Vec<(PathBuf, String)> {
             let cut = text.find("#[cfg(test)]").unwrap_or(text.len());
             (rel, text[..cut].to_string())
         })
-        .collect()
+        .collect();
+    // a scan over no file finds no offender, and that is not a pass
+    assert!(
+        !sources.is_empty(),
+        "no source read under {}",
+        src.display()
+    );
+    sources
 }
 
 // ENALLAGI_BIN points at the test binary so nothing here builds release or reads one off PATH
