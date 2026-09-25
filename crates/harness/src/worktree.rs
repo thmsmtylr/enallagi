@@ -147,10 +147,17 @@ fn resumable_base(root: &Path) -> Option<String> {
         ],
     )
     .ok()?;
+    // a lane branch is resumed while it carries commits HEAD does not: an upstream commit moves
+    // HEAD off the branch without delivering its work, and a branch whose commits reached HEAD
+    // carries none
     listed
         .lines()
         .map(str::trim)
-        .find(|b| !b.is_empty() && git::git_ok(root, &["merge-base", "--is-ancestor", "HEAD", b]))
+        .find(|b| {
+            !b.is_empty()
+                && git::git(root, &["rev-list", "--count", &format!("HEAD..{b}")])
+                    .is_ok_and(|n| n.trim() != "0")
+        })
         .map(str::to_string)
 }
 
@@ -668,6 +675,35 @@ mod tests {
         .expect("the first lane");
         assert!(first.merged, "reason: {}", first.reason);
         assert!(!r.root.join("one.txt").exists());
+
+        let mut seen = false;
+        let second = lane(&r.root, &cfg, &mut |wt| {
+            seen = wt.join("one.txt").exists();
+            Ok(())
+        })
+        .expect("the second lane");
+
+        assert!(
+            seen,
+            "the second lane started without T-001's implementation: {}",
+            second.reason
+        );
+    }
+
+    // an upstream commit moves HEAD off the lane branch; the task at review is still on it
+    #[test]
+    fn an_unfinished_task_survives_upstream_work() {
+        let r = per_task_repo();
+        let cfg = cfg(&r);
+        let (_origin, bare) = origin_of(&r);
+
+        let first = lane(&r.root, &cfg, &mut |wt| {
+            land_at(wt, "T-001", "one.txt", "review");
+            Ok(())
+        })
+        .expect("the first lane");
+        assert!(first.merged, "reason: {}", first.reason);
+        let _clone = commit_on_origin(&bare, "unrelated.txt");
 
         let mut seen = false;
         let second = lane(&r.root, &cfg, &mut |wt| {
