@@ -1689,7 +1689,7 @@ const REVIEW_QUERY: &str = concat!(
     "repository(owner:$owner,name:$repo){pullRequest(number:$number){",
     "reviews(first:100){pageInfo{hasNextPage} nodes{body}}",
     "reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved isOutdated ",
-    "comments(first:100){pageInfo{hasNextPage} nodes{path body url}}}}",
+    "comments(first:100){pageInfo{hasNextPage} nodes{path line startLine body url}}}}",
     "}}}",
 );
 
@@ -1703,6 +1703,7 @@ const GENERATED: &str = include_str!("fixtures/reviews/generated.json");
 const PLAIN: &str = include_str!("fixtures/reviews/plain.json");
 const SHORT: &str = include_str!("fixtures/reviews/short.json");
 const THREAD: &str = include_str!("fixtures/reviews/thread.json");
+const AGREED: &str = include_str!("fixtures/reviews/agreed.json");
 
 // everything a proposed block states before the comment's own words
 fn scaffold_of(block: &str) -> Vec<&str> {
@@ -1827,6 +1828,48 @@ fn review_folds_a_thread_into_one_block() {
         "{stdout}"
     );
     assert!(!stdout.contains("discussion_r1000000008"), "{stdout}");
+}
+
+#[test]
+fn the_same_finding_raised_twice_is_one_block() {
+    let f = GhRepo::new(&review_gh(AGREED));
+    let before = enallagi::queue::parse(&f.tasks()).expect("parse").len();
+
+    let out = f.review(&["owner/repo#13"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let blocks = enallagi::queue::parse(&f.tasks()).expect("parse");
+    assert_eq!(blocks.len(), before + 1, "{}", f.tasks());
+    let block = enallagi::queue::block_text(&blocks[before]);
+    assert!(
+        block.contains(
+            "notes: https://github.com/owner/repo/pull/13#discussion_r1000000009\n  \
+             > https://github.com/owner/repo/pull/13#discussion_r1000000009\n  \
+             > https://github.com/owner/repo/pull/13#discussion_r1000000010\n"
+        ),
+        "{block}"
+    );
+
+    let once = f.tasks();
+    let out = f.review(&["owner/repo#13"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(f.tasks(), once);
+}
+
+#[test]
+fn a_different_finding_on_the_same_line_stays() {
+    let differs = AGREED.replacen("drops the timezone", "drops the offset", 1);
+    let f = GhRepo::new(&review_gh(&differs));
+    let before = enallagi::queue::parse(&f.tasks()).expect("parse").len();
+
+    let out = f.review(&["owner/repo#13"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let blocks = enallagi::queue::parse(&f.tasks()).expect("parse");
+    assert_eq!(blocks.len(), before + 2, "{}", f.tasks());
+    assert!(
+        !f.tasks().contains("  > https://"),
+        "a block raised once lists no raiser: {}",
+        f.tasks()
+    );
 }
 
 #[test]

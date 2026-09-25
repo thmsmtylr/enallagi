@@ -12,7 +12,7 @@ const QUERY: &str = concat!(
     "repository(owner:$owner,name:$repo){pullRequest(number:$number){",
     "reviews(first:100){pageInfo{hasNextPage} nodes{body}}",
     "reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved isOutdated ",
-    "comments(first:100){pageInfo{hasNextPage} nodes{path body url}}}}",
+    "comments(first:100){pageInfo{hasNextPage} nodes{path line startLine body url}}}}",
     "}}}",
 );
 
@@ -51,8 +51,13 @@ struct Summary {
 }
 
 #[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Remark {
     path: Option<String>,
+    #[serde(default)]
+    line: Option<u64>,
+    #[serde(default)]
+    start_line: Option<u64>,
     body: String,
     url: String,
 }
@@ -95,6 +100,9 @@ pub struct Anchored {
     pub body: String,
     pub url: String,
     pub replies: Vec<String>,
+    // the same finding raised again on the same lines: its permalinks, never who wrote them
+    pub also: Vec<String>,
+    lines: (Option<u64>, Option<u64>),
 }
 
 #[derive(Debug, Default)]
@@ -251,6 +259,8 @@ fn collect(response: Response) -> Found {
                             body: remark.body,
                             url: remark.url,
                             replies: Vec::new(),
+                            also: Vec::new(),
+                            lines: (remark.start_line, remark.line),
                         });
                     }
                     None => found.unanchored += 1,
@@ -261,10 +271,27 @@ fn collect(response: Response) -> Found {
         if let Some(mut first) = first {
             first.replies = remarks.map(|r| r.body).collect();
             found.folded += first.replies.len();
-            found.anchored.push(first);
+            let same = found.anchored.iter_mut().find(|a| {
+                a.path == first.path
+                    && a.lines == first.lines
+                    && plain(&a.body) == plain(&first.body)
+            });
+            match same {
+                Some(a) => a.also.push(first.url),
+                None => found.anchored.push(first),
+            }
         }
     }
     found
+}
+
+// case, whitespace and the markdown a review tool wraps a finding in are not the finding
+fn plain(body: &str) -> String {
+    body.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub fn read(reference: &str) -> Result<Found, ReviewError> {
@@ -300,6 +327,11 @@ fn title(comment: &Anchored) -> String {
 pub fn render(comment: &Anchored, id: &str) -> String {
     let mut lines = issue::scaffold(id, &title(comment), &comment.path);
     lines.push(format!("notes: {}", comment.url));
+    if !comment.also.is_empty() {
+        for url in std::iter::once(&comment.url).chain(&comment.also) {
+            lines.push(format!("  > {url}"));
+        }
+    }
     issue::quote(&comment.body, &mut lines);
     for reply in &comment.replies {
         lines.push("  >".to_string());
@@ -348,6 +380,8 @@ mod tests {
                 body: body.to_string(),
                 url: url.to_string(),
                 replies: Vec::new(),
+                also: Vec::new(),
+                lines: (None, None),
             }],
             ..Found::default()
         }
