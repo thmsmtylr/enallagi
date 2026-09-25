@@ -1937,3 +1937,67 @@ fn a_host_tool_error_reads_unknown() {
         "{out}"
     );
 }
+
+// a host tool that never answers is killed with what it spawned after the bound, and the leg
+// reports the bound rather than an elapsed reading; the test polls the binary against a ceiling of
+// its own so a lost bound fails instead of hanging
+#[test]
+fn a_hung_host_tool_reads_unknown_after_the_bound() {
+    let (repo, _cfg) = seeded_with(TRUE_CHECK);
+    let (_origin, _branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
+    let bins = tempfile::TempDir::new().expect("tempdir");
+    let path = bin_dir(bins.path(), Some("/bin/sleep 600\n"));
+    let mut child = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["probe", "branch-protection"])
+        .current_dir(&repo.root)
+        .env("PATH", &path)
+        .stdout(std::process::Stdio::piped())
+        // nothing of cargo's is inherited: a stub left behind would otherwise hold its pipe open
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("probe");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = std::process::Command::new("pkill")
+                .args(["-f", "/bin/sleep 600"])
+                .status();
+            panic!("the probe outlived the ceiling: the host leg has no bound");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    };
+    let mut out = String::new();
+    std::io::Read::read_to_string(child.stdout.as_mut().expect("stdout"), &mut out).expect("read");
+    assert!(status.success(), "{out}");
+    assert!(out.contains("-> unknown, no answer in 10s"), "{out}");
+    // killed is not yet reaped: a zombie the container's init has not collected still answers pgrep
+    let alive = || {
+        let out = std::process::Command::new("ps")
+            .args(["-eo", "pid=,stat=,args="])
+            .output()
+            .expect("ps");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| {
+                let mut cols = l.split_whitespace();
+                let (_, stat) = (cols.next(), cols.next().unwrap_or(""));
+                let args: Vec<&str> = cols.collect();
+                args == ["/bin/sleep", "600"] && !stat.starts_with('Z')
+            })
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !alive().is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(
+        alive().is_empty(),
+        "the stub's sleep outlived the probe: {:?}",
+        alive()
+    );
+}
