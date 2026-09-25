@@ -22,7 +22,9 @@ queued is decided before the scout files more.
 
 Before selecting a task, an iteration reads the review comments on open pull requests
 from its own `task/` branches.
-Each unresolved comment lands as a `proposed` block.
+Each unresolved thread lands as one `proposed` block carrying its thread id, and the same
+finding raised twice on the same lines is one block.
+When that block lands, the launcher replies on the thread with the sha and resolves it.
 No host tool, no such branch, or a failed host call is a warning, never a halt.
 
 ## Gates

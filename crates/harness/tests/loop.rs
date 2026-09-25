@@ -3637,6 +3637,67 @@ impl Pulls {
     }
 }
 
+const THREADED_TASK: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.ts
+rows: none — harness
+status: ready
+criteria:
+  - it happens
+notes: https://github.com/owner/repo/pull/13#discussion_r1000000007
+  thread: PRRT_kwDOA1
+";
+
+// the block a review thread raised, with the gh the read uses standing in for the host
+fn threaded(gh: &str) -> Pulls {
+    let p = pulls("", "exit 0\n");
+    p.repo.write("TASKS.md", THREADED_TASK);
+    p.repo.commit_all("a block from a review thread");
+    let stub = p.tools.path().join("gh");
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" >{dir}/gh.log\n{gh}",
+            dir = p.tools.path().display()
+        ),
+    )
+    .expect("gh");
+    p
+}
+
+#[test]
+fn a_landed_block_answers_its_thread() {
+    let p = threaded("exit 0\n");
+    let (_, out) = p.run(&[]);
+    assert!(out.contains("tasks landed: T-001"), "{out}");
+    let args = p.gh().unwrap_or_else(|| panic!("gh never ran:\n{out}"));
+    assert!(args.starts_with("api\ngraphql\n"), "{args}");
+    assert!(args.contains("resolveReviewThread"), "{args}");
+    assert!(args.contains("\nthread=PRRT_kwDOA1\n"), "{args}");
+    let sha = args
+        .lines()
+        .find_map(|l| l.strip_prefix("body=Answered in "))
+        .and_then(|l| l.split_whitespace().next())
+        .unwrap_or_else(|| panic!("no sha in the reply: {args}"));
+    let subject = enallagi::git::git(&p.repo.root, &["log", "-1", "--format=%s", sha])
+        .unwrap_or_else(|e| panic!("{sha} is not a commit here: {e}"));
+    assert!(subject.contains("T-001"), "{subject}");
+}
+
+#[test]
+fn an_unanswered_thread_is_a_warning_not_a_halt() {
+    let p = threaded("echo 'gh: could not resolve' >&2\nexit 1\n");
+    let (_, out) = p.run(&[]);
+    assert!(out.contains("tasks landed: T-001"), "{out}");
+    assert!(
+        out.contains("T-001: thread PRRT_kwDOA1 was left open: "),
+        "{out}"
+    );
+    assert!(out.contains("could not resolve"), "{out}");
+    assert!(out.contains(" halts= landed=T-001 "), "{out}");
+}
+
 #[test]
 fn pr_per_task_opens_one_from_the_launcher() {
     let p = pulls("", "exit 0\n");

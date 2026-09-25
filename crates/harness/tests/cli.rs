@@ -1688,7 +1688,7 @@ const REVIEW_QUERY: &str = concat!(
     "query($owner:String!,$repo:String!,$number:Int!){",
     "repository(owner:$owner,name:$repo){pullRequest(number:$number){",
     "reviews(first:100){pageInfo{hasNextPage} nodes{body}}",
-    "reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved isOutdated ",
+    "reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated ",
     "comments(first:100){pageInfo{hasNextPage} nodes{path line startLine body url}}}}",
     "}}}",
 );
@@ -1813,6 +1813,7 @@ fn review_folds_a_thread_into_one_block() {
         block.contains("  > parse drops the timezone\n  >\n  > Thanks, fixed in the next push."),
         "{block}"
     );
+    assert!(block.contains("\n  thread: PRRT_kwDOA1\n"), "{block}");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("  folded: 1 later in a thread"), "{stdout}");
 
