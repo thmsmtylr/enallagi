@@ -1858,18 +1858,20 @@ fn a_diverged_upstream_is_one_finding() {
     git(&repo.root, &["fetch", "-q", "origin"]);
     assert!(matches!(drift(&repo, &cfg), ProbeResult::Count(f) if f.is_empty()));
 
+    // two commits here against one upstream, so each count is read against its own range
     repo.write("local.txt", "x");
     repo.commit_all("the checkout's own commit");
+    repo.write("local2.txt", "x");
+    repo.commit_all("the checkout's second commit");
     let ProbeResult::Count(found) = drift(&repo, &cfg) else {
         panic!("{:?}", drift(&repo, &cfg));
     };
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].path, ".git/HEAD");
+    // the checkout's own commits are named first, each count beside the range that produced it
     assert!(
-        found[0].message.contains(&format!(
-            "`git rev-list --count origin/{branch}..{branch}` -> 1"
-        )) && found[0].message.contains(&format!(
-            "`git rev-list --count {branch}..origin/{branch}` -> 1"
+        found[0].message.starts_with(&format!(
+            "`git rev-list --count origin/{branch}..{branch}` -> 2 and `git rev-list --count {branch}..origin/{branch}` -> 1"
         )),
         "{}",
         found[0].message
