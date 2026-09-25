@@ -1,15 +1,17 @@
-# Cuts a GitHub release on a `v*` tag: the same four cross-compiled targets `cross-build` in
-# ci.yml proves compile, this time attached to a release along with a SHA256SUMS file. A tag that
-# is not on main, whose tree carries a dogfood instance, or whose `vX.Y.Z` does not equal the crate
-# version, is refused before anything is built.
+# Cuts a GitHub release: the same four cross-compiled targets `cross-build` in ci.yml proves
+# compile, this time attached to a release along with a SHA256SUMS file. A tag that is not on main,
+# whose tree carries a dogfood instance, or whose `vX.Y.Z` does not equal the crate version, is
+# refused before anything is built.
 #
-# The release procedure, and the only statement of it:
+# The release procedure, and the only statement of it: merge a pull request that
 #
-#   1. set `version` in crates/harness/Cargo.toml to X.Y.Z
-#   2. in CHANGELOG.md, move the `## Unreleased` lines under a new `## vX.Y.Z (YYYY-MM-DD)` heading
-#   3. commit both on main
-#   4. `git tag -a vX.Y.Z -m vX.Y.Z`
-#   5. `git push origin vX.Y.Z`
+#   1. sets `version` in crates/harness/Cargo.toml to X.Y.Z (and `cargo update -w`)
+#   2. moves the CHANGELOG.md `## Unreleased` lines under a new `## vX.Y.Z (YYYY-MM-DD)` heading
+#
+# The push to main that carries a crate version with no tag runs the `tag` job, which does
+# `git tag -a vX.Y.Z -m vX.Y.Z` and `git push origin vX.Y.Z` itself, then `release` builds that tag
+# in the same run. A tag pushed with GITHUB_TOKEN starts no second run, so there is exactly one.
+# Pushing a `v*` tag by hand still releases it, as before.
 #
 # Every `uses:` is pinned to a 40-character commit SHA with its tag in a trailing comment, the
 # same discipline ci.yml documents and `every_github_action_is_pinned_to_a_commit_sha`
@@ -19,6 +21,10 @@ name: release
 
 on:
   push:
+    branches:
+      - main
+    paths:
+      - crates/harness/Cargo.toml
     tags:
       - 'v*'
 
@@ -26,11 +32,15 @@ permissions:
   contents: read
 
 jobs:
-  release:
-    name: release
+  # a version on main with no tag is a release nobody has cut yet; a version already tagged is not
+  tag:
+    name: tag
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.cut.outputs.tag }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -38,9 +48,42 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      - name: tag the crate version if it is new
+        id: cut
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/harness/Cargo.toml | head -1)
+          tag="v$version"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "$tag already exists; nothing to release"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "$tag" "$GITHUB_SHA"
+          git push origin "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: release
+    needs: tag
+    # a hand-pushed tag skips `tag`, so this runs when that job was skipped too
+    if: always() && (startsWith(github.ref, 'refs/tags/v') || needs.tag.outputs.tag != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.tag.outputs.tag || github.ref_name }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
           persist-credentials: false
       - name: the tag is on main
-        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+        run: git merge-base --is-ancestor "$(git rev-parse "$RELEASE_TAG^{commit}")" origin/main
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: stable
@@ -66,6 +109,7 @@ jobs:
         run: (cd dist && sha256sum enallagi-* > SHA256SUMS)
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
             dist/enallagi-x86_64-unknown-linux-musl
             dist/enallagi-aarch64-unknown-linux-musl
