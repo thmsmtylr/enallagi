@@ -5,6 +5,22 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.2.0 (2026-09-25)
+
+- a new crate version on main is the release: `release.yml` tags it and builds that tag in the same run, so cutting one is merging the pull request that bumps `crates/harness/Cargo.toml` and moves these lines
+- `friction-repeat` counts a `## Earned rules` line in DECISIONS.md as cover, so a friction the adjudicator closed stops being reported
+- block titles are 72 characters or fewer, and `probe title-length` reports one past it from `queue.title_cap_from` on
+- `enallagi review` queues one block per open thread, folds the same finding raised twice on the same lines into one, and a landed block replies on its thread with the sha and resolves it
+- a `task/` branch main already carries makes no `gh pr list` call
+- the commit-verdict gate reads a `deferred:` line before prose, and a quoted line, code span, path or test name never trips it
+- a task at `review` keeps its lane branch when origin moves
+- the branch-protection probe gives the host tool ten seconds, then reports `unknown`
+- `enallagi pr` commits its own record and leaves operator edits in the state repository alone
+- a merge git refused is reported in git's words, not as an aborted conflict
+- a `STOP` directory ends no rate-limit wait; only a `STOP` file does
+- `turns-exhausted` reports only a stage whose preset was handed the turn cap
+- `queue-uncovered` reports a criterion whose cargo filter cannot select the test it names
+- `litter` reads the state repository's tracked-and-ignored paths too
 - `enallagi init` is one pass: it asks for the four keys detection cannot decide (`--yes`, `--check`, `--fail-name`, `--source-root`, `--preset` answer without asking), renders every copy from the answers, writes the configured preset's adapter, vendors skills at a terminal (`--sync`, `--frozen`), commits the state, takes `--issue <url>`, and ends with a probe; it seeds no placeholder task and no placeholder spec row
 - a tree no runner preset matches still gets `layout.source_root` and `layout.test_glob` from its `src/` and `tests/`
 - `enallagi eject` keeps the harness directory under `$XDG_DATA_HOME/enallagi/ejected` unless `--delete` is passed
