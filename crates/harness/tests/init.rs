@@ -704,6 +704,25 @@ fn prune_drops_every_line_of_a_multiline_array() {
     );
 }
 
+// the head of the file counts as a cut, so a blank line above the first table is dropped
+#[test]
+fn prune_drops_a_blank_line_at_the_head() {
+    let repo = Repo::new();
+    seeded(
+        &repo,
+        "\n[check]\ncommand = \"make check\"\ntimeout = \"30m\"\n",
+    );
+    let dropped = init::prune(&repo.root, false).expect("prune");
+    assert_eq!(dropped, ["check.timeout"]);
+    let text = read(&repo, ".enallagi/enallagi.toml");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        &lines[..2],
+        [enallagi::config::DEFAULTS_NOTE.trim_end(), "[check]"],
+        "{text}"
+    );
+}
+
 #[test]
 fn prune_twice_writes_the_defaults_note_once() {
     let repo = Repo::new();
