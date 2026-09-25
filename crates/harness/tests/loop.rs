@@ -2292,6 +2292,35 @@ fn digest_and_probe_agree_past_the_turn_cap() {
     assert_eq!(in_digest, in_probe, "digest {in_digest}, probe {in_probe}");
 }
 
+#[test]
+fn digest_and_probe_agree_on_an_uncapped_stage() {
+    use enallagi::probes::telemetry::{turns_exhausted, ProbeResult};
+    let toml = base_toml("").replacen(
+        "command = [\"./src/fakeagent.sh\", \"{prompt}\", \"{turns}\"]",
+        "command = [\"./src/fakeagent.sh\", \"{prompt}\"]",
+        1,
+    );
+    let r = repo(&toml, "");
+    r.write("TASKS.md", "# queue\n");
+    script(
+        &r,
+        "src/fakeagent.sh",
+        "echo '{\"total_cost_usd\":0.5,\"num_turns\":6}'\n",
+    );
+    r.commit_all("a scout reporting one turn past a cap it was never handed");
+
+    let (digest, _) = go(&r, &opts(1));
+    let in_digest = pipeline::digest_text(&digest).contains("scout: turns 5");
+    let cfg = enallagi::config::load(&r.root).expect("config");
+    let log = enallagi::events::Log::open(&r.root.join(".enallagi"));
+    let ProbeResult::Count(findings) = turns_exhausted(&log, &cfg) else {
+        panic!("turns_exhausted could not read the log");
+    };
+    let in_probe = findings.iter().any(|f| f.message.contains("stage scout"));
+    assert_eq!(in_digest, in_probe, "digest {in_digest}, probe {in_probe}");
+    assert!(!in_probe, "the probe reported an uncapped stage");
+}
+
 // turns = 20 and one block handed at turns_per_block = 25 is a cap of 45, not 20
 fn adjudicating_at_turns(reported: u64) -> Repo {
     let r = repo("", "");
