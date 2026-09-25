@@ -1066,6 +1066,15 @@ mod tests {
         assert!(dated_reset("resets 4am (UTC)").is_none());
     }
 
+    // the notice's own minutes and casing survive, so a text rebuilt from the captures fails here
+    #[test]
+    fn dated_reset_is_the_notice_verbatim() {
+        assert_eq!(
+            dated_reset("resets SEPT 20 at 04:05PM (UTC)").as_deref(),
+            Some("SEPT 20 at 04:05PM (UTC)")
+        );
+    }
+
     fn fix_now(zoned: jiff::Zoned) {
         FIXED_NOW.with(|n| *n.borrow_mut() = Some(zoned));
     }

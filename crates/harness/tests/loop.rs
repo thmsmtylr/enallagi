@@ -3238,6 +3238,16 @@ fn a_weekly_limit_halt_still_books_the_stage() {
         "{:?}",
         digest.halts
     );
+    // the stage ran and printed the notice, so it is not a stage that could not start
+    assert!(
+        digest
+            .halts
+            .iter()
+            .any(|h| h.contains("further out than the wait ceiling")
+                && !h.contains("could not start")),
+        "{:?}",
+        digest.halts
+    );
 }
 
 fn claude_args_repo(key: &str) -> Repo {
