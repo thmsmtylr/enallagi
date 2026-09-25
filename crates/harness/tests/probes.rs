@@ -539,7 +539,6 @@ fn a_dated_learning_is_told_where_to_move() {
         "LEARNINGS.md",
         "- [2026-09-02] the check cache served a green nobody ran -> always run `./selftest.sh` uncached (evals/cache-green).\n",
     );
-    fs::create_dir_all(repo.root.join("evals/cache-green")).expect("mkdir");
     let results = run(&repo, &cfg);
     let found = findings(&results, "learning-ungated");
     assert_eq!(found.len(), 1, "{}", render(&results));
