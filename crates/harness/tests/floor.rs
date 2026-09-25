@@ -1445,6 +1445,30 @@ fn no_comment_cites_an_issue_number() {
     assert!(scanned > 50, "{scanned} sources scanned");
 }
 
+// nothing else runs rustdoc, so a broken intra-doc link in a clap help string is reported here
+#[test]
+fn rustdoc_reports_no_warning() {
+    let out = enallagi::fixture::command("cargo")
+        .args(["doc", "-p", "enallagi", "--no-deps"])
+        .env("RUSTDOCFLAGS", "-Dwarnings")
+        .env("CARGO_TERM_COLOR", "never")
+        .current_dir(repo_root())
+        .output()
+        .expect("run cargo doc");
+    let said = String::from_utf8_lossy(&out.stderr);
+    let first = said
+        .lines()
+        .find(|l| l.contains("warning") || l.contains("error"))
+        .unwrap_or_default();
+    assert!(out.status.success(), "cargo doc: {first}\n{said}");
+    // rustdoc's own name for the finished build, so a run that never happened is not a pass
+    assert!(
+        said.lines()
+            .any(|l| l.contains("Documenting") || l.contains("Finished")),
+        "cargo doc printed nothing:\n{said}"
+    );
+}
+
 // the citation floor above catches a comment, not a fixture, and a fixture is where the foreign name
 // was. A manifest a fixture writes names one of a few neutral words, so putting a real repository's
 // name back in one fails here.

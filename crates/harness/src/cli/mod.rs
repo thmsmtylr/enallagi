@@ -122,10 +122,10 @@ pub enum Command {
         /// Refuse a stage whose skills are not already vendored and locked; never fetch
         #[arg(long)]
         frozen: bool,
-        /// Add the agent preset's bypass flag to every lane, as [agent] dangerously_skip_permissions does
+        /// Add the agent preset's bypass flag to every lane, as `[agent] dangerously_skip_permissions` does
         #[arg(long)]
         dangerously_skip_permissions: bool,
-        /// Push each landed task to its own branch and open its pull request, as [pr] per_task does
+        /// Push each landed task to its own branch and open its pull request, as `[pr] per_task` does
         #[arg(long)]
         pr_per_task: bool,
     },
