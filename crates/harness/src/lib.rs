@@ -1,5 +1,3 @@
-//! An autonomous task loop for a coding agent, installed into any git repository. Every module below is one stage of that loop or one thing it reads: the queue, the roles, the gates, the probes and the event log.
-
 pub mod agent;
 pub mod archive;
 pub mod cli;

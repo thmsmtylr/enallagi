@@ -4,7 +4,6 @@ pub mod common;
 pub mod contribution_policy;
 pub mod telemetry;
 
-mod branch_protection;
 mod check_red;
 mod check_unnamed;
 mod driver;
@@ -77,7 +76,6 @@ pub const NAMES: &[&str] = &[
     "prompt-unsubstituted",
     "contribution-policy",
     "upstream-drift",
-    "branch-protection",
     "verdict-flip",
     "rejection-repeat",
     "stage-outlier",
@@ -88,7 +86,7 @@ pub const NAMES: &[&str] = &[
 
 type ProbeFn = fn(&ProbeCtx) -> ProbeResult;
 
-fn registry() -> [(&'static str, ProbeFn); 26] {
+fn registry() -> [(&'static str, ProbeFn); 25] {
     [
         ("spec-untested", spec_untested::probe),
         ("queue-uncovered", queue_uncovered::probe),
@@ -109,7 +107,6 @@ fn registry() -> [(&'static str, ProbeFn); 26] {
         ("prompt-unsubstituted", prompt_unsubstituted::probe),
         ("contribution-policy", contribution_policy::probe),
         ("upstream-drift", upstream_drift::probe),
-        ("branch-protection", branch_protection::probe),
         ("verdict-flip", telemetry_probe::verdict_flip),
         ("rejection-repeat", telemetry_probe::rejection_repeat),
         ("stage-outlier", telemetry_probe::stage_outlier),

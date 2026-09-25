@@ -1,5 +1,3 @@
-//! `enallagi worktree [n]` -- runs a round in a lane of its own, and reports what came back to the parent branch.
-
 use std::path::Path;
 use std::process::Command;
 

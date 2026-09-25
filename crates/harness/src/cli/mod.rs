@@ -1,5 +1,3 @@
-//! The parser and the dispatcher: one clap `Command` variant per subcommand, and `run` hands each to the sibling module of the same name.
-
 mod base;
 mod eject;
 mod eval;
@@ -426,29 +424,18 @@ jobs:
         );
     }
 
-    fn subcommand_names() -> Vec<String> {
-        Cli::command()
-            .get_subcommands()
-            .map(|s| s.get_name().to_string())
-            .collect()
-    }
-
     #[test]
-    fn every_subcommand_is_in_the_reviewed_set() {
-        assert_eq!(subcommand_names(), SUBCOMMANDS);
-    }
+    fn the_subcommand_set_is_the_reviewed_sixteen() {
+        let cmd = Cli::command();
+        let names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
+        assert_eq!(names, SUBCOMMANDS);
 
-    #[test]
-    fn every_subcommand_is_named_in_the_readme() {
         let listed = README.split("## Commands").nth(1).expect("## Commands");
-        for name in subcommand_names() {
+        for name in names {
             assert!(listed.contains(&format!("`{name}`")), "README omits {name}");
         }
-    }
 
-    #[test]
-    fn no_two_subcommands_state_one_job() {
-        let mut jobs: Vec<String> = Cli::command()
+        let mut jobs: Vec<String> = cmd
             .get_subcommands()
             .map(|s| s.get_about().expect("about").to_string())
             .collect();

@@ -247,10 +247,8 @@ fn the_task_branch_holds_only_the_done_change() {
         ),
         ""
     );
-    // the subject is the task's last commit with its id dropped, not the block's own title
     let subject = git(&f.root, &["log", "-1", "--format=%s", "task/T-001"]);
-    assert_eq!(subject, "fix(thing): answer the rejection", "{subject}");
-    assert!(subject.len() <= 72, "{subject}");
+    assert!(subject.contains("the thing says two twice"), "{subject}");
     assert!(git(&f.root, &["worktree", "list"]).lines().count() == 1);
     assert!(f.remote_branches().lines().all(|b| !b.contains("task/")));
     assert_eq!(

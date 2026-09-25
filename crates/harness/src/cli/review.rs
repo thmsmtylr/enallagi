@@ -1,5 +1,3 @@
-//! `enallagi review <ref>` -- appends one block per open review comment, and exits 1 when more than a page went unread.
-
 use crate::config;
 use crate::queue::Queue;
 use crate::review::{self, ReviewError};

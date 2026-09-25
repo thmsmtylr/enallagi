@@ -1,4 +1,4 @@
-//! One lane runs in its own git worktree. Its product work is fast-forwarded back onto the parent branch, or, under `[pr] per_task`, left on the branch `enallagi pr` pushes. A state parent that moved under the lane is merged.
+//! One lane runs in its own git worktree. Its work is fast-forwarded back onto the parent branch, or, under `[pr] per_task`, left on the branch `enallagi pr` pushes.
 
 use std::path::{Path, PathBuf};
 
@@ -154,47 +154,6 @@ fn resumable_base(root: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-// the commits the parent gained while the lane ran, which a merge takes in and a fast-forward never meets
-fn absorbed_by(repo: &Path, branch: &str) -> String {
-    git::git(repo, &["log", "--format=%h %s", &format!("{branch}..HEAD")])
-        .unwrap_or_default()
-        .lines()
-        .collect::<Vec<_>>()
-        .join("; ")
-}
-
-// a merge commit needs an identity the state repository rarely configures, so it borrows the
-// product's own, exactly as `git::commit_instance` does at `git.rs:146`
-fn merge_into(repo: &Path, root: &Path, branch: &str, ff: bool) -> Result<String, git::GitError> {
-    if ff {
-        return git::git(repo, &["merge", "--ff-only", branch]);
-    }
-    let mut args: Vec<String> = Vec::new();
-    for key in ["user.name", "user.email"] {
-        if let Ok(value) = git::git(root, &["config", key]) {
-            args.extend(["-c".to_string(), format!("{key}={value}")]);
-        }
-    }
-    args.extend(
-        [
-            "-c",
-            "commit.gpgsign=false",
-            "merge",
-            "--no-ff",
-            "--no-edit",
-            branch,
-        ]
-        .map(String::from),
-    );
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let merged = git::git(repo, &args);
-    if merged.is_err() {
-        // git leaves the conflict in the index and the tree, and a parent left mid-merge is worse than an unmerged lane
-        let _ = git::git(repo, &["merge", "--abort"]);
-    }
-    merged
-}
-
 // an untracked file is the operator's own and a lane never sees it, so it is named and not refused
 fn untracked_notice(paths: &[String]) -> String {
     format!(
@@ -281,11 +240,9 @@ pub fn lane(
         .cloned()
         .collect();
 
-    // checked before any merge, so a product branch that cannot fast-forward merges neither. The
-    // state repository's lane commits name product shas, so the product side never merges a commit
+    // checked for every repository before any merge, so one that cannot fast-forward merges neither
     let stuck: Vec<String> = merging
         .iter()
-        .filter(|(repo, _)| repo.as_path() == root)
         .filter(|(repo, _)| !git::git_ok(repo, &["merge-base", "--is-ancestor", "HEAD", &branch]))
         .map(|(repo, _)| format!("{branch} cannot fast-forward into {}", repo.display()))
         .collect();
@@ -297,27 +254,12 @@ pub fn lane(
     let mut merged: Vec<(&PathBuf, String)> = Vec::new();
     for (repo, _) in &merging {
         let pre = git::git(repo, &["rev-parse", "HEAD"])?;
-        // only the state repository reaches this not-an-ancestor: the product was screened above
-        let ff = git::git_ok(repo, &["merge-base", "--is-ancestor", "HEAD", &branch]);
-        let absorbed = absorbed_by(repo, &branch);
-        match merge_into(repo, root, &branch, ff) {
+        match git::git(repo, &["merge", "--ff-only", &branch]) {
             Ok(out) => {
-                said.push(if ff {
-                    out
-                } else {
-                    format!("{} merged {branch} over {absorbed}: {out}", repo.display())
-                });
+                said.push(out);
                 merged.push((repo, pre));
             }
             Err(err) => {
-                let reason = match &err {
-                    git::GitError::Failed { stderr, .. } if ff => Some(stderr.clone()),
-                    git::GitError::Failed { .. } => Some(format!(
-                        "{branch} conflicts with {} over {absorbed}, and the merge was aborted",
-                        repo.display()
-                    )),
-                    _ => None,
-                };
                 // a merge git refuses after the ancestry check (a dirty parent tree) undoes the ones before it
                 for (done, pre) in merged {
                     if let Err(e) = git::git(done, &["reset", "--keep", &pre]) {
@@ -329,9 +271,9 @@ pub fn lane(
                         });
                     }
                 }
-                match reason {
-                    Some(reason) => return Ok(left(reason)),
-                    None => return Err(err.into()),
+                match err {
+                    git::GitError::Failed { stderr, .. } => return Ok(left(stderr)),
+                    e => return Err(e.into()),
                 }
             }
         }
@@ -427,17 +369,6 @@ mod tests {
 
     fn land(wt: &Path, id: &str, file: &str) {
         land_at(wt, id, file, "done");
-    }
-
-    // the parent decides the same block the lane decides, so the state merge conflicts rather than applying
-    fn decide_in_the_parent(state: &Path, status: &str) {
-        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
-        std::fs::write(
-            state.join("TASKS.md"),
-            tasks.replacen("status: ready", &format!("status: {status}"), 1),
-        )
-        .expect("write");
-        commit_in(state, "a second writer decided the same block");
     }
 
     fn per_task_repo() -> Repo {
@@ -703,11 +634,10 @@ mod tests {
         let state = r.root.join(".enallagi");
         let pre_head = git::head(&r.root);
 
-        let mut before_the_merge = None;
         let report = lane(&r.root, &cfg, &mut |wt| {
             land(wt, "T-001", "one.txt");
-            decide_in_the_parent(&state, "blocked");
-            before_the_merge = git::head(&state);
+            std::fs::write(state.join("moved.txt"), "y").expect("write");
+            commit_in(&state, "a second writer moved the state");
             Ok(())
         })
         .expect("lane");
@@ -719,11 +649,6 @@ mod tests {
             "{}",
             report.reason
         );
-        assert_eq!(git::head(&state), before_the_merge);
-        assert!(
-            git::porcelain(&state).is_empty(),
-            "the merge was not aborted"
-        );
         assert_eq!(git::head(&r.root), pre_head);
         assert!(!r.root.join("one.txt").exists());
         let left = report.left.clone().expect("left in place");
@@ -731,71 +656,6 @@ mod tests {
         let lane_tasks =
             std::fs::read_to_string(left.join(".enallagi/TASKS.md")).expect("TASKS.md");
         assert!(lane_tasks.contains("status: done"));
-        remove_left(&r, &report);
-    }
-
-    #[test]
-    fn a_moved_state_parent_merges_with_a_commit() {
-        let r = nested_repo();
-        let cfg = cfg(&r);
-        let state = r.root.join(".enallagi");
-        let pre_head = git::head(&r.root);
-
-        let report = lane(&r.root, &cfg, &mut |wt| {
-            land(wt, "T-001", "one.txt");
-            std::fs::write(state.join("moved.txt"), "y").expect("write");
-            commit_in(&state, "a second writer moved the state");
-            Ok(())
-        })
-        .expect("lane");
-
-        assert!(report.merged, "reason: {}", report.reason);
-        assert!(
-            report.reason.contains("a second writer moved the state"),
-            "{}",
-            report.reason
-        );
-        assert_ne!(git::head(&r.root), pre_head);
-        assert!(r.root.join("one.txt").exists());
-        assert!(state.join("moved.txt").exists());
-        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
-        assert!(
-            tasks.contains("## [T-001] one\nscope: one.txt\nstatus: done"),
-            "{tasks}"
-        );
-        // a sha and two parents: the state absorbed the second writer rather than replaying over them
-        let parents = git::git(&state, &["rev-list", "--parents", "-1", "HEAD"]).expect("rev-list");
-        assert_eq!(parents.split_whitespace().count(), 3, "{parents}");
-    }
-
-    #[test]
-    fn a_state_merge_rolls_back_with_the_product() {
-        let r = nested_repo();
-        let cfg = cfg(&r);
-        let state = r.root.join(".enallagi");
-        let pre_root = git::head(&r.root);
-
-        let mut before_the_merge = None;
-        let report = lane(&r.root, &cfg, &mut |wt| {
-            land(wt, "T-001", "one.txt");
-            std::fs::write(state.join("moved.txt"), "y").expect("write");
-            commit_in(&state, "a second writer moved the state");
-            before_the_merge = git::head(&state);
-            // the parent's own untracked copy is what the product's fast-forward refuses
-            r.write("one.txt", "an operator's own untracked edit");
-            Ok(())
-        })
-        .expect("lane");
-
-        assert!(!report.merged, "reason: {}", report.reason);
-        // the state merged and the product refused: the reason is git's, not the ancestry check's
-        assert!(report.reason.contains("one.txt"), "{}", report.reason);
-        assert_eq!(git::head(&r.root), pre_root);
-        assert_eq!(git::head(&state), before_the_merge, "{}", report.reason);
-        let parents = git::git(&state, &["rev-list", "--parents", "-1", "HEAD"]).expect("rev-list");
-        assert_eq!(parents.split_whitespace().count(), 2, "{parents}");
-        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
-        assert!(!tasks.contains("status: done"), "{tasks}");
         remove_left(&r, &report);
     }
 
@@ -814,7 +674,8 @@ mod tests {
                 reason: "y".into(),
             });
             land(wt, "T-001", "one.txt");
-            decide_in_the_parent(&state, "blocked");
+            std::fs::write(state.join("moved.txt"), "y").expect("write");
+            commit_in(&state, "a second writer moved the state");
             Ok(())
         })
         .expect("lane");

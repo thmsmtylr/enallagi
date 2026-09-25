@@ -333,23 +333,16 @@ fn apply_and_commit(
     Ok(())
 }
 
-// the task's last commit subject with its id dropped: `feat(scope): T-### x` -> `feat(scope): x`.
-// A block title is the finding in the finding's own words and runs long; a pull request wants the
-// one line the commit already wrote. The block's title is the body's heading, not the subject.
-const SUBJECT_MAX: usize = 72;
-
+// the conventional prefix of the task's last commit, `feat(scope): T-### …`, in front of the task's title
 fn subject(tasks: &[Task], picked: &[(String, String)]) -> String {
-    let written = regex::Regex::new(r"^([a-z]+(?:\([^)]*\))?!?):\s*T-\d+\s+(.+)$").expect("regex");
-    let line = picked
+    let title = &tasks[0].title;
+    let prefix = regex::Regex::new(r"^([a-z]+(?:\([^)]*\))?!?):\s*T-\d+\b").expect("regex");
+    picked
         .iter()
         .rev()
-        .find_map(|(_, s)| written.captures(s))
-        .map(|c| format!("{}: {}", &c[1], &c[2]))
-        .unwrap_or_else(|| tasks[0].title.clone());
-    match line.char_indices().nth(SUBJECT_MAX) {
-        None => line,
-        Some((at, _)) => format!("{}...", line[..at].trim_end()),
-    }
+        .find_map(|(_, s)| prefix.captures(s))
+        .map(|c| format!("{} {title}", &c[1]))
+        .unwrap_or_else(|| title.clone())
 }
 
 fn describe(

@@ -1,5 +1,3 @@
-//! `enallagi events` -- replays the log through the filters, keeping a matched stage's surrounding events and not the matching lines alone.
-
 use std::path::Path;
 
 use crate::events::{render_line, stage_of, task_of, Event, Kind, Log};

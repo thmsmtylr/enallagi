@@ -1,5 +1,3 @@
-//! `enallagi issue <ref>` -- appends the block one GitHub issue becomes, or prints it and writes nothing under --dry-run.
-
 use crate::config;
 use crate::issue::{self, IssueError};
 use crate::queue::Queue;

@@ -1449,7 +1449,7 @@ fn verifier_noting(r: &Repo, note: &str, proposed: &str) -> String {
     )
 }
 
-fn queued_status(r: &Repo) -> Option<String> {
+fn t001_status(r: &Repo) -> Option<String> {
     let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
     let blocks = enallagi::queue::parse(&text).expect("parse");
     let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
@@ -1472,7 +1472,7 @@ fn a_deferred_finding_with_no_block_is_refused() {
     });
     let reason = refusal.unwrap_or_else(|| panic!("commit-verdict passed: {events:#?}"));
     assert!(reason.contains("minor"), "{reason}");
-    assert_eq!(queued_status(&r).as_deref(), Some("review"));
+    assert_eq!(t001_status(&r).as_deref(), Some("review"));
     assert!(digest.landed.is_empty(), "{:?}", digest.landed);
     assert!(
         enallagi::git::porcelain(&r.root).is_empty(),
@@ -1833,8 +1833,7 @@ fn a_nested_install_refuses_a_grown_baseline() {
 
     let (digest, events) = go(&r, &opts(1));
     assert!(digest.landed.is_empty(), "{events:#?}");
-    // the iteration's commits are on the branch, so the block wants another verdict, not another build
-    assert_eq!(nested_status(&r).as_deref(), Some("review"));
+    assert_eq!(nested_status(&r).as_deref(), Some("ready"));
     let refusal = events.iter().find_map(|e| match &e.kind {
         Kind::Gate {
             gate, pass, reason, ..
@@ -1845,48 +1844,6 @@ fn a_nested_install_refuses_a_grown_baseline() {
     assert!(
         reason.contains("added a line to .check-baseline"),
         "{reason}"
-    );
-}
-
-// the implement round rewrites the block, widening scope: with no `widened:` line
-const WIDENED: &str = "cat > .enallagi/TASKS.md <<'EOF'\n\
-## [T-001] do the thing\n\
-\n\
-scope: src/thing.ts, src/other.ts\n\
-rows: none \u{2014} harness\n\
-status: review\n\
-criteria:\n\
-  - it happens\n\
-EOF\n";
-
-// the widening lands in the implement round, so a review-only round's own bases already carry it
-#[test]
-fn a_review_round_reads_the_queued_scope() {
-    let r = nested("exit 0\n", WIDENED);
-
-    let (digest, events) = go(&r, &opts(2));
-    assert!(digest.landed.is_empty(), "{events:#?}");
-    assert_eq!(nested_status(&r).as_deref(), Some("review"));
-    let refusals: Vec<String> = events
-        .iter()
-        .filter_map(|e| match &e.kind {
-            Kind::Gate {
-                gate, pass, reason, ..
-            } if gate == "scope" && !*pass => Some(reason.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(refusals.len(), 2, "{events:#?}");
-    assert!(
-        refusals
-            .iter()
-            .all(|r| r.contains("widened scope: with src/other.ts")),
-        "{refusals:?}"
-    );
-    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
-    assert!(
-        tasks.contains("gate: ") && tasks.contains("widened scope: with src/other.ts"),
-        "{tasks}"
     );
 }
 
@@ -3469,81 +3426,4 @@ fn a_red_task_branch_opens_no_pr() {
             && warnings.contains("the check failed in the task worktree"),
         "{out}"
     );
-}
-
-// a bare clone on disk under a URL that names a host: the probe reads real refs and calls nothing
-fn hosted_origin(r: &Repo) -> (tempfile::TempDir, String) {
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let git = |root: &std::path::Path, args: &[&str]| {
-        enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
-    };
-    let bare = dir.path().join("origin.git");
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "-q",
-            "--bare",
-            &r.root.to_string_lossy(),
-            "origin.git",
-        ],
-    );
-    git(
-        &r.root,
-        &["remote", "add", "origin", &bare.to_string_lossy()],
-    );
-    git(&r.root, &["fetch", "-q", "origin"]);
-    let branch = git(&r.root, &["rev-parse", "--abbrev-ref", "HEAD"]);
-    git(&r.root, &["remote", "set-head", "origin", &branch]);
-    git(
-        &r.root,
-        &[
-            "remote",
-            "set-url",
-            "origin",
-            "https://git.example.invalid/o/r.git",
-        ],
-    );
-    (dir, branch)
-}
-
-fn protection(r: &Repo) -> String {
-    let cfg = enallagi::config::load(&r.root).expect("load");
-    let check = enallagi::probes::CheckOutcome {
-        ran: true,
-        red: false,
-        output: String::new(),
-    };
-    let ctx = enallagi::probes::ProbeCtx {
-        root: &r.root,
-        cfg: &cfg,
-        check: Some(&check),
-        driver: false,
-    };
-    enallagi::probes::render(&enallagi::probes::run_all(
-        &ctx,
-        &["branch-protection".to_string()],
-    ))
-}
-
-#[test]
-fn an_iteration_lands_under_a_protection_finding() {
-    let r = repo("", "");
-    let implement = implementer(&r, "");
-    let verify = verifier(&r);
-    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", TASKS);
-    r.commit_all("stubs");
-    let (_origin, _branch) = hosted_origin(&r);
-    let reported = protection(&r);
-    assert!(
-        reported.starts_with("PROBE branch-protection 1"),
-        "{reported}"
-    );
-
-    let (digest, events) = go(&r, &opts(1));
-    assert_eq!(ends(&events).len(), 2, "{events:#?}");
-    assert!(digest.halts.is_empty(), "{:?}", digest.halts);
-    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    assert!(tasks.contains("status: done"), "{tasks}");
 }

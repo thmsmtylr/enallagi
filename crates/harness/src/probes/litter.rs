@@ -1,5 +1,3 @@
-//! A path the repository carries that is neither product nor a document governing it, tracked or not, minus the machinery every tree has.
-
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
 use crate::git;
