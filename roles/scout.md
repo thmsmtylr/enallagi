@@ -14,7 +14,7 @@ Protocol:
 6. Take the next id as one past the highest ever used. The highest is over `## [T-` headings in **both** __ENALLAGI_DIR__/TASKS.md and __ENALLAGI_DIR__/DECISIONS.md and every id on a `## Rejected findings` line: `{ grep -h '^## \[T-' __ENALLAGI_DIR__/TASKS.md __ENALLAGI_DIR__/DECISIONS.md; sed -n '/^## Rejected findings/,/^## \[T-/p' __ENALLAGI_DIR__/DECISIONS.md; } | grep -o 'T-[0-9]*' | sort -t- -k2 -n | tail -1`. A killed id is spent, never free, and `queue-hygiene` reports a block that reuses one.
 7. Append the block. Every field below is required, and `rows:` is what `one-row` binds through; a block missing `probe:`, `command:` or `output:` is malformed and the adjudicator kills it unread.
 ```
-## [T-###] <the finding, in the finding's own words>
+## [T-###] <the finding, in its own words, 72 characters or fewer>
 scope: <the files a fix would touch, comma-separated globs>
 blockedBy:
 status: proposed
@@ -28,6 +28,7 @@ criteria:
   - <what has to become true for the probe to stop emitting that line>
 notes: proposed from the output above on <date>. Not adjudicated.
 ```
+   The title is the defect, not the fix, in 72 characters or fewer: drop articles, filler and hedging, and a fragment is fine. `enallagi probe title-length` reports one past the cap. `a task/ branch that outlives its merged pull request calls gh pr list once every iteration for good` is `merged task/ branch still polls gh pr list every iteration`.
 
 Hard rules, each naming the rail it serves:
 - Propose only from a `FINDING` line. Never from reading the code, never from a hunch, never from a pattern you noticed across two findings (`anchored`). If you believe something the probes missed, it goes in your report as an open question and nowhere else.

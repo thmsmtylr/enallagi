@@ -64,8 +64,9 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `skill-ungated` | a `[[skill]]` whose `gate` is `none` |
 | `ponytail-ceiling` | a `ponytail:` marker no kill line names |
 | `rejection-stale` | a block whose last verdict is REJECTED and whose status is not `ready` |
+| `title-length` | a block title past 72 characters, from `queue.title_cap_from` on; the id and the count |
 | `queue-hygiene` | a repeated id, a missing status, an undefined blocker, or a scope entry matching nothing |
-| `friction-repeat` | a friction recorded twice that no rule or kill line covers |
+| `friction-repeat` | a friction recorded twice that no LEARNINGS.md rule, `## Earned rules` line or kill line covers |
 | `check-red` | a check that exits non-zero, with its first failing test |
 | `litter` | a tracked path the repository treats as disposable, or an untracked path on no allowlist |
 | `plain-record` | a commit subject, note or printed line that comments instead of recording |

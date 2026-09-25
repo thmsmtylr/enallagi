@@ -58,7 +58,7 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 // truncated at #[cfg(test)] so a fixture string in a test module isn't mistaken for real launcher code
 fn crate_sources() -> Vec<(PathBuf, String)> {
     let src = repo_root().join("crates/harness/src");
-    walk(&src)
+    let sources: Vec<(PathBuf, String)> = walk(&src)
         .into_iter()
         .filter(|p| p.extension().is_some_and(|e| e == "rs"))
         .map(|rel| {
@@ -66,7 +66,14 @@ fn crate_sources() -> Vec<(PathBuf, String)> {
             let cut = text.find("#[cfg(test)]").unwrap_or(text.len());
             (rel, text[..cut].to_string())
         })
-        .collect()
+        .collect();
+    // a scan over no file finds no offender, and that is not a pass
+    assert!(
+        !sources.is_empty(),
+        "no source read under {}",
+        src.display()
+    );
+    sources
 }
 
 // ENALLAGI_BIN points at the test binary so nothing here builds release or reads one off PATH
@@ -1301,11 +1308,97 @@ fn every_harness_dir_path_has_a_store() {
     assert_eq!(missing, Vec::<String>::new());
 }
 
+// string literals blanked to spaces, newlines kept, so a `//` line inside a raw-string fixture is
+// source and not a comment; a comment's own quotes are left alone
+fn without_strings(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let at = |k: usize| chars.get(k).copied();
+    let blank = |c: char| if c == '\n' { '\n' } else { ' ' };
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '/' && at(i + 1) == Some('/') {
+            while i < chars.len() && chars[i] != '\n' {
+                out.push(chars[i]);
+                i += 1;
+            }
+        } else if c == '/' && at(i + 1) == Some('*') {
+            while i < chars.len() && !(chars[i] == '*' && at(i + 1) == Some('/')) {
+                out.push(chars[i]);
+                i += 1;
+            }
+            out.push_str("*/");
+            i += 2;
+        } else if c == '\'' && at(i + 1) == Some('\\') {
+            // an escaped char literal, `'\''` or `'\n'`, closes at the next quote after its escape
+            let close = (i + 3..chars.len())
+                .find(|&k| chars[k] == '\'')
+                .unwrap_or(chars.len() - 1);
+            out.push_str(&" ".repeat(close + 1 - i));
+            i = close + 1;
+        } else if c == '\'' && at(i + 2) == Some('\'') {
+            out.push_str("   ");
+            i += 3;
+        } else if c == '"' || (c == 'r' || c == 'b') && matches!(at(i + 1), Some('"' | '#' | 'r')) {
+            let mut j = i;
+            while matches!(at(j), Some('r' | 'b')) {
+                j += 1;
+            }
+            let raw = (i..j).any(|k| chars[k] == 'r');
+            let mut hashes = 0;
+            while at(j) == Some('#') {
+                hashes += 1;
+                j += 1;
+            }
+            if at(j) != Some('"') {
+                out.push(c);
+                i += 1;
+                continue;
+            }
+            j += 1;
+            out.push_str(&" ".repeat(j - i));
+            i = j;
+            while i < chars.len() {
+                if chars[i] == '"' && (0..hashes).all(|k| at(i + 1 + k) == Some('#')) {
+                    out.push_str(&" ".repeat(hashes + 1));
+                    i += hashes + 1;
+                    break;
+                }
+                if !raw && chars[i] == '\\' {
+                    out.push(' ');
+                    i += 1;
+                }
+                if i < chars.len() {
+                    out.push(blank(chars[i]));
+                    i += 1;
+                }
+            }
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    out
+}
+
 #[test]
 fn no_comment_cites_an_issue_number() {
-    // ponytail: whole-line comments only, which is the shape the rule has been broken in; read a
-    // trailing comment too once a scan can tell one from a `//` inside a string literal
+    // ponytail: whole-line comments only, which is the shape the rule has been broken in; a
+    // trailing comment after code is still unread
     let cited = re(r"(?m)^[ \t]*//[^\n]*#[0-9]+");
+    assert!(
+        cited.is_match(&without_strings(
+            "// the seeded spec: owner/repo#49 rewrote it by hand"
+        )),
+        "the scan cannot report through the string scrub"
+    );
+    assert!(
+        !cited.is_match(&without_strings(
+            "const X: &str = r#\"\n// a note the fixture carries #12\n\"#;"
+        )),
+        "a raw string line read as a comment"
+    );
     assert!(
         cited.is_match("// the seeded spec: owner/repo#49 rewrote it by hand"),
         "the scan cannot report"
@@ -1339,7 +1432,7 @@ fn no_comment_cites_an_issue_number() {
         if !shipped.contains(&Path::new("crates").join(&rel)) {
             continue;
         }
-        let text = read(&crates.join(&rel));
+        let text = without_strings(&read(&crates.join(&rel)));
         scanned += 1;
         assert!(
             !cited.is_match(&text),
@@ -1350,6 +1443,30 @@ fn no_comment_cites_an_issue_number() {
     }
     // an empty corpus is not a pass; `git ls-files 'crates/**/*.rs'` -> 77
     assert!(scanned > 50, "{scanned} sources scanned");
+}
+
+// nothing else runs rustdoc, so a broken intra-doc link in a clap help string is reported here
+#[test]
+fn rustdoc_reports_no_warning() {
+    let out = enallagi::fixture::command("cargo")
+        .args(["doc", "-p", "enallagi", "--no-deps"])
+        .env("RUSTDOCFLAGS", "-Dwarnings")
+        .env("CARGO_TERM_COLOR", "never")
+        .current_dir(repo_root())
+        .output()
+        .expect("run cargo doc");
+    let said = String::from_utf8_lossy(&out.stderr);
+    let first = said
+        .lines()
+        .find(|l| l.contains("warning") || l.contains("error"))
+        .unwrap_or_default();
+    assert!(out.status.success(), "cargo doc: {first}\n{said}");
+    // rustdoc's own name for the finished build, so a run that never happened is not a pass
+    assert!(
+        said.lines()
+            .any(|l| l.contains("Documenting") || l.contains("Finished")),
+        "cargo doc printed nothing:\n{said}"
+    );
 }
 
 // the citation floor above catches a comment, not a fixture, and a fixture is where the foreign name
@@ -1398,3 +1515,9 @@ fn no_fixture_manifest_names_another_repository() {
     // an empty corpus is not a pass; `git ls-files 'crates/**/*.rs'` -> 77
     assert!(scanned > 50, "{scanned} sources scanned");
 }
+
+// the fixture T-281 named: a `//` line inside a raw string is source, and the citation scan leaves it
+#[allow(dead_code)]
+const PROBE_FIXTURE: &str = r#"
+// a seeded note the fixture carries #12
+"#;

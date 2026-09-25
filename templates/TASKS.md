@@ -13,7 +13,7 @@ iteration, leaving a stub with the fields the loop still reads. Keep this file s
 ## Block format
 
 ```
-## [T-###] one line, in the finding's own words
+## [T-###] the finding, in its own words, 72 characters or fewer
 scope: src/thing.ts, src/thing.test.ts
 blockedBy:
 status: ready
@@ -23,6 +23,7 @@ criteria:
 notes: <what a reviewer should scrutinise; the implementer's and the verifier's own words>
 ```
 
+A title is the defect in 72 characters or fewer, compressed: articles, filler and hedging dropped, a fragment allowed, the defect stated rather than the fix. `the commit-verdict gate regex on minor sends a correct verdict back to review on a false positive` is `commit-verdict regex on minor bounces a correct verdict`. `enallagi probe title-length` reports one past the cap.
 Keep the example above unnumbered: `enallagi tasks ready` scans for `## [T-<digits>]` and does not
 know a code fence from a block. `blockedBy:` is empty, `none`, or a comma-separated list of ids.
 A directory in `scope:` is written `dir/**`. A bare `dir` matches only itself, never a file beneath it.

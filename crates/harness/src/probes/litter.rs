@@ -23,18 +23,28 @@ fn machinery(ctx: &ProbeCtx, path: &str) -> bool {
     })
 }
 
-// the repository's own ignore rules cover it and git tracks it anyway, so the repository already calls it disposable
+// the repository's own ignore rules cover it and git tracks it anyway, so the repository already calls it
+// disposable; a state repository is asked the same and its paths are prefixed as `common::tracked` names them
 fn tracked_and_ignored(root: &Path) -> Res<Vec<String>> {
-    let out = git::git(
-        root,
-        &["ls-files", "--cached", "--ignored", "--exclude-standard"],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(out
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(String::from)
-        .collect())
+    let list = |repo: &Path, prefix: &str| -> Res<Vec<String>> {
+        let out = git::git(
+            repo,
+            &["ls-files", "--cached", "--ignored", "--exclude-standard"],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(out
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| format!("{prefix}{l}"))
+            .collect())
+    };
+    let mut paths = list(root, "")?;
+    let dir = crate::config::harness_dir(root);
+    let state = git::state_root(root, &dir);
+    if state != root {
+        paths.extend(list(&state, &format!("{dir}/"))?);
+    }
+    Ok(paths)
 }
 
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {

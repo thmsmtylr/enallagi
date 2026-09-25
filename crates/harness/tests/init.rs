@@ -704,6 +704,25 @@ fn prune_drops_every_line_of_a_multiline_array() {
     );
 }
 
+// the head of the file counts as a cut, so a blank line above the first table is dropped
+#[test]
+fn prune_drops_a_blank_line_at_the_head() {
+    let repo = Repo::new();
+    seeded(
+        &repo,
+        "\n[check]\ncommand = \"make check\"\ntimeout = \"30m\"\n",
+    );
+    let dropped = init::prune(&repo.root, false).expect("prune");
+    assert_eq!(dropped, ["check.timeout"]);
+    let text = read(&repo, ".enallagi/enallagi.toml");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        &lines[..2],
+        [enallagi::config::DEFAULTS_NOTE.trim_end(), "[check]"],
+        "{text}"
+    );
+}
+
 #[test]
 fn prune_twice_writes_the_defaults_note_once() {
     let repo = Repo::new();
@@ -1518,16 +1537,29 @@ fn a_code_only_tree_gains_no_other_prefix() {
     install(&repo);
     let written: toml::Value =
         toml::from_str(&read(&repo, ".enallagi/enallagi.toml")).expect("parse");
-    let prefixes = written["layout"]["allowed_prefixes"]
+    let prefixes: Vec<&str> = written["layout"]["allowed_prefixes"]
         .as_array()
-        .expect("array");
-    for entry in prefixes {
-        let entry = entry.as_str().expect("string");
-        assert!(
-            entry.starts_with('.') || ["src/", "tests/", "package.json"].contains(&entry),
-            "{entry}: {prefixes:?}"
-        );
-    }
+        .expect("array")
+        .iter()
+        .map(|e| e.as_str().expect("string"))
+        .collect();
+    // the whole array, in order: a membership test would accept any entry the tree could yield
+    assert_eq!(
+        prefixes,
+        [
+            ".claude/",
+            ".codex/",
+            ".cursor/",
+            ".enallagi/",
+            ".gemini/",
+            ".github/",
+            ".omp/",
+            ".qwen/",
+            "package.json",
+            "src/",
+            "tests/"
+        ]
+    );
 }
 
 #[test]

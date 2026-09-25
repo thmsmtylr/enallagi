@@ -96,7 +96,7 @@ fn probes_exit_0_every_probe_ran() {
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     assert_eq!(errors(&results), Vec::<&str>::new());
-    assert_eq!(results.len(), 26, "{}", render(&results));
+    assert_eq!(results.len(), 27, "{}", render(&results));
 }
 
 #[test]
@@ -433,6 +433,10 @@ fn strict_prefixes_reports_a_file_outside_them() {
     let found = findings(&results, "litter");
     assert_eq!(found.len(), 1, "{}", render(&results));
     assert_eq!(found[0].path, "scratch.md");
+    assert_eq!(
+        found[0].message,
+        "tracked and neither product nor a document that governs it"
+    );
 }
 
 #[test]
@@ -444,6 +448,10 @@ fn a_tracked_machinery_path_is_litter() {
     let found = findings(&results, "litter");
     assert_eq!(found.len(), 1, "{}", render(&results));
     assert_eq!(found[0].path, "dist/bundle.js");
+    assert_eq!(
+        found[0].message,
+        "tracked and the repository treats it as disposable"
+    );
 }
 
 #[test]
@@ -457,6 +465,64 @@ fn a_tracked_file_the_ignore_rules_cover_is_litter() {
     let found = findings(&results, "litter");
     assert_eq!(found.len(), 1, "{}", render(&results));
     assert_eq!(found[0].path, "src/notes.tmp");
+    assert_eq!(
+        found[0].message,
+        "tracked and the repository treats it as disposable"
+    );
+}
+
+// the harness directory as its own repository: what its ignore rules cover and git tracks anyway is litter too
+#[test]
+fn a_state_repo_ignored_path_is_litter() {
+    let repo = Repo::new();
+    let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
+    repo.write("src/main.rs", "fn main() {}\n");
+    repo.write(".git/info/exclude", ".enallagi/\n");
+    repo.commit_all("product");
+    let toml = format!(
+        "[check]\ncommand = \"true\"\n\n[layout]\nallowed_prefixes = [\"src/\", \".enallagi/\", \".claude/\"]\n{}",
+        vendored_skills(&repo)
+    );
+    repo.write(".enallagi/enallagi.toml", &toml);
+    repo.write(".enallagi/.gitignore", "*.tmp\n");
+    repo.write(".enallagi/scratch.tmp", "x\n");
+    let state = repo.root.join(".enallagi");
+    git(&state, &["init", "-q"]);
+    git(&state, &["config", "user.name", "t"]);
+    git(&state, &["config", "user.email", "t@t"]);
+    git(&state, &["add", "-A"]);
+    git(&state, &["add", "-f", "scratch.tmp"]);
+    git(
+        &state,
+        &["-c", "commit.gpgsign=false", "commit", "-qm", "state"],
+    );
+
+    let cfg = config::load(&repo.root).expect("config");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "litter");
+    let scratch: Vec<_> = found
+        .iter()
+        .filter(|f| f.path == ".enallagi/scratch.tmp")
+        .collect();
+    assert_eq!(scratch.len(), 1, "{}", render(&results));
+    assert_eq!(
+        scratch[0].message,
+        "tracked and the repository treats it as disposable"
+    );
+}
+
+#[test]
+fn an_untracked_file_on_no_allowlist_is_litter() {
+    let (repo, cfg) = conventional();
+    repo.write("junk.log", "x\n");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "litter");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, "junk.log");
+    assert_eq!(
+        found[0].message,
+        "untracked or ignored, on no allowlist and no known machinery"
+    );
 }
 
 #[test]
@@ -539,7 +605,6 @@ fn a_dated_learning_is_told_where_to_move() {
         "LEARNINGS.md",
         "- [2026-09-02] the check cache served a green nobody ran -> always run `./selftest.sh` uncached (evals/cache-green).\n",
     );
-    fs::create_dir_all(repo.root.join("evals/cache-green")).expect("mkdir");
     let results = run(&repo, &cfg);
     let found = findings(&results, "learning-ungated");
     assert_eq!(found.len(), 1, "{}", render(&results));
@@ -673,7 +738,16 @@ next: nothing
 fn a_reworded_repeat_of_one_friction_is_reported() {
     let (repo, cfg) = seeded();
     append(&repo, "PROGRESS.md", FRICTION_FIXTURE);
-    assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(1));
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "friction-repeat");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0]
+            .message
+            .contains("no LEARNINGS.md rule, earned rule or dated kill line covers it"),
+        "{}",
+        found[0].message
+    );
 }
 
 #[test]
@@ -685,6 +759,21 @@ fn and_a_repeat_a_dated_kill_line_names_is_covered() {
         "DECISIONS.md",
         "\n## Rejected findings\n- [2026-09-13] the same friction is recorded 2 times: FIFTH sighting of a check firing on the prose that documents it - and the first where the \u{2014} refuted by `enallagi eval --gate prose-check`: `GATE prose-check REJECT the case passes with the rule ablated, so the rule changed no outcome`; PROGRESS.md keeps the evidence\n",
     );
+    assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
+}
+
+// the adjudicator writes the rule a repeat owes under `## Earned rules`, and LEARNINGS.md only holds the seeds
+#[test]
+fn and_a_repeat_an_earned_rule_names_is_covered() {
+    let (repo, cfg) = seeded();
+    append(&repo, "PROGRESS.md", FRICTION_FIXTURE);
+    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "DECISIONS.md");
+    let earned = "## Earned rules\n\n- [2026-09-25] a check firing on the prose that documents it is read by `enallagi probe friction-repeat`, never quoted into the prose.\n";
+    let text =
+        fs::read_to_string(&path)
+            .expect("decisions")
+            .replacen("## Earned rules\n", earned, 1);
+    fs::write(&path, text).expect("write");
     assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
 }
 
@@ -1451,6 +1540,49 @@ fn a_rejection_behind_a_dated_label_is_reported() {
     assert!(found[0].contains("T-003"), "{}", found[0]);
 }
 
+const LONG_TITLE: &str = "a task/ branch that outlives its merged pull request calls gh pr list once every iteration for good";
+
+#[test]
+fn a_title_past_the_cap_is_reported_with_its_count() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        &format!("\n## [T-002] merged task/ branch still polls gh pr list every iteration\nscope: src/a.rs\nstatus: ready\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n"),
+    );
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "title-length");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, ".enallagi/TASKS.md");
+    assert_eq!(
+        found[0].message,
+        format!(
+            "T-003 title runs to {} characters, past the 72 cap",
+            LONG_TITLE.chars().count()
+        )
+    );
+    assert!(LONG_TITLE.chars().count() > 72);
+}
+
+#[test]
+fn a_title_written_before_the_cap_is_left_alone() {
+    let (repo, mut cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n"),
+    );
+    cfg.queue.title_cap_from = 3;
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "title-length");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0].message.starts_with("T-003 "),
+        "{}",
+        found[0].message
+    );
+}
+
 // the label's own first word is the verdict, and the reasons after the colon are not an answer to it
 #[test]
 fn a_rejection_dated_in_its_own_label_is_reported() {
@@ -1859,18 +1991,20 @@ fn a_diverged_upstream_is_one_finding() {
     git(&repo.root, &["fetch", "-q", "origin"]);
     assert!(matches!(drift(&repo, &cfg), ProbeResult::Count(f) if f.is_empty()));
 
+    // two commits here against one upstream, so each count is read against its own range
     repo.write("local.txt", "x");
     repo.commit_all("the checkout's own commit");
+    repo.write("local2.txt", "x");
+    repo.commit_all("the checkout's second commit");
     let ProbeResult::Count(found) = drift(&repo, &cfg) else {
         panic!("{:?}", drift(&repo, &cfg));
     };
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].path, ".git/HEAD");
+    // the checkout's own commits are named first, each count beside the range that produced it
     assert!(
-        found[0].message.contains(&format!(
-            "`git rev-list --count origin/{branch}..{branch}` -> 1"
-        )) && found[0].message.contains(&format!(
-            "`git rev-list --count {branch}..origin/{branch}` -> 1"
+        found[0].message.starts_with(&format!(
+            "`git rev-list --count origin/{branch}..{branch}` -> 2 and `git rev-list --count {branch}..origin/{branch}` -> 1"
         )),
         "{}",
         found[0].message

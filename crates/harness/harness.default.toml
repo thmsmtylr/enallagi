@@ -15,11 +15,12 @@ fail_name = ""
 # timeout bounds both forms; a check that runs past it is killed with its process group and halts the run.
 timeout = "30m"
 
-# drain is the standing proposed blocks one adjudicate stage takes; turns_per_block sizes that stage; proposed_rounds is how long a proposed block may stand.
+# drain is the standing proposed blocks one adjudicate stage takes; turns_per_block sizes that stage; proposed_rounds is how long a proposed block may stand; title_cap_from is the first id the 72-character title cap applies to.
 [queue]
 drain = 3
 turns_per_block = 25
 proposed_rounds = 6
+title_cap_from = 1
 
 # per_task has enallagi run push each landed task to its own branch and open its pull request, as --pr-per-task does.
 [pr]
