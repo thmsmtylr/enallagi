@@ -176,8 +176,7 @@ struct Unmerged {
     aborted: bool,
 }
 
-// a merge commit needs an identity the state repository rarely configures, so it borrows the
-// product's own, exactly as `git::commit_instance` does at `git.rs:146`
+// a merge commit needs an identity the state repository rarely configures, so it borrows the product's
 fn merge_into(repo: &Path, root: &Path, branch: &str, ff: bool) -> Result<String, Unmerged> {
     if ff {
         return git::git(repo, &["merge", "--ff-only", branch]).map_err(|err| Unmerged {
@@ -185,12 +184,7 @@ fn merge_into(repo: &Path, root: &Path, branch: &str, ff: bool) -> Result<String
             aborted: false,
         });
     }
-    let mut args: Vec<String> = Vec::new();
-    for key in ["user.name", "user.email"] {
-        if let Ok(value) = git::git(root, &["config", key]) {
-            args.extend(["-c".to_string(), format!("{key}={value}")]);
-        }
-    }
+    let mut args = git::identity_args(root);
     args.extend(
         [
             "-c",

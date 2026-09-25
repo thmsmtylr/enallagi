@@ -118,6 +118,18 @@ pub fn locate(root: &Path, harness_dir: &str, path: &str) -> (PathBuf, String, b
     }
 }
 
+// the state repository configures no identity, so a commit there borrows the product's, and every
+// commit a round makes carries one author for the `commit-identity` gate
+pub fn identity_args(root: &Path) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+    for key in ["user.name", "user.email"] {
+        if let Ok(value) = git(root, &["config", key]) {
+            args.extend(["-c".to_string(), format!("{key}={value}")]);
+        }
+    }
+    args
+}
+
 // the subject names the product HEAD the state was committed against, which is what `enallagi base` reads back
 pub fn commit_instance(
     root: &Path,
@@ -143,12 +155,7 @@ pub fn commit_instance(
     if git_ok(&state, &["diff", "--cached", "--quiet"]) {
         return Ok(false);
     }
-    let mut args: Vec<String> = Vec::new();
-    for key in ["user.name", "user.email"] {
-        if let Ok(value) = git(root, &["config", key]) {
-            args.extend(["-c".to_string(), format!("{key}={value}")]);
-        }
-    }
+    let mut args = identity_args(root);
     args.extend(["-c", "commit.gpgsign=false", "commit", "-q", "-m", &msg].map(String::from));
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     git(&state, &args)?;
@@ -177,12 +184,7 @@ pub fn commit_instance_only(
     if git_ok(&state, &diff) {
         return Ok(false);
     }
-    let mut args: Vec<String> = Vec::new();
-    for key in ["user.name", "user.email"] {
-        if let Ok(value) = git(root, &["config", key]) {
-            args.extend(["-c".to_string(), format!("{key}={value}")]);
-        }
-    }
+    let mut args = identity_args(root);
     args.extend(
         [
             "-c",
@@ -306,6 +308,22 @@ mod tests {
         assert!(commit_paths(&r.root, &["src/a.ts"], "add").unwrap());
         assert!(!commit_paths(&r.root, &["src/a.ts"], "again").unwrap());
         assert_eq!(diff_names(&r.root, "HEAD~1"), vec!["src/a.ts".to_string()]);
+    }
+
+    #[test]
+    fn identity_args_follow_the_repo_config() {
+        let r = Repo::new();
+        git(&r.root, &["config", "user.name", "Lane"]).expect("config");
+        git(&r.root, &["config", "user.email", "lane@example.test"]).expect("config");
+        assert_eq!(
+            identity_args(&r.root),
+            ["-c", "user.name=Lane", "-c", "user.email=lane@example.test"]
+        );
+        let bare = tempfile::TempDir::new().expect("tempdir");
+        git(bare.path(), &["init", "-q"]).expect("init");
+        git(bare.path(), &["config", "--unset-all", "user.name"]).ok();
+        git(bare.path(), &["config", "--unset-all", "user.email"]).ok();
+        assert!(identity_args(bare.path()).is_empty());
     }
 
     #[test]
