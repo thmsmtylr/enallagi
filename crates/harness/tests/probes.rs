@@ -1451,6 +1451,24 @@ fn a_rejection_behind_a_dated_label_is_reported() {
     assert!(found[0].contains("T-003"), "{}", found[0]);
 }
 
+// the label's own first word is the verdict, and the reasons after the colon are not an answer to it
+#[test]
+fn a_rejection_dated_in_its_own_label_is_reported() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        &reviewed_block(
+            "T-003",
+            "review",
+            "  REJECTED 2026-09-21: Passed counts do not reproduce.\n",
+        ),
+    );
+    let found = rejection_stale(&repo, &cfg);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("T-003"), "{}", found[0]);
+}
+
 #[test]
 fn check_red_says_nothing_for_a_timed_out_check() {
     let (repo, mut cfg) = seeded();
