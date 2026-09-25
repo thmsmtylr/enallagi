@@ -1702,6 +1702,7 @@ const SETTLED: &str = include_str!("fixtures/reviews/settled.json");
 const GENERATED: &str = include_str!("fixtures/reviews/generated.json");
 const PLAIN: &str = include_str!("fixtures/reviews/plain.json");
 const SHORT: &str = include_str!("fixtures/reviews/short.json");
+const THREAD: &str = include_str!("fixtures/reviews/thread.json");
 
 // everything a proposed block states before the comment's own words
 fn scaffold_of(block: &str) -> Vec<&str> {
@@ -1727,7 +1728,7 @@ fn a_short_read_is_kept_and_reported() {
 }
 
 #[test]
-fn review_appends_one_block_per_comment() {
+fn review_appends_one_block_per_thread() {
     let f = GhRepo::new(&review_gh(SUMMARY));
     let before = f.tasks();
 
@@ -1786,6 +1787,46 @@ notes: https://github.com/owner/repo/pull/13#discussion_r1000000001
     assert!(stdout.contains("  proposed: ## [T-002] "), "{stdout}");
     assert!(stdout.contains("  proposed: ## [T-003] "), "{stdout}");
     assert!(stdout.contains("  skipped: 1 with no path"), "{stdout}");
+    assert!(stdout.contains("  folded: 0 later in a thread"), "{stdout}");
+}
+
+#[test]
+fn review_folds_a_thread_into_one_block() {
+    let f = GhRepo::new(&review_gh(THREAD));
+    let before = enallagi::queue::parse(&f.tasks()).expect("parse").len();
+
+    let out = f.review(&["owner/repo#13"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let blocks = enallagi::queue::parse(&f.tasks()).expect("parse");
+    assert_eq!(blocks.len(), before + 1, "{}", f.tasks());
+    let block = enallagi::queue::block_text(&blocks[before]);
+    assert!(
+        block.starts_with("## [T-002] parse drops the timezone\n"),
+        "{block}"
+    );
+    assert_eq!(
+        enallagi::queue::field(&blocks[before], "notes").as_deref(),
+        Some("https://github.com/owner/repo/pull/13#discussion_r1000000007")
+    );
+    assert!(
+        block.contains("  > parse drops the timezone\n  >\n  > Thanks, fixed in the next push."),
+        "{block}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("  folded: 1 later in a thread"), "{stdout}");
+
+    let once = f.tasks();
+    let out = f.review(&["owner/repo#13"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(f.tasks(), once);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(
+            "  carried: T-002 https://github.com/owner/repo/pull/13#discussion_r1000000007"
+        ),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("discussion_r1000000008"), "{stdout}");
 }
 
 #[test]

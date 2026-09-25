@@ -88,12 +88,13 @@ struct Response {
     data: Data,
 }
 
-// what a block needs from one comment: its anchor, its words and its permalink
+// what a block needs from one thread: its anchor, its first words, its permalink and what followed
 #[derive(Debug)]
 pub struct Anchored {
     pub path: String,
     pub body: String,
     pub url: String,
+    pub replies: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -101,6 +102,8 @@ pub struct Found {
     pub anchored: Vec<Anchored>,
     pub unanchored: usize,
     pub settled: usize,
+    // later comments in an open thread, quoted under the thread's block
+    pub folded: usize,
     // a list came back at its page limit, so what follows was never read
     pub short: bool,
 }
@@ -237,15 +240,28 @@ fn collect(response: Response) -> Found {
             found.settled += thread.comments.nodes.len();
             continue;
         }
-        for remark in thread.comments.nodes {
-            match remark.path {
-                Some(path) => found.anchored.push(Anchored {
-                    path,
-                    body: remark.body,
-                    url: remark.url,
-                }),
-                None => found.unanchored += 1,
+        // the response ranks no comment, so the first anchored one names the thread
+        let mut remarks = thread.comments.nodes.into_iter();
+        let first = loop {
+            match remarks.next() {
+                Some(remark) => match remark.path {
+                    Some(path) => {
+                        break Some(Anchored {
+                            path,
+                            body: remark.body,
+                            url: remark.url,
+                            replies: Vec::new(),
+                        });
+                    }
+                    None => found.unanchored += 1,
+                },
+                None => break None,
             }
+        };
+        if let Some(mut first) = first {
+            first.replies = remarks.map(|r| r.body).collect();
+            found.folded += first.replies.len();
+            found.anchored.push(first);
         }
     }
     found
@@ -285,6 +301,10 @@ pub fn render(comment: &Anchored, id: &str) -> String {
     let mut lines = issue::scaffold(id, &title(comment), &comment.path);
     lines.push(format!("notes: {}", comment.url));
     issue::quote(&comment.body, &mut lines);
+    for reply in &comment.replies {
+        lines.push("  >".to_string());
+        issue::quote(reply, &mut lines);
+    }
     lines.join("\n")
 }
 
@@ -327,6 +347,7 @@ mod tests {
                 path: path.to_string(),
                 body: body.to_string(),
                 url: url.to_string(),
+                replies: Vec::new(),
             }],
             ..Found::default()
         }
