@@ -433,6 +433,10 @@ fn strict_prefixes_reports_a_file_outside_them() {
     let found = findings(&results, "litter");
     assert_eq!(found.len(), 1, "{}", render(&results));
     assert_eq!(found[0].path, "scratch.md");
+    assert_eq!(
+        found[0].message,
+        "tracked and neither product nor a document that governs it"
+    );
 }
 
 #[test]
@@ -444,6 +448,10 @@ fn a_tracked_machinery_path_is_litter() {
     let found = findings(&results, "litter");
     assert_eq!(found.len(), 1, "{}", render(&results));
     assert_eq!(found[0].path, "dist/bundle.js");
+    assert_eq!(
+        found[0].message,
+        "tracked and the repository treats it as disposable"
+    );
 }
 
 #[test]
@@ -457,6 +465,24 @@ fn a_tracked_file_the_ignore_rules_cover_is_litter() {
     let found = findings(&results, "litter");
     assert_eq!(found.len(), 1, "{}", render(&results));
     assert_eq!(found[0].path, "src/notes.tmp");
+    assert_eq!(
+        found[0].message,
+        "tracked and the repository treats it as disposable"
+    );
+}
+
+#[test]
+fn an_untracked_file_on_no_allowlist_is_litter() {
+    let (repo, cfg) = conventional();
+    repo.write("junk.log", "x\n");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "litter");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, "junk.log");
+    assert_eq!(
+        found[0].message,
+        "untracked or ignored, on no allowlist and no known machinery"
+    );
 }
 
 #[test]
