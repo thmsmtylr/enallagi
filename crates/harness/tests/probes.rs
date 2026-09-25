@@ -738,7 +738,16 @@ next: nothing
 fn a_reworded_repeat_of_one_friction_is_reported() {
     let (repo, cfg) = seeded();
     append(&repo, "PROGRESS.md", FRICTION_FIXTURE);
-    assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(1));
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "friction-repeat");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0]
+            .message
+            .contains("no LEARNINGS.md rule, earned rule or dated kill line covers it"),
+        "{}",
+        found[0].message
+    );
 }
 
 #[test]
@@ -750,6 +759,21 @@ fn and_a_repeat_a_dated_kill_line_names_is_covered() {
         "DECISIONS.md",
         "\n## Rejected findings\n- [2026-09-13] the same friction is recorded 2 times: FIFTH sighting of a check firing on the prose that documents it - and the first where the \u{2014} refuted by `enallagi eval --gate prose-check`: `GATE prose-check REJECT the case passes with the rule ablated, so the rule changed no outcome`; PROGRESS.md keeps the evidence\n",
     );
+    assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
+}
+
+// the adjudicator writes the rule a repeat owes under `## Earned rules`, and LEARNINGS.md only holds the seeds
+#[test]
+fn and_a_repeat_an_earned_rule_names_is_covered() {
+    let (repo, cfg) = seeded();
+    append(&repo, "PROGRESS.md", FRICTION_FIXTURE);
+    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "DECISIONS.md");
+    let earned = "## Earned rules\n\n- [2026-09-25] a check firing on the prose that documents it is read by `enallagi probe friction-repeat`, never quoted into the prose.\n";
+    let text =
+        fs::read_to_string(&path)
+            .expect("decisions")
+            .replacen("## Earned rules\n", earned, 1);
+    fs::write(&path, text).expect("write");
     assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
 }
 

@@ -1,4 +1,4 @@
-//! A friction recorded twice in PROGRESS.md that neither a LEARNINGS.md rule nor a dated kill line covers: matched by token overlap, not exact text.
+//! A friction recorded twice in PROGRESS.md that no LEARNINGS.md rule, earned rule or dated kill line covers: matched by token overlap, not exact text.
 
 use super::common::{self, Res};
 use super::ponytail_ceiling;
@@ -158,6 +158,12 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     } else {
         vec![]
     };
+    // the rule a repeat owes is the adjudicator's, and it writes it under `## Earned rules`, never LEARNINGS.md
+    coverage.extend(
+        common::earned_rules(ctx)?
+            .iter()
+            .map(|(_, rule)| words(rule)),
+    );
     // a rule the ablation gate refuses closes as a dated refutation instead; `PROGRESS.md` keeps a
     // kill line about anything else from counting
     coverage.extend(
@@ -182,7 +188,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
                 &progress,
                 last.0,
                 format!(
-                    "the same friction is recorded {} times and no LEARNINGS.md rule or dated kill line covers it: {}",
+                    "the same friction is recorded {} times and no LEARNINGS.md rule, earned rule or dated kill line covers it: {}",
                     group.hits.len(),
                     common::cut(&last.1, 90)
                 ),
