@@ -1518,16 +1518,29 @@ fn a_code_only_tree_gains_no_other_prefix() {
     install(&repo);
     let written: toml::Value =
         toml::from_str(&read(&repo, ".enallagi/enallagi.toml")).expect("parse");
-    let prefixes = written["layout"]["allowed_prefixes"]
+    let prefixes: Vec<&str> = written["layout"]["allowed_prefixes"]
         .as_array()
-        .expect("array");
-    for entry in prefixes {
-        let entry = entry.as_str().expect("string");
-        assert!(
-            entry.starts_with('.') || ["src/", "tests/", "package.json"].contains(&entry),
-            "{entry}: {prefixes:?}"
-        );
-    }
+        .expect("array")
+        .iter()
+        .map(|e| e.as_str().expect("string"))
+        .collect();
+    // the whole array, in order: a membership test would accept any entry the tree could yield
+    assert_eq!(
+        prefixes,
+        [
+            ".claude/",
+            ".codex/",
+            ".cursor/",
+            ".enallagi/",
+            ".gemini/",
+            ".github/",
+            ".omp/",
+            ".qwen/",
+            "package.json",
+            "src/",
+            "tests/"
+        ]
+    );
 }
 
 #[test]
