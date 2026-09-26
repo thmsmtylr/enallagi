@@ -637,3 +637,69 @@ fn an_empty_names_list_still_sweeps_the_state_repo() {
     let named = git(&state, &["log", "-1", "--name-only", "--format="]);
     assert!(named.lines().any(|l| l == "PROGRESS.md"), "{named}");
 }
+
+#[test]
+fn landed_names_each_state_and_filters_built() {
+    let (f, shas) = landed("exit 0");
+    let tasks = format!(
+        "{DONE_AND_REJECTED}\n## [T-003] pushed already\nscope: src/thing.txt\nblockedBy: none\nstatus: done\n\n## [T-004] never built\nscope: src/thing.txt\nblockedBy: none\nstatus: done\n"
+    );
+    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    let pushed = commit(
+        &f.root,
+        "src/thing.txt",
+        &replace(&f.thing(), "six\n", "six six\n"),
+        "feat(thing): T-003 six twice",
+    );
+    write(
+        &f.root,
+        ".enallagi/pr/T-003.md",
+        "# six\n\npushed: https://example.test/pull/3 2026-09-26\n",
+    );
+    let (code, out) = f.harness(&["pr", "T-001"]);
+    assert_eq!(code, 0, "{out}");
+
+    let (code, out) = f.harness(&["tasks", "landed"]);
+    assert_eq!(code, 0, "{out}");
+    let rows: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        rows,
+        [
+            format!(
+                "T-001\tthe thing says two twice\t{},{}\tbuilt task/T-001",
+                shas[0], shas[2]
+            ),
+            format!("T-003\tpushed already\t{pushed}\tpushed https://example.test/pull/3"),
+            "T-004\tnever built\t-\tno branch".to_string(),
+        ]
+    );
+    let (code, out) = f.harness(&["tasks", "landed", "--built"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, format!("{}\n", rows[0]));
+}
+
+#[test]
+fn push_on_a_built_branch_updates_the_pushed_line() {
+    let (f, _) = landed("exit 0");
+    let (code, out) = f.harness(&["pr", "T-001"]);
+    assert_eq!(code, 0, "{out}");
+    let description = f.root.join(".enallagi/pr/T-001.md");
+    let text = fs::read_to_string(&description).expect("description");
+    assert!(text.contains("\npushed: no "), "{text}");
+    let tip = git(&f.root, &["rev-parse", "task/T-001"]);
+
+    exec(&f.tools.join("gh"), "echo https://example.test/pull/1\n");
+    let (code, out) = f.harness(&["pr", "T-001", "--push"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(git(&f.root, &["rev-parse", "task/T-001"]), tip);
+    assert!(f.remote_branches().contains("task/T-001"));
+    let text = fs::read_to_string(&description).expect("description");
+    let pushed: Vec<&str> = text.lines().filter(|l| l.starts_with("pushed:")).collect();
+    assert_eq!(pushed.len(), 1, "{text}");
+    assert!(
+        pushed[0].starts_with("pushed: https://example.test/pull/1 "),
+        "{text}"
+    );
+    let state = f.root.join(".enallagi");
+    assert_eq!(git(&state, &["status", "--porcelain", "--", "pr"]), "");
+}

@@ -128,6 +128,7 @@ Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGE
 - `watch` attaches to a live loop. `events` queries the log. Each event carries `sha`, the product HEAD, and `run.start` carries `binary`.
 - `events --summary` prints one row per task: stages, verify rounds, rejections, overturned verdicts, seconds, cost and token lanes.
 - `tasks` reads and edits the queue. `base` prints the commit a task was queued against.
+- `tasks landed` lists each done task, its commits, and `no branch`, `built <branch>` or `pushed <url>`. `--built` keeps the branches waiting on a push.
 - `issue` appends a GitHub issue, and `review` a pull request's review comments, as `proposed` tasks.
 - `probe` reports findings. `gate` runs one gate. `hook` is the agent's lifecycle entry point.
 - `skills` resolves declared skills. `eval` runs the evals. `pr` builds a pull request.

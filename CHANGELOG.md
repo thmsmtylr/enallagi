@@ -5,6 +5,11 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.2.6 (2026-09-26)
+
+- `enallagi tasks landed` prints each done task with its commits and one of `no branch`, `built <branch>` or `pushed <url>`, and `--built` lists only the branches waiting on a push
+- `enallagi pr` writes a `pushed:` line into its description, and `--push` on an already built branch pushes it as it stands and updates that line
+
 ## v0.2.5 (2026-09-26)
 
 - `enallagi events --summary` prints one row per task (stages, verify rounds, done verdicts, rejections, overturns, seconds, cost and the four token lanes) and a footer with totals and the false-completion rate, overturned done verdicts over all done verdicts; `--json` prints the same as one object per task

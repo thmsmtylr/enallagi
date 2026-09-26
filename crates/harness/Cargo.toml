@@ -1,6 +1,6 @@
 [package]
 name = "enallagi"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 description = "An autonomous task loop for a coding agent, installed into any git repository."
 license = "MIT"
