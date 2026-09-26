@@ -35,6 +35,10 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             return Ok(2);
         }
     }
+    println!("enallagi {} {}", env!("CARGO_PKG_VERSION"), events::COMMIT);
+    if predates_head(&root, events::COMMIT) {
+        println!("binary predates HEAD");
+    }
     let tui = !args.no_tui && !args.dry_run && std::io::stdout().is_terminal();
     // flags set here win: with_env_budgets only fills a field still None
     let opts = RunOpts {
@@ -123,5 +127,44 @@ fn counts_as_failure(e: &Event) -> bool {
         Kind::Gate { gate, pass, .. } => !pass && gate != "dry-round",
         Kind::StageEnd { exit, .. } => *exit != 0,
         _ => false,
+    }
+}
+
+// a lane runs whichever enallagi is on PATH, and one built before HEAD judges the tree by older rules
+fn predates_head(root: &std::path::Path, commit: &str) -> bool {
+    commit != "unknown"
+        && git::git(root, &["rev-parse", "HEAD"]).ok().as_deref() != Some(commit)
+        && git::git_ok(root, &["merge-base", "--is-ancestor", commit, "HEAD"])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixture::Repo;
+
+    #[test]
+    fn a_binary_built_from_head_is_current() {
+        let r = Repo::new();
+        let head = git::git(&r.root, &["rev-parse", "HEAD"]).unwrap();
+        assert!(!predates_head(&r.root, &head));
+    }
+
+    #[test]
+    fn a_binary_built_from_an_ancestor_predates_head() {
+        let r = Repo::new();
+        let built = git::git(&r.root, &["rev-parse", "HEAD"]).unwrap();
+        r.write("src/later.ts", "x");
+        r.commit_all("later");
+        assert!(predates_head(&r.root, &built));
+    }
+
+    #[test]
+    fn a_binary_built_outside_a_repo_is_not_stale() {
+        let r = Repo::new();
+        // a ref named `unknown` must not stand in for the placeholder
+        git::git(&r.root, &["branch", "unknown"]).unwrap();
+        r.write("src/later.ts", "x");
+        r.commit_all("later");
+        assert!(!predates_head(&r.root, "unknown"));
     }
 }

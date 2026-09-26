@@ -472,6 +472,7 @@ impl<'a> Loop<'a> {
             config_sha256: config_sha256(self.root),
             pipeline: None,
             permissions_skipped: self.cfg.agent.dangerously_skip_permissions,
+            binary: Some(crate::events::binary()),
         });
 
         // a backticked mention is prose about the marker; only a bare one halts the run

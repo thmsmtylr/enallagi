@@ -843,6 +843,54 @@ fn run_without_a_tty_prints_one_line_per_event() {
 }
 
 #[test]
+fn run_names_its_binary_and_each_event_its_head() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
+    r.write("TASKS.md", TASKS);
+    installed(&r);
+    r.commit_all("stubs");
+    let head = enallagi::git::git(&r.root, &["rev-parse", "HEAD"]).unwrap();
+
+    let (code, out) = harness(&r.root, &["run", "--no-tui", "--iterations", "1"]);
+    assert_eq!(code, 0, "{out}");
+    let named = format!(
+        "enallagi {} {}",
+        env!("CARGO_PKG_VERSION"),
+        enallagi::events::COMMIT
+    );
+    assert_eq!(out.lines().next(), Some(named.as_str()), "{out}");
+    assert!(!out.contains("binary predates HEAD"), "{out}");
+
+    let events = enallagi::events::Log::open(&r.root.join(".enallagi"))
+        .read()
+        .unwrap();
+    assert!(events.iter().all(|e| e.sha.is_some()), "{events:#?}");
+    let start = &events[0];
+    assert_eq!(start.sha.as_deref(), Some(head.as_str()));
+    assert!(
+        matches!(&start.kind, Kind::RunStart { binary: Some(b), .. } if *b == enallagi::events::binary()),
+        "{start:#?}"
+    );
+
+    let (_, rendered) = harness(&r.root, &["events"]);
+    let first = rendered.lines().next().unwrap_or_default();
+    assert!(first.contains(&format!("sha={head}")), "{rendered}");
+    assert!(
+        first.contains(&format!(
+            r#"binary={{"version":"{}","#,
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{rendered}"
+    );
+    let (_, json) = harness(&r.root, &["events", "--json"]);
+    let first = json.lines().next().unwrap_or_default();
+    assert!(first.contains(&format!(r#""sha":"{head}""#)), "{json}");
+    assert!(first.contains(r#""binary":{"version":"#), "{json}");
+}
+
+#[test]
 fn harness_run_exits_2_on_a_refused_config() {
     let r = repo(
         &base_toml("").replace("\"commit-round\"", "\"nope\""),
