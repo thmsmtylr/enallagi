@@ -5,6 +5,10 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.3.0-beta.1 (2026-09-26)
+
+- beta: the first release that installs with one command (`install.sh`), turns an issue into a task (`enallagi issue`, `init --issue`), runs a named pipeline (`run --pipeline`), and measures itself (`events --summary`, `tasks landed`); the lines under v0.2.1 to v0.2.6 are what it adds since v0.2.0
+
 ## v0.2.6 (2026-09-26)
 
 - `enallagi tasks landed` prints each done task with its commits and one of `no branch`, `built <branch>` or `pushed <url>`, and `--built` lists only the branches waiting on a push
