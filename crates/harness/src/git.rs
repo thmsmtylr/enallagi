@@ -323,7 +323,14 @@ mod tests {
         git(bare.path(), &["init", "-q"]).expect("init");
         git(bare.path(), &["config", "--unset-all", "user.name"]).ok();
         git(bare.path(), &["config", "--unset-all", "user.email"]).ok();
-        assert!(identity_args(bare.path()).is_empty());
+        // a repository that sets neither key falls through to the machine's global identity, if any
+        let mut global = Vec::new();
+        for key in ["user.name", "user.email"] {
+            if let Ok(value) = git(bare.path(), &["config", "--global", key]) {
+                global.extend(["-c".to_string(), format!("{key}={value}")]);
+            }
+        }
+        assert_eq!(identity_args(bare.path()), global);
     }
 
     #[test]
