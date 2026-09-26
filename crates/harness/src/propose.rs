@@ -59,17 +59,35 @@ impl Proposal {
 
 pub enum Outcome {
     Written(Vec<Detected>),
-    Refused { keys: Vec<Detected>, step: String },
+    /// Each attempt's proposal and the step it failed.
+    Refused(Vec<(Vec<Detected>, String)>),
 }
 
-/// Asks, verifies, and writes enallagi.toml only when every step passes.
+/// Asks, verifies, and writes enallagi.toml only when every step passes; a refusal is sent back once.
 pub fn run(root: &Path, cfg: &Config) -> anyhow::Result<Outcome> {
     crate::agent::catch_stop_signals();
-    let proposal = ask(root, cfg)?;
-    let keys = proposal.keys();
-    if let Err(step) = verify(root, cfg, &proposal) {
-        return Ok(Outcome::Refused { keys, step });
+    let mut refused: Vec<(Vec<Detected>, String)> = Vec::new();
+    let first = ask(root, cfg, &prompt())?;
+    let step = match verify(root, cfg, &first) {
+        Ok(()) => return written(root, first.keys()),
+        Err(step) => step,
+    };
+    refused.push((first.keys(), step.clone()));
+    let again = format!(
+        "{}\nA proposal was already refused at this step, so propose again with it fixed:\n{step}\n",
+        prompt()
+    );
+    match ask(root, cfg, &again) {
+        Ok(second) => match verify(root, cfg, &second) {
+            Ok(()) => return written(root, second.keys()),
+            Err(step) => refused.push((second.keys(), step)),
+        },
+        Err(err) => refused.push((Vec::new(), err.to_string())),
     }
+    Ok(Outcome::Refused(refused))
+}
+
+fn written(root: &Path, keys: Vec<Detected>) -> anyhow::Result<Outcome> {
     write(root, &keys)?;
     Ok(Outcome::Written(keys))
 }
@@ -81,6 +99,9 @@ manifest, build files, CI workflows and a few test files. Name the one command t
 test suite, the way its CI or its test script does, and how that command's output names a failing \
 test. Do not edit, create or delete any file, and install nothing: enallagi runs the command itself \
 to verify the answer.
+
+Every regex is read by the Rust `regex` crate: no look-around (`(?=`, `(?!`, `(?<=`, `(?<!`) and \
+no backreferences.
 
 End the reply with exactly one block in this form, TOML between the two marker lines:
 
@@ -102,7 +123,7 @@ test_decl_patterns = \"file:line\"
     )
 }
 
-fn ask(root: &Path, cfg: &Config) -> anyhow::Result<Proposal> {
+fn ask(root: &Path, cfg: &Config, prompt: &str) -> anyhow::Result<Proposal> {
     let presets = crate::agent::presets();
     let resolved = crate::agent::resolve(&cfg.agent, "default", &presets)?;
     let dir = &cfg.layout.harness_dir;
@@ -111,7 +132,7 @@ fn ask(root: &Path, cfg: &Config) -> anyhow::Result<Proposal> {
         env: BTreeMap::new(),
         cwd: root,
         timeout: Some(TIMEOUT),
-        prompt: prompt(),
+        prompt: prompt.to_string(),
         turns: TURNS,
         stage: "propose-check".to_string(),
         task: None,

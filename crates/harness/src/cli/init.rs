@@ -121,11 +121,14 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 }
                 cfg = config::load(&root)?;
             }
-            Ok(crate::propose::Outcome::Refused { keys, step }) => {
-                for key in &keys {
-                    println!("  proposed: {} = {} ({})", key.key, key.value, key.origin);
+            Ok(crate::propose::Outcome::Refused(attempts)) => {
+                for (keys, step) in &attempts {
+                    for key in keys {
+                        println!("  proposed: {} = {} ({})", key.key, key.value, key.origin);
+                    }
+                    println!("  refused: {step}");
                 }
-                println!("  refused, nothing written: {step}");
+                println!("  nothing written");
             }
             Err(err) => println!("  no check proposed: {err}"),
         }

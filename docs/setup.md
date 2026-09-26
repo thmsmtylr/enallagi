@@ -64,7 +64,8 @@ Init writes the keys only after all of these pass:
 - with the throwaway test in place, the check exits non-zero and `fail_name` captures its name
 
 The throwaway test is removed whatever the outcome.
-A proposal that fails prints each value and the step it failed, and writes nothing.
+A refused proposal goes back to the agent once, with the step it failed.
+A second refusal prints each value and both steps, and writes nothing.
 The agent is asked only on a terminal, never under `--yes`, unless `--propose-check` is given.
 
 The seven runners and their `fail_name` patterns are in [configuration.md](configuration.md#checkfail_name).

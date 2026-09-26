@@ -7,7 +7,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## v0.3.0-beta.2 (2026-09-26)
 
-- `enallagi init` asks the configured agent for the check when no runner preset matches, and writes it only after running it green, then red naming a planted failing test; `--propose-check` asks when stdin is not a terminal
+- `enallagi init` asks the configured agent for the check when no runner preset matches, and writes it only after running it green, then red naming a planted failing test; a refused proposal is sent back once, and `--propose-check` asks when stdin is not a terminal
 
 ## v0.3.0-beta.1 (2026-09-26)
 
