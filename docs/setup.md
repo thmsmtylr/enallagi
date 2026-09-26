@@ -54,6 +54,19 @@ it, and `--yes` takes every default. A stdin that is not a terminal never asks.
 ```bash
 enallagi init --yes
 ```
+
+When `check.command` is still empty after the questions, init asks the configured agent for the check.
+The agent names `check.command`, `check.fail_name`, `layout.test_file_suffix_re` and `layout.test_decl_patterns`, and one throwaway failing test.
+Init writes the keys only after all of these pass:
+
+- the check exits 0 on the clean tree
+- `test_file_suffix_re` matches the throwaway test's path, and a `test_decl_patterns` entry declares it
+- with the throwaway test in place, the check exits non-zero and `fail_name` captures its name
+
+The throwaway test is removed whatever the outcome.
+A proposal that fails prints each value and the step it failed, and writes nothing.
+The agent is asked only on a terminal, never under `--yes`, unless `--propose-check` is given.
+
 The seven runners and their `fail_name` patterns are in [configuration.md](configuration.md#checkfail_name).
 
 Init then writes `.enallagi/enallagi.toml` and renders the role prompts, `RAILS.md`, the loop's

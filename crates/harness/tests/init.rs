@@ -1791,3 +1791,64 @@ fn the_setup_guide_is_four_sections() {
         "a second init is a step again"
     );
 }
+
+const PROBE_RUNNER: &str = "status=0
+for f in t/*_test.sh; do
+  name=$(sed -n 's/^test //p' \"$f\")
+  if sh \"$f\"; then echo \"ok $name\"; else echo \"FAIL $name\"; status=1; fi
+done
+exit $status
+";
+
+// a suite with no runner preset, and a scripted agent that proposes a check for it
+fn proposing(fail_name: &str) -> Repo {
+    let repo = Repo::new();
+    repo.write("t/a_test.sh", "test a_passes\n");
+    repo.write("run.sh", PROBE_RUNNER);
+    repo.commit_all("suite");
+    let block = format!(
+        "BEGIN ENALLAGI CHECK\ncommand = \"sh run.sh\"\nfail_name = '{fail_name}'\ntest_file_suffix_re = '_test\\.sh$'\ntest_decl_patterns = [\"test {{name}}\"]\nprobe_file = \"t/probe_test.sh\"\nprobe_body = \"test enallagi_probe_fails\\nexit 1\\n\"\n\n[origin]\ncommand = \"run.sh:1\"\nEND ENALLAGI CHECK"
+    );
+    let argv = repo.stub_agent(&format!("cat <<'BLOCK'\n{block}\nBLOCK\n"));
+    repo.write(
+        ".enallagi/enallagi.toml",
+        &format!("[agent]\npreset = \"custom\"\ncommand = {argv:?}\n"),
+    );
+    install(&repo);
+    repo
+}
+
+fn propose(repo: &Repo) -> enallagi::propose::Outcome {
+    let cfg = enallagi::config::load(&repo.root).expect("config");
+    assert!(cfg.check.command.is_empty());
+    enallagi::propose::run(&repo.root, &cfg).expect("propose")
+}
+
+#[test]
+fn a_verified_proposal_writes_the_check() {
+    let repo = proposing("^FAIL (.+)$");
+    let outcome = propose(&repo);
+    assert!(
+        matches!(outcome, enallagi::propose::Outcome::Written(_)),
+        "refused"
+    );
+    let cfg = enallagi::config::load(&repo.root).expect("config");
+    assert_eq!(cfg.check.command, "sh run.sh");
+    assert_eq!(cfg.check.fail_name, "^FAIL (.+)$");
+    assert_eq!(cfg.layout.test_decl_patterns, vec!["test {name}"]);
+    assert!(!repo.root.join("t/probe_test.sh").exists());
+}
+
+#[test]
+fn a_fail_name_naming_nothing_is_refused() {
+    let repo = proposing("^NOPE (.+)$");
+    let before = read(&repo, ".enallagi/enallagi.toml");
+    match propose(&repo) {
+        enallagi::propose::Outcome::Refused { step, .. } => {
+            assert!(step.contains("fail_name names []"), "{step}")
+        }
+        enallagi::propose::Outcome::Written(_) => panic!("written"),
+    }
+    assert_eq!(read(&repo, ".enallagi/enallagi.toml"), before);
+    assert!(!repo.root.join("t/probe_test.sh").exists());
+}

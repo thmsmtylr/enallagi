@@ -77,6 +77,9 @@ pub enum Command {
         /// Append this GitHub issue as a proposed block once installed
         #[arg(long, value_name = "URL")]
         issue: Option<String>,
+        /// Ask the agent for an unset check even when stdin is not a terminal or --yes is given
+        #[arg(long)]
+        propose_check: bool,
     },
     /// Remove from this repository and leave no trace
     ///
@@ -271,6 +274,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             sync,
             frozen,
             issue,
+            propose_check,
         } => init::run(&init::Args {
             adapter,
             dry_run,
@@ -286,6 +290,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             sync,
             frozen,
             issue,
+            propose_check,
         }),
         Command::Eject {
             dry_run,
@@ -370,7 +375,7 @@ mod tests {
         "skills", "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 36] = [
+    const FLAGS: [&str; 37] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
@@ -383,6 +388,7 @@ mod tests {
         "init --sync",
         "init --frozen",
         "init --issue",
+        "init --propose-check",
         "eject --dry-run",
         "eject --keep-record",
         "eject --delete",

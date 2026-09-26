@@ -5,6 +5,10 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.3.0-beta.2 (2026-09-26)
+
+- `enallagi init` asks the configured agent for the check when no runner preset matches, and writes it only after running it green, then red naming a planted failing test; `--propose-check` asks when stdin is not a terminal
+
 ## v0.3.0-beta.1 (2026-09-26)
 
 - beta: the first release that installs with one command (`install.sh`), turns an issue into a task (`enallagi issue`, `init --issue`), runs a named pipeline (`run --pipeline`), and measures itself (`events --summary`, `tasks landed`); the lines under v0.2.1 to v0.2.6 are what it adds since v0.2.0

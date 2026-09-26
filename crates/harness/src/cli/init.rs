@@ -14,6 +14,7 @@ pub struct Args {
     pub sync: bool,
     pub frozen: bool,
     pub issue: Option<String>,
+    pub propose_check: bool,
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
@@ -94,9 +95,41 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         return Ok(0);
     }
 
-    let cfg = config::load(&root)?;
+    let mut cfg = config::load(&root)?;
     let dir = config::harness_dir(&root);
     let mut failed = false;
+
+    // an agent call costs money and minutes, so an unattended init makes one only when asked
+    let ask = args.propose_check || (!args.yes && std::io::stdin().is_terminal());
+    if cfg.check.command.is_empty() && ask {
+        println!(
+            "  no check: asking the {} agent for one, then running it to verify",
+            cfg.agent.preset
+        );
+        match crate::propose::run(&root, &cfg) {
+            Ok(crate::propose::Outcome::Written(keys)) => {
+                for key in &keys {
+                    println!("  proposed: {} = {} ({})", key.key, key.value, key.origin);
+                }
+                println!(
+                    "  verified: the check is green, and red naming the probe test once planted"
+                );
+                // the context file names the check, so it is rendered again from the new config
+                let again = init::install(&root, &opts)?;
+                for note in again.notes.iter().filter(|n| n.starts_with("updated:")) {
+                    println!("  {note}");
+                }
+                cfg = config::load(&root)?;
+            }
+            Ok(crate::propose::Outcome::Refused { keys, step }) => {
+                for key in &keys {
+                    println!("  proposed: {} = {} ({})", key.key, key.value, key.origin);
+                }
+                println!("  refused, nothing written: {step}");
+            }
+            Err(err) => println!("  no check proposed: {err}"),
+        }
+    }
 
     // the skills a lane loads, vendored now rather than at the first stage; a stdin that is not a
     // terminal is a fixture or a pipeline, where a fetch mid-install is a surprise, so it needs --sync
