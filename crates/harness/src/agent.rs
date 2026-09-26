@@ -577,6 +577,8 @@ fn sleep_until(seconds: u64, stop_file: &Path) -> Result<(), AgentError> {
 fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), AgentError> {
     let turns = s.turns.to_string();
     let timeout = s.timeout.map(|t| t.as_secs().to_string());
+    // the layout is reloaded here because StageSpawn carries the filled argv, not the layout that filled it
+    let cfg = crate::config::load(s.cwd).ok();
     let argv: Vec<String> = s
         .argv
         .iter()
@@ -587,15 +589,15 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
                 Some(t) => word.replace("{timeout}", t),
                 None => word,
             };
+            let word = fill_lane(&word, s.cwd, cfg.as_ref());
             word.replace("{prompt}", &s.prompt)
         })
         .collect();
     let (program, args) = argv.split_first().ok_or(AgentError::EmptyCommand)?;
 
-    // the layout is reloaded here because StageSpawn carries the filled argv, not the layout that filled it
-    let preset_env = match crate::config::load(s.cwd) {
-        Ok(cfg) => fill_env(&s.preset.env, &cfg.layout),
-        Err(_) => s.preset.env.clone(),
+    let preset_env = match &cfg {
+        Some(cfg) => fill_env(&s.preset.env, &cfg.layout),
+        None => s.preset.env.clone(),
     };
 
     use std::os::unix::process::CommandExt;
@@ -682,6 +684,60 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
             .unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
     };
     Ok((exit, output, timed_out))
+}
+
+/// What a sandboxed lane may do past its sandbox: run the check unsandboxed, since a suite may need a
+/// terminal or a cache outside the lane, read an issue, and commit to the product and state repositories.
+pub fn fill_lane(word: &str, cwd: &Path, cfg: Option<&crate::config::Config>) -> String {
+    if !word.contains("\"{lane_") && !word.contains("\"{state_git_dir}\"") {
+        return word.to_string();
+    }
+    let dir = cfg.map_or(".enallagi", |c| c.layout.harness_dir.as_str());
+    let mut unsandboxed: Vec<String> = cfg
+        .into_iter()
+        .flat_map(|c| [c.check.command.as_str(), c.check.force.as_str()])
+        .flat_map(command_prefixes)
+        .collect();
+    unsandboxed.push("gh issue view:*".to_string());
+    unsandboxed.sort();
+    unsandboxed.dedup();
+    let mut allowed: Vec<String> = unsandboxed.iter().map(|p| format!("Bash({p})")).collect();
+    allowed.extend([
+        "Bash(git add:*)".to_string(),
+        "Bash(git commit:*)".to_string(),
+        format!("Bash(git -C {dir}:*)"),
+    ]);
+    let state = crate::git::git(
+        &cwd.join(dir),
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .unwrap_or_else(|_| cwd.join(dir).join(".git").display().to_string());
+    let items = |list: &[String]| {
+        list.iter()
+            .map(|item| serde_json::Value::String(item.clone()).to_string())
+            .collect::<Vec<String>>()
+            .join(",")
+    };
+    word.replace("\"{lane_unsandboxed}\"", &items(&unsandboxed))
+        .replace("\"{lane_allowed}\"", &items(&allowed))
+        .replace("\"{state_git_dir}\"", &items(&[state]))
+}
+
+/// One `<program> <subcommand>:*` rule per command in a shell line; leading `VAR=value` words are dropped.
+pub fn command_prefixes(line: &str) -> Vec<String> {
+    line.split(['&', ';', '|'])
+        .filter_map(|part| {
+            let words: Vec<&str> = part
+                .split_whitespace()
+                .skip_while(|w| w.contains('=') && !w.starts_with('-'))
+                .collect();
+            let program = words.first()?;
+            Some(match words.get(1).filter(|w| !w.starts_with('-')) {
+                Some(sub) => format!("{program} {sub}:*"),
+                None => format!("{program}:*"),
+            })
+        })
+        .collect()
 }
 
 fn drain<R: Read + Send + 'static>(
@@ -827,6 +883,62 @@ mod tests {
             .position(|w| w == "--settings")
             .expect("--settings");
         serde_json::from_str(&argv[i + 1]).expect("the settings word is JSON")
+    }
+
+    #[test]
+    fn a_check_line_names_one_rule_per_command() {
+        assert_eq!(
+            command_prefixes("CI=false npm test -- --serial"),
+            ["npm test:*"]
+        );
+        assert_eq!(
+            command_prefixes("cargo test -q && cargo clippy --all-targets"),
+            ["cargo test:*", "cargo clippy:*"]
+        );
+        assert_eq!(command_prefixes("pytest -q"), ["pytest:*"]);
+        assert!(command_prefixes("").is_empty());
+    }
+
+    #[test]
+    fn a_lane_runs_its_check_outside_the_sandbox() {
+        let r = crate::fixture::Repo::new();
+        r.write(
+            ".enallagi/enallagi.toml",
+            "[check]\ncommand = \"CI=false npm test -- --serial\"\nfail_name = '(.+)'\n",
+        );
+        crate::git::git(&r.root.join(".enallagi"), &["init", "-q"]).expect("git init");
+        let cfg = crate::config::load(&r.root).expect("config");
+        let argv = resolve(&cfg.agent, "default", &presets())
+            .expect("resolve")
+            .argv;
+        let argv: Vec<String> = argv
+            .iter()
+            .map(|w| fill_lane(w, &r.root, Some(&cfg)))
+            .collect();
+        let settings = settings_word(&argv);
+        let excluded = settings
+            .pointer("/sandbox/excludedCommands")
+            .expect("excluded");
+        assert!(
+            excluded.as_array().unwrap().contains(&"npm test:*".into()),
+            "{excluded}"
+        );
+        let allowed = settings.pointer("/permissions/allow").expect("allow");
+        assert!(
+            allowed
+                .as_array()
+                .unwrap()
+                .contains(&"Bash(npm test:*)".into()),
+            "{allowed}"
+        );
+        let write = settings
+            .pointer("/sandbox/filesystem/allowWrite/0")
+            .expect("allowWrite");
+        assert!(
+            write.as_str().unwrap().ends_with(".enallagi/.git"),
+            "{write}"
+        );
+        assert!(std::path::Path::new(write.as_str().unwrap()).is_absolute());
     }
 
     #[test]

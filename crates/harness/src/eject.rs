@@ -23,6 +23,8 @@ pub struct EjectReport {
     pub kept: Vec<String>,
     /// The git path of the exclude file, when it held the block.
     pub exclude: Option<String>,
+    /// Whether `.gitignore` held the line init added.
+    pub unignored: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -77,6 +79,9 @@ pub fn eject(root: &Path, opts: &EjectOpts) -> Result<EjectReport, EjectError> {
     if text.lines().any(|l| l == EXCLUDE_OPEN) {
         report.exclude = Some(exclude.clone());
     }
+    let ignore = fs::read_to_string(root.join(".gitignore")).unwrap_or_default();
+    let line = git::ignore_line(&dir);
+    report.unignored = ignore.lines().any(|l| l.trim() == line);
     if opts.dry_run {
         return Ok(report);
     }
@@ -95,6 +100,24 @@ pub fn eject(root: &Path, opts: &EjectOpts) -> Result<EjectReport, EjectError> {
     }
     if report.exclude.is_some() {
         fs::write(root.join(&exclude), outside).map_err(io(&exclude))?;
+    }
+    if report.unignored {
+        let kept: String = ignore
+            .lines()
+            .filter(|l| l.trim() != line)
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let path = root.join(".gitignore");
+        if kept.trim().is_empty() {
+            fs::remove_file(&path).map_err(io(path.display()))?;
+        } else {
+            fs::write(&path, kept).map_err(io(path.display()))?;
+        }
+        git::commit_only(
+            root,
+            ".gitignore",
+            &format!("Stop ignoring {line}, the enallagi directory"),
+        )?;
     }
     Ok(report)
 }

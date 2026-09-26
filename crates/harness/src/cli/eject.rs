@@ -57,5 +57,13 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     if let Some(exclude) = &report.exclude {
         println!("  {verb}: the harness block in {exclude}");
     }
+    if report.unignored {
+        let verb = if args.dry_run {
+            "would commit"
+        } else {
+            "committed"
+        };
+        println!("  {verb}: .gitignore without the harness directory's line");
+    }
     Ok(0)
 }

@@ -3,7 +3,7 @@
 use crate::queue::{self, QueueError};
 use std::process::Command;
 
-const FIELDS: &str = "number,title,body,url,labels";
+const FIELDS: &str = "number,title,body,url,labels,state";
 
 #[derive(Debug, serde::Deserialize)]
 pub struct Issue {
@@ -11,6 +11,12 @@ pub struct Issue {
     pub body: String,
     pub url: String,
     pub labels: Vec<Label>,
+    #[serde(default = "open")]
+    pub state: String,
+}
+
+fn open() -> String {
+    "OPEN".to_string()
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -100,6 +106,18 @@ pub(crate) fn quote(text: &str, lines: &mut Vec<String>) {
 pub fn render(issue: &Issue, id: &str) -> String {
     let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
     let mut lines = scaffold(id, issue.title.trim(), "src/thing.ts, src/thing.test.ts");
+    // the adjudicator kills a block with no probe, command and output unread; an issue's are its state
+    lines.splice(
+        4..4,
+        [
+            "probe: issue".to_string(),
+            format!(
+                "command: `gh issue view {} --json state,title --jq '.state + \": \" + .title'`",
+                issue.url
+            ),
+            format!("output: {}: {}", issue.state, issue.title.trim()),
+        ],
+    );
     lines.push(format!("notes: {}", issue.url));
     lines.push(format!("  labels: {}", labels.join(", ")));
     quote(&issue.body, &mut lines);
@@ -156,6 +174,7 @@ mod tests {
             body: body.to_string(),
             url: url.to_string(),
             labels: Vec::new(),
+            state: "OPEN".to_string(),
         }
     }
 

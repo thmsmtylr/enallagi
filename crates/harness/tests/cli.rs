@@ -1591,7 +1591,7 @@ fn issue_appends_one_proposed_block() {
             "--repo",
             "owner/repo",
             "--json",
-            "number,title,body,url,labels"
+            "number,title,body,url,labels,state"
         ]
     );
     assert_eq!(f.porcelain(), " M TASKS.md\n");
@@ -1610,6 +1610,9 @@ fn issue_appends_one_proposed_block() {
 scope: src/thing.ts, src/thing.test.ts
 blockedBy:
 status: proposed
+probe: issue
+command: `gh issue view https://github.com/owner/repo/issues/12 --json state,title --jq '.state + \": \" + .title'`
+output: OPEN: a file uploaded unzipped cannot be downloaded
 rows: none — harness
 criteria:
   - <objective, and naming the command whose output changes when it is done>
@@ -1653,7 +1656,7 @@ fn issue_dry_run_prints_and_writes_nothing() {
             "view",
             "https://github.com/owner/repo/issues/12",
             "--json",
-            "number,title,body,url,labels"
+            "number,title,body,url,labels,state"
         ]
     );
     assert_eq!(f.tasks(), before);

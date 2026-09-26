@@ -184,6 +184,9 @@ pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
     let dir = config::load(root)?.layout.harness_dir;
     if !opts.dry_run && own_repository(root, &dir) {
         state_repository(root, &dir, &report.excluded)?;
+        if let Some(note) = ignore_in_product(root, &dir)? {
+            report.notes.push(note);
+        }
     }
 
     // the old answers move aside only once the new file holds them, and only for the run that read them
@@ -427,6 +430,43 @@ fn state_repository(root: &Path, dir: &str, entries: &[String]) -> Result<(), In
     }
     fs::write(&exclude, out).map_err(io(exclude.display()))?;
     Ok(())
+}
+
+// linters and formatters read .gitignore and never info/exclude, and a lane checks out HEAD, so the
+// line is committed: uncommitted, the lane's tools still scan the harness directory's vendored code
+fn ignore_in_product(root: &Path, dir: &str) -> Result<Option<String>, InitError> {
+    let path = root.join(".gitignore");
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    let line = git::ignore_line(dir);
+    if text.lines().any(|l| l.trim() == line) {
+        return Ok(None);
+    }
+    let dirty = git::git(root, &["status", "--porcelain", "--", ".gitignore"])
+        .is_ok_and(|out| !out.is_empty());
+    let mut out = text;
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&line);
+    out.push('\n');
+    fs::write(&path, out).map_err(io(path.display()))?;
+    if dirty {
+        return Ok(Some(format!(
+            ".gitignore now ends with `{line}` and was not committed, since it held other changes; commit it before `enallagi worktree`"
+        )));
+    }
+    git::commit_only(
+        root,
+        ".gitignore",
+        &format!("Ignore {line}, the enallagi directory"),
+    )
+    .map_err(|e| InitError::Io {
+        path: ".gitignore".to_string(),
+        source: std::io::Error::other(e.to_string()),
+    })?;
+    Ok(Some(format!(
+        "committed: .gitignore ignores `{line}`, so the product's own tools skip it"
+    )))
 }
 
 fn write(path: String, content: String) -> Planned {
