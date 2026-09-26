@@ -236,6 +236,16 @@ pub fn lane(
         let (tracked, loose): (Vec<String>, Vec<String>) = git::porcelain(&repo)
             .into_iter()
             .partition(|l| !l.starts_with("??"));
+        // the operator's own queue edits are what the lane should run on, so they are committed, not refused
+        if !tracked.is_empty() && repo != root {
+            git::commit_instance(root, &cfg.layout.harness_dir, &[], "queue: operator edits")?;
+            eprintln!(
+                "worktree: committed the operator's edits in {} before branching: {}",
+                repo.display(),
+                tracked.join(", ")
+            );
+            continue;
+        }
         if !tracked.is_empty() {
             return Err(WorktreeError::Dirty {
                 repo,
@@ -970,7 +980,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dirty_state_parent_refuses_the_lane() {
+    fn a_dirty_state_parent_is_committed_first() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -980,20 +990,15 @@ mod tests {
         )
         .expect("write");
 
-        let mut ran = false;
-        let err = lane(&r.root, &cfg, &mut |_wt| {
-            ran = true;
+        let mut seen = String::new();
+        lane(&r.root, &cfg, &mut |wt| {
+            seen = std::fs::read_to_string(wt.join(".enallagi/TASKS.md")).expect("TASKS.md");
             Ok(())
         })
-        .err()
-        .expect("refused");
+        .expect("lane");
 
-        assert!(!ran, "the lane ran against a dirty state repository");
-        let msg = err.to_string();
-        assert!(msg.contains("TASKS.md"), "{msg}");
-        assert!(msg.contains(&state.display().to_string()), "{msg}");
-        let listed = git::git(&state, &["worktree", "list"]).expect("worktree list");
-        assert!(!listed.contains("/worktrees/lane-"), "{listed}");
+        assert!(seen.contains("an uncommitted queue edit"), "{seen}");
+        assert!(git::porcelain(&state).is_empty());
     }
 
     #[test]
