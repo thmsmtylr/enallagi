@@ -244,6 +244,9 @@ pub enum Command {
         /// Print one JSON object per line instead of the rendered form
         #[arg(long)]
         json: bool,
+        /// Print one row per task and a footer with the false-completion rate
+        #[arg(long)]
+        summary: bool,
     },
     /// Run one lane in its own git worktree and fast-forward the branch
     Worktree {
@@ -339,11 +342,13 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             task,
             since,
             json,
+            summary,
         } => events::run(&events::Args {
             role,
             task,
             since,
             json,
+            summary,
         }),
         Command::Worktree { n } => worktree::run(&worktree::Args { n }),
     }
@@ -364,7 +369,7 @@ mod tests {
         "skills", "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 35] = [
+    const FLAGS: [&str; 36] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
@@ -400,6 +405,7 @@ mod tests {
         "events --task",
         "events --since",
         "events --json",
+        "events --summary",
     ];
 
     fn visible_flags() -> Vec<String> {

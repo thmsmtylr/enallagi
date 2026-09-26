@@ -126,6 +126,7 @@ Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGE
 - `run` drives the pipelines in place. `worktree` drives them in an isolated checkout.
 - `run` prints its version and build commit first, and `binary predates HEAD` when HEAD descends from that commit.
 - `watch` attaches to a live loop. `events` queries the log. Each event carries `sha`, the product HEAD, and `run.start` carries `binary`.
+- `events --summary` prints one row per task: stages, verify rounds, rejections, overturned verdicts, seconds, cost and token lanes.
 - `tasks` reads and edits the queue. `base` prints the commit a task was queued against.
 - `issue` appends a GitHub issue, and `review` a pull request's review comments, as `proposed` tasks.
 - `probe` reports findings. `gate` runs one gate. `hook` is the agent's lifecycle entry point.
