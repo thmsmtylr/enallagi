@@ -879,7 +879,6 @@ fn main_tracks_no_instance_file() {
 fn the_shell_package_is_gone() {
     let gone = [
         "harness/",
-        "install.sh",
         "selftest.sh",
         "adapters/claude/skill-hook.sh",
         "evals/run.sh",
@@ -1140,6 +1139,93 @@ fn the_tag_equals_the_crate_version() {
     assert!(!tag.is_empty(), "RELEASE_TAG is unset");
     let version = crate_version_in(&read(&repo_root().join("crates/harness/Cargo.toml")));
     assert_eq!(tag_mismatch(&tag, &version), None);
+}
+
+#[test]
+fn the_release_publishes_only_a_complete_draft() {
+    let block = job_block(&release_yml(), "release");
+    let upload = block
+        .find("softprops/action-gh-release")
+        .unwrap_or_else(|| panic!("no upload step:\n{block}"));
+    let draft = block
+        .find("draft: true")
+        .unwrap_or_else(|| panic!("the release is not created as a draft:\n{block}"));
+    let publish = block
+        .find("gh release edit \"$RELEASE_TAG\" --draft=false")
+        .unwrap_or_else(|| panic!("no publish step:\n{block}"));
+    assert!(upload < draft && draft < publish, "{block}");
+    for asset in [
+        "enallagi-x86_64-unknown-linux-musl",
+        "enallagi-aarch64-unknown-linux-musl",
+        "enallagi-x86_64-apple-darwin",
+        "enallagi-aarch64-apple-darwin",
+        "SHA256SUMS",
+    ] {
+        assert!(
+            block[upload..publish].contains(&format!("dist/{asset}")),
+            "the draft attaches no {asset}:\n{block}"
+        );
+    }
+}
+
+const FAKE_BINARY: &str = "#!/bin/sh\necho enallagi 9.9.9\n";
+
+// every asset name carries the same fake binary, so the test needs no copy of install.sh's target table
+fn fake_release(sum: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut sums = String::new();
+    for target in [
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+    ] {
+        fs::write(dir.path().join(format!("enallagi-{target}")), FAKE_BINARY).expect("write asset");
+        sums.push_str(&format!("{sum}  enallagi-{target}\n"));
+    }
+    fs::write(dir.path().join("SHA256SUMS"), sums).expect("write sums");
+    dir
+}
+
+fn run_installer(release: &Path, into: &Path) -> (i32, String) {
+    let out = enallagi::fixture::command("sh")
+        .arg(repo_root().join("install.sh"))
+        .env("ENALLAGI_BASE_URL", format!("file://{}", release.display()))
+        .env("ENALLAGI_INSTALL", into)
+        .output()
+        .expect("run install.sh");
+    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.code().unwrap_or(-1), text)
+}
+
+#[test]
+fn the_installer_refuses_a_binary_its_sum_rejects() {
+    use sha2::{Digest, Sha256};
+    let into = tempfile::tempdir().expect("tempdir");
+    let installed = into.path().join("enallagi");
+
+    let wrong = fake_release(&"0".repeat(64));
+    let (code, out) = run_installer(wrong.path(), into.path());
+    assert_ne!(code, 0, "{out}");
+    assert!(!installed.exists(), "installed on a wrong sum:\n{out}");
+
+    let sum: String = Sha256::digest(FAKE_BINARY)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let right = fake_release(&sum);
+    let (code, out) = run_installer(right.path(), into.path());
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains(&installed.display().to_string()), "{out}");
+    let ran = Command::new(&installed)
+        .arg("--version")
+        .output()
+        .expect("run it");
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout).trim(),
+        "enallagi 9.9.9"
+    );
 }
 
 // `--exact` with a name no suite declares runs zero tests and exits 0

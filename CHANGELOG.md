@@ -5,6 +5,11 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.2.3 (2026-09-26)
+
+- `curl -fsSL https://raw.githubusercontent.com/thmsmtylr/enallagi/main/install.sh | sh` installs the release binary for the machine, checked against `SHA256SUMS`; `install.ps1` runs it inside WSL
+- a release is created as a draft and published only after every asset is attached
+
 ## v0.2.2 (2026-09-26)
 
 - the `harness-immutable` rail in RAILS.md and SPEC.md names only `.enallagi/enallagi.toml`, the one file `init` hashes, where it also named a build config, preloads and a check script that nothing hashed

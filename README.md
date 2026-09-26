@@ -17,14 +17,8 @@ An autonomous task loop for a coding agent, in one static binary.
 ## Install
 
 ```bash
-curl -LO https://github.com/thmsmtylr/enallagi/releases/latest/download/enallagi-aarch64-apple-darwin
-chmod +x enallagi-aarch64-apple-darwin
-sudo mv enallagi-aarch64-apple-darwin /usr/local/bin/enallagi
+curl -fsSL https://raw.githubusercontent.com/thmsmtylr/enallagi/main/install.sh | sh
 ```
-
-Runtime needs `git`, `sh` and your agent CLI.
-
-Releases carry four targets. Pick `x86_64` or `aarch64`, and `apple-darwin` or `unknown-linux-musl`.
 
 From source:
 

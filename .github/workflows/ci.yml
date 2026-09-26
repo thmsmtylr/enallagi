@@ -1,4 +1,4 @@
-# `shell` lints the scripts that remain (driver.sh, docs/*.sh, evals/*.sh)
+# `shell` lints the scripts that remain (install.sh, driver.sh, docs/*.sh, evals/*.sh)
 # with bash -n, shellcheck at full severity, and `docs/bootstrap.sh --check` against the whole log.
 # `driver` runs the ignored test that drives the release binary through a real install. `package`
 # refuses a dogfood instance on main or in a pull request into it. `skills`
