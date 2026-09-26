@@ -538,6 +538,24 @@ fn task_files(ctx: &GateCtx, base: &str, task: &str, filter: &str) -> Vec<String
     files
 }
 
+// a proposed block's scope: line is the adjudicator's to write, so widening counts from its promotion
+fn promoted_at(ctx: &GateCtx, task: &str, queued: &str) -> Option<String> {
+    if field_at(ctx, task, "status", Some(queued)).as_deref() != Some("proposed") {
+        return None;
+    }
+    let tasks = crate::config::instance_rel(ctx.root, &ctx.cfg.layout.harness_dir, "TASKS.md");
+    let (repo, inner, _) = git::locate(ctx.root, &ctx.cfg.layout.harness_dir, &tasks);
+    let range = format!("{queued}..HEAD");
+    let revs = git::git(
+        &repo,
+        &["log", "--reverse", "--format=%H", &range, "--", &inner],
+    )
+    .ok()?;
+    revs.lines()
+        .find(|rev| field_at(ctx, task, "status", Some(rev)).is_some_and(|s| s != "proposed"))
+        .map(String::from)
+}
+
 // diffs the iteration's own commits against the task's scope: globs; also routes the three loops via rows: none — harness
 fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
@@ -563,7 +581,8 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     // implement round's own state commit, which already carries the widening
     let queued_rev = git::task_queued_commit(ctx.root, &ctx.cfg.layout.harness_dir, &task)
         .ok()
-        .flatten();
+        .flatten()
+        .map(|rev| promoted_at(ctx, &task, &rev).unwrap_or(rev));
     let queued =
         field_at(ctx, &task, "scope", queued_rev.as_deref()).map(|line| scope_globs(&line));
     let gained: Vec<String> = queued

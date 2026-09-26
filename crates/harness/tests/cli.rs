@@ -1065,6 +1065,16 @@ fn verified_install_as(
     state: &[&str],
     verdict: &str,
 ) -> (enallagi::fixture::Repo, String) {
+    verified_install_promoted(product, state, verdict, None)
+}
+
+// `promoted` queues the block proposed with a placeholder scope, then promotes it with this one
+fn verified_install_promoted(
+    product: &[&str],
+    state: &[&str],
+    verdict: &str,
+    promoted: Option<&str>,
+) -> (enallagi::fixture::Repo, String) {
     let r = enallagi::fixture::Repo::new();
     let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
     let out = in_harness(&r.root, &["init"]);
@@ -1093,9 +1103,21 @@ fn verified_install_as(
         );
     };
     let tasks = std::fs::read_to_string(state_dir.join("TASKS.md")).expect("TASKS.md");
-    let block = "\n## [T-900] halt\nscope: a.txt\nstatus: review\n";
-    r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
-    commit_state(&format!("queue at {queued}"));
+    match promoted {
+        Some(scope) => {
+            let block = "\n## [T-900] halt\nscope: src/thing.ts\nstatus: proposed\n";
+            r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
+            commit_state(&format!("queue at {queued}"));
+            let block = format!("\n## [T-900] halt\nscope: {scope}\nstatus: ready\n");
+            r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
+            commit_state(&format!("promote at {queued}"));
+        }
+        None => {
+            let block = "\n## [T-900] halt\nscope: a.txt\nstatus: review\n";
+            r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
+            commit_state(&format!("queue at {queued}"));
+        }
+    }
 
     r.write("a.txt", "work\n");
     for f in product {
@@ -1149,6 +1171,14 @@ fn gate_scope_rejects_a_silent_widening() {
         block.contains("gate: ") && block.contains("widened scope: with b.txt"),
         "{block}"
     );
+}
+
+#[test]
+fn gate_scope_counts_widening_from_promotion() {
+    let verdict = "scope: a.txt, b.txt\nstatus: done\n";
+    let (r, queued) = verified_install_promoted(&["b.txt"], &[], verdict, Some("a.txt, b.txt"));
+    let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
 }
 
 // the base a review-only round runs on: the product commit the implement round left behind
