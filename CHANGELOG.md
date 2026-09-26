@@ -5,6 +5,11 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.2.1 (2026-09-26)
+
+- every `cargo test` step in CI runs with `--no-fail-fast`, so a failing test binary no longer hides the failures in the binaries after it, and a floor test fails a step without the flag
+- the repository-identity test passes on a machine with a global git identity, where it failed on every developer machine and passed only in CI
+
 ## v0.2.0 (2026-09-25)
 
 - a new crate version on main is the release: `release.yml` tags it and builds that tag in the same run, so cutting one is merging the pull request that bumps `crates/harness/Cargo.toml` and moves these lines
