@@ -141,7 +141,10 @@ fn ask(root: &Path, cfg: &Config, prompt: &str) -> anyhow::Result<Proposal> {
     let rate_limit = regex::Regex::new(&format!("(?i){}", cfg.agent.rate_limit_pattern))?;
     let mut events = crate::events::Writer::new(crate::events::Log::open(&root.join(dir)));
     let stop_file = config::instance_path(root, dir, "STOP");
-    let result = crate::agent::spawn(&spawn, &mut events, &stop_file, &rate_limit)?;
+    let label = format!("asking the {} agent", spawn.preset.name);
+    let result = step(&label, || {
+        crate::agent::spawn(&spawn, &mut events, &stop_file, &rate_limit)
+    })?;
     parse(&result.output).ok_or_else(|| {
         anyhow::anyhow!(
             "the agent exited {} and printed no `{BEGIN}` block that parses",
@@ -190,6 +193,36 @@ fn blocks(text: &str) -> Vec<String> {
                 .join("\n")
         })
         .collect()
+}
+
+// on a terminal the line ticks, so a check that takes minutes does not look hung
+fn step<T>(label: &str, work: impl FnOnce() -> T) -> T {
+    use std::io::{IsTerminal, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let started = std::time::Instant::now();
+    let tty = std::io::stdout().is_terminal();
+    let done = AtomicBool::new(false);
+    let out = std::thread::scope(|scope| {
+        if tty {
+            scope.spawn(|| {
+                let mut frame = 0;
+                while !done.load(Ordering::Relaxed) {
+                    let secs = started.elapsed().as_secs();
+                    print!("\r  {} {label} {secs}s", FRAMES[frame % FRAMES.len()]);
+                    let _ = std::io::stdout().flush();
+                    frame += 1;
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                print!("\r\x1b[2K");
+            });
+        }
+        let out = work();
+        done.store(true, Ordering::Relaxed);
+        out
+    });
+    println!("  {label} ({}s)", started.elapsed().as_secs());
+    out
 }
 
 // removed on drop, so a check that fails, times out or is stopped leaves no file behind
@@ -253,7 +286,10 @@ pub fn verify(root: &Path, cfg: &Config, p: &Proposal) -> Result<(), String> {
     let mut checked = cfg.clone();
     checked.check.command.clone_from(&p.command);
     checked.check.fail_name.clone_from(&p.fail_name);
-    let clean = crate::gates::check_delta(root, &checked, false);
+    let clean = step(
+        &format!("running `{}` on the clean tree", p.command),
+        || crate::gates::check_delta(root, &checked, false),
+    );
     if let Some(reason) = &clean.timed_out {
         return Err(reason.clone());
     }
@@ -267,7 +303,10 @@ pub fn verify(root: &Path, cfg: &Config, p: &Proposal) -> Result<(), String> {
 
     std::fs::write(&probe, &p.probe_body).map_err(|e| format!("{}: {e}", p.probe_file))?;
     let planted = Planted(probe);
-    let report = crate::gates::check_delta(root, &checked, false);
+    let report = step(
+        &format!("running it again with {} planted", p.probe_file),
+        || crate::gates::check_delta(root, &checked, false),
+    );
     drop(planted);
     if let Some(reason) = &report.timed_out {
         return Err(reason.clone());
