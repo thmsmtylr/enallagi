@@ -68,19 +68,27 @@ pub fn run(root: &Path, cfg: &Config) -> anyhow::Result<Outcome> {
     crate::agent::catch_stop_signals();
     let mut refused: Vec<(Vec<Detected>, String)> = Vec::new();
     let first = ask(root, cfg, &prompt())?;
-    let step = match verify(root, cfg, &first) {
+    let (step, green) = match verify(root, cfg, &first, None) {
         Ok(()) => return written(root, first.keys()),
-        Err(step) => step,
+        Err(refusal) => refusal,
     };
     refused.push((first.keys(), step.clone()));
+    let tried: Vec<String> = first
+        .keys()
+        .iter()
+        .map(|k| format!("{} = {}", k.key, k.value))
+        .collect();
     let again = format!(
-        "{}\nA proposal was already refused at this step, so propose again with it fixed:\n{step}\n",
-        prompt()
+        "{}\nThis proposal was refused:\n{}\n\nThe step it failed, with the check's output:\n{step}\n\nPropose again with that fixed, keeping what already worked.\n",
+        prompt(),
+        tried.join("\n")
     );
+    // a command already green on the clean tree is not run clean a second time
+    let green = green.then_some(first.command.as_str());
     match ask(root, cfg, &again) {
-        Ok(second) => match verify(root, cfg, &second) {
+        Ok(second) => match verify(root, cfg, &second, green) {
             Ok(()) => return written(root, second.keys()),
-            Err(step) => refused.push((second.keys(), step)),
+            Err((step, _)) => refused.push((second.keys(), step)),
         },
         Err(err) => refused.push((Vec::new(), err.to_string())),
     }
@@ -101,7 +109,9 @@ test. Do not edit, create or delete any file, and install nothing: enallagi runs
 to verify the answer.
 
 Every regex is read by the Rust `regex` crate: no look-around (`(?=`, `(?!`, `(?<=`, `(?<!`) and \
-no backreferences.
+no backreferences. `fail_name` is matched line by line against the check's output with every ANSI \
+escape sequence already removed, so write it for plain text. Its group 1 must end with the failing \
+test's own name: a file or suite prefix before it is fine, error text after it is not.
 
 End the reply with exactly one block in this form, TOML between the two marker lines:
 
@@ -234,8 +244,24 @@ impl Drop for Planted {
     }
 }
 
-/// The first step the proposal fails, or nothing when the check proves every key.
-pub fn verify(root: &Path, cfg: &Config, p: &Proposal) -> Result<(), String> {
+/// The first step the proposal fails and whether its command was green on the clean tree.
+fn verify(
+    root: &Path,
+    cfg: &Config,
+    p: &Proposal,
+    green: Option<&str>,
+) -> Result<(), (String, bool)> {
+    let mut clean_passed = false;
+    steps(root, cfg, p, green, &mut clean_passed).map_err(|step| (step, clean_passed))
+}
+
+fn steps(
+    root: &Path,
+    cfg: &Config,
+    p: &Proposal,
+    green: Option<&str>,
+    clean_passed: &mut bool,
+) -> Result<(), String> {
     let fail_name = regex::Regex::new(&p.fail_name).map_err(|e| format!("fail_name: {e}"))?;
     if fail_name.captures_len() < 2 {
         return Err("fail_name has no capture group to name a test".to_string());
@@ -286,20 +312,23 @@ pub fn verify(root: &Path, cfg: &Config, p: &Proposal) -> Result<(), String> {
     let mut checked = cfg.clone();
     checked.check.command.clone_from(&p.command);
     checked.check.fail_name.clone_from(&p.fail_name);
-    let clean = step(
-        &format!("running `{}` on the clean tree", p.command),
-        || crate::gates::check_delta(root, &checked, false),
-    );
-    if let Some(reason) = &clean.timed_out {
-        return Err(reason.clone());
+    if green != Some(p.command.as_str()) {
+        let clean = step(
+            &format!("running `{}` on the clean tree", p.command),
+            || crate::gates::check_delta(root, &checked, false),
+        );
+        if let Some(reason) = &clean.timed_out {
+            return Err(reason.clone());
+        }
+        if clean.red {
+            return Err(format!(
+                "the check exits {} on the clean tree:\n{}",
+                clean.exit,
+                clean.tail(20).join("\n")
+            ));
+        }
     }
-    if clean.red {
-        return Err(format!(
-            "the check exits {} on the clean tree:\n{}",
-            clean.exit,
-            clean.tail(20).join("\n")
-        ));
-    }
+    *clean_passed = true;
 
     std::fs::write(&probe, &p.probe_body).map_err(|e| format!("{}: {e}", p.probe_file))?;
     let planted = Planted(probe);
@@ -318,11 +347,17 @@ pub fn verify(root: &Path, cfg: &Config, p: &Proposal) -> Result<(), String> {
         ));
     }
     let names: Vec<&String> = report.unforgiven.iter().chain(&report.forgiven).collect();
-    if !names.iter().any(|n| n.contains(PROBE_NAME)) {
+    if !names.iter().any(|n| n.ends_with(PROBE_NAME)) {
+        let mentions: Vec<&str> = report
+            .output
+            .lines()
+            .filter(|line| line.contains(PROBE_NAME))
+            .collect();
         return Err(format!(
-            "with {} in place the check exits {} and fail_name names {names:?}, not {PROBE_NAME}:\n{}",
+            "with {} in place the check exits {} and fail_name names {names:?}, none ending in {PROBE_NAME}.\nEvery output line that mentions it:\n{}\nThe output's last lines:\n{}",
             p.probe_file,
             report.exit,
+            mentions.join("\n"),
             report.tail(20).join("\n")
         ));
     }

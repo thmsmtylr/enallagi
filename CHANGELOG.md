@@ -7,6 +7,8 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## v0.3.0-beta.2 (2026-09-26)
 
+- the check's output has its ANSI escape sequences removed before `fail_name` reads it
+- `enallagi init` ends on `Next: set check.command ...` when no check is set, instead of pointing at `enallagi run`
 - `enallagi worktree` commits uncommitted edits in the harness directory's own repository before branching, instead of refusing; uncommitted product work is still refused
 - `enallagi init` asks the configured agent for the check when no runner preset matches, and writes it only after running it green, then red naming a planted failing test; a refused proposal is sent back once, and `--propose-check` asks when stdin is not a terminal
 

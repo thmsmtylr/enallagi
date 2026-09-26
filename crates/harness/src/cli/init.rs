@@ -214,7 +214,17 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     }
     println!("  probe: {findings} finding(s)");
 
-    println!("\nNext: enallagi run --pr-per-task");
+    if cfg.check.command.is_empty() {
+        println!(
+            "\nNext: set check.command in {}, then re-run `enallagi init`; no lane runs without it",
+            crate::config::config_path(&root)
+                .strip_prefix(&root)
+                .unwrap_or(std::path::Path::new(crate::config::CONFIG))
+                .display()
+        );
+    } else {
+        println!("\nNext: enallagi run --pr-per-task");
+    }
     Ok(if failed { 1 } else { 0 })
 }
 

@@ -1191,6 +1191,8 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         timed_out,
         stopped,
     } = run;
+    // a runner forced into colour would otherwise need every fail_name to spell out its escape codes
+    let output = strip_ansi(&output);
     let tally = tally(&output);
     if timed_out || stopped.is_some() {
         let reason = match stopped {
@@ -1248,6 +1250,19 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         timed_out: None,
         tally,
     }
+}
+
+/// The text with its ANSI colour and cursor sequences removed.
+pub fn strip_ansi(text: &str) -> String {
+    static ANSI: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    ANSI.get_or_init(|| {
+        regex::Regex::new(
+            r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]",
+        )
+        .expect("literal pattern")
+    })
+    .replace_all(text, "")
+    .into_owned()
 }
 
 // strips a trailing " [<digits>(.<digits>)?(s|m)]" — a test-runner-printed duration, not part of the test's name
@@ -1871,6 +1886,12 @@ mod tests {
             env.warnings,
             vec![format!("the check printed no `test result:` line: `{cmd}`")]
         );
+    }
+
+    #[test]
+    fn a_coloured_failure_line_is_named_as_plain_text() {
+        let line = "\x1b[31m✘\x1b[39m \x1b[31m[fail]:\x1b[39m \x1b[1mfile \x1b[90m›\x1b[39m a test\x1b[22m \x1b[31mfailed\x1b[39m\n";
+        assert_eq!(strip_ansi(line), "✘ [fail]: file › a test failed\n");
     }
 
     fn cargo_fail_name() -> String {

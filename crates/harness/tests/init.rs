@@ -1245,7 +1245,7 @@ fn init_commits_the_state_it_wrote() {
     assert!(
         stdout
             .lines()
-            .any(|l| l == "Next: enallagi run --pr-per-task"),
+            .any(|l| l.starts_with("Next: set check.command in .enallagi/enallagi.toml")),
         "{stdout}"
     );
     let state = repo.root.join(".enallagi");
@@ -1792,7 +1792,8 @@ fn the_setup_guide_is_four_sections() {
     );
 }
 
-const PROBE_RUNNER: &str = "status=0
+const PROBE_RUNNER: &str = "echo run >> src/.runs
+status=0
 for f in t/*_test.sh; do
   name=$(sed -n 's/^test //p' \"$f\")
   if sh \"$f\"; then echo \"ok $name\"; else echo \"FAIL $name\"; status=1; fi
@@ -1868,11 +1869,23 @@ fn a_fail_name_naming_nothing_is_refused() {
         enallagi::propose::Outcome::Refused(attempts) => {
             assert_eq!(attempts.len(), 2);
             for (_, step) in &attempts {
-                assert!(step.contains("fail_name names []"), "{step}");
+                assert!(step.contains("fail_name names [], none ending"), "{step}");
             }
         }
         enallagi::propose::Outcome::Written(_) => panic!("written"),
     }
     assert_eq!(read(&repo, ".enallagi/enallagi.toml"), before);
     assert!(!repo.root.join("t/probe_test.sh").exists());
+}
+
+#[test]
+fn a_retry_skips_the_clean_run_already_green() {
+    let wrong = check_block("^NOPE (.+)$", "_test\\.sh$");
+    let good = check_block("^FAIL (.+)$", "_test\\.sh$");
+    let repo = proposing(&wrong, &good);
+    assert!(
+        matches!(propose(&repo), enallagi::propose::Outcome::Written(_)),
+        "refused"
+    );
+    assert_eq!(read(&repo, "src/.runs").lines().count(), 3);
 }
