@@ -7,6 +7,9 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## v0.3.0-beta.2 (2026-09-26)
 
+- a Claude lane runs sandboxed with edits accepted instead of stopping at every permission prompt: the check runs outside the sandbox, commits to the product and state repositories are allowed, and writes outside the lane, network and the deny list stay blocked
+- `enallagi init` commits `/.enallagi/` to the product's `.gitignore`, since linters read it and never `info/exclude`; `enallagi eject` commits its removal
+- an imported issue is a `probe: issue` block with a `command:` and `output:`, which the adjudicator promotes instead of killing as unanchored
 - the check's output has its ANSI escape sequences removed before `fail_name` reads it
 - `enallagi init` ends on `Next: set check.command ...` when no check is set, instead of pointing at `enallagi run`
 - `enallagi worktree` commits uncommitted edits in the harness directory's own repository before branching, instead of refusing; uncommitted product work is still refused
