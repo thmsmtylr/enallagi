@@ -1869,7 +1869,7 @@ fn a_fail_name_naming_nothing_is_refused() {
         enallagi::propose::Outcome::Refused(attempts) => {
             assert_eq!(attempts.len(), 2);
             for (_, step) in &attempts {
-                assert!(step.contains("fail_name names [], none ending"), "{step}");
+                assert!(step.contains("fail_name names [], and only"), "{step}");
             }
         }
         enallagi::propose::Outcome::Written(_) => panic!("written"),
@@ -1888,4 +1888,16 @@ fn a_retry_skips_the_clean_run_already_green() {
         "refused"
     );
     assert_eq!(read(&repo, "src/.runs").lines().count(), 3);
+}
+
+#[test]
+fn a_fail_name_matching_a_pass_is_refused() {
+    let wide = check_block("^(?:ok|FAIL) (.+)$", "_test\\.sh$");
+    let repo = proposing(&wide, &wide);
+    match propose(&repo) {
+        enallagi::propose::Outcome::Refused(attempts) => {
+            assert!(attempts[0].1.contains("a_passes"), "{}", attempts[0].1)
+        }
+        enallagi::propose::Outcome::Written(_) => panic!("written"),
+    }
 }

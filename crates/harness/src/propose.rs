@@ -111,7 +111,8 @@ to verify the answer.
 Every regex is read by the Rust `regex` crate: no look-around (`(?=`, `(?!`, `(?<=`, `(?<!`) and \
 no backreferences. `fail_name` is matched line by line against the check's output with every ANSI \
 escape sequence already removed, so write it for plain text. Its group 1 must end with the failing \
-test's own name: a file or suite prefix before it is fine, error text after it is not.
+test's own name: a file or suite prefix before it is fine, error text after it is not. It must match \
+no line a passing, skipped or known-failing test prints.
 
 End the reply with exactly one block in this form, TOML between the two marker lines:
 
@@ -347,14 +348,15 @@ fn steps(
         ));
     }
     let names: Vec<&String> = report.unforgiven.iter().chain(&report.forgiven).collect();
-    if !names.iter().any(|n| n.ends_with(PROBE_NAME)) {
+    // the clean tree was green, so any other name is a line fail_name should not match
+    if names.is_empty() || !names.iter().all(|n| n.ends_with(PROBE_NAME)) {
         let mentions: Vec<&str> = report
             .output
             .lines()
             .filter(|line| line.contains(PROBE_NAME))
             .collect();
         return Err(format!(
-            "with {} in place the check exits {} and fail_name names {names:?}, none ending in {PROBE_NAME}.\nEvery output line that mentions it:\n{}\nThe output's last lines:\n{}",
+            "with {} in place the check exits {} and fail_name names {names:?}, and only a name ending in {PROBE_NAME} is failing.\nEvery output line that mentions it:\n{}\nThe output's last lines:\n{}",
             p.probe_file,
             report.exit,
             mentions.join("\n"),
