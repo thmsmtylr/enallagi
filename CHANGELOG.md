@@ -5,6 +5,10 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.2.5 (2026-09-26)
+
+- `enallagi events --summary` prints one row per task (stages, verify rounds, done verdicts, rejections, overturns, seconds, cost and the four token lanes) and a footer with totals and the false-completion rate, overturned done verdicts over all done verdicts; `--json` prints the same as one object per task
+
 ## v0.2.4 (2026-09-26)
 
 - every event in `events.jsonl` carries `sha`, the product HEAD it was written at, and `run.start` carries `binary`, the crate version and the commit the binary was built from
