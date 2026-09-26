@@ -5,6 +5,10 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.2.2 (2026-09-26)
+
+- the `harness-immutable` rail in RAILS.md and SPEC.md names only `.enallagi/enallagi.toml`, the one file `init` hashes, where it also named a build config, preloads and a check script that nothing hashed
+
 ## v0.2.1 (2026-09-26)
 
 - every `cargo test` step in CI runs with `--no-fail-fast`, so a failing test binary no longer hides the failures in the binaries after it, and a floor test fails a step without the flag

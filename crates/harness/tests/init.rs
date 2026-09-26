@@ -396,6 +396,18 @@ fn a_fresh_install_leaves_the_hash_rails_true() {
     install(&repo);
     assert_eq!(findings(&repo, "rail-unenforced"), Vec::new());
     assert_eq!(findings(&repo, "hash-uncovered"), Vec::new());
+    // a name the row carries in prose is one hash-uncovered cannot see and init does not hash
+    for doc in [".enallagi/RAILS.md", ".enallagi/SPEC.md"] {
+        let text = read(&repo, doc);
+        let row = text
+            .lines()
+            .find(|l| l.starts_with("| `harness-immutable`"))
+            .unwrap_or_else(|| panic!("{doc} has no harness-immutable row"));
+        assert!(row.contains("`.enallagi/enallagi.toml`"), "{row}");
+        for prose in ["build config", "preload", "check script", "loop script"] {
+            assert!(!row.contains(prose), "{doc}: {row}");
+        }
+    }
 }
 
 #[test]
