@@ -5,6 +5,11 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.2.4 (2026-09-26)
+
+- every event in `events.jsonl` carries `sha`, the product HEAD it was written at, and `run.start` carries `binary`, the crate version and the commit the binary was built from
+- `enallagi run` prints the binary's version and commit when it starts, and `binary predates HEAD` when HEAD has moved past the commit it was built from
+
 ## v0.2.3 (2026-09-26)
 
 - `curl -fsSL https://raw.githubusercontent.com/thmsmtylr/enallagi/main/install.sh | sh` installs the release binary for the machine, checked against `SHA256SUMS`; `install.ps1` runs it inside WSL
