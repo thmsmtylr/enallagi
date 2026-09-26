@@ -110,9 +110,16 @@ jobs:
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
+          draft: true
           files: |
             dist/enallagi-x86_64-unknown-linux-musl
             dist/enallagi-aarch64-unknown-linux-musl
             dist/enallagi-x86_64-apple-darwin
             dist/enallagi-aarch64-apple-darwin
             dist/SHA256SUMS
+      # a draft until every file is attached, so a failed upload never leaves a public release short
+      - name: publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "$RELEASE_TAG" --draft=false

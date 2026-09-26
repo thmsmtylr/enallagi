@@ -8,6 +8,13 @@ The example is a node repository whose tests run under `node --import tsx --test
 Install the binary as the [README](../README.md#install) shows.
 Runtime needs `git`, `sh` and your agent CLI.
 
+Releases carry four targets. Pick `x86_64` or `aarch64`, and `apple-darwin` or `unknown-linux-musl`.
+`install.sh` picks one from `uname -sm` and checks it against the release's `SHA256SUMS`.
+
+- `ENALLAGI_VERSION=v0.2.0` pins a release instead of the latest.
+- `ENALLAGI_INSTALL=<dir>` installs somewhere other than `~/.local/bin`.
+- On Windows, `install.ps1` runs `install.sh` inside WSL, since the binary needs `sh` and `git`.
+
 ## 2. Run `enallagi init`
 
 The repository's `package.json` names its test script:

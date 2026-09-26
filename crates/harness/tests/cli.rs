@@ -1206,7 +1206,7 @@ fn a_legacy_config_name_warns_about_the_rename() {
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
 }
 
-const DOC_UNRUNNABLE: [(&str, &str); 12] = [
+const DOC_UNRUNNABLE: [(&str, &str); 10] = [
     (
         "enallagi init --issue https://github.com/owner/repo/issues/12",
         "reads a GitHub issue over the network with gh",
@@ -1216,16 +1216,8 @@ const DOC_UNRUNNABLE: [(&str, &str); 12] = [
         "spawns the agent CLI, which no test may call",
     ),
     (
-        "curl -LO https://github.com/thmsmtylr/enallagi/releases/latest/download/enallagi-aarch64-apple-darwin",
+        "curl -fsSL https://raw.githubusercontent.com/thmsmtylr/enallagi/main/install.sh | sh",
         "downloads a release asset over the network",
-    ),
-    (
-        "chmod +x enallagi-aarch64-apple-darwin",
-        "the asset the curl line downloads is not in the tree",
-    ),
-    (
-        "sudo mv enallagi-aarch64-apple-darwin /usr/local/bin/enallagi",
-        "installs system-wide as root",
     ),
     (
         "enallagi run --pipeline task --iterations 1",
@@ -1247,7 +1239,10 @@ const DOC_UNRUNNABLE: [(&str, &str); 12] = [
         "enallagi worktree 1",
         "spawns the agent CLI in a worktree, which no test may call",
     ),
-    ("enallagi watch", "attaches a live view and does not exit on its own"),
+    (
+        "enallagi watch",
+        "attaches a live view and does not exit on its own",
+    ),
     (
         "enallagi pr T-001 --push",
         "pushes a branch and opens a pull request",
