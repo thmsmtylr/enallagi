@@ -180,6 +180,7 @@ mod tests {
             run: "r".into(),
             iter: 0,
             seq: 1,
+            sha: None,
             kind: Kind::Halt {
                 halt: "x".into(),
                 reason: reason.to_string(),

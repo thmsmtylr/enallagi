@@ -12,6 +12,9 @@ pub struct Event {
     pub run: String,
     pub iter: u32,
     pub seq: u64,
+    // the product HEAD the event was written against; a log written before the field reads as None
+    #[serde(default)]
+    pub sha: Option<String>,
     #[serde(flatten)]
     pub kind: Kind,
 }
@@ -26,6 +29,8 @@ pub enum Kind {
         // a log written before the field existed reads as not skipped
         #[serde(default)]
         permissions_skipped: bool,
+        #[serde(default)]
+        binary: Option<Binary>,
     },
     #[serde(rename = "run.end")]
     RunEnd {
@@ -104,6 +109,21 @@ pub enum Kind {
     },
 }
 
+pub const COMMIT: &str = env!("ENALLAGI_COMMIT");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Binary {
+    pub version: String,
+    pub commit: String,
+}
+
+pub fn binary() -> Binary {
+    Binary {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        commit: COMMIT.to_string(),
+    }
+}
+
 // summed over every `test result:` line: line 1 of fourteen is one binary, not the total
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tally {
@@ -133,6 +153,7 @@ pub fn task_of(k: &Kind) -> Option<&str> {
 
 pub struct Log {
     pub path: PathBuf,
+    dir: PathBuf,
 }
 
 impl Log {
@@ -143,6 +164,7 @@ impl Log {
             .unwrap_or_else(|| harness_dir.to_path_buf());
         Log {
             path: dir.join("events.jsonl"),
+            dir: harness_dir.to_path_buf(),
         }
     }
 
@@ -205,6 +227,7 @@ pub struct Writer {
     seq: u64,
     last_error: Option<String>,
     sink: Option<Sink>,
+    git_dirs: Option<(PathBuf, PathBuf)>,
 }
 
 impl Writer {
@@ -214,6 +237,7 @@ impl Writer {
         let nanos = now.subsec_nanosecond() as u32;
         let hex = (std::process::id() ^ nanos) & 0xffff;
         Writer {
+            git_dirs: product_git_dirs(&log.dir),
             log,
             run: format!("{ts}-{hex:04x}"),
             iter: 0,
@@ -235,6 +259,10 @@ impl Writer {
             run: self.run.clone(),
             iter: self.iter,
             seq: self.seq,
+            sha: self
+                .git_dirs
+                .as_ref()
+                .and_then(|(dir, common)| head_sha(dir, common)),
             kind,
         };
         // emit returns Event not Result, so a write failure is stashed in last_error instead of raised
@@ -252,6 +280,47 @@ impl Writer {
     pub fn set_iter(&mut self, i: u32) {
         self.iter = i;
     }
+}
+
+// the harness directory may be its own repository, whose HEAD is not the product's
+fn product_git_dirs(harness_dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    let top = |d: &Path| {
+        crate::git::git(d, &["rev-parse", "--show-toplevel"])
+            .ok()
+            .map(PathBuf::from)
+    };
+    let own = fs::canonicalize(harness_dir).ok();
+    let root = match top(harness_dir) {
+        Some(t) if Some(&t) != own.as_ref() => t,
+        t => harness_dir.parent().and_then(top).or(t)?,
+    };
+    let out = crate::git::git(
+        &root,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-dir",
+            "--git-common-dir",
+        ],
+    )
+    .ok()?;
+    let (dir, common) = out.split_once('\n')?;
+    Some((PathBuf::from(dir), PathBuf::from(common)))
+}
+
+// read from the files, not `git rev-parse`: every stage.output chunk is an event
+fn head_sha(git_dir: &Path, common_dir: &Path) -> Option<String> {
+    let head = fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    let Some(name) = head.trim().strip_prefix("ref: ") else {
+        return Some(head.trim().to_string());
+    };
+    if let Ok(sha) = fs::read_to_string(common_dir.join(name)) {
+        return Some(sha.trim().to_string());
+    }
+    fs::read_to_string(common_dir.join("packed-refs"))
+        .ok()?
+        .lines()
+        .find_map(|l| l.strip_suffix(name)?.strip_suffix(' ').map(String::from))
 }
 
 fn rfc3339_secs(ts: jiff::Timestamp) -> String {
@@ -307,6 +376,7 @@ mod tests {
             config_sha256: "a".into(),
             pipeline: None,
             permissions_skipped: false,
+            binary: None,
         });
         w.set_iter(1);
         w.emit(Kind::Halt {
@@ -518,6 +588,7 @@ mod tests {
                             run: format!("lane-{lane}"),
                             iter: 1,
                             seq,
+                            sha: None,
                             kind: Kind::StageOutput {
                                 stage: "implement".into(),
                                 chunk: "x".repeat(200),
