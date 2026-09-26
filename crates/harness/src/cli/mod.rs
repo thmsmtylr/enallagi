@@ -213,11 +213,12 @@ pub enum Command {
     /// Query or edit TASKS.md
     ///
     /// Subcommands: list, ready, ready-unattended, ids-at, block, field, set-status, unblock,
-    /// rejections, archive.
+    /// rejections, archive, landed [--built].
     Tasks {
         /// Subcommand to run
         cmd: String,
         /// Arguments for the subcommand
+        #[arg(allow_hyphen_values = true)]
         args: Vec<String>,
     },
     /// Run the evals

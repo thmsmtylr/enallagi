@@ -88,6 +88,14 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
         return Err(PrError::Refused(refusals));
     }
 
+    let stem = ids.join("-");
+    let description = root.join(&dir).join("pr").join(format!("{stem}.md"));
+    let built_ref = format!("refs/heads/task/{stem}");
+    let branch_built = git::git(root, &["rev-parse", "--verify", "-q", &built_ref]).is_ok();
+    if opts.push && branch_built && description.exists() {
+        return push_built(root, &dir, &stem, description, opts);
+    }
+
     let default = default_branch(root)?;
     git::git(root, &["fetch", "-q", "origin", &default])?;
     let base = format!("origin/{default}");
@@ -164,7 +172,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     if !refusals.is_empty() {
         return Err(PrError::Refused(refusals));
     }
-    let branch = format!("task/{}", ids.join("-"));
+    let branch = format!("task/{stem}");
     let scratch = tempfile::TempDir::new().map_err(io("a temporary directory"))?;
     let wt = scratch.path().join("worktree");
     let wt_arg = wt.display().to_string();
@@ -179,23 +187,17 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
         return Err(err);
     }
 
-    let description = root
-        .join(&dir)
-        .join("pr")
-        .join(format!("{}.md", ids.join("-")));
     let stat = git::git(root, &["diff", "--stat", &base, &branch])?;
     let policy = contribution_policy::find(root).map_err(|e| PrError::Refused(vec![e]))?;
     let refused = opts.push && !opts.policy_read && !policy.is_empty();
     let mut text = describe(root, &dir, &tasks, &picked, &stat)?;
     text.push_str(&policy_section(&policy, opts, refused));
+    text.push_str(&format!("\npushed: no {}\n", today()));
     if let Some(parent) = description.parent() {
         fs::create_dir_all(parent).map_err(io(parent.display()))?;
     }
     fs::write(&description, text).map_err(io(description.display()))?;
-    // the description is the only record of the contribution-policy decision, so it is committed rather than left for the next tidy-up
-    let record = format!("pr/{}.md", ids.join("-"));
-    // the record alone: an operator's uncommitted queue edits are not this command's to commit
-    git::commit_instance_only(root, &dir, &[&record], &format!("pr {}", ids.join("-")))?;
+    record(root, &dir, &stem)?;
 
     if refused {
         git::git(root, &["branch", "-D", &branch])?;
@@ -213,10 +215,171 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
         policy,
     };
     if opts.push {
-        git::git(root, &["push", "-q", "origin", &report.branch])?;
-        report.opened = Some(open(root, &report)?);
+        push(root, &dir, &stem, &mut report)?;
     }
     Ok(report)
+}
+
+// a branch built without --push is pushed as it stands; its base is the task branch its parent tips, else the default
+fn push_built(
+    root: &Path,
+    dir: &str,
+    stem: &str,
+    description: PathBuf,
+    opts: &PrOpts,
+) -> Result<PrReport, PrError> {
+    let policy = contribution_policy::find(root).map_err(|e| PrError::Refused(vec![e]))?;
+    if !opts.policy_read && !policy.is_empty() {
+        return Err(PrError::Policy {
+            sentences: policy.iter().map(cite).collect(),
+            description,
+        });
+    }
+    let branch = format!("task/{stem}");
+    let parent = git::git(root, &["rev-parse", &format!("{branch}~1")])?;
+    let stacked = git::git(
+        root,
+        &[
+            "for-each-ref",
+            "--points-at",
+            &parent,
+            "--format=%(refname:short)",
+            "refs/heads/task/",
+        ],
+    )?;
+    let base = match stacked.lines().find(|b| *b != branch) {
+        Some(b) => b.to_string(),
+        None => default_branch(root)?,
+    };
+    let mut report = PrReport {
+        branch,
+        base,
+        description,
+        opened: None,
+        policy,
+    };
+    push(root, dir, stem, &mut report)?;
+    Ok(report)
+}
+
+fn push(root: &Path, dir: &str, stem: &str, report: &mut PrReport) -> Result<(), PrError> {
+    git::git(root, &["push", "-q", "origin", &report.branch])?;
+    let opened = open(root, report)?;
+    if opened.starts_with("http") {
+        let text =
+            fs::read_to_string(&report.description).map_err(io(report.description.display()))?;
+        let line = format!("pushed: {opened} {}", today());
+        let text: Vec<String> = text
+            .lines()
+            .map(|l| {
+                if l.starts_with("pushed:") {
+                    line.clone()
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect();
+        fs::write(&report.description, text.join("\n") + "\n")
+            .map_err(io(report.description.display()))?;
+        record(root, dir, stem)?;
+    }
+    report.opened = Some(opened);
+    Ok(())
+}
+
+// the description is the only record of the contribution-policy decision and the push, so it is committed rather than left for the next tidy-up
+fn record(root: &Path, dir: &str, stem: &str) -> Result<(), PrError> {
+    let record = format!("pr/{stem}.md");
+    // the record alone: an operator's uncommitted queue edits are not this command's to commit
+    git::commit_instance_only(root, dir, &[&record], &format!("pr {stem}"))?;
+    Ok(())
+}
+
+fn today() -> String {
+    jiff::Zoned::now().strftime("%Y-%m-%d").to_string()
+}
+
+#[derive(Debug)]
+pub struct Landed {
+    pub id: String,
+    pub title: String,
+    pub commits: Vec<String>,
+    /// `no branch`, `built <branch>`, or `pushed <url>`.
+    pub state: String,
+}
+
+/// Every done task, archived ones first, with the product commits naming it and its pull-request state.
+pub fn landed(root: &Path) -> Result<Vec<Landed>, PrError> {
+    let cfg = config::load(root).map_err(|e| PrError::Refused(vec![e.to_string()]))?;
+    let dir = cfg.layout.harness_dir.clone();
+    let read = |name: &str| fs::read_to_string(config::instance_path(root, &dir, name));
+    let queued = parse(&read("TASKS.md").unwrap_or_default())?;
+    let archived = parse(&read("DECISIONS.md").unwrap_or_default())?;
+    let unstubbed = archived
+        .iter()
+        .filter(|a| !queued.iter().any(|q| q.id == a.id));
+    let done: Vec<&queue::Block> = unstubbed
+        .chain(&queued)
+        .filter(|b| queue::field(b, "status").as_deref() == Some("done"))
+        .collect();
+    let ids: Vec<String> = done.iter().map(|b| b.id.clone()).collect();
+    let picked = commits(root, "HEAD", &ids)?;
+
+    let mut records: Vec<(String, String)> = Vec::new();
+    if let Ok(entries) = fs::read_dir(root.join(&dir).join("pr")) {
+        for path in entries.flatten().map(|e| e.path()) {
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+            if path.extension().is_some_and(|x| x == "md") {
+                records.push((
+                    stem.to_string(),
+                    fs::read_to_string(&path).unwrap_or_default(),
+                ));
+            }
+        }
+    }
+    let branches = git::git(
+        root,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads/task/",
+        ],
+    )?;
+
+    Ok(done
+        .into_iter()
+        .map(|b| {
+            let full = archived.iter().find(|a| a.id == b.id).unwrap_or(b);
+            let names = |s: &str| s.contains(&b.id) && gates::names_task(s, &b.id);
+            let commits = picked
+                .iter()
+                .filter(|(_, s)| names(s))
+                .map(|(sha, _)| sha.clone())
+                .collect();
+            let state = match records.iter().find(|(stem, _)| names(stem)) {
+                Some((stem, text)) => {
+                    let branch = format!("task/{stem}");
+                    let url = text
+                        .lines()
+                        .find_map(|l| l.strip_prefix("pushed: "))
+                        .and_then(|v| v.split_whitespace().next())
+                        .filter(|v| *v != "no");
+                    match url {
+                        Some(url) => format!("pushed {url}"),
+                        None if branches.lines().any(|l| l == branch) => format!("built {branch}"),
+                        None => "no branch".to_string(),
+                    }
+                }
+                None => "no branch".to_string(),
+            };
+            Landed {
+                id: b.id.clone(),
+                title: full.title.clone(),
+                commits,
+                state,
+            }
+        })
+        .collect())
 }
 
 pub fn cite(f: &Finding) -> String {
@@ -268,7 +431,11 @@ fn commits(root: &Path, range: &str, ids: &[String]) -> Result<Vec<(String, Stri
     Ok(log
         .lines()
         .filter_map(|l| l.split_once(' '))
-        .filter(|(_, subject)| ids.iter().any(|id| gates::names_task(subject, id)))
+        // contains first: the matcher compiles a regex per call, and a whole history meets every id
+        .filter(|(_, subject)| {
+            ids.iter()
+                .any(|id| subject.contains(id.as_str()) && gates::names_task(subject, id))
+        })
         .map(|(sha, subject)| (sha.to_string(), subject.to_string()))
         .collect())
 }

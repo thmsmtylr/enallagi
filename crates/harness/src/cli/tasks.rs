@@ -9,7 +9,7 @@ pub struct Args {
     pub args: Vec<String>,
 }
 
-const USAGE: &str = "enallagi tasks: usage: enallagi tasks <list|ready|ready-unattended|ids-at|block|field|set-status|unblock|rejections|archive> [args] [file]";
+const USAGE: &str = "enallagi tasks: usage: enallagi tasks <list|ready|ready-unattended|ids-at|block|field|set-status|unblock|rejections|archive|landed [--built]> [args] [file]";
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
     let a = &args.args;
@@ -139,6 +139,21 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             }
             for id in &report.moved {
                 println!("{id}");
+            }
+            Ok(0)
+        }
+        "landed" => {
+            let built = a.iter().any(|x| x == "--built");
+            let rows = crate::pr::landed(&std::env::current_dir()?)?;
+            for row in rows {
+                if built && !row.state.starts_with("built ") {
+                    continue;
+                }
+                let commits = match row.commits.is_empty() {
+                    true => "-".to_string(),
+                    false => row.commits.join(","),
+                };
+                println!("{}\t{}\t{}\t{}", row.id, row.title, commits, row.state);
             }
             Ok(0)
         }
