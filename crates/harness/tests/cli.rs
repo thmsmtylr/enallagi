@@ -176,6 +176,82 @@ fn events_since_keeps_only_events_at_or_after() {
     assert!(stdout.contains("\"reason\":\"late\""));
 }
 
+#[test]
+fn events_summary_counts_an_overturned_done() {
+    let dir = tempfile::tempdir().unwrap();
+    let harness_dir = dir.path().join(".enallagi");
+    std::fs::create_dir_all(&harness_dir).unwrap();
+    std::fs::write(
+        harness_dir.join("events.jsonl"),
+        concat!(
+            r#"{"ts":"2026-09-07T00:00:00Z","run":"r","iter":1,"seq":1,"kind":"stage.end","stage":"implement","task":"T-1","seconds":10,"exit":0,"cost":1.5,"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":3,"cache_read_input_tokens":4,"turns":1}"#,
+            "\n",
+            r#"{"ts":"2026-09-07T00:00:01Z","run":"r","iter":1,"seq":2,"kind":"stage.end","stage":"verify","task":"T-1","seconds":5,"exit":0,"cost":0.5,"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":3,"cache_read_input_tokens":4,"turns":1}"#,
+            "\n",
+            r#"{"ts":"2026-09-07T00:00:02Z","run":"r","iter":1,"seq":3,"kind":"gate","gate":"verdict","task":"T-1","pass":true,"reason":"ok","tally":{"passed":1,"failed":0,"ignored":0,"lines":1}}"#,
+            "\n",
+            r#"{"ts":"2026-09-07T00:00:03Z","run":"r","iter":2,"seq":4,"kind":"stage.end","stage":"verify","task":"T-2","seconds":7,"exit":0,"cost":1.0,"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":30,"cache_read_input_tokens":40,"turns":1}"#,
+            "\n",
+            r#"{"ts":"2026-09-07T00:00:04Z","run":"r","iter":2,"seq":5,"kind":"task.status","task":"T-2","from":"done","to":"ready","reason":"red","by":"verdict"}"#,
+            "\n",
+            r#"{"ts":"2026-09-07T00:00:05Z","run":"r","iter":2,"seq":6,"kind":"gate","gate":"verdict","task":"T-2","pass":false,"reason":"red","tally":{"passed":0,"failed":1,"ignored":0,"lines":1}}"#,
+            "\n",
+            r#"{"ts":"2026-09-07T00:00:06Z","run":"r","iter":3,"seq":7,"kind":"stage.end","stage":"verify","task":"T-2","seconds":3,"exit":0,"cost":null,"input_tokens":null,"output_tokens":null,"turns":null}"#,
+            "\n",
+            r#"{"ts":"2026-09-07T00:00:07Z","run":"r","iter":3,"seq":8,"kind":"gate","gate":"verdict","task":"T-2","pass":true,"reason":"not done"}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+    let summary = |json: bool| {
+        let mut args = vec!["events", "--summary"];
+        if json {
+            args.push("--json");
+        }
+        let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+            .args(&args)
+            .current_dir(dir.path())
+            .output()
+            .expect("run enallagi events --summary");
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let text = summary(false);
+    let cells = |task: &str| -> Vec<String> {
+        let line = text.lines().find(|l| l.starts_with(task)).unwrap();
+        line.split_whitespace().skip(1).map(String::from).collect()
+    };
+    assert_eq!(
+        cells("T-1"),
+        ["2", "1", "1", "0", "0", "15", "2.00", "2", "4", "6", "8"],
+        "{text}"
+    );
+    assert_eq!(
+        cells("T-2"),
+        ["2", "2", "1", "1", "1", "10", "1.00", "10", "20", "30", "40"],
+        "{text}"
+    );
+    assert!(
+        text.contains("false-completion rate: 1/2 = 0.500"),
+        "{text}"
+    );
+
+    let json = summary(true);
+    let rows: Vec<serde_json::Value> = json
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 3, "{json}");
+    assert_eq!(rows[0]["task"], "T-1");
+    assert_eq!(rows[0]["overturns"], 0);
+    assert_eq!(rows[1]["task"], "T-2");
+    assert_eq!(rows[1]["overturns"], 1);
+    assert_eq!(rows[1]["rejections"], 1);
+    assert_eq!(rows[1]["cache_read_input_tokens"], 40);
+    assert_eq!(rows[2]["false_completion_rate"], 0.5);
+}
+
 fn events_in(dir: &std::path::Path) -> std::process::Output {
     enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["events", "--json"])
