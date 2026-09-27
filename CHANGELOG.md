@@ -5,6 +5,10 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.3.0-beta.3 (2026-09-27)
+
+- the README and docs describe the agent's check proposal, the `claude` preset's lane sandbox, the committed `.gitignore` line, and the issue block's placeholders
+
 ## v0.3.0-beta.2 (2026-09-26)
 
 - an imported issue's scope reads `<written by the adjudicator at promotion>` instead of a made-up path, and `enallagi run` and `enallagi worktree` refuse a `ready` block still carrying either import placeholder

@@ -106,10 +106,12 @@ Seven runners ship: cargo, node, bun, vitest, jest, pytest and go.
 Detection writes `check.command`, `check.fail_name` and the `layout` test keys.
 
 Each detected value is printed with the `file:line` it came from.
-A tree that matches no runner, or more than one, keeps the defaults and names the candidates.
+A tree that matches more than one runner keeps the defaults and names the candidates.
+A tree that matches none has the agent propose a check, written only once the check proves it.
 
 - `agent.preset` names the CLI to drive, or `custom` with your own `agent.command`.
 - `agent.model` and `agent.effort` set defaults. A role or a task can override both.
+- A `claude` lane runs sandboxed with edits accepted, so it needs no bypass flag. See [docs/configuration.md](docs/configuration.md).
 - `agent.dangerously_skip_permissions` adds the preset's bypass flag to every lane. Default `false`.
 - `enallagi run --dangerously-skip-permissions` does the same for one run.
   A preset that declares no bypass flag refuses the run.
@@ -123,6 +125,7 @@ Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGE
 ## Commands
 
 - `init` installs into a repository. `eject` removes it and keeps the record outside it.
+  Both commit one change to the product's `.gitignore`: init adds `/.enallagi/`, and eject removes it.
 - `run` drives the pipelines in place. `worktree` drives them in an isolated checkout.
 - `run` prints its version and build commit first, and `binary predates HEAD` when HEAD descends from that commit.
 - `watch` attaches to a live loop. `events` queries the log. Each event carries `sha`, the product HEAD, and `run.start` carries `binary`.
