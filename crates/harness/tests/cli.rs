@@ -1637,7 +1637,7 @@ fn issue_appends_one_proposed_block() {
     assert_eq!(last.title, "a file uploaded unzipped cannot be downloaded");
     let block = enallagi::queue::block_text(last);
     let want = "\
-scope: src/thing.ts, src/thing.test.ts
+scope: <written by the adjudicator at promotion>
 blockedBy:
 status: proposed
 probe: issue
@@ -2080,4 +2080,30 @@ fn the_review_source_names_no_comment_author() {
             assert!(!tokens.contains(&named), "{name} says `{named}`");
         }
     }
+}
+
+#[test]
+fn run_refuses_a_ready_block_left_unfilled() {
+    let r = enallagi::fixture::Repo::new();
+    let out = in_harness(&r.root, &["init", "--check", "true", "--fail-name", "(.+)"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
+    let block = format!(
+        "\n## [T-001] a\nscope: {}\nstatus: ready\n",
+        enallagi::queue::SCOPE_PLACEHOLDER
+    );
+    r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
+    for args in [
+        &["run", "--iterations", "1", "--no-tui"][..],
+        &["worktree", "1"],
+    ] {
+        let out = in_harness(&r.root, args);
+        assert_ne!(out.status.code(), Some(0), "{args:?} {out:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("T-001 is ready but still carries"),
+            "{args:?} {stderr}"
+        );
+    }
+    assert!(!r.root.join(".enallagi/worktrees").exists());
 }

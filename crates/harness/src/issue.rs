@@ -92,7 +92,7 @@ pub(crate) fn scaffold(id: &str, title: &str, scope: &str) -> Vec<String> {
         "status: proposed".to_string(),
         "rows: none — harness".to_string(),
         "criteria:".to_string(),
-        "  - <objective, and naming the command whose output changes when it is done>".to_string(),
+        format!("  - {}", queue::CRITERIA_PLACEHOLDER),
     ]
 }
 
@@ -105,7 +105,7 @@ pub(crate) fn quote(text: &str, lines: &mut Vec<String>) {
 
 pub fn render(issue: &Issue, id: &str) -> String {
     let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
-    let mut lines = scaffold(id, issue.title.trim(), "src/thing.ts, src/thing.test.ts");
+    let mut lines = scaffold(id, issue.title.trim(), queue::SCOPE_PLACEHOLDER);
     // the adjudicator kills a block with no probe, command and output unread; an issue's are its state
     lines.splice(
         4..4,

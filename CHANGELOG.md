@@ -7,6 +7,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## v0.3.0-beta.2 (2026-09-26)
 
+- an imported issue's scope reads `<written by the adjudicator at promotion>` instead of a made-up path, and `enallagi run` and `enallagi worktree` refuse a `ready` block still carrying either import placeholder
 - the `scope` gate counts widening from a block's promotion, not from its proposal, so the scope the adjudicator writes is not a widening
 - the context file tells a lane to run the check alone in its shell call, the one form a sandboxed lane runs outside its sandbox
 - a Claude lane runs sandboxed with edits accepted instead of stopping at every permission prompt: the check runs outside the sandbox, commits to the product and state repositories are allowed, and writes outside the lane, network and the deny list stay blocked

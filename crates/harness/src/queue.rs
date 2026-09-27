@@ -143,6 +143,25 @@ pub fn ready_unattended(blocks: &[Block]) -> Option<String> {
     None
 }
 
+/// What an import writes where only the adjudicator can decide: the scope a fix touches, and its criteria.
+pub const SCOPE_PLACEHOLDER: &str = "<written by the adjudicator at promotion>";
+pub const CRITERIA_PLACEHOLDER: &str =
+    "<objective, and naming the command whose output changes when it is done>";
+
+/// The `ready` blocks whose scope or criteria are still an import's placeholder.
+pub fn unfilled_ready(blocks: &[Block]) -> Vec<String> {
+    blocks
+        .iter()
+        .filter(|b| field(b, "status").as_deref() == Some("ready"))
+        .filter(|b| {
+            b.body.iter().any(|(_, line)| {
+                line.contains(SCOPE_PLACEHOLDER) || line.contains(CRITERIA_PLACEHOLDER)
+            })
+        })
+        .map(|b| b.id.clone())
+        .collect()
+}
+
 pub fn ids_at(blocks: &[Block], status: &str) -> Vec<String> {
     blocks
         .iter()
@@ -289,6 +308,17 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_ready_block_with_a_placeholder_is_unfilled() {
+        let text = format!(
+            "## [T-001] a\nscope: {SCOPE_PLACEHOLDER}\nstatus: ready\n\n\
+             ## [T-002] b\nscope: a.rs\nstatus: ready\ncriteria:\n  - {CRITERIA_PLACEHOLDER}\n\n\
+             ## [T-003] c\nscope: {SCOPE_PLACEHOLDER}\nstatus: proposed\n\n\
+             ## [T-004] d\nscope: a.rs\nstatus: ready\ncriteria:\n  - `cargo test` passes\n"
+        );
+        assert_eq!(unfilled_ready(&parse(&text).unwrap()), ["T-001", "T-002"]);
+    }
 
     const Q: &str = "## [T-001] first\nscope: src/a.ts\nblockedBy: none\nstatus: ready\ncriteria:\n  - x\n\n## [T-002] second\nscope: src/b.ts\nblockedBy: T-001\nstatus: blocked\n\n```\n## [T-999] not a task\nstatus: ready\n```\n\n## [T-003] attended\nscope: src/c.ts\nblockedBy:\nstatus: ready\nattended: true\n";
 
