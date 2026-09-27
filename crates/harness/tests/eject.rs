@@ -221,12 +221,14 @@ fn an_ejected_repository_looks_untouched() {
     assert_eq!(product.join("\n"), index);
     let paths = git(&r.root, &["log", "--name-only", "--format="]);
     assert!(paths.lines().any(|p| p == "src/thing.ts"), "{paths}");
+    // init commits the .gitignore line and eject commits its removal; nothing else reaches history
     for path in paths.lines().filter(|p| !p.is_empty()) {
         assert!(
-            path == "src/thing.ts" || path == "src/schema.ts",
+            ["src/thing.ts", "src/schema.ts", ".gitignore"].contains(&path),
             "{path} is in the product history"
         );
     }
+    assert!(!r.root.join(".gitignore").exists());
 }
 
 #[test]

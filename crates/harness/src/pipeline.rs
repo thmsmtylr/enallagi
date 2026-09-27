@@ -168,10 +168,24 @@ pub struct Refused(pub String);
 // the two probes that answer "would this lane be told the wrong check?"
 const PREFLIGHT: [&str; 2] = ["check-unnamed", "install-stale"];
 
+/// Refuses a `ready` block whose scope or criteria an import left for the adjudicator to write.
+pub fn refuse_unfilled(root: &Path, cfg: &Config) -> Result<(), Refused> {
+    let unfilled = queue::unfilled_ready(&queue_blocks(root, cfg));
+    if unfilled.is_empty() {
+        return Ok(());
+    }
+    Err(Refused(format!(
+        "{} is ready but still carries the import's placeholder scope or criteria. \
+         Set it back to `status: proposed` so the adjudicator writes them, or write them yourself.",
+        unfilled.join(", ")
+    )))
+}
+
 /// Refuses before the first stage when the installed files or the context file have drifted from
 /// the configured check. A probe that could not run refuses too: its zero is not a pass.
 pub fn preflight(root: &Path) -> anyhow::Result<()> {
     let cfg = config::load(root).map_err(|e| Refused(e.to_string()))?;
+    refuse_unfilled(root, &cfg)?;
     // Some(..) keeps run_all from running the check itself; neither of these probes reads it
     let check = CheckOutcome {
         ran: false,

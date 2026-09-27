@@ -79,6 +79,33 @@ pub fn commit_paths(root: &Path, paths: &[&str], msg: &str) -> Result<bool, GitE
     Ok(true)
 }
 
+/// Commits `path` alone, leaving whatever else is staged uncommitted.
+pub fn commit_only(root: &Path, path: &str, msg: &str) -> Result<(), GitError> {
+    git(root, &["add", "-A", "--", path])?;
+    let mut args = identity_args(root);
+    args.extend(
+        [
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            msg,
+            "--",
+            path,
+        ]
+        .map(String::from),
+    );
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    git(root, &args)?;
+    Ok(())
+}
+
+/// The `.gitignore` line init adds so the product's own tools skip the harness directory.
+pub fn ignore_line(dir: &str) -> String {
+    format!("/{dir}/")
+}
+
 // the same directory as the main worktree names it, or None when this already is the main worktree.
 // A linked worktree is removed when its lane ends, so a file written there goes with it.
 pub fn main_worktree_path(dir: &Path) -> Option<PathBuf> {

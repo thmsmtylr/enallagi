@@ -13,6 +13,8 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     let root = git::git(Path::new("."), &["rev-parse", "--show-toplevel"])?;
     let root = Path::new(root.trim());
     let cfg = config::load(root)?;
+    // refused here too, so a lane is not created only for its run to refuse
+    crate::pipeline::refuse_unfilled(root, &cfg)?;
     let n = args.n.unwrap_or(3);
     let parent_branch = git::git(root, &["rev-parse", "--abbrev-ref", "HEAD"])
         .unwrap_or_else(|_| "HEAD".to_string());

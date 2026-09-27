@@ -2108,7 +2108,8 @@ fn direct_commits_on_the_default_branch_count() {
     assert_eq!(found[0].path, ".git/config");
     assert_eq!(
         found[0].message,
-        format!("`git log --first-parent --no-merges --format=%h origin/{branch} | wc -l` -> 2")
+        // one more than before init committed its .gitignore line
+        format!("`git log --first-parent --no-merges --format=%h origin/{branch} | wc -l` -> 3")
     );
 }
 

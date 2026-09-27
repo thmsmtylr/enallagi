@@ -5,6 +5,19 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.3.0-beta.2 (2026-09-26)
+
+- an imported issue's scope reads `<written by the adjudicator at promotion>` instead of a made-up path, and `enallagi run` and `enallagi worktree` refuse a `ready` block still carrying either import placeholder
+- the `scope` gate counts widening from a block's promotion, not from its proposal, so the scope the adjudicator writes is not a widening
+- the context file tells a lane to run the check alone in its shell call, the one form a sandboxed lane runs outside its sandbox
+- a Claude lane runs sandboxed with edits accepted instead of stopping at every permission prompt: the check runs outside the sandbox, commits to the product and state repositories are allowed, and writes outside the lane, network and the deny list stay blocked
+- `enallagi init` commits `/.enallagi/` to the product's `.gitignore`, since linters read it and never `info/exclude`; `enallagi eject` commits its removal
+- an imported issue is a `probe: issue` block with a `command:` and `output:`, which the adjudicator promotes instead of killing as unanchored
+- the check's output has its ANSI escape sequences removed before `fail_name` reads it
+- `enallagi init` ends on `Next: set check.command ...` when no check is set, instead of pointing at `enallagi run`
+- `enallagi worktree` commits uncommitted edits in the harness directory's own repository before branching, instead of refusing; uncommitted product work is still refused
+- `enallagi init` asks the configured agent for the check when no runner preset matches, and writes it only after running it green, then red naming a planted failing test; a refused proposal is sent back once, and `--propose-check` asks when stdin is not a terminal
+
 ## v0.3.0-beta.1 (2026-09-26)
 
 - beta: the first release that installs with one command (`install.sh`), turns an issue into a task (`enallagi issue`, `init --issue`), runs a named pipeline (`run --pipeline`), and measures itself (`events --summary`, `tasks landed`); the lines under v0.2.1 to v0.2.6 are what it adds since v0.2.0

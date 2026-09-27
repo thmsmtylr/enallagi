@@ -538,6 +538,24 @@ fn task_files(ctx: &GateCtx, base: &str, task: &str, filter: &str) -> Vec<String
     files
 }
 
+// a proposed block's scope: line is the adjudicator's to write, so widening counts from its promotion
+fn promoted_at(ctx: &GateCtx, task: &str, queued: &str) -> Option<String> {
+    if field_at(ctx, task, "status", Some(queued)).as_deref() != Some("proposed") {
+        return None;
+    }
+    let tasks = crate::config::instance_rel(ctx.root, &ctx.cfg.layout.harness_dir, "TASKS.md");
+    let (repo, inner, _) = git::locate(ctx.root, &ctx.cfg.layout.harness_dir, &tasks);
+    let range = format!("{queued}..HEAD");
+    let revs = git::git(
+        &repo,
+        &["log", "--reverse", "--format=%H", &range, "--", &inner],
+    )
+    .ok()?;
+    revs.lines()
+        .find(|rev| field_at(ctx, task, "status", Some(rev)).is_some_and(|s| s != "proposed"))
+        .map(String::from)
+}
+
 // diffs the iteration's own commits against the task's scope: globs; also routes the three loops via rows: none — harness
 fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
@@ -563,7 +581,8 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     // implement round's own state commit, which already carries the widening
     let queued_rev = git::task_queued_commit(ctx.root, &ctx.cfg.layout.harness_dir, &task)
         .ok()
-        .flatten();
+        .flatten()
+        .map(|rev| promoted_at(ctx, &task, &rev).unwrap_or(rev));
     let queued =
         field_at(ctx, &task, "scope", queued_rev.as_deref()).map(|line| scope_globs(&line));
     let gained: Vec<String> = queued
@@ -1191,6 +1210,8 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         timed_out,
         stopped,
     } = run;
+    // a runner forced into colour would otherwise need every fail_name to spell out its escape codes
+    let output = strip_ansi(&output);
     let tally = tally(&output);
     if timed_out || stopped.is_some() {
         let reason = match stopped {
@@ -1248,6 +1269,19 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         timed_out: None,
         tally,
     }
+}
+
+/// The text with its ANSI colour and cursor sequences removed.
+pub fn strip_ansi(text: &str) -> String {
+    static ANSI: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    ANSI.get_or_init(|| {
+        regex::Regex::new(
+            r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]",
+        )
+        .expect("literal pattern")
+    })
+    .replace_all(text, "")
+    .into_owned()
 }
 
 // strips a trailing " [<digits>(.<digits>)?(s|m)]" — a test-runner-printed duration, not part of the test's name
@@ -1871,6 +1905,12 @@ mod tests {
             env.warnings,
             vec![format!("the check printed no `test result:` line: `{cmd}`")]
         );
+    }
+
+    #[test]
+    fn a_coloured_failure_line_is_named_as_plain_text() {
+        let line = "\x1b[31m✘\x1b[39m \x1b[31m[fail]:\x1b[39m \x1b[1mfile \x1b[90m›\x1b[39m a test\x1b[22m \x1b[31mfailed\x1b[39m\n";
+        assert_eq!(strip_ansi(line), "✘ [fail]: file › a test failed\n");
     }
 
     fn cargo_fail_name() -> String {
