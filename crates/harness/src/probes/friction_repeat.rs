@@ -1,4 +1,4 @@
-//! A friction recorded twice in PROGRESS.md that no LEARNINGS.md rule, earned rule or dated kill line covers: matched by token overlap, not exact text.
+//! A friction recorded twice in PROGRESS.md, or two landed blocks a pull request review raised, that no LEARNINGS.md rule, earned rule or dated kill line covers: matched by token overlap, not exact text. A review block landing after the rule that covers its class is reported too.
 
 use super::common::{self, Res};
 use super::ponytail_ceiling;
@@ -69,9 +69,21 @@ const PROSE_WORDS: [&str; 54] = [
     "yourself",
 ];
 
+// the same permalink `enallagi review` writes into a block's notes and `audit::reviewed` reads
+const PERMALINK: &str = r"/pull/\d+#(discussion_r|pullrequestreview)";
+const DATE: &str = r"\d{4}-\d{2}-\d{2}";
+
+struct Hit {
+    path: String,
+    line: usize,
+    text: String,
+    // a review block's first date; `None` for a PROGRESS.md friction
+    review: Option<String>,
+}
+
 struct Group {
     first: BTreeSet<String>,
-    hits: Vec<(usize, String)>,
+    hits: Vec<Hit>,
 }
 
 fn words(text: &str) -> BTreeSet<String> {
@@ -115,7 +127,7 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let progress = common::instance(ctx, "PROGRESS.md");
     let learnings = common::instance(ctx, "LEARNINGS.md");
-    let mut frictions: Vec<(usize, String, BTreeSet<String>)> = Vec::new();
+    let mut frictions: Vec<(Hit, BTreeSet<String>)> = Vec::new();
     for (index, line) in common::lines_of(ctx.root, &progress)?.iter().enumerate() {
         let Some(rest) = line.strip_prefix("friction:") else {
             continue;
@@ -126,43 +138,59 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             continue;
         }
         let tokens: BTreeSet<String> = key.split(' ').map(String::from).collect();
-        frictions.push((index + 1, text, tokens));
+        let hit = Hit {
+            path: progress.clone(),
+            line: index + 1,
+            text,
+            review: None,
+        };
+        frictions.push((hit, tokens));
     }
+    frictions.extend(reviewed(ctx)?);
     let mut spread: HashMap<String, usize> = HashMap::new();
-    for word in frictions.iter().flat_map(|(_, _, tokens)| tokens) {
+    for word in frictions.iter().flat_map(|(_, tokens)| tokens) {
         *spread.entry(word.clone()).or_default() += 1;
     }
 
     let mut groups: Vec<Group> = Vec::new();
     // ponytail: a rare word is one exactly two frictions carry, so a third occurrence joins only by overlap; count spread outside the group to lift it
-    for (line, text, tokens) in frictions {
+    for (hit, tokens) in frictions {
         match groups.iter_mut().find(|group| {
             overlap(&group.first, &tokens) >= FRICTION_OVERLAP
                 || rare_shared(&group.first, &tokens, &spread) >= RARE_SHARED
         }) {
-            Some(group) => group.hits.push((line, text)),
+            Some(group) => group.hits.push(hit),
             None => groups.push(Group {
                 first: tokens,
-                hits: vec![(line, text)],
+                hits: vec![hit],
             }),
         }
     }
 
     // ponytail: coverage is per-line word-set containment; a rule or kill line that paraphrases every word escapes it
-    let mut coverage: Vec<BTreeSet<String>> = if common::exists(ctx.root, &learnings) {
-        common::lines_of(ctx.root, &learnings)?
-            .iter()
-            .filter(|l| l.starts_with("- "))
-            .map(|l| words(l))
-            .collect()
-    } else {
-        vec![]
+    // each rule carries its date, `""` for an undated seed; a kill line carries none, since it settles no class
+    let date = common::re(DATE)?;
+    let dated = |l: &str| {
+        Some(
+            date.find(l.split(']').next().unwrap_or(""))
+                .map_or(String::new(), |m| m.as_str().to_string()),
+        )
     };
+    let mut coverage: Vec<(Option<String>, BTreeSet<String>)> =
+        if common::exists(ctx.root, &learnings) {
+            common::lines_of(ctx.root, &learnings)?
+                .iter()
+                .filter(|l| l.starts_with("- "))
+                .map(|l| (dated(l), words(l)))
+                .collect()
+        } else {
+            vec![]
+        };
     // the rule a repeat owes is the adjudicator's, and it writes it under `## Earned rules`, never LEARNINGS.md
     coverage.extend(
         common::earned_rules(ctx)?
             .iter()
-            .map(|(_, rule)| words(rule)),
+            .map(|(_, rule)| (dated(rule), words(rule))),
     );
     // a rule the ablation gate refuses closes as a dated refutation instead; `PROGRESS.md` keeps a
     // kill line about anything else from counting
@@ -170,31 +198,95 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         ponytail_ceiling::kill_lines(ctx)?
             .iter()
             .filter(|line| line.contains("PROGRESS.md"))
-            .map(|line| words(line)),
+            .map(|line| (None, words(line))),
     );
     let covered = |first: &BTreeSet<String>| {
-        coverage.iter().any(|rule| {
+        coverage.iter().find(|(_, rule)| {
             !rule.is_empty()
                 && first.intersection(rule).count() as f64 / first.len() as f64 >= FRICTION_OVERLAP
         })
     };
 
-    Ok(groups
-        .iter()
-        .filter(|group| group.hits.len() > 1 && !covered(&group.first))
-        .filter_map(|group| {
-            let last = group.hits.last()?;
-            Some(common::finding(
-                &progress,
-                last.0,
-                format!(
-                    "the same friction is recorded {} times and no LEARNINGS.md rule, earned rule or dated kill line covers it: {}",
-                    group.hits.len(),
-                    common::cut(&last.1, 90)
-                ),
-            ))
-        })
-        .collect())
+    let mut found = Vec::new();
+    for group in &groups {
+        match covered(&group.first) {
+            None if group.hits.len() > 1 => {
+                let Some(last) = group.hits.last() else {
+                    continue;
+                };
+                found.push(common::finding(
+                    &last.path,
+                    last.line,
+                    format!(
+                        "the same friction is recorded {} times and no LEARNINGS.md rule, earned rule or dated kill line covers it: {}",
+                        group.hits.len(),
+                        common::cut(&last.text, 90)
+                    ),
+                ));
+            }
+            Some((Some(since), _)) => {
+                found.extend(
+                    group
+                        .hits
+                        .iter()
+                        .filter(|hit| hit.review.as_ref().is_some_and(|at| at > since))
+                        .map(|hit| {
+                            common::finding(
+                                &hit.path,
+                                hit.line,
+                                format!(
+                                    "a review finding landed after the rule of {} that covers its class: {}",
+                                    if since.is_empty() { "the seed" } else { since },
+                                    common::cut(&hit.text, 90)
+                                ),
+                            )
+                        }),
+                );
+            }
+            _ => {}
+        }
+    }
+    Ok(found)
+}
+
+// a landed block whose notes carry a pull request permalink, keyed by its title; an id archived to DECISIONS.md is read once
+fn reviewed(ctx: &ProbeCtx) -> Res<Vec<(Hit, BTreeSet<String>)>> {
+    let permalink = common::re(PERMALINK)?;
+    let date = common::re(DATE)?;
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for name in ["TASKS.md", "DECISIONS.md"] {
+        let rel = common::instance(ctx, name);
+        if !common::exists(ctx.root, &rel) {
+            continue;
+        }
+        let blocks = crate::queue::parse(&common::read(ctx.root, &rel)?)
+            .map_err(|e| format!("{rel}: {e}"))?;
+        for block in blocks {
+            if crate::queue::field(&block, "status").as_deref() != Some("done")
+                || !block.body.iter().any(|(_, l)| permalink.is_match(l))
+                || !seen.insert(block.id.clone())
+            {
+                continue;
+            }
+            let at = block
+                .body
+                .iter()
+                .find_map(|(_, l)| date.find(l))
+                .map_or(String::new(), |m| m.as_str().to_string());
+            let tokens = words(&block.title);
+            out.push((
+                Hit {
+                    path: rel.clone(),
+                    line: block.line,
+                    text: block.title,
+                    review: Some(at),
+                },
+                tokens,
+            ));
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

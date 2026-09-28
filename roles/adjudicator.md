@@ -27,6 +27,7 @@ For each block with `status: proposed`, in file order:
 ```
 - [YYYY-MM-DD] <what went wrong> → <the rule instead> (`<the --gate run or the command that showed the cost>`)
 ```
+8. **Name a review repeat.** A block whose `notes:` carry a pull request permalink came from a review. Before promoting it, grep __ENALLAGI_DIR__/TASKS.md and __ENALLAGI_DIR__/DECISIONS.md for a `status: done` block with a permalink and the same class of defect. If one exists, the only thing you write is one line in the promoted block's `notes:` in __ENALLAGI_DIR__/TASKS.md, naming both ids and the class. The rule is not yours: `enallagi audit` proposes it under `## Proposed learnings` in __ENALLAGI_DIR__/DECISIONS.md, and the operator accepts it or kills it. `enallagi probe friction-repeat` chases the class, reporting two landed review blocks no rule covers and a review block landed after the rule that covers it.
 Hard rules, each naming the rail it serves:
 - You never write a proposal. Something the probes missed goes in your report as an open question, never as a block (`anchored`).
 - You never write code, never edit a file a block names, never run an implementer's work "just to check", and never mark anything `done`: that is the verifier's, and only after an implementer has committed.
