@@ -216,7 +216,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
 
     if cfg.check.command.is_empty() {
         println!(
-            "\nNext: set check.command in {}, then re-run `enallagi init`; no lane runs without it",
+            "\nNext: run `enallagi init --propose-check` to have the agent find the check, or set check.command in {} and re-run `enallagi init`; no lane runs without it",
             crate::config::config_path(&root)
                 .strip_prefix(&root)
                 .unwrap_or(std::path::Path::new(crate::config::CONFIG))

@@ -12,6 +12,8 @@ dangerously_skip_permissions = false
 command = ""
 force = ""
 fail_name = ""
+# tally is a regex over each output line; its named groups passed and failed are summed. Empty reads cargo's `test result:` lines.
+tally = ""
 # timeout bounds both forms; a check that runs past it is killed with its process group and halts the run.
 timeout = "30m"
 

@@ -1565,6 +1565,24 @@ fn a_title_past_the_cap_is_reported_with_its_count() {
 }
 
 #[test]
+fn an_imported_issue_keeps_its_title_until_promotion() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "TASKS.md",
+        &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: proposed\nprobe: issue\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\nprobe: issue\n"),
+    );
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "title-length");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0].message.starts_with("T-003 "),
+        "{}",
+        found[0].message
+    );
+}
+
+#[test]
 fn a_title_written_before_the_cap_is_left_alone() {
     let (repo, mut cfg) = seeded();
     append(
@@ -2126,6 +2144,16 @@ fn the_host_leg_quotes_the_answer_and_command() {
         )),
         "{out}"
     );
+}
+
+#[test]
+fn an_unadministered_repository_is_silence() {
+    let (repo, _cfg) = seeded_with(TRUE_CHECK);
+    let (_origin, _branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
+    let bins = tempfile::TempDir::new().expect("tempdir");
+    let gh = "case \"$2\" in *rules*) echo 'deletion';; *) echo false;; esac\n";
+    let out = probe_bin(&repo, &bin_dir(bins.path(), Some(gh)));
+    assert_eq!(out.trim(), "PROBE branch-protection 0", "{out}");
 }
 
 #[test]

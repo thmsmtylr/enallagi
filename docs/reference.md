@@ -64,7 +64,7 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `skill-ungated` | a `[[skill]]` whose `gate` is `none` |
 | `ponytail-ceiling` | a `ponytail:` marker no kill line names |
 | `rejection-stale` | a block whose last verdict is REJECTED and whose status is not `ready` |
-| `title-length` | a block title past 72 characters, from `queue.title_cap_from` on; the id and the count |
+| `title-length` | a block title past 72 characters, from `queue.title_cap_from` on, except an imported issue still `proposed`; the id and the count |
 | `queue-hygiene` | a repeated id, a missing status, an undefined blocker, or a scope entry matching nothing |
 | `friction-repeat` | a friction recorded twice that no LEARNINGS.md rule, `## Earned rules` line or kill line covers |
 | `check-red` | a check that exits non-zero, with its first failing test |
@@ -85,7 +85,7 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 The repository's own ignore rules covering a path git still tracks reads the same way.
 `layout.strict_prefixes = true` widens the tracked arm to every path outside `layout.allowed_prefixes`.
 
-`branch-protection` is advisory.
+`branch-protection` is advisory, and silent on a GitHub repository whose `permissions.admin` reads `false`.
 Its host-free leg counts the non-merge first-parent commits on the remote's default branch.
 Its host leg quotes what a host tool answered, or `unknown` when that tool exited non-zero.
 

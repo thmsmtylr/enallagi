@@ -16,7 +16,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         return Ok(vec![common::finding(
             file,
             0,
-            "enallagi.toml sets no check.command, so the context file names no check; set it, then run `enallagi init`",
+            "enallagi.toml sets no check.command, so the context file names no check; run `enallagi init --propose-check`, or set it and run `enallagi init`",
         )]);
     }
     if !common::exists(ctx.root, file) {

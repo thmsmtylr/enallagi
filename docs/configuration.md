@@ -25,6 +25,7 @@ The harness fills in the rules when it starts each stage:
 
 - each command in `check.command` and `check.force` runs outside the sandbox, since a suite may need a terminal
 - `gh issue view` runs outside the sandbox too
+- no MCP server is loaded: `--strict-mcp-config` keeps the operator's own out, as the settings keep their plugins out
 - `git add`, `git commit` and `git -C <harness_dir>` are allowed, and the state repository's `.git` is writable
 - network, writes outside the lane and the preset's deny list stay blocked
 
@@ -36,6 +37,7 @@ The context file tells each lane to run the check that way.
 - `check.command`: the one command that decides green. Empty by default. Init sets it from a detected runner, or from an agent proposal it has verified. A run refuses to start while it is empty.
 - `check.force`: the same check with its cache defeated. Empty by default. Left out of `enallagi.toml`, it follows `check.command`.
 - `check.fail_name`: a regex over the check's output whose group 1 is a failing test's name. Empty by default. Init writes the detected runner's pattern below, or the verified proposal's. It reads the output with ANSI escape sequences removed.
+- `check.tally`: a regex over each line of the check's output. Every match's named groups `passed` and `failed` are summed into the gate's tally. Empty by default, which reads cargo's `test result:` lines. The verified proposal writes one. A runner with neither records no tally, rather than a tally of zero.
 - `check.timeout`: `<n>s`, `<n>m` or `<n>h`. Default `"30m"`. A check that runs past it halts the run.
 
 ### `check.fail_name`

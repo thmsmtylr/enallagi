@@ -445,7 +445,17 @@ fn the_verdict_gate_records_the_check_tally() {
     );
     let implement = implementer(&r, "");
     let verify = verifier(&r);
-    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
+    // a check is counted only when its output has a reader, here the cargo preset's
+    let cargo = enallagi::runners::presets()
+        .into_iter()
+        .find(|p| p.name == "cargo")
+        .expect("the cargo preset")
+        .fail_name;
+    let toml = base_toml(&role_commands(&implement, &verify)).replace(
+        "[check]\ncommand = \"./src/fakecheck.sh\"",
+        &format!("[check]\ncommand = \"./src/fakecheck.sh\"\nfail_name = '{cargo}'"),
+    );
+    write_toml(&r, &toml);
     r.write("TASKS.md", TASKS);
     r.commit_all("stubs");
 
@@ -457,7 +467,7 @@ fn the_verdict_gate_records_the_check_tally() {
     let tally = tally.unwrap_or_else(|| panic!("no verdict tally: {events:#?}"));
     assert_eq!((tally.passed, tally.ignored, tally.lines), (476, 5, 2));
     assert!(
-        !digest.warnings.iter().any(|w| w.contains("test result:")),
+        !digest.warnings.iter().any(|w| w.contains("count line")),
         "{:?}",
         digest.warnings
     );
@@ -487,7 +497,7 @@ fn a_check_with_no_count_warns_in_the_digest() {
         digest
             .warnings
             .iter()
-            .any(|w| w == "the check printed no `test result:` line: `./src/fakecheck.sh`"),
+            .any(|w| w == "the check printed no count line: `./src/fakecheck.sh`"),
         "{:?}",
         digest.warnings
     );

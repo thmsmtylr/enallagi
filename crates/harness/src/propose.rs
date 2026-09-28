@@ -17,6 +17,8 @@ const TIMEOUT: Duration = Duration::from_secs(600);
 pub struct Proposal {
     pub command: String,
     pub fail_name: String,
+    #[serde(default)]
+    pub tally: String,
     pub test_file_suffix_re: String,
     pub test_decl_patterns: Vec<String>,
     pub probe_file: String,
@@ -43,6 +45,7 @@ impl Proposal {
                 "fail_name",
                 self.fail_name.clone().into(),
             ),
+            at("check.tally", "tally", self.tally.clone().into()),
             at(
                 "layout.test_file_suffix_re",
                 "test_file_suffix_re",
@@ -114,11 +117,16 @@ escape sequence already removed, so write it for plain text. Its group 1 must en
 test's own name: a file or suite prefix before it is fine, error text after it is not. It must match \
 no line a passing, skipped or known-failing test prints.
 
+`tally` is matched against each output line the same way. Its named groups `passed` and `failed` \
+capture the counts in the runner's summary, and every match on every line is summed, so one line \
+may carry both. Leave it empty only when the runner prints no count at all.
+
 End the reply with exactly one block in this form, TOML between the two marker lines:
 
 {BEGIN}
 command = \"the shell command, run from the repository root, that exits 0 only when every test passes\"
 fail_name = 'a regex matched against each output line; capture group 1 is the failing test name'
+tally = 'a regex with named groups passed and failed, matched against each output line'
 test_file_suffix_re = 'a regex that matches the repository-relative path of every test file'
 test_decl_patterns = [\"how a test is declared in source, with {{name}} where its name goes\"]
 probe_file = \"a repository-relative path that does not exist, in a directory that does, which the runner would pick up as a test file\"
@@ -127,6 +135,7 @@ probe_body = \"\"\"the full source of that file: one test named {PROBE_NAME} tha
 [origin]
 command = \"file:line the command was read from\"
 fail_name = \"file:line\"
+tally = \"file:line\"
 test_file_suffix_re = \"file:line\"
 test_decl_patterns = \"file:line\"
 {END}
@@ -267,6 +276,13 @@ fn steps(
     if fail_name.captures_len() < 2 {
         return Err("fail_name has no capture group to name a test".to_string());
     }
+    if !p.tally.is_empty() {
+        let tally = regex::Regex::new(&p.tally).map_err(|e| format!("tally: {e}"))?;
+        let names: Vec<&str> = tally.capture_names().flatten().collect();
+        if !names.contains(&"passed") || !names.contains(&"failed") {
+            return Err("tally needs both named groups, passed and failed".to_string());
+        }
+    }
     let suffix = regex::Regex::new(&p.test_file_suffix_re)
         .map_err(|e| format!("test_file_suffix_re: {e}"))?;
     if p.test_decl_patterns.is_empty() || p.test_decl_patterns.iter().any(|d| !d.contains("{name}"))
@@ -313,6 +329,7 @@ fn steps(
     let mut checked = cfg.clone();
     checked.check.command.clone_from(&p.command);
     checked.check.fail_name.clone_from(&p.fail_name);
+    checked.check.tally.clone_from(&p.tally);
     if green != Some(p.command.as_str()) {
         let clean = step(
             &format!("running `{}` on the clean tree", p.command),
@@ -325,6 +342,14 @@ fn steps(
             return Err(format!(
                 "the check exits {} on the clean tree:\n{}",
                 clean.exit,
+                clean.tail(20).join("\n")
+            ));
+        }
+        if !p.tally.is_empty() && (clean.tally.passed == 0 || clean.tally.failed != 0) {
+            return Err(format!(
+                "on the clean tree tally counts {} passed and {} failed, and a green suite counts some passed and none failed.\nThe output's last lines:\n{}",
+                clean.tally.passed,
+                clean.tally.failed,
                 clean.tail(20).join("\n")
             ));
         }
@@ -345,6 +370,13 @@ fn steps(
         return Err(format!(
             "the check exits 0 with {} in place, so the runner does not pick it up",
             p.probe_file
+        ));
+    }
+    if !p.tally.is_empty() && report.tally.failed == 0 {
+        return Err(format!(
+            "with {} in place tally counts no failed test.\nThe output's last lines:\n{}",
+            p.probe_file,
+            report.tail(20).join("\n")
         ));
     }
     let names: Vec<&String> = report.unforgiven.iter().chain(&report.forgiven).collect();

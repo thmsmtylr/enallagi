@@ -29,6 +29,9 @@ fn find(root: &Path) -> Vec<Finding> {
     let Some(default) = default_branch(root) else {
         return Vec::new();
     };
+    if !may_administer(root, &host) {
+        return Vec::new();
+    }
     let mut found = direct_commits(root, &default);
     found.extend(host_answer(root, &host, &default));
     found
@@ -82,6 +85,19 @@ fn direct_commits(root: &Path, default: &str) -> Vec<Finding> {
         0,
         format!("`git {} | wc -l` -> {count}", args.join(" ")),
     )]
+}
+
+// a repository the operator cannot administer is one whose protection they cannot change, so it
+// reports nothing; any answer but a plain `false` leaves the probe as it was
+fn may_administer(root: &Path, host: &str) -> bool {
+    let Some((_, tool)) = TOOLS.iter().find(|(named, _)| host.contains(named)) else {
+        return true;
+    };
+    let args = ["api", "repos/{owner}/{repo}", "--jq", ".permissions.admin"];
+    !matches!(
+        bounded(root, tool, &args),
+        Ok(Some(out)) if out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "false"
+    )
 }
 
 fn host_answer(root: &Path, host: &str, default: &str) -> Vec<Finding> {
