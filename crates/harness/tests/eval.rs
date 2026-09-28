@@ -239,7 +239,7 @@ fn a_fixture_that_cannot_be_built_is_error_never_fail() {
     assert_eq!(r.code, 1);
     assert_eq!(
         last_line(&r.stdout),
-        "EVAL case ERROR (the fixture could not be built — nothing was measured)"
+        "EVAL case ERROR (the fixture could not be built, so nothing was measured)"
     );
 }
 
@@ -376,6 +376,6 @@ fn a_prompt_that_is_not_a_file_is_a_fixture_error() {
     assert_eq!(r.code, 1, "stdout={} stderr={}", r.stdout, r.stderr);
     assert_eq!(
         last_line(&r.stdout),
-        "EVAL case ERROR (the fixture could not be built — nothing was measured)"
+        "EVAL case ERROR (the fixture could not be built, so nothing was measured)"
     );
 }

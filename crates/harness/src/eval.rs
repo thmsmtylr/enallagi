@@ -175,11 +175,11 @@ fn report(name: &str, outcome: &Outcome) -> bool {
             true
         }
         Outcome::FixtureError => {
-            println!("EVAL {name} ERROR (the fixture could not be built — nothing was measured)");
+            println!("EVAL {name} ERROR (the fixture could not be built, so nothing was measured)");
             false
         }
         Outcome::AgentError => {
-            println!("EVAL {name} ERROR (the agent exited non-zero — nothing was measured)");
+            println!("EVAL {name} ERROR (the agent exited non-zero, so nothing was measured)");
             false
         }
         Outcome::Fail => {
