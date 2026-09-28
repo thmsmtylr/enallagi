@@ -181,7 +181,7 @@ pub enum Command {
     /// Propose a learning for each class of finding that recurs
     ///
     /// Reads review blocks, frictions and rejections, and writes proposed entries to DECISIONS.md.
-    /// Runs no model and sits in no pipeline.
+    /// The `auditor` role words each entry, and it sits in no pipeline.
     Audit,
     /// Print the product commit a task was queued against
     ///

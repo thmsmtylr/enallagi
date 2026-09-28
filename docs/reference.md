@@ -27,8 +27,10 @@ finding raised twice on the same lines is one block.
 When that block lands, the launcher replies on the thread with the sha and resolves it.
 No host tool, no such branch, or a failed host call is a warning, never a halt.
 
-`enallagi audit` reads review blocks, frictions and rejections, and writes `proposed` learnings to `## Proposed learnings` in DECISIONS.md.
-It sits in no pipeline, runs no model, and never accepts what it proposes.
+`enallagi audit` groups review blocks, frictions and rejections, and the `auditor` role words each class as a `proposed` learning.
+The learnings go to `## Proposed learnings` in DECISIONS.md.
+A learning that names no instance of its class is refused and not written.
+It sits in no pipeline and never accepts what it proposes.
 The classes it groups by are the `CLASSES` table in `crates/harness/src/audit.rs`.
 
 A dated `killed: YYYY-MM-DD` line under an entry keeps its class from being proposed again.

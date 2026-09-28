@@ -1,11 +1,13 @@
-//! audit: review findings, frictions and rejections the repository already holds, grouped by rule into proposed learnings. No model reads them.
+//! audit: review findings, frictions and rejections the repository already holds, grouped by rule into classes; the `auditor` role words each class as a proposed learning.
 
 use crate::config::{self, Config};
 use crate::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
 use crate::queue::{self, QueueError};
 use regex::Regex;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 pub const PROPOSED: &str = "## Proposed learnings";
 const EARNED: &str = "## Earned rules";
@@ -13,6 +15,10 @@ const REJECTED: &str = "## Rejected findings";
 const EXPIRED: &str = "## Expired findings";
 // a class with fewer instances than this is one occurrence, which PROGRESS.md keeps as evidence
 const RECURS: usize = 2;
+const BEGIN: &str = "BEGIN ENALLAGI LEARNING";
+const END: &str = "END ENALLAGI LEARNING";
+const TURNS: u32 = 20;
+const TIMEOUT: Duration = Duration::from_secs(600);
 
 pub struct Class {
     pub name: &'static str,
@@ -47,12 +53,16 @@ pub enum AuditError {
     Io(#[from] std::io::Error),
     #[error("enallagi audit: {0}")]
     Read(String),
+    #[error("enallagi audit: {0}")]
+    Agent(String),
 }
 
 #[derive(Debug)]
 pub struct Proposal {
     pub class: &'static str,
     pub instances: Vec<String>,
+    // the auditor role's learning, as it wrote it between the markers
+    pub learning: String,
 }
 
 #[derive(Debug, Default)]
@@ -203,23 +213,103 @@ fn state(decisions: &str, class: &str) -> Option<State> {
 }
 
 pub fn render(proposal: &Proposal) -> String {
-    let class = CLASSES
+    let mut lines = proposal.learning.lines().map(str::trim);
+    let first = lines.next().unwrap_or_default();
+    let first = first.strip_prefix("- ").unwrap_or(first);
+    std::iter::once(format!("- [proposed] `{}`: {first}", proposal.class))
+        .chain(lines.filter(|l| !l.is_empty()).map(|l| format!("  {l}")))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn prompt(role: &str, class: &Class, instances: &[&Signal]) -> String {
+    let cited: Vec<String> = instances
         .iter()
-        .find(|c| c.name == proposal.class)
-        .expect("a proposal names a class in the table");
-    let cites: Vec<String> = proposal
-        .instances
-        .iter()
-        .map(|i| format!("`{i}`"))
+        .map(|s| {
+            let text: Vec<String> = s
+                .text
+                .lines()
+                .map(|l| format!("    {}", l.trim()))
+                .collect();
+            format!("- `{}`\n{}", s.at, text.join("\n"))
+        })
         .collect();
     format!(
-        "- [proposed] `{}`: {}, seen {} times → {}\n  instances: {}",
+        "{role}\n\nThe class is `{}`: {}. The step's rule for it: {}.\n\nIts {} instances, each with the text the step read there:\n\n{}\n",
         class.name,
         class.shape,
-        proposal.instances.len(),
         class.rule,
-        cites.join(", ")
+        instances.len(),
+        cited.join("\n")
     )
+}
+
+// a JSON event line is read for the strings it carries, so a preset that streams events still answers
+fn answer(output: &str) -> Option<String> {
+    fn strings(value: &serde_json::Value, out: &mut Vec<String>) {
+        match value {
+            serde_json::Value::String(text) if text.contains(BEGIN) => out.push(text.clone()),
+            serde_json::Value::Array(items) => items.iter().for_each(|v| strings(v, out)),
+            serde_json::Value::Object(map) => map.values().for_each(|v| strings(v, out)),
+            _ => {}
+        }
+    }
+    let mut texts = vec![String::new()];
+    for line in output.lines() {
+        match serde_json::from_str::<serde_json::Value>(line) {
+            Ok(value) if value.is_object() || value.is_array() => strings(&value, &mut texts),
+            _ => {
+                texts[0].push_str(line);
+                texts[0].push('\n');
+            }
+        }
+    }
+    texts
+        .iter()
+        .flat_map(|text| {
+            text.split(BEGIN)
+                .skip(1)
+                .filter_map(|part| part.split_once(END))
+                .map(|(body, _)| body.trim().to_string())
+                .collect::<Vec<_>>()
+        })
+        .rfind(|body| !body.is_empty())
+}
+
+// an installed role file overrides the shipped one, so an empty one leaves the agent no role
+fn role(root: &Path, cfg: &Config) -> String {
+    let installed = root
+        .join(&cfg.layout.harness_dir)
+        .join("roles")
+        .join("auditor.md");
+    let text = fs::read_to_string(installed)
+        .unwrap_or_else(|_| include_str!("../../../roles/auditor.md").to_string());
+    config::subst(&text, cfg)
+}
+
+fn ask(root: &Path, cfg: &Config, prompt: String) -> Result<String, AuditError> {
+    let presets = crate::agent::presets();
+    let resolved = crate::agent::resolve(&cfg.agent, "auditor", &presets)
+        .map_err(|e| AuditError::Agent(e.to_string()))?;
+    let dir = &cfg.layout.harness_dir;
+    let spawn = crate::agent::StageSpawn {
+        argv: crate::agent::fill_layout(&resolved.argv, &cfg.layout),
+        env: BTreeMap::new(),
+        cwd: root,
+        timeout: Some(TIMEOUT),
+        prompt,
+        turns: TURNS,
+        stage: "auditor".to_string(),
+        task: None,
+        preset: resolved.preset,
+    };
+    let rate_limit = Regex::new(&format!("(?i){}", cfg.agent.rate_limit_pattern))
+        .map_err(|e| AuditError::Agent(e.to_string()))?;
+    let mut events = crate::events::Writer::new(crate::events::Log::open(&root.join(dir)));
+    let stop_file = config::instance_path(root, dir, "STOP");
+    crate::agent::spawn(&spawn, &mut events, &stop_file, &rate_limit)
+        .map(|result| result.output)
+        .map_err(|e| AuditError::Agent(e.to_string()))
 }
 
 // the section sits after the earned rules, so an agent reading those does not take a proposal for one
@@ -290,22 +380,46 @@ pub fn run(root: &Path, cfg: &Config) -> Result<Report, AuditError> {
         decisions: decisions_rel.clone(),
         ..Report::default()
     };
+    let role = role(root, cfg);
     for class in &CLASSES {
         let pattern = Regex::new(class.pattern).expect("pattern");
-        let mut instances: Vec<String> = Vec::new();
+        let mut matched: Vec<&Signal> = Vec::new();
         for s in &signal {
-            if pattern.is_match(&probes::common::normal(&s.text)) && !instances.contains(&s.at) {
-                instances.push(s.at.clone());
+            if pattern.is_match(&probes::common::normal(&s.text))
+                && !matched.iter().any(|m| m.at == s.at)
+            {
+                matched.push(s);
             }
         }
-        if instances.len() < RECURS {
+        if matched.len() < RECURS {
             continue;
         }
+        let instances: Vec<String> = matched.iter().map(|s| s.at.clone()).collect();
         match state(&decisions, class.name) {
-            None => report.proposed.push(Proposal {
-                class: class.name,
-                instances,
-            }),
+            None => {
+                let output = ask(root, cfg, prompt(&role, class, &matched))?;
+                match answer(&output) {
+                    Some(learning)
+                        if instances
+                            .iter()
+                            .any(|i| learning.contains(&format!("`{i}`"))) =>
+                    {
+                        report.proposed.push(Proposal {
+                            class: class.name,
+                            instances,
+                            learning,
+                        })
+                    }
+                    Some(_) => report.settled.push(format!(
+                        "`{}` refused: the auditor's learning names no instance of its class",
+                        class.name
+                    )),
+                    None => report.settled.push(format!(
+                        "`{}` refused: the auditor printed no `{BEGIN}` block",
+                        class.name
+                    )),
+                }
+            }
             Some(State::Proposed) => report
                 .settled
                 .push(format!("`{}` already proposed", class.name)),

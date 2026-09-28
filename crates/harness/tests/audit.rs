@@ -51,11 +51,33 @@ const GREEN: CheckOutcome = CheckOutcome {
     output: String::new(),
 };
 
+// the scripted auditor logs each prompt and cites every instance the prompt names
+const AUDITOR: &str = "printf '%s\\n----\\n' \"$1\" >> src/.prompts
+cites=$(printf '%s\\n' \"$1\" | sed -n 's/^- \\(`[^`]*`\\)$/\\1/p' | paste -sd, -)
+printf 'BEGIN ENALLAGI LEARNING\\nthe instances repeat one shape → hold the rule\\ninstances: %s\\nEND ENALLAGI LEARNING\\n' \"$cites\"
+";
+
 fn seeded() -> (Repo, Config) {
+    seeded_with(AUDITOR)
+}
+
+fn seeded_with(agent: &str) -> (Repo, Config) {
     let repo = Repo::new();
-    repo.init_harness("[check]\ncommand = \"true\"\n");
+    let argv = repo.stub_agent(agent);
+    repo.init_harness(&format!(
+        "[agent]\npreset = \"custom\"\ncommand = {argv:?}\n\n[check]\ncommand = \"true\"\n"
+    ));
     let cfg = config::load(&repo.root).expect("config");
     (repo, cfg)
+}
+
+fn prompts(repo: &Repo) -> Vec<String> {
+    fs::read_to_string(repo.root.join("src/.prompts"))
+        .unwrap_or_default()
+        .split("\n----\n")
+        .filter(|p| !p.trim().is_empty())
+        .map(String::from)
+        .collect()
 }
 
 fn append(repo: &Repo, rel: &str, text: &str) {
@@ -313,4 +335,51 @@ fn an_accepted_class_is_not_proposed() {
     let classes: Vec<&str> = report.proposed.iter().map(|p| p.class).collect();
     assert_eq!(classes, ["vacuous-test"]);
     assert!(report.settled[0].contains("accepted"), "{report:?}");
+}
+
+#[test]
+fn each_class_is_handed_to_the_auditor_role() {
+    let (repo, cfg) = seeded();
+    with_signal(&repo);
+    let report = audit::run(&repo.root, &cfg).expect("audit");
+    assert_eq!(report.proposed.len(), 2, "{report:?}");
+    let asked = prompts(&repo);
+    assert_eq!(asked.len(), 2, "{asked:#?}");
+    let role = include_str!("../../../roles/auditor.md");
+    let protocol = role.lines().find(|l| l.starts_with("1. ")).expect("step 1");
+    for (prompt, proposal) in asked.iter().zip(&report.proposed) {
+        assert!(prompt.contains(protocol), "{prompt}");
+        assert!(
+            prompt.contains(&format!("`{}`", proposal.class)),
+            "{prompt}"
+        );
+        for cite in &proposal.instances {
+            assert!(prompt.contains(&format!("- `{cite}`")), "{cite}: {prompt}");
+        }
+    }
+    let written = decisions(&repo);
+    assert_eq!(
+        written
+            .matches("[proposed] `lost-result`: the instances repeat one shape → hold the rule")
+            .count(),
+        1,
+        "{written}"
+    );
+}
+
+#[test]
+fn a_learning_citing_no_instance_is_refused() {
+    let (repo, cfg) = seeded_with(
+        "printf 'BEGIN ENALLAGI LEARNING\\na lesson → a rule\\ninstances: `src/elsewhere.rs:1`\\nEND ENALLAGI LEARNING\\n'\n",
+    );
+    with_signal(&repo);
+    let before = decisions(&repo);
+    let report = audit::run(&repo.root, &cfg).expect("audit");
+    assert!(report.proposed.is_empty(), "{report:?}");
+    assert_eq!(report.settled.len(), 2, "{report:?}");
+    assert!(
+        report.settled.iter().all(|s| s.contains("refused")),
+        "{report:?}"
+    );
+    assert_eq!(decisions(&repo), before);
 }
