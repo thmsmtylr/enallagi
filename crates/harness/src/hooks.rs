@@ -354,10 +354,14 @@ pub fn skills_contract(root: &Path) -> (i32, String) {
     if !skills.is_empty() {
         println!("The skills this harness relies on, and the gate that enforces each:");
         for s in &skills {
-            println!("- {} — {} (gate: {})", s.id, s.why, s.gate);
+            println!("{}", skill_line(s));
         }
     }
     (0, String::new())
+}
+
+fn skill_line(s: &config::SkillDecl) -> String {
+    format!("- {}: {} (gate: {})", s.id, s.why, s.gate)
 }
 
 #[cfg(test)]
@@ -591,6 +595,10 @@ mod tests {
         assert_eq!(cfg.skill.len(), 1);
         assert_eq!(cfg.skill[0].id, "tdd");
         assert_eq!(cfg.skill[0].gate, "verdict");
+        assert_eq!(
+            skill_line(&cfg.skill[0]),
+            "- tdd: forces a failing test first (gate: verdict)"
+        );
     }
 
     #[test]
