@@ -32,7 +32,7 @@ The full prompts are in `__ENALLAGI_DIR__/roles/`. Read the one for the role you
 
 ## What done means
 
-`__CHECK__` passes, verified on **delta** against `.check-baseline` — a failure listed there is
+`__CHECK__` passes, verified on **delta** against `__ENALLAGI_DIR__/.check-baseline` — a failure listed there is
 inherited, a failure not listed there is a rejection, and the file only ever shrinks. Adding a line
 to it is weakening a test by another name.
 
@@ -42,7 +42,7 @@ so write the verdict you can defend against a command someone else runs.
 
 It re-runs the **scope** check too: the iteration's own commits, diffed against the task's `scope:`
 globs. A file the scope line does not name sends the task back to `ready`, and so does a diff
-touching the launcher, the hooks, the check script, `.check-baseline` or `test-hashes.json` under a
+touching the launcher, the hooks, the check script, `__ENALLAGI_DIR__/.check-baseline` or `test-hashes.json` under a
 task whose `rows:` is not `none — harness` — one round changes a product lever or the measure of
 that lever, never both.
 

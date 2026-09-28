@@ -14,6 +14,8 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 - the adjudicator runs an issue's `gh issue view` alone and without asking for network, since a lane already runs it outside the sandbox
 - a `claude` lane loads no MCP server: `--strict-mcp-config` keeps the operator's own out
 - `branch-protection` is silent on a GitHub repository the operator cannot administer
+- the verifier may run a mutation a criterion names: an `Edit`, the command alone, an `Edit` back, and a clean `git diff --quiet`; the implementer makes one the same way, never with `sed -i` or a chained command a lane cannot run unattended
+- the context file, rails, roles and loop skill name the baseline at `.enallagi/.check-baseline`, where it lives, instead of a bare `.check-baseline`
 
 ## v0.3.0-beta.3 (2026-09-27)
 
