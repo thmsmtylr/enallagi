@@ -103,6 +103,13 @@ Every table and key, with its default, is in [configuration.md](configuration.md
 The checkout's own branch then follows its own tracking ref and carries nothing else.
 With `per_task = false` a lane fast-forwards the checkout's branch and pushes nothing.
 
+A task whose commits conflict with the default branch is stacked on an earlier task's branch.
+`enallagi pr` tries each `task/<id>` branch that changed a conflicting file, newest first.
+It looks at the branches this run built and the ones on the remote.
+The pull request's base is the branch that takes the commits, and its description names that task.
+A `blockedBy:` task whose branch is on the remote is stacked on the same way.
+When no branch takes the commits, the refusal names the conflicting files.
+
 That split needs the harness documents in a repository of their own.
 When they share the product repository, `by_branch` is false even under `per_task = true`.
 Lane commits then fast-forward into the checkout, exactly as they do under `per_task = false`.
