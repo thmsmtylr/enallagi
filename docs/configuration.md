@@ -15,13 +15,27 @@ Re-run `enallagi init` after every edit, as [setup.md](setup.md) says.
 - `agent.usage`: JSON paths to `cost`, `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens` and `turns` in the agent's output. The preset's own by default.
 - `agent.rate_limit_pattern`: output that means the agent hit a rate limit, matched without case. Default `"hit your session limit"`.
 - `agent.dangerously_skip_permissions`: adds the preset's bypass flag to every lane. Default `false`.
+  The `claude` preset needs no bypass: its lanes run in the Claude Code sandbox, described below.
 - `[agent.<role>]`: `preset`, `command`, `model`, `effort` and `usage` for one role. The role is one of `scout`, `adjudicator`, `implementer`, `verifier` or `researcher`.
+
+### The `claude` preset's sandbox
+
+A `claude` lane runs with the Claude Code sandbox on and file edits accepted.
+The harness fills in the rules when it starts each stage:
+
+- each command in `check.command` and `check.force` runs outside the sandbox, since a suite may need a terminal
+- `gh issue view` runs outside the sandbox too
+- `git add`, `git commit` and `git -C <harness_dir>` are allowed, and the state repository's `.git` is writable
+- network, writes outside the lane and the preset's deny list stay blocked
+
+Only a command run alone in its shell call matches these rules.
+The context file tells each lane to run the check that way.
 
 ## `[check]`
 
-- `check.command`: the one command that decides green. Empty by default, and init sets it when it detects a runner. A run refuses to start while it is empty.
+- `check.command`: the one command that decides green. Empty by default. Init sets it from a detected runner, or from an agent proposal it has verified. A run refuses to start while it is empty.
 - `check.force`: the same check with its cache defeated. Empty by default. Left out of `enallagi.toml`, it follows `check.command`.
-- `check.fail_name`: a regex over the check's output whose group 1 is a failing test's name. Empty by default, and init writes the detected runner's pattern below.
+- `check.fail_name`: a regex over the check's output whose group 1 is a failing test's name. Empty by default. Init writes the detected runner's pattern below, or the verified proposal's. It reads the output with ANSI escape sequences removed.
 - `check.timeout`: `<n>s`, `<n>m` or `<n>h`. Default `"30m"`. A check that runs past it halts the run.
 
 ### `check.fail_name`
@@ -103,12 +117,12 @@ The spec and its exit criteria:
 - `layout.rows_end_heading`: the heading that closes them. Default `"## 12."`.
 - `layout.contract_file`: the file the roles name as the one home of every shared shape. Default `"src/schema.ts"`.
 
-The source and its tests, which init sets when it detects a runner:
+The source and its tests, which init sets from a detected runner or a verified proposal:
 
-- `layout.source_root`: the product source. Empty by default, and init sets it when it detects a runner.
+- `layout.source_root`: the product source. Empty by default, and init sets it from the tree.
 - `layout.source_ext`: extensions the probes read as source. Default `[".ts", ".tsx", ".js", ".mjs", ".cjs", ".sh", ".py"]`.
-- `layout.test_file_suffix_re`: a regex naming a test file. Empty by default, and init writes the detected runner's.
-- `layout.test_decl_patterns`: how a test is declared, with `{name}` for its name. Empty by default, and init writes the detected runner's.
+- `layout.test_file_suffix_re`: a regex naming a test file. Empty by default. Init writes the detected runner's or the proposal's.
+- `layout.test_decl_patterns`: how a test is declared, with `{name}` for its name. Empty by default. Init writes the detected runner's or the proposal's.
 - `layout.test_glob`: git pathspecs holding test code, which the verifier diffs as `__TEST_GLOB__`. Empty by default.
 
 The allowlists the `litter` and `rail-unenforced` probes read:

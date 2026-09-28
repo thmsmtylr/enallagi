@@ -35,6 +35,11 @@ One pass does everything a lane needs, and `--issue <url>` queues the issue the 
 enallagi init --issue https://github.com/owner/repo/issues/12
 ```
 
+The issue lands as a `proposed` block with `probe: issue`.
+Its scope reads `<written by the adjudicator at promotion>`, and its criteria are a placeholder too.
+The adjudicator writes both from the issue text when it promotes the block.
+`enallagi run` and `enallagi worktree` refuse a `ready` block that still carries either placeholder.
+
 Init detects the test runner from the files the repository carries.
 Each detected key is printed with the `file:line` that decided it.
 Four of the six lines read:
@@ -97,9 +102,14 @@ notes:
 - `rows:` is a token the queue reads, never prose. Write `none — harness` or a spec row's exact name.
 - A spec row name carries no comma, since `rows:` splits on commas.
 
-`.enallagi/` is its own git repository, excluded from yours, and the verdict gate fails a task
-while a file there carries an uncommitted edit. Init commits what it wrote; a block you append is
-yours to commit, with `git -C .enallagi commit -am "queue T-001"`.
+`.enallagi/` is its own git repository. Init hides it from yours in two places:
+
+- `.git/info/exclude`, which git reads
+- a `/.enallagi/` line in `.gitignore`, which linters and formatters read, committed so each lane's checkout has it
+
+The verdict gate fails a task while a file in `.enallagi/` carries an uncommitted edit.
+Init commits what it wrote, and `enallagi worktree` commits your queue edits before it branches.
+Under `enallagi run`, commit them yourself with `git -C .enallagi commit -am "queue T-001"`.
 
 Edit `.enallagi/enallagi.toml` later and the rendered copies name the old values; re-run
 `enallagi init` and it re-renders them, or `enallagi probe install-stale` names each stale file

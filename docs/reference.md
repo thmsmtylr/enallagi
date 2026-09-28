@@ -130,6 +130,9 @@ The plan is built in `crates/harness/src/init.rs`.
 `$XDG_DATA_HOME/enallagi/ejected/<repository>-<stamp>` (`~/.local/share/...` when unset);
 `--keep-record <path>` names the place instead, and `--delete` is the one way to remove it.
 
+Init commits one line to the product's `.gitignore`, and eject commits its removal.
+Those two commits are what an install leaves in the product's history.
+
 | Path | What |
 | --- | --- |
 | `.enallagi/roles/{scout,adjudicator,implementer,verifier,researcher}.md` | the five role prompts, always resubstituted |
@@ -137,3 +140,4 @@ The plan is built in `crates/harness/src/init.rs`.
 | `<skills_dir>/running-the-loop/` | the loop's own usage skill, in the preset's skill directory |
 | `.enallagi/{enallagi.toml,TASKS.md,PROGRESS.md,LEARNINGS.md,DECISIONS.md,.check-baseline,SPEC.md,evals/README.md}` | seeded once and never overwritten |
 | `.enallagi/AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | seeded once: the context file, and one-line pointers to it |
+| `.gitignore` | `/.enallagi/` appended and committed, so the product's linters skip the harness directory |
