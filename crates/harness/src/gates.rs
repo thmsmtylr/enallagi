@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::config::Config;
 use crate::events::{Kind, Tally, Writer};
@@ -1194,7 +1194,8 @@ fn tally_by(output: &str, pattern: &str) -> Tally {
 // the gate's copy of the tally, and the digest's warning when the tally contradicts the exit
 // the runner whose summary `tally` parses, named by the fail_name the preset pins
 fn counts_test_results(cfg: &Config) -> bool {
-    !cfg.check.tally.is_empty()
+    !cfg.check.report.is_empty()
+        || !cfg.check.tally.is_empty()
         || crate::runners::presets()
             .into_iter()
             .any(|r| r.name == "cargo" && r.fail_name == cfg.check.fail_name)
@@ -1219,6 +1220,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         .check
         .timeout_duration()
         .unwrap_or(crate::config::DEFAULT_CHECK_TIMEOUT);
+    let started = SystemTime::now();
     let run = match run_bounded(root, command, timeout) {
         Ok(run) => run,
         Err(err) => {
@@ -1239,7 +1241,21 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
     } = run;
     // a runner forced into colour would otherwise need every fail_name to spell out its escape codes
     let output = strip_ansi(&output);
-    let tally = tally(&output, &cfg.check.tally);
+    let report = (!cfg.check.report.is_empty() && !timed_out && stopped.is_none())
+        .then(|| junit(root, &cfg.check.report, started));
+    let (tally, reported) = match report {
+        None => (tally(&output, &cfg.check.tally), None),
+        Some(Ok((tally, names))) => (tally, Some(names)),
+        Some(Err(reason)) => {
+            return CheckReport {
+                red: true,
+                unnamed: true,
+                output: format!("{reason}\n{output}"),
+                exit,
+                ..CheckReport::default()
+            };
+        }
+    };
     if timed_out || stopped.is_some() {
         let reason = match stopped {
             Some(signal) => {
@@ -1268,13 +1284,14 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
     }
 
     // a pattern that doesn't compile names nothing -- fail closed, not a crash
-    let mut names: Vec<String> = match regex::Regex::new(&cfg.check.fail_name) {
-        Ok(re) => output
+    let mut names: Vec<String> = match (reported, regex::Regex::new(&cfg.check.fail_name)) {
+        (Some(names), _) => names,
+        (None, Ok(re)) => output
             .lines()
             .filter_map(|l| re.captures(l))
             .filter_map(|c| c.get(1).map(|m| strip_duration(m.as_str())))
             .collect(),
-        Err(_) => Vec::new(),
+        (None, Err(_)) => Vec::new(),
     };
     names.sort();
     names.dedup();
@@ -1327,6 +1344,44 @@ fn strip_duration(name: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+// a report older than the run is an earlier run's result, so it is refused rather than read
+fn junit(root: &Path, rel: &str, started: SystemTime) -> Result<(Tally, Vec<String>), String> {
+    let path = root.join(rel);
+    let modified = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .map_err(|err| format!("the check wrote no report at `{rel}`: {err}"))?;
+    if modified < started {
+        return Err(format!(
+            "the report at `{rel}` was not written by this run of the check"
+        ));
+    }
+    let text = std::fs::read_to_string(&path)
+        .map_err(|err| format!("the report at `{rel}` could not be read: {err}"))?;
+    let doc = roxmltree::Document::parse(&text)
+        .map_err(|err| format!("the report at `{rel}` does not parse: {err}"))?;
+    let mut t = Tally::default();
+    let mut failed = Vec::new();
+    for node in doc.descendants().filter(|n| n.is_element()) {
+        match node.tag_name().name() {
+            "testsuite" => t.lines += 1,
+            "testcase" => {
+                let has = |tag: &str| node.children().any(|c| c.has_tag_name(tag));
+                if has("failure") || has("error") {
+                    t.failed += 1;
+                    failed.push(node.attribute("name").unwrap_or_default().to_string());
+                } else if has("skipped") {
+                    t.ignored += 1;
+                } else {
+                    t.passed += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    failed.retain(|n| !n.is_empty());
+    Ok((t, failed))
 }
 
 fn baseline(path: &Path) -> Vec<String> {
@@ -1983,6 +2038,76 @@ mod tests {
         run("check-delta", &mut env.ctx(Some("T-001"), None));
         assert!(env.warnings.is_empty(), "{:?}", env.warnings);
         assert_eq!(gate_tally(&env).map(|t| t.passed), Some(3));
+    }
+
+    const JUNIT: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="suite" tests="4">
+    <testcase classname="suite" name="suite::adds"/>
+    <testcase classname="suite" name="suite::subtracts"><system-out>ok &amp; done</system-out></testcase>
+    <testcase classname="suite" name="suite::divides"><failure message="left != right">boom</failure></testcase>
+    <testcase classname="suite" name="suite::later"><skipped/></testcase>
+  </testsuite>
+</testsuites>
+"#;
+
+    fn junit_env(check_body: &str) -> Env {
+        let mut env = Env::new(check_body);
+        env.cfg.check.report = "out/junit.xml".to_string();
+        env
+    }
+
+    #[test]
+    fn a_junit_report_names_the_failure_and_tally() {
+        let mut env = junit_env(&format!(
+            "mkdir -p out\ncat > out/junit.xml <<'EOF'\n{JUNIT}EOF\necho '(fail) from the output'\nexit 1\n"
+        ));
+        let r = check_delta(&env.repo.root, &env.cfg, false);
+        assert!(r.red, "{}", r.output);
+        assert_eq!(r.unforgiven, vec!["suite::divides".to_string()]);
+        assert_eq!((r.tally.passed, r.tally.failed, r.tally.ignored), (2, 1, 1));
+
+        env.repo
+            .write(".enallagi/.check-baseline", "suite::divides\n");
+        let r = check_delta(&env.repo.root, &env.cfg, false);
+        assert_eq!(r.forgiven, vec!["suite::divides".to_string()]);
+        assert!(r.accepts(), "{}", r.output);
+
+        run("check-delta", &mut env.ctx(Some("T-001"), None));
+        assert_eq!(gate_tally(&env).map(|t| t.passed), Some(2));
+    }
+
+    #[test]
+    fn a_stale_junit_report_is_red() {
+        let env = junit_env("echo '(fail) nothing'\nexit 0\n");
+        env.repo.write("out/junit.xml", JUNIT);
+        let hour_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+        std::fs::File::options()
+            .write(true)
+            .open(env.repo.root.join("out/junit.xml"))
+            .and_then(|f| f.set_modified(hour_ago))
+            .expect("age the report");
+        let r = check_delta(&env.repo.root, &env.cfg, false);
+        assert!(r.red && !r.accepts(), "{}", r.output);
+        assert!(r.output.contains("out/junit.xml"), "{}", r.output);
+        assert_eq!(r.tally, Tally::default());
+    }
+
+    #[test]
+    fn an_absent_junit_report_is_red() {
+        let env = junit_env("echo 'test result: ok. 3 passed; 0 failed'\nexit 0\n");
+        let r = check_delta(&env.repo.root, &env.cfg, false);
+        assert!(r.red && !r.accepts(), "{}", r.output);
+        assert!(r.output.contains("out/junit.xml"), "{}", r.output);
+        assert_eq!(r.tally, Tally::default());
+    }
+
+    #[test]
+    fn an_unparsed_junit_report_is_red() {
+        let env = junit_env("mkdir -p out\necho '<testsuite><testcase' > out/junit.xml\nexit 0\n");
+        let r = check_delta(&env.repo.root, &env.cfg, false);
+        assert!(r.red && !r.accepts(), "{}", r.output);
+        assert!(r.output.contains("does not parse"), "{}", r.output);
     }
 
     #[test]
