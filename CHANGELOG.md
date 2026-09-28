@@ -5,6 +5,19 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.3.0-beta.4 (2026-09-28)
+
+- `enallagi pr` builds its branch in a worktree under the harness directory, as a lane does, so a check that finds its tools in a parent directory, as npm finds `node_modules`, runs there
+- `check.tally` names the counts in a runner's summary with the regex groups `passed` and `failed`; the agent's check proposal writes one and init verifies it, and a runner with no count records no tally instead of a tally of zero
+- `enallagi init` and the `check-unnamed` finding name `enallagi init --propose-check` when no runner is detected
+- `title-length` leaves an imported issue's title alone while the block is `proposed`; the adjudicator writes the task's title at promotion
+- the adjudicator runs an issue's `gh issue view` alone and without asking for network, since a lane already runs it outside the sandbox
+- a `claude` lane loads no MCP server: `--strict-mcp-config` keeps the operator's own out
+- `branch-protection` is silent on a GitHub repository the operator cannot administer
+- the verifier may run a mutation a criterion names: an `Edit`, the command alone, an `Edit` back, and a clean `git diff --quiet`; the implementer makes one the same way, never with `sed -i` or a chained command a lane cannot run unattended
+- the context file, rails, roles and loop skill name the baseline at `.enallagi/.check-baseline`, where it lives, instead of a bare `.check-baseline`
+- the context file, and the implementer and verifier roles an existing install re-renders, say the tool's result carries the check's exit status, so a lane never chains `echo $?` onto it, which the sandbox holds for approval
+
 ## v0.3.0-beta.3 (2026-09-27)
 
 - the README and docs describe the agent's check proposal, the `claude` preset's lane sandbox, the committed `.gitignore` line, and the issue block's placeholders

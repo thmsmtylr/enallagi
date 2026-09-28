@@ -384,6 +384,20 @@ fn a_conflicting_diff_names_the_files_and_stops() {
 }
 
 #[test]
+fn the_check_finds_the_checkouts_installed_tools() {
+    let (f, _) = landed(
+        "d=$PWD; while [ \"$d\" != / ]; do [ -f \"$d/node_modules/marker\" ] && exit 0; d=$(dirname \"$d\"); done\necho 'no node_modules above the worktree'\nexit 1\n",
+    );
+    write(&f.root, "node_modules/marker", "");
+    let (code, out) = f.harness(&["pr", "T-001"]);
+    assert_eq!(code, 0, "{out}");
+    let left: Vec<_> = fs::read_dir(f.root.join(".enallagi/worktrees"))
+        .expect("worktrees")
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+}
+
+#[test]
 fn a_red_check_pushes_nothing() {
     let (f, _) = landed("echo 'the check saw FIVE missing'\nexit 3\n");
     let (code, out) = f.harness(&["pr", "T-001", "--push"]);

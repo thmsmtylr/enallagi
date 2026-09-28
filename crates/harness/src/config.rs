@@ -152,6 +152,9 @@ pub struct CheckConfig {
     /// The check with its cache defeated. Follows `command` unless pinned.
     pub force: String,
     pub fail_name: String,
+    /// A regex over each output line whose named groups `passed` and `failed` are summed into the
+    /// tally; empty reads cargo's `test result:` lines.
+    pub tally: String,
     /// `<n>s`, `<n>m` or `<n>h`; empty means `DEFAULT_CHECK_TIMEOUT`.
     pub timeout: String,
 }

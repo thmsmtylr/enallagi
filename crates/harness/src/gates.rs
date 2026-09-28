@@ -981,7 +981,7 @@ impl CheckReport {
     }
 
     // a failure the exit hid, or a check that ran and printed no count, is a number nobody can quote.
-    // `counts` is whether this repository's runner prints `test result:` at all
+    // `counts` is whether this repository's check prints a count the tally reads at all
     pub fn tally_warning(&self, command: &str, counts: bool) -> Option<String> {
         if self.timed_out.is_some() || self.output.starts_with(NEVER_RAN) {
             return None;
@@ -989,12 +989,11 @@ impl CheckReport {
         let t = self.tally;
         if t.failed > 0 && self.exit == 0 {
             return Some(format!(
-                "the check exited 0 with {} failed over {} `test result:` lines: `{command}`",
+                "the check exited 0 with {} failed over {} count lines: `{command}`",
                 t.failed, t.lines
             ));
         }
-        (counts && t.lines == 0)
-            .then(|| format!("the check printed no `test result:` line: `{command}`"))
+        (counts && t.lines == 0).then(|| format!("the check printed no count line: `{command}`"))
     }
 
     // the last n non-empty lines of output, so a rejection can show what the check actually saw
@@ -1146,7 +1145,10 @@ fn drain<R: Read + Send + 'static>(
     })
 }
 
-pub fn tally(output: &str) -> Tally {
+pub fn tally(output: &str, pattern: &str) -> Tally {
+    if !pattern.is_empty() {
+        return tally_by(output, pattern);
+    }
     let mut t = Tally::default();
     for line in output.lines().filter(|l| l.starts_with("test result:")) {
         t.lines += 1;
@@ -1166,12 +1168,36 @@ pub fn tally(output: &str) -> Tally {
     t
 }
 
+// a pattern that doesn't compile counts nothing, and the gate records no tally rather than a zero
+fn tally_by(output: &str, pattern: &str) -> Tally {
+    let mut t = Tally::default();
+    let Ok(re) = regex::Regex::new(pattern) else {
+        return t;
+    };
+    let count = |c: &regex::Captures, name: &str| {
+        c.name(name)
+            .and_then(|m| m.as_str().parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    for line in output.lines() {
+        let mut matched = false;
+        for c in re.captures_iter(line) {
+            matched = true;
+            t.passed += count(&c, "passed");
+            t.failed += count(&c, "failed");
+        }
+        t.lines += u64::from(matched);
+    }
+    t
+}
+
 // the gate's copy of the tally, and the digest's warning when the tally contradicts the exit
 // the runner whose summary `tally` parses, named by the fail_name the preset pins
 fn counts_test_results(cfg: &Config) -> bool {
-    crate::runners::presets()
-        .into_iter()
-        .any(|r| r.name == "cargo" && r.fail_name == cfg.check.fail_name)
+    !cfg.check.tally.is_empty()
+        || crate::runners::presets()
+            .into_iter()
+            .any(|r| r.name == "cargo" && r.fail_name == cfg.check.fail_name)
 }
 
 fn counted(ctx: &mut GateCtx, report: &CheckReport) -> Option<Tally> {
@@ -1179,7 +1205,8 @@ fn counted(ctx: &mut GateCtx, report: &CheckReport) -> Option<Tally> {
     if let Some(warning) = report.tally_warning(&ctx.cfg.check.command, counts) {
         ctx.warnings.push(warning);
     }
-    Some(report.tally)
+    // a runner with no count to read has no tally, not a tally of zero
+    counts.then_some(report.tally)
 }
 
 pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
@@ -1212,7 +1239,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
     } = run;
     // a runner forced into colour would otherwise need every fail_name to spell out its escape codes
     let output = strip_ansi(&output);
-    let tally = tally(&output);
+    let tally = tally(&output, &cfg.check.tally);
     if timed_out || stopped.is_some() {
         let reason = match stopped {
             Some(signal) => {
@@ -1840,7 +1867,7 @@ mod tests {
 
     #[test]
     fn tally_sums_every_test_result_line() {
-        let t = tally(&fourteen_result_lines());
+        let t = tally(&fourteen_result_lines(), "");
         assert_eq!(
             t,
             Tally {
@@ -1850,6 +1877,18 @@ mod tests {
                 lines: 14
             }
         );
+    }
+
+    #[test]
+    fn a_tally_pattern_sums_its_named_groups() {
+        let ava = r"^\s*(?:(?P<passed>\d+) tests? passed|(?P<failed>\d+) tests? failed)";
+        let out = "  ✘ [fail]: a › b\n  1585 tests passed\n  1 test failed\n  4 known failures\n";
+        let t = tally(out, ava);
+        assert_eq!((t.passed, t.failed, t.lines), (1585, 1, 2));
+        let jest = r"(?P<failed>\d+) failed|(?P<passed>\d+) passed";
+        let t = tally("Tests:       1 failed, 3 passed, 4 total\n", jest);
+        assert_eq!((t.passed, t.failed, t.lines), (3, 1, 1));
+        assert_eq!(tally(out, "("), Tally::default());
     }
 
     #[test]
@@ -1870,6 +1909,7 @@ mod tests {
             "cat <<'EOF'\n{}EOF\nexit 0\n",
             fourteen_result_lines()
         ));
+        env.cfg.check.fail_name = cargo_fail_name();
         let out = run("check-delta", &mut env.ctx(Some("T-001"), None));
         assert!(out.pass, "{}", out.reason);
         assert!(env.warnings.is_empty(), "{:?}", env.warnings);
@@ -1890,7 +1930,7 @@ mod tests {
         assert_eq!(
             env.warnings,
             vec![format!(
-                "the check exited 0 with 1 failed over 1 `test result:` lines: `{cmd}`"
+                "the check exited 0 with 1 failed over 1 count lines: `{cmd}`"
             )]
         );
     }
@@ -1903,7 +1943,7 @@ mod tests {
         let cmd = env.cfg.check.command.clone();
         assert_eq!(
             env.warnings,
-            vec![format!("the check printed no `test result:` line: `{cmd}`")]
+            vec![format!("the check printed no count line: `{cmd}`")]
         );
     }
 
@@ -1921,11 +1961,28 @@ mod tests {
             .fail_name
     }
 
+    fn gate_tally(env: &Env) -> Option<Tally> {
+        env.events().iter().find_map(|e| match &e.kind {
+            Kind::Gate { gate, tally, .. } if gate == "check-delta" => *tally,
+            _ => None,
+        })
+    }
+
     #[test]
     fn a_green_check_on_another_runner_is_quiet() {
         let mut env = Env::new("echo 'Tests:       3 passed, 3 total'\nexit 0\n");
         run("check-delta", &mut env.ctx(Some("T-001"), None));
         assert!(env.warnings.is_empty(), "{:?}", env.warnings);
+        assert_eq!(gate_tally(&env), None);
+    }
+
+    #[test]
+    fn a_tally_pattern_counts_another_runner() {
+        let mut env = Env::new("echo 'Tests:       3 passed, 3 total'\nexit 0\n");
+        env.cfg.check.tally = r"(?P<passed>\d+) passed".to_string();
+        run("check-delta", &mut env.ctx(Some("T-001"), None));
+        assert!(env.warnings.is_empty(), "{:?}", env.warnings);
+        assert_eq!(gate_tally(&env).map(|t| t.passed), Some(3));
     }
 
     #[test]

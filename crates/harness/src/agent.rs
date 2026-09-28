@@ -958,6 +958,8 @@ mod tests {
         // the adapter arrives by --plugin-dir and must survive the override
         assert_eq!(plugins.get("harness@inline"), None);
         assert!(argv.iter().any(|w| w == "--plugin-dir"));
+        // the operator's own MCP servers stay out of a lane, as their plugins do
+        assert!(argv.iter().any(|w| w == "--strict-mcp-config"));
     }
 
     #[test]

@@ -15,6 +15,16 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let heading = common::re(r"^## \[T-(\d+)\] (.*)$")?;
     // titles written before the cap are the record they were written as; every citation names them verbatim
     let from = ctx.cfg.queue.title_cap_from;
+    // an imported issue keeps its author's title until the adjudicator writes the task's at promotion
+    let foreign: Vec<String> = crate::queue::parse(&text)
+        .unwrap_or_default()
+        .iter()
+        .filter(|b| {
+            crate::queue::field(b, "status").as_deref() == Some("proposed")
+                && crate::queue::field(b, "probe").as_deref() == Some("issue")
+        })
+        .map(|b| b.id.clone())
+        .collect();
     let mut found = Vec::new();
     for (at, line) in text.lines().enumerate() {
         let Some(caps) = heading.captures(line) else {
@@ -23,6 +33,9 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         let (Some(number), Some(title)) = (caps.get(1), caps.get(2)) else {
             continue;
         };
+        if foreign.contains(&format!("T-{}", number.as_str())) {
+            continue;
+        }
         let number: u32 = number
             .as_str()
             .parse()

@@ -1243,9 +1243,10 @@ fn init_commits_the_state_it_wrote() {
     let stdout = harness_init(&repo, &[]);
     assert!(stdout.contains("  committed: .enallagi"), "{stdout}");
     assert!(
-        stdout
-            .lines()
-            .any(|l| l.starts_with("Next: set check.command in .enallagi/enallagi.toml")),
+        stdout.lines().any(
+            |l| l.starts_with("Next: run `enallagi init --propose-check`")
+                && l.contains("set check.command in .enallagi/enallagi.toml")
+        ),
         "{stdout}"
     );
     let state = repo.root.join(".enallagi");
@@ -1793,11 +1794,12 @@ fn the_setup_guide_is_four_sections() {
 }
 
 const PROBE_RUNNER: &str = "echo run >> src/.runs
-status=0
+status=0; passed=0; failed=0
 for f in t/*_test.sh; do
   name=$(sed -n 's/^test //p' \"$f\")
-  if sh \"$f\"; then echo \"ok $name\"; else echo \"FAIL $name\"; status=1; fi
+  if sh \"$f\"; then echo \"ok $name\"; passed=$((passed+1)); else echo \"FAIL $name\"; status=1; failed=$((failed+1)); fi
 done
+echo \"$passed passed, $failed failed\"
 exit $status
 ";
 
@@ -1888,6 +1890,64 @@ fn a_retry_skips_the_clean_run_already_green() {
         "refused"
     );
     assert_eq!(read(&repo, "src/.runs").lines().count(), 3);
+}
+
+fn with_tally(block: &str, tally: &str) -> String {
+    block.replace(
+        "test_file_suffix_re",
+        &format!("tally = '{tally}'\ntest_file_suffix_re"),
+    )
+}
+
+fn refusals(repo: &Repo) -> Vec<String> {
+    match propose(repo) {
+        enallagi::propose::Outcome::Refused(attempts) => {
+            attempts.into_iter().map(|(_, step)| step).collect()
+        }
+        enallagi::propose::Outcome::Written(_) => panic!("written"),
+    }
+}
+
+#[test]
+fn a_counting_tally_is_written() {
+    let good = with_tally(
+        &check_block("^FAIL (.+)$", "_test\\.sh$"),
+        r"^(?P<passed>\d+) passed, (?P<failed>\d+) failed$",
+    );
+    let repo = proposing(&good, &good);
+    assert!(
+        matches!(propose(&repo), enallagi::propose::Outcome::Written(_)),
+        "refused"
+    );
+    let cfg = enallagi::config::load(&repo.root).expect("config");
+    assert_eq!(
+        cfg.check.tally,
+        r"^(?P<passed>\d+) passed, (?P<failed>\d+) failed$"
+    );
+}
+
+#[test]
+fn a_tally_without_both_groups_is_refused() {
+    let half = with_tally(
+        &check_block("^FAIL (.+)$", "_test\\.sh$"),
+        r"^(?P<passed>\d+) passed",
+    );
+    let repo = proposing(&half, &half);
+    for step in refusals(&repo) {
+        assert!(step.contains("both named groups"), "{step}");
+    }
+}
+
+#[test]
+fn a_tally_that_counts_nothing_is_refused() {
+    let blind = with_tally(
+        &check_block("^FAIL (.+)$", "_test\\.sh$"),
+        r"^(?P<passed>\d+) ok, (?P<failed>\d+) not ok$",
+    );
+    let repo = proposing(&blind, &blind);
+    for step in refusals(&repo) {
+        assert!(step.contains("tally counts 0 passed"), "{step}");
+    }
 }
 
 #[test]

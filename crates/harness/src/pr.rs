@@ -173,7 +173,14 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
         return Err(PrError::Refused(refusals));
     }
     let branch = format!("task/{stem}");
-    let scratch = tempfile::TempDir::new().map_err(io("a temporary directory"))?;
+    // under the repository, as a lane's is: a runner that resolves its tools from a parent directory,
+    // as node does node_modules, finds the checkout's own; a system temp directory has none
+    let worktrees = root.join(&dir).join("worktrees");
+    fs::create_dir_all(&worktrees).map_err(io(worktrees.display()))?;
+    let scratch = tempfile::Builder::new()
+        .prefix("pr-")
+        .tempdir_in(&worktrees)
+        .map_err(io(worktrees.display()))?;
     let wt = scratch.path().join("worktree");
     let wt_arg = wt.display().to_string();
     git::git(

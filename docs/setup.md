@@ -61,12 +61,13 @@ enallagi init --yes
 ```
 
 When `check.command` is still empty after the questions, init asks the configured agent for the check.
-The agent names `check.command`, `check.fail_name`, `layout.test_file_suffix_re` and `layout.test_decl_patterns`, and one throwaway failing test.
+The agent names `check.command`, `check.fail_name`, `check.tally`, `layout.test_file_suffix_re` and `layout.test_decl_patterns`, and one throwaway failing test.
 Init writes the keys only after all of these pass:
 
 - the check exits 0 on the clean tree
 - `test_file_suffix_re` matches the throwaway test's path, and a `test_decl_patterns` entry declares it
 - with the throwaway test in place, the check exits non-zero and `fail_name` captures its name
+- when `tally` is given, it counts some passed and none failed on the clean tree, and a failure with the throwaway test in place
 
 The throwaway test is removed whatever the outcome.
 A refused proposal goes back to the agent once, with the step it failed.

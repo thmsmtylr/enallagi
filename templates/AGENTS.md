@@ -7,7 +7,7 @@
 
 - Verify, and this is what done means: `__CHECK__`
 - Uncached, for any number you quote to a human: `__CHECK_FORCE__`
-- Run either one alone in its shell call, exactly as written: nothing piped, redirected or chained. A sandboxed lane runs only that exact form outside its sandbox, and a suite that needs a terminal fails inside it.
+- Run either one alone in its shell call, exactly as written: nothing piped, redirected or chained. A sandboxed lane runs only that exact form outside its sandbox, and a suite that needs a terminal fails inside it. The tool's result carries the exit status: never append `echo $?` to read it.
 - One loop iteration: `enallagi run --iterations 1`; `touch STOP` halts it
 - What the tree says about itself: `enallagi probe`
 
@@ -27,7 +27,7 @@ on the task's `scope:` line; an out-of-scope need is a note and a stop.
 Named, never numbered, and each names what enforces it.
 The full table is `__ENALLAGI_DIR__/RAILS.md`. The five that decide most reviews:
 
-- `green` — done means `__CHECK__` passes, verified on **delta** against `.check-baseline`, which
+- `green` — done means `__CHECK__` passes, verified on **delta** against `__ENALLAGI_DIR__/.check-baseline`, which
   only ever shrinks. Never weaken a test or a lint rule to get there.
 - `citable` — every claim carries its source: a URL with the date, a `file:line`, or the command and
   its output.
