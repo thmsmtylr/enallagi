@@ -50,7 +50,7 @@ fn create_worktree(
     let harness_dir = &cfg.layout.harness_dir;
     let state_root = git::state_root(root, harness_dir);
     let start = by_branch(root, cfg)
-        .then(|| resumable_base(root))
+        .then(|| resumable_base(root, cfg))
         .flatten()
         .unwrap_or_else(|| "HEAD".to_string());
     let mut last_dir = PathBuf::new();
@@ -93,6 +93,9 @@ fn create_worktree(
             made.push(pair);
         }
         if made.len() == pairs.len() {
+            if start != "HEAD" {
+                catch_up(root, &dir, &start);
+            }
             return Ok((branch, dir, pairs));
         }
         for (repo, wt) in made.into_iter().rev() {
@@ -105,6 +108,28 @@ fn create_worktree(
         last_dir = dir;
     }
     Err(WorktreeError::Create(last_dir))
+}
+
+// a resumed lane takes in what HEAD gained since it branched, or it runs on an old tree; a merge
+// that conflicts is abandoned and the lane keeps its own work, as before
+fn catch_up(root: &Path, dir: &Path, start: &str) {
+    let Ok(head) = git::git(root, &["rev-parse", "HEAD"]) else {
+        return;
+    };
+    let merge = [
+        "-c",
+        "commit.gpgsign=false",
+        "merge",
+        "-q",
+        "--no-edit",
+        head.as_str(),
+    ];
+    if let Err(err) = git::git(dir, &merge) {
+        let _ = git::git(dir, &["merge", "--abort"]);
+        eprintln!(
+            "worktree: resumed {start} without HEAD's newer commits, the merge failed: {err}"
+        );
+    }
 }
 
 // under `[pr] per_task` the operator reviews the branch `enallagi pr` pushed, so the lane's product
@@ -135,7 +160,15 @@ fn follow_upstream(root: &Path, branch: &str) -> Result<String, String> {
 
 // under `[pr] per_task` the checkout's branch never carries the lane's product commits, so a task
 // left unfinished lives on the last lane branch, and the next lane starts there rather than at HEAD
-fn resumable_base(root: &Path) -> Option<String> {
+fn resumable_base(root: &Path, cfg: &Config) -> Option<String> {
+    let tasks = crate::config::instance_path(root, &cfg.layout.harness_dir, "TASKS.md");
+    let text = std::fs::read_to_string(tasks).unwrap_or_default();
+    let blocks = crate::queue::parse(&text).unwrap_or_default();
+    let open: Vec<&str> = blocks
+        .iter()
+        .filter(|b| crate::queue::field(b, "status").as_deref() != Some("done"))
+        .map(|b| b.id.as_str())
+        .collect();
     let listed = git::git(
         root,
         &[
@@ -147,16 +180,20 @@ fn resumable_base(root: &Path) -> Option<String> {
         ],
     )
     .ok()?;
-    // a lane branch is resumed while it carries commits HEAD does not: an upstream commit moves
-    // HEAD off the branch without delivering its work, and a branch whose commits reached HEAD
-    // carries none
+    // a lane branch is resumed while a commit HEAD lacks names a task not yet done; a pull request
+    // lands a task as a rebuilt commit, so a finished lane still carries commits HEAD does not
     listed
         .lines()
         .map(str::trim)
         .find(|b| {
             !b.is_empty()
-                && git::git(root, &["rev-list", "--count", &format!("HEAD..{b}")])
-                    .is_ok_and(|n| n.trim() != "0")
+                && git::git(root, &["log", "--format=%s", &format!("HEAD..{b}")]).is_ok_and(
+                    |subjects| {
+                        subjects
+                            .lines()
+                            .any(|s| open.iter().any(|id| crate::gates::names_task(s, id)))
+                    },
+                )
         })
         .map(str::to_string)
 }
@@ -730,6 +767,51 @@ mod tests {
             "the second lane started without T-001's implementation: {}",
             second.reason
         );
+    }
+
+    #[test]
+    fn a_resumed_lane_takes_in_upstream_work() {
+        let r = per_task_repo();
+        let cfg = cfg(&r);
+        let (_origin, bare) = origin_of(&r);
+
+        lane(&r.root, &cfg, &mut |wt| {
+            land_at(wt, "T-001", "one.txt", "review");
+            Ok(())
+        })
+        .expect("the first lane");
+        let _clone = commit_on_origin(&bare, "unrelated.txt");
+
+        let mut seen = (false, false);
+        let second = lane(&r.root, &cfg, &mut |wt| {
+            seen = (
+                wt.join("one.txt").exists(),
+                wt.join("unrelated.txt").exists(),
+            );
+            Ok(())
+        })
+        .expect("the second lane");
+        assert_eq!(seen, (true, true), "{}", second.reason);
+    }
+
+    #[test]
+    fn a_lane_whose_tasks_are_done_is_not_resumed() {
+        let r = per_task_repo();
+        let cfg = cfg(&r);
+
+        lane(&r.root, &cfg, &mut |wt| {
+            land(wt, "T-001", "one.txt");
+            Ok(())
+        })
+        .expect("the first lane");
+
+        let mut seen = true;
+        let second = lane(&r.root, &cfg, &mut |wt| {
+            seen = wt.join("one.txt").exists();
+            Ok(())
+        })
+        .expect("the second lane");
+        assert!(!seen, "a finished lane was resumed: {}", second.reason);
     }
 
     #[test]
