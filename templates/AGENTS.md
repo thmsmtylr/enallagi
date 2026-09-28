@@ -7,7 +7,7 @@
 
 - Verify, and this is what done means: `__CHECK__`
 - Uncached, for any number you quote to a human: `__CHECK_FORCE__`
-- Run either one alone in its shell call, exactly as written: nothing piped, redirected or chained. A sandboxed lane runs only that exact form outside its sandbox, and a suite that needs a terminal fails inside it.
+- Run either one alone in its shell call, exactly as written: nothing piped, redirected or chained. A sandboxed lane runs only that exact form outside its sandbox, and a suite that needs a terminal fails inside it. The tool's result carries the exit status: never append `echo $?` to read it.
 - One loop iteration: `enallagi run --iterations 1`; `touch STOP` halts it
 - What the tree says about itself: `enallagi probe`
 
