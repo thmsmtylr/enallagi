@@ -837,6 +837,83 @@ fn frictions_sharing_only_prose_are_not_repeats() {
     assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
 }
 
+// two landed blocks `enallagi review` queued from two pull requests, one class of defect ten days apart
+const REVIEWED_FIXTURE: &str = "
+## [T-901] the retry loop discards the fetch error and reports success
+scope: src/fetch.rs
+status: done
+notes: https://github.com/o/r/pull/7#discussion_r101
+  IMPLEMENTER 2026-09-10: the error is returned.
+
+## [T-902] the upload path discards the write error and reports success
+scope: src/upload.rs
+status: done
+notes: https://github.com/o/r/pull/9#discussion_r202
+  IMPLEMENTER 2026-09-20: the error is returned.
+";
+
+fn earned(repo: &Repo, rule: &str) {
+    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "DECISIONS.md");
+    let text = fs::read_to_string(&path).expect("decisions").replacen(
+        "## Earned rules\n",
+        &format!("## Earned rules\n\n{rule}\n"),
+        1,
+    );
+    fs::write(&path, text).expect("write");
+}
+
+const LOOP_RULE: &str = "a loop that discards an error and reports success → assert on what the caller receives (`enallagi probe friction-repeat`)";
+
+#[test]
+fn two_landed_review_blocks_of_a_class_are_reported() {
+    let (repo, cfg) = seeded();
+    append(&repo, "DECISIONS.md", REVIEWED_FIXTURE);
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "friction-repeat");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, ".enallagi/DECISIONS.md");
+    assert!(
+        found[0].message.contains("recorded 2 times") && found[0].message.contains("upload path"),
+        "{}",
+        found[0].message
+    );
+}
+
+#[test]
+fn an_unlanded_review_block_is_not_counted() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "DECISIONS.md",
+        &REVIEWED_FIXTURE.replacen("status: done", "status: ready", 1),
+    );
+    assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
+}
+
+#[test]
+fn a_review_class_after_its_rule_is_reported() {
+    let (repo, cfg) = seeded();
+    append(&repo, "DECISIONS.md", REVIEWED_FIXTURE);
+    earned(&repo, &format!("- [2026-09-15] {LOOP_RULE}"));
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "friction-repeat");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0].message.contains("after the rule of 2026-09-15")
+            && found[0].message.contains("upload path"),
+        "{}",
+        found[0].message
+    );
+}
+
+#[test]
+fn a_review_class_before_its_rule_is_covered() {
+    let (repo, cfg) = seeded();
+    append(&repo, "DECISIONS.md", REVIEWED_FIXTURE);
+    earned(&repo, &format!("- [2026-09-25] {LOOP_RULE}"));
+    assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
+}
+
 fn with_driver(body: &str) -> (Repo, Config) {
     let (repo, cfg) =
         seeded_with("[layout]\ndriver_command = \"$ENALLAGI_ROOT/src/fakedriver.sh\"\n");
