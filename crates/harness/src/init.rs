@@ -283,18 +283,22 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         Some(text) => text.clone(),
         None => fs::read_to_string(root.join(&toml)).map_err(io(&toml))?,
     };
-    let mut hashes = serde_json::Map::new();
-    hashes.insert(
-        toml.clone(),
-        Value::String(skills::sha256(config_text.as_bytes())),
-    );
-    seed(
-        root,
-        &mut plan,
-        &mut report,
-        &at("test-hashes.json"),
-        pretty(&Value::Object(hashes)),
-    );
+    let digest = skills::sha256(config_text.as_bytes());
+    let hashes_path = at("test-hashes.json");
+    match rehash(root, &hashes_path, &toml, &digest)? {
+        Some(text) => plan.push(write(hashes_path, text)),
+        None => {
+            let mut hashes = serde_json::Map::new();
+            hashes.insert(toml.clone(), Value::String(digest));
+            seed(
+                root,
+                &mut plan,
+                &mut report,
+                &hashes_path,
+                pretty(&Value::Object(hashes)),
+            );
+        }
+    }
     seed_context(root, &mut plan, &mut report, &cfg, &sub);
 
     let spec = at(&cfg.layout.spec);
@@ -485,6 +489,32 @@ fn seed(
     } else {
         plan.push(write(path.to_string(), content));
     }
+}
+
+// only the config key's value is replaced in place, so every other key stays byte for byte
+fn rehash(root: &Path, path: &str, key: &str, digest: &str) -> Result<Option<String>, InitError> {
+    let full = root.join(path);
+    if !has_content(&full) {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(&full).map_err(io(path))?;
+    let old = match serde_json::from_str::<serde_json::Map<String, Value>>(&text) {
+        Ok(map) => match map.get(key) {
+            Some(Value::String(old)) if old != digest => old.clone(),
+            _ => return Ok(None),
+        },
+        Err(_) => return Ok(None),
+    };
+    let quoted = |s: &str| Value::String(s.to_string()).to_string();
+    let Some(at) = text.find(&quoted(key)).map(|i| i + quoted(key).len()) else {
+        return Ok(None);
+    };
+    let Some(value) = text[at..].find(&quoted(&old)).map(|i| at + i) else {
+        return Ok(None);
+    };
+    let mut out = text.clone();
+    out.replace_range(value..value + quoted(&old).len(), &quoted(digest));
+    Ok(Some(out))
 }
 
 // returns the text only when this run wrote it -- config::load can't see an unwritten file

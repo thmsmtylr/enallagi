@@ -391,6 +391,39 @@ fn an_existing_hash_file_is_kept() {
 }
 
 #[test]
+fn a_reinstall_rehashes_an_edited_config() {
+    let repo = Repo::new();
+    install(&repo);
+    let seeded = read(&repo, ".enallagi/test-hashes.json");
+    let mine = "  \"src/schema.ts\":   \"deadbeef\"\n}\n";
+    let hashes = seeded
+        .trim_end()
+        .trim_end_matches('}')
+        .trim_end()
+        .to_string()
+        + ",\n"
+        + mine;
+    repo.write(".enallagi/test-hashes.json", &hashes);
+    let config = read(&repo, ".enallagi/enallagi.toml") + "# an operator's edit\n";
+    repo.write(".enallagi/enallagi.toml", &config);
+    install(&repo);
+    let text = read(&repo, ".enallagi/test-hashes.json");
+    let keys: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(&text).expect("test-hashes.json is a flat object");
+    use sha2::Digest;
+    let digest: String = sha2::Sha256::digest(read(&repo, ".enallagi/enallagi.toml").as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(
+        keys.get(".enallagi/enallagi.toml").map(String::as_str),
+        Some(digest.as_str()),
+        "{text}"
+    );
+    assert!(text.ends_with(mine), "{text}");
+}
+
+#[test]
 fn a_fresh_install_leaves_the_hash_rails_true() {
     let repo = Repo::new();
     install(&repo);
