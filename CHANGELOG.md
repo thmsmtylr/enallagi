@@ -5,6 +5,10 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.3.0-beta.5 (2026-09-29)
+
+- under `[pr] per_task`, a lane resumes an earlier lane branch only while one of its commits names a task not yet `done`, and a resumed lane merges in what the checkout's HEAD gained since, so a round never runs on a tree older than its checkout
+
 ## v0.3.0-beta.4 (2026-09-28)
 
 - `enallagi pr` builds its branch in a worktree under the harness directory, as a lane does, so a check that finds its tools in a parent directory, as npm finds `node_modules`, runs there
@@ -16,7 +20,6 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 - `branch-protection` is silent on a GitHub repository the operator cannot administer
 - the verifier may run a mutation a criterion names: an `Edit`, the command alone, an `Edit` back, and a clean `git diff --quiet`; the implementer makes one the same way, never with `sed -i` or a chained command a lane cannot run unattended
 - the context file, rails, roles and loop skill name the baseline at `.enallagi/.check-baseline`, where it lives, instead of a bare `.check-baseline`
-- under `[pr] per_task`, a lane resumes an earlier lane branch only while one of its commits names a task not yet `done`, and a resumed lane merges in what the checkout's HEAD gained since, so a round never runs on a tree older than its checkout
 - the context file, and the implementer and verifier roles an existing install re-renders, say the tool's result carries the check's exit status, so a lane never chains `echo $?` onto it, which the sandbox holds for approval
 
 ## v0.3.0-beta.3 (2026-09-27)
