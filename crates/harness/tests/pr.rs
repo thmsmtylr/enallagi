@@ -605,6 +605,118 @@ fn two_sibling_blockers_are_refused() {
     );
 }
 
+const SAME_LINE: &str = "\
+# TASKS
+
+## [T-010] two gains an a
+scope: src/thing.txt
+blockedBy: none
+status: done
+
+## [T-011] two gains a b
+scope: src/thing.txt
+blockedBy: none
+status: done
+";
+
+// T-011 rewrites the line T-010 wrote, so its commit applies only on top of T-010's
+fn same_line(tasks: &str) -> Fixture {
+    let f = Fixture::new(tasks, "exit 0\n");
+    commit(
+        &f.root,
+        "src/thing.txt",
+        &replace(THING, "two\n", "two a\n"),
+        "feat(thing): T-010 two gains an a",
+    );
+    commit(
+        &f.root,
+        "src/thing.txt",
+        &replace(&f.thing(), "two a\n", "two a b\n"),
+        "feat(thing): T-011 two gains a b",
+    );
+    f
+}
+
+fn build(f: &Fixture, id: &str, stack_on: &[&str]) -> enallagi::pr::PrReport {
+    let opts = enallagi::pr::PrOpts {
+        stack_on: stack_on.iter().map(|s| s.to_string()).collect(),
+        ..enallagi::pr::PrOpts::default()
+    };
+    enallagi::pr::build(&f.root, &[id.to_string()], &opts)
+        .unwrap_or_else(|e| panic!("{id} builds: {e:?}"))
+}
+
+// an earlier run pushed the branch, and this checkout holds only the remote's copy
+fn push_and_forget(f: &Fixture, branch: &str) {
+    git(&f.root, &["push", "-q", "origin", branch]);
+    git(&f.root, &["branch", "-D", branch]);
+    git(
+        &f.root,
+        &["update-ref", "-d", &format!("refs/remotes/origin/{branch}")],
+    );
+}
+
+#[test]
+fn a_conflict_stacks_on_a_branch_built_this_run() {
+    let f = same_line(SAME_LINE);
+    let alone = enallagi::pr::build(
+        &f.root,
+        &["T-011".to_string()],
+        &enallagi::pr::PrOpts::default(),
+    );
+    let Err(enallagi::pr::PrError::Conflict { files, .. }) = alone else {
+        panic!("{alone:?}");
+    };
+    assert_eq!(files, ["src/thing.txt"]);
+
+    build(&f, "T-010", &[]);
+    let second = build(&f, "T-011", &["T-010"]);
+    assert_eq!(second.base, "task/T-010");
+    assert_eq!(
+        git(&f.root, &["rev-parse", "task/T-011^"]),
+        git(&f.root, &["rev-parse", "task/T-010"])
+    );
+    assert!(git(&f.root, &["show", "task/T-011:src/thing.txt"]).contains("two a b\n"));
+    let text = fs::read_to_string(&second.description).expect("description");
+    assert!(text.contains("Stacks on T-010"), "{text}");
+}
+
+#[test]
+fn a_conflict_stacks_on_a_branch_pushed_earlier() {
+    let f = same_line(SAME_LINE);
+    build(&f, "T-010", &[]);
+    push_and_forget(&f, "task/T-010");
+
+    let second = build(&f, "T-011", &[]);
+    assert_eq!(second.base, "task/T-010");
+    assert_eq!(
+        git(&f.root, &["rev-parse", "task/T-011^"]),
+        git(&f.origin, &["rev-parse", "task/T-010"])
+    );
+    let text = fs::read_to_string(&second.description).expect("description");
+    assert!(text.contains("Stacks on T-010"), "{text}");
+}
+
+#[test]
+fn a_blocker_pushed_earlier_is_the_base() {
+    let tasks = SAME_LINE.replace(
+        "gains a b\nscope: src/thing.txt\nblockedBy: none",
+        "gains a b\nscope: src/thing.txt\nblockedBy: T-010",
+    );
+    let f = same_line(&tasks);
+    build(&f, "T-010", &[]);
+    push_and_forget(&f, "task/T-010");
+
+    let second = build(&f, "T-011", &[]);
+    assert_eq!(second.base, "task/T-010");
+    assert_eq!(
+        git(&f.root, &["rev-parse", "task/T-011^"]),
+        git(&f.origin, &["rev-parse", "task/T-010"])
+    );
+    let text = fs::read_to_string(&second.description).expect("description");
+    assert!(text.contains("Stacks on T-010"), "{text}");
+}
+
 #[test]
 fn pr_commits_its_description_to_the_state_repo() {
     let (f, _) = landed("exit 0");
