@@ -102,6 +102,25 @@ The repository's own ignore rules covering a path git still tracks reads the sam
 Its host-free leg counts the non-merge first-parent commits on the remote's default branch.
 Its host leg quotes what a host tool answered, or `unknown` when that tool exited non-zero.
 
+### Report
+
+`enallagi report` prints one markdown document and runs no model.
+Two runs over the same inputs print the same bytes.
+It is built in `crates/harness/src/report.rs`.
+
+| Section | Derived from |
+| --- | --- |
+| `Staleness` | `git rev-parse HEAD`, the binary's version and build commit, and each `run.start` run id in `events.jsonl` |
+| `This repository` | each archived block in DECISIONS.md whose `rows:` is not `none — harness`, with its `events --summary` row |
+| `The harness` | each archived block whose `rows:` is `none — harness`, and the findings of six probes |
+
+The six probes are `friction-repeat`, `verdict-flip`, `rejection-repeat`, `stage-outlier`, `turns-exhausted` and `limit-repeat`.
+A task's figures carry the `sha` of its last event, or the `events --summary` command when the log has none.
+
+Every line that is not a heading carries a `file:line`, a command or a sha.
+A line with none makes the command exit 1 and print it.
+`--skill` writes the same document under `<skills_dir>/enallagi-report/SKILL.md`, after a `name` and `description` frontmatter.
+
 ## Configuration
 
 `.enallagi/enallagi.toml` deep-merges over `crates/harness/harness.default.toml`.

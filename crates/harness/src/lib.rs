@@ -18,6 +18,7 @@ pub mod pr;
 pub mod probes;
 pub mod propose;
 pub mod queue;
+pub mod report;
 pub mod review;
 pub mod roles;
 pub mod runners;

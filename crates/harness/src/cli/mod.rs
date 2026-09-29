@@ -3,13 +3,14 @@
 mod base;
 mod eject;
 mod eval;
-mod events;
+pub(crate) mod events;
 mod gate;
 mod hook;
 mod init;
 mod issue;
 mod pr;
 mod probe;
+mod report;
 mod review;
 mod run;
 mod skills;
@@ -176,6 +177,15 @@ pub enum Command {
         /// Print the blocks and write nothing
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Write one document about this repository from the record the loop kept
+    ///
+    /// Reads DECISIONS.md, the event log and six probes, and runs no model. Every claim carries its
+    /// evidence.
+    Report {
+        /// Write the document as a SKILL.md under the skills directory instead of printing it
+        #[arg(long)]
+        skill: bool,
     },
     /// Print the product commit a task was queued against
     ///
@@ -344,6 +354,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         }),
         Command::Issue { reference, dry_run } => issue::run(&issue::Args { reference, dry_run }),
         Command::Review { reference, dry_run } => review::run(&review::Args { reference, dry_run }),
+        Command::Report { skill } => report::run(&report::Args { skill }),
         Command::Base { task } => base::run(&base::Args { task }),
         Command::Gate { which, task, base } => gate::run(&gate::Args { which, task, base }),
         Command::Hook { name } => hook::run(&hook::Args { name }),
@@ -379,12 +390,12 @@ mod tests {
     const CI: &str = include_str!("../../../../.github/workflows/ci.yml");
     const RELEASE: &str = include_str!("../../../../.github/workflows/release.yml");
 
-    const SUBCOMMANDS: [&str; 16] = [
-        "init", "eject", "run", "watch", "probe", "pr", "issue", "review", "base", "gate", "hook",
-        "skills", "tasks", "eval", "events", "worktree",
+    const SUBCOMMANDS: [&str; 17] = [
+        "init", "eject", "run", "watch", "probe", "pr", "issue", "review", "report", "base",
+        "gate", "hook", "skills", "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 39] = [
+    const FLAGS: [&str; 40] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
@@ -415,6 +426,7 @@ mod tests {
         "pr --policy-read",
         "issue --dry-run",
         "review --dry-run",
+        "report --skill",
         "gate --base",
         "skills --cost",
         "eval --gate",
@@ -568,7 +580,8 @@ jobs:
         let wide: Vec<&str> = help.lines().filter(|l| l.chars().count() > 100).collect();
         assert!(wide.is_empty(), "past 100 columns: {wide:#?}");
         let lines = help.lines().count();
-        assert!(lines <= 25, "--help is {lines} lines");
+        // one line per subcommand, and nine for the usage, the headings and the two options
+        assert!(lines <= SUBCOMMANDS.len() + 9, "--help is {lines} lines");
     }
 
     #[test]
