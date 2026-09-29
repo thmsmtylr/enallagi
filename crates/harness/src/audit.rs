@@ -398,7 +398,15 @@ fn role(root: &Path, cfg: &Config) -> String {
         .join("auditor.md");
     let text = fs::read_to_string(installed)
         .unwrap_or_else(|_| include_str!("../../../roles/auditor.md").to_string());
-    config::subst(&text, cfg)
+    config::subst(body(&text), cfg)
+}
+
+// an agent CLI reads a prompt that starts with `-` as an option, and the frontmatter starts with `---`
+fn body(role: &str) -> &str {
+    role.strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .map_or(role, |(_, body)| body)
+        .trim_start()
 }
 
 fn ask(root: &Path, cfg: &Config, prompt: String) -> Result<String, AuditError> {
@@ -421,9 +429,17 @@ fn ask(root: &Path, cfg: &Config, prompt: String) -> Result<String, AuditError> 
         .map_err(|e| AuditError::Agent(e.to_string()))?;
     let mut events = crate::events::Writer::new(crate::events::Log::open(&root.join(dir)));
     let stop_file = config::instance_path(root, dir, "STOP");
-    crate::agent::spawn(&spawn, &mut events, &stop_file, &rate_limit)
-        .map(|result| result.output)
-        .map_err(|e| AuditError::Agent(e.to_string()))
+    let result = crate::agent::spawn(&spawn, &mut events, &stop_file, &rate_limit)
+        .map_err(|e| AuditError::Agent(e.to_string()))?;
+    // a failed agent's output can quote the role's own template, which parses as a learning
+    if result.exit != 0 {
+        let first = result.output.lines().next().unwrap_or_default();
+        return Err(AuditError::Agent(format!(
+            "the auditor exited {}: {first}",
+            result.exit
+        )));
+    }
+    Ok(result.output)
 }
 
 // the section sits after the earned rules, so an agent reading those does not take a proposal for one

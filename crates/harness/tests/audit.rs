@@ -471,3 +471,31 @@ fn a_second_audit_repeats_no_proposal() {
     assert_eq!(again.merged.len(), 2, "{again:?}");
     assert_eq!(decisions(&repo), once);
 }
+
+// the stub refuses a leading `-` the way an agent CLI's option parser does
+#[test]
+fn the_auditor_prompt_is_not_read_as_an_option() {
+    let (repo, cfg) = seeded();
+    with_signal(&repo);
+    let (lost, _) = two_classes(&repo);
+    let answer = learning("lost result", LOST, &refs(&lost));
+    repo.stub_agent(&format!(
+        "case \"$1\" in -*) echo \"error: unknown option '$1'\"; exit 1;; esac\ncat <<'ANSWER'\n{answer}\nANSWER\n"
+    ));
+    let report = audit::run(&repo.root, &cfg).expect("audit");
+    let classes: Vec<&str> = report.proposed.iter().map(|p| p.class.as_str()).collect();
+    assert_eq!(classes, ["lost result"], "{report:?}");
+}
+
+#[test]
+fn a_failed_auditor_writes_nothing() {
+    let (repo, cfg) = seeded();
+    with_signal(&repo);
+    let (lost, _) = two_classes(&repo);
+    let before = decisions(&repo);
+    let answer = learning("lost result", LOST, &refs(&lost));
+    repo.stub_agent(&format!("cat <<'ANSWER'\n{answer}\nANSWER\nexit 1\n"));
+    let err = audit::run(&repo.root, &cfg).expect_err("a failed auditor");
+    assert!(err.to_string().contains("exited 1"), "{err}");
+    assert_eq!(decisions(&repo), before);
+}
