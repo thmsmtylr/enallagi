@@ -2188,7 +2188,14 @@ fn a_hung_host_tool_reads_unknown_after_the_bound() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
     let (_origin, _branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
-    let path = bin_dir(bins.path(), Some("/bin/sleep 600\n"));
+    let pidfile = bins.path().join("gh.pid");
+    // sleep is a grandchild, so killing gh alone leaves it running
+    let stub = format!(
+        "/bin/sleep 600 &\necho $! > '{}'\nwait\n",
+        pidfile.display()
+    );
+    let path = bin_dir(bins.path(), Some(&stub));
+    let pid = || -> Option<libc::pid_t> { fs::read_to_string(&pidfile).ok()?.trim().parse().ok() };
     let mut child = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["probe", "branch-protection"])
         .current_dir(&repo.root)
@@ -2205,9 +2212,9 @@ fn a_hung_host_tool_reads_unknown_after_the_bound() {
         }
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
-            let _ = std::process::Command::new("pkill")
-                .args(["-f", "/bin/sleep 600"])
-                .status();
+            if let Some(pid) = pid() {
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
             panic!("the probe outlived the ceiling: the host leg has no bound");
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -2216,30 +2223,20 @@ fn a_hung_host_tool_reads_unknown_after_the_bound() {
     std::io::Read::read_to_string(child.stdout.as_mut().expect("stdout"), &mut out).expect("read");
     assert!(status.success(), "{out}");
     assert!(out.contains("-> unknown, no answer in 10s"), "{out}");
-    // killed is not yet reaped: a zombie the container's init has not collected still answers pgrep
+    let pid = pid().expect("the stub wrote its pid");
+    // the sandbox refuses a process listing, so the stub's own pid is polled
+    // killed is not yet reaped: a zombie the container's init has not collected still answers kill 0
     let alive = || {
-        let out = std::process::Command::new("ps")
-            .args(["-eo", "pid=,stat=,args="])
-            .output()
-            .expect("ps");
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter(|l| {
-                let mut cols = l.split_whitespace();
-                let (_, stat) = (cols.next(), cols.next().unwrap_or(""));
-                let args: Vec<&str> = cols.collect();
-                args == ["/bin/sleep", "600"] && !stat.starts_with('Z')
-            })
-            .map(str::to_string)
-            .collect::<Vec<_>>()
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        let zombie = stat
+            .rsplit(')')
+            .next()
+            .is_some_and(|s| s.trim_start().starts_with('Z'));
+        !zombie && unsafe { libc::kill(pid, 0) } == 0
     };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !alive().is_empty() && std::time::Instant::now() < deadline {
+    while alive() && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    assert!(
-        alive().is_empty(),
-        "the stub's sleep outlived the probe: {:?}",
-        alive()
-    );
+    assert!(!alive(), "the stub's sleep outlived the probe: pid {pid}");
 }

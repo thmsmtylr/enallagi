@@ -26,7 +26,7 @@ case $(uname -sm) in
 esac
 asset=enallagi-$target
 
-tmp=$(mktemp -d)
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/enallagi-install.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
 curl -fsSL "$base/$asset" -o "$tmp/$asset" || fail "download $base/$asset"
