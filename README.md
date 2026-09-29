@@ -134,6 +134,7 @@ Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGE
 - `tasks landed` lists each done task, its commits, and `no branch`, `built <branch>` or `pushed <url>`. `--built` keeps the branches waiting on a push.
 - `issue` appends a GitHub issue, and `review` a pull request's review comments, as `proposed` tasks.
 - `probe` reports findings. `gate` runs one gate. `hook` is the agent's lifecycle entry point.
+- `audit` proposes a learning for each class of finding that recurs.
 - `skills` resolves declared skills. `eval` runs the evals. `pr` builds a pull request.
 
 `enallagi pr --push` reads the target's contribution guide first.
