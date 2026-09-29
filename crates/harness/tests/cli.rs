@@ -252,6 +252,84 @@ fn events_summary_counts_an_overturned_done() {
     assert_eq!(rows[2]["false_completion_rate"], 0.5);
 }
 
+// one implementer stage with usage and a rendered role file, one verifier stage with neither
+fn prefix_in(dir: &std::path::Path) -> String {
+    let harness_dir = dir.join(".enallagi");
+    std::fs::create_dir_all(harness_dir.join("run/roles")).unwrap();
+    std::fs::write(harness_dir.join("run/roles/implementer.md"), "0123456789").unwrap();
+    std::fs::write(
+        harness_dir.join("events.jsonl"),
+        concat!(
+            r#"{"ts":"2026-09-07T00:00:00Z","run":"r","iter":1,"seq":1,"kind":"stage.start","stage":"implement","role":"implementer","command":"claude","task":"T-1"}"#,
+            "\n",
+            r#"{"ts":"2026-09-07T00:10:00Z","run":"r","iter":1,"seq":2,"kind":"stage.end","stage":"implement","task":"T-1","seconds":600,"exit":0,"cost":null,"input_tokens":22,"output_tokens":6233,"cache_creation_input_tokens":54825,"cache_read_input_tokens":505740,"turns":9}"#,
+            "\n",
+            r#"{"ts":"2026-09-07T00:11:00Z","run":"r","iter":1,"seq":3,"kind":"stage.start","stage":"verify","role":"verifier","command":"claude","task":"T-1"}"#,
+            "\n",
+            r#"{"ts":"2026-09-07T00:20:00Z","run":"r","iter":1,"seq":4,"kind":"stage.end","stage":"verify","task":"T-1","seconds":540,"exit":143,"cost":null,"input_tokens":null,"output_tokens":null,"turns":null}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["events", "--prefix"])
+        .current_dir(dir)
+        .output()
+        .expect("run enallagi events --prefix");
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn row<'a>(report: &'a str, role: &str) -> Vec<&'a str> {
+    report
+        .lines()
+        .find(|l| l.starts_with(&format!("{role} ")))
+        .unwrap_or_else(|| panic!("no {role} row: {report}"))
+        .split_whitespace()
+        .collect()
+}
+
+#[test]
+fn events_prefix_prints_each_role_s_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let report = prefix_in(dir.path());
+    let header = row(&report, "role");
+    let implementer = row(&report, "implementer");
+    let at = |name: &str| {
+        let i = header.iter().position(|h| *h == name);
+        implementer[i.unwrap_or_else(|| panic!("no {name} column: {report}"))]
+    };
+    assert_eq!(at("input_tokens"), "22", "{report}");
+    assert_eq!(at("cache_creation_input_tokens"), "54825", "{report}");
+    assert_eq!(at("cache_read_input_tokens"), "505740", "{report}");
+    assert_eq!(at("repaid"), "54847", "{report}");
+    assert_eq!(at("cached"), "505740", "{report}");
+    assert_eq!(at("handed_bytes"), "10", "{report}");
+}
+
+#[test]
+fn events_prefix_prints_a_dash_for_no_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let report = prefix_in(dir.path());
+    let verifier = row(&report, "verifier");
+    assert_eq!(verifier[..3], ["verifier", "verify", "T-1"], "{report}");
+    assert!(verifier[3..].iter().all(|v| *v == "-"), "{report}");
+}
+
+#[test]
+fn events_prefix_names_its_window_and_no_rate() {
+    let dir = tempfile::tempdir().unwrap();
+    let report = prefix_in(dir.path());
+    let window = report.lines().next().unwrap_or_default();
+    assert!(
+        window.contains("2026-09-07T00:00:00Z") && window.contains("2026-09-07T00:20:00Z"),
+        "{report}"
+    );
+    for rate in ["per day", "per hour", "per run", "/day", "/hour"] {
+        assert!(!report.contains(rate), "{rate}: {report}");
+    }
+}
+
 fn events_in(dir: &std::path::Path) -> std::process::Output {
     enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["events", "--json"])
@@ -331,6 +409,97 @@ fn skills_sync_works_under_a_custom_preset() {
     assert!(out.status.success(), "{out:?}");
     assert!(root.join(".enallagi/skills/tdd/SKILL.md").is_file());
     assert!(root.join(".enallagi/harness.lock").is_file());
+}
+
+// the shipped implementer and verifier both load ponytail and caveman-commit; the implementer's
+// transcript invokes tdd and the verifier's invokes caveman-commit
+fn cost_in(root: &std::path::Path) -> String {
+    let mut toml = String::from("[check]\ncommand = \"true\"\n\n");
+    for id in [
+        "tdd",
+        "ponytail",
+        "debugging",
+        "review-received",
+        "verify-before-done",
+        "review-requested",
+        "brainstorming",
+        "caveman-commit",
+    ] {
+        toml.push_str(&format!(
+            "[[skill]]\nid = \"{id}\"\nsource = \"path:vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"x\"\n\n"
+        ));
+        std::fs::create_dir_all(root.join(format!("vendor/{id}"))).unwrap();
+        std::fs::write(root.join(format!("vendor/{id}/SKILL.md")), "body\n").unwrap();
+    }
+    std::fs::write(root.join("enallagi.toml"), toml).unwrap();
+    let harness = |args: &[&str]| {
+        enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("run enallagi skills")
+    };
+    assert!(harness(&["skills", "sync"]).status.success());
+    let used = |id: &str| {
+        serde_json::json!({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Skill", "input": {"skill": format!("harness:{id}")}}
+        ]}})
+        .to_string()
+    };
+    let lines = [
+        r#"{"ts":"2026-09-07T00:00:00Z","run":"r","iter":1,"seq":1,"kind":"stage.start","stage":"implement","role":"implementer","command":"claude","task":"T-1"}"#.to_string(),
+        serde_json::json!({"ts":"2026-09-07T00:01:00Z","run":"r","iter":1,"seq":2,"kind":"stage.output","stage":"implement","chunk": format!("{}\n", used("tdd"))}).to_string(),
+        r#"{"ts":"2026-09-07T00:10:00Z","run":"r","iter":1,"seq":3,"kind":"stage.end","stage":"implement","task":"T-1","seconds":600,"exit":0,"cost":null,"input_tokens":null,"output_tokens":null,"turns":null}"#.to_string(),
+        r#"{"ts":"2026-09-07T00:11:00Z","run":"r","iter":1,"seq":4,"kind":"stage.start","stage":"verify","role":"verifier","command":"claude","task":"T-1"}"#.to_string(),
+        serde_json::json!({"ts":"2026-09-07T00:12:00Z","run":"r","iter":1,"seq":5,"kind":"stage.output","stage":"verify","chunk": format!("{}\n", used("caveman-commit"))}).to_string(),
+        r#"{"ts":"2026-09-07T00:20:00Z","run":"r","iter":1,"seq":6,"kind":"stage.end","stage":"verify","task":"T-1","seconds":540,"exit":0,"cost":null,"input_tokens":null,"output_tokens":null,"turns":null}"#.to_string(),
+    ];
+    std::fs::write(root.join(".enallagi/events.jsonl"), lines.join("\n") + "\n").unwrap();
+    let out = harness(&["skills", "--cost"]);
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn skills_cost_counts_loads_against_uses() {
+    let dir = tempfile::tempdir().unwrap();
+    let report = cost_in(dir.path());
+    let row = |id: &str| -> Vec<String> {
+        report
+            .lines()
+            .find(|l| l.starts_with(&format!("{id} ")))
+            .unwrap_or_else(|| panic!("no {id} row: {report}"))
+            .split_whitespace()
+            .map(String::from)
+            .collect()
+    };
+    assert_eq!(
+        row("skill"),
+        ["skill", "bytes", "loaded", "used"],
+        "{report}"
+    );
+    assert_eq!(row("tdd"), ["tdd", "5", "1", "1"], "{report}");
+    assert_eq!(row("ponytail"), ["ponytail", "5", "2", "0"], "{report}");
+    assert_eq!(
+        row("caveman-commit"),
+        ["caveman-commit", "5", "2", "1"],
+        "{report}"
+    );
+    assert_eq!(
+        row("brainstorming"),
+        ["brainstorming", "5", "0", "0"],
+        "{report}"
+    );
+}
+
+#[test]
+fn skills_cost_names_an_unused_skill_unproven() {
+    let dir = tempfile::tempdir().unwrap();
+    let report = cost_in(dir.path());
+    let unproven: Vec<&str> = report.lines().filter(|l| l.contains("unproven")).collect();
+    assert_eq!(unproven.len(), 1, "{report}");
+    assert!(unproven[0].contains("ponytail"), "{report}");
+    assert!(!report.contains("waste"), "{report}");
 }
 
 #[test]

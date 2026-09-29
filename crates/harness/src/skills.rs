@@ -2,7 +2,7 @@
 
 use crate::agent::Preset;
 use crate::config::Config;
-use crate::events::{Kind, Writer};
+use crate::events::{Event, Kind, Writer};
 use crate::git;
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
@@ -489,6 +489,108 @@ fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
 pub(crate) fn sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub fn dir_bytes(dir: &Path) -> Option<u64> {
+    let mut total = 0;
+    for entry in fs::read_dir(dir).ok()? {
+        let entry = entry.ok()?;
+        let meta = entry.metadata().ok()?;
+        total += match meta.is_dir() {
+            true => dir_bytes(&entry.path())?,
+            false => meta.len(),
+        };
+    }
+    Some(total)
+}
+
+// the id a stream-json line's Skill tool_use names, with any `plugin:` prefix dropped
+fn skills_invoked(transcript: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for line in transcript.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(content) = value.pointer("/message/content").and_then(|c| c.as_array()) else {
+            continue;
+        };
+        for block in content {
+            if block.get("type").and_then(|t| t.as_str()) != Some("tool_use")
+                || block.get("name").and_then(|n| n.as_str()) != Some("Skill")
+            {
+                continue;
+            }
+            if let Some(skill) = block.pointer("/input/skill").and_then(|s| s.as_str()) {
+                ids.push(skill.rsplit(':').next().unwrap_or(skill).to_string());
+            }
+        }
+    }
+    ids
+}
+
+/// Per skill: its vendored bytes, the role stages whose prompt loaded it and those whose transcript invoked it.
+pub fn cost_report(
+    skills: &[(String, Option<u64>)],
+    loads: &dyn Fn(&str) -> Vec<String>,
+    events: &[Event],
+) -> String {
+    let mut open: std::collections::HashMap<(&str, u32, &str), (&str, String)> = Default::default();
+    let mut stages: Vec<(&str, String)> = Vec::new();
+    for e in events {
+        match &e.kind {
+            Kind::StageStart {
+                stage,
+                role: Some(role),
+                ..
+            } => {
+                open.insert((&e.run, e.iter, stage), (role, String::new()));
+            }
+            Kind::StageOutput { stage, chunk } => {
+                if let Some((_, transcript)) =
+                    open.get_mut(&(e.run.as_str(), e.iter, stage.as_str()))
+                {
+                    transcript.push_str(chunk);
+                }
+            }
+            Kind::StageEnd { stage, .. } => {
+                if let Some(ended) = open.remove(&(e.run.as_str(), e.iter, stage.as_str())) {
+                    stages.push(ended);
+                }
+            }
+            _ => {}
+        }
+    }
+    let stages: Vec<(Vec<String>, Vec<String>)> = stages
+        .iter()
+        .map(|(role, transcript)| (loads(role), skills_invoked(transcript)))
+        .collect();
+    let mut out = format!(
+        "{} role stages in the log\n{:<20} {:>8} {:>7} {:>5}\n",
+        stages.len(),
+        "skill",
+        "bytes",
+        "loaded",
+        "used"
+    );
+    let mut unproven = Vec::new();
+    for (id, bytes) in skills {
+        let loaded = stages.iter().filter(|(l, _)| l.contains(id)).count();
+        let used = stages.iter().filter(|(_, u)| u.contains(id)).count();
+        out.push_str(&format!(
+            "{id:<20} {:>8} {loaded:>7} {used:>5}\n",
+            bytes.map_or_else(|| "-".to_string(), |b| b.to_string())
+        ));
+        if loaded > 0 && loaded == stages.len() && used == 0 {
+            unproven.push(id.as_str());
+        }
+    }
+    for id in unproven {
+        out.push_str(&format!(
+            "{id}: loaded by all {} stages and used by none, so its benefit is unproven in this log\n",
+            stages.len()
+        ));
+    }
+    out
 }
 
 // unresolved {{skill:<id>}} tokens are left alone; inline presets get the body appended, others get the invocation
