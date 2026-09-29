@@ -323,6 +323,98 @@ fn head_sha(git_dir: &Path, common_dir: &Path) -> Option<String> {
         .find_map(|l| l.strip_suffix(name)?.strip_suffix(' ').map(String::from))
 }
 
+fn dash(n: Option<u64>) -> String {
+    n.map_or_else(|| "-".to_string(), |n| n.to_string())
+}
+
+/// One row per role stage in the log: its usage lanes and the bytes of the role file it was handed.
+pub fn prefix_report(events: &[Event], handed_bytes: &dyn Fn(&str) -> Option<u64>) -> String {
+    let mut roles: std::collections::HashMap<(&str, u32, &str), &str> = Default::default();
+    let mut window: Option<(&str, &str)> = None;
+    let mut rows = Vec::new();
+    let mut totals: std::collections::BTreeMap<&str, (u64, u64, u64, u64)> = Default::default();
+    for e in events {
+        match &e.kind {
+            Kind::StageStart {
+                stage,
+                role: Some(role),
+                ..
+            } => {
+                roles.insert((&e.run, e.iter, stage), role);
+                window = Some((window.map_or(e.ts.as_str(), |w| w.0), e.ts.as_str()));
+            }
+            Kind::StageEnd {
+                stage,
+                task,
+                input_tokens,
+                cache_creation_input_tokens,
+                cache_read_input_tokens,
+                ..
+            } => {
+                let Some(role) = roles.remove(&(e.run.as_str(), e.iter, stage.as_str())) else {
+                    continue;
+                };
+                window = window.map(|w| (w.0, e.ts.as_str()));
+                // a stage that logged no input count logged no usage: its other lanes print `-` too
+                let lanes = input_tokens.map(|input| {
+                    let creation = cache_creation_input_tokens.unwrap_or(0);
+                    let read = cache_read_input_tokens.unwrap_or(0);
+                    (input, creation, read)
+                });
+                let total = totals.entry(role).or_default();
+                total.0 += 1;
+                if let Some((input, creation, read)) = lanes {
+                    total.1 += 1;
+                    total.2 += input + creation;
+                    total.3 += read;
+                }
+                rows.push(format!(
+                    "{role:<12} {stage:<10} {:<6} {:>12} {:>27} {:>23} {:>9} {:>9} {:>12}",
+                    task.as_deref().unwrap_or("-"),
+                    dash(lanes.map(|l| l.0)),
+                    dash(lanes.map(|l| l.1)),
+                    dash(lanes.map(|l| l.2)),
+                    dash(lanes.map(|l| l.0 + l.1)),
+                    dash(lanes.map(|l| l.2)),
+                    dash(handed_bytes(role)),
+                ));
+            }
+            _ => {}
+        }
+    }
+    let Some((from, to)) = window else {
+        return "window: no role stage in the log\n".to_string();
+    };
+    let mut out = format!(
+        "window {from} to {to}: {} role stages, summed as logged\n\
+         repaid = input_tokens + cache_creation_input_tokens, sent in full each stage; \
+         cached = cache_read_input_tokens, re-read at a discount\n",
+        rows.len()
+    );
+    out.push_str(&format!(
+        "{:<12} {:<10} {:<6} {:>12} {:>27} {:>23} {:>9} {:>9} {:>12}\n",
+        "role",
+        "stage",
+        "task",
+        "input_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "repaid",
+        "cached",
+        "handed_bytes"
+    ));
+    for row in rows {
+        out.push_str(&row);
+        out.push('\n');
+    }
+    for (role, (stages, measured, repaid, cached)) in totals {
+        out.push_str(&format!(
+            "total {role}: {stages} stages, {measured} with usage, repaid {repaid}, cached {cached}\n"
+        ));
+    }
+    out
+}
+
 fn rfc3339_secs(ts: jiff::Timestamp) -> String {
     ts.strftime("%Y-%m-%dT%H:%M:%SZ").to_string()
 }

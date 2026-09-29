@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::events::{render_line, stage_of, task_of, Event, Kind, Log};
+use crate::events::{prefix_report, render_line, stage_of, task_of, Event, Kind, Log};
 
 pub struct Args {
     pub role: Option<String>,
@@ -10,6 +10,7 @@ pub struct Args {
     pub since: Option<String>,
     pub json: bool,
     pub summary: bool,
+    pub prefix: bool,
 }
 
 // --role isn't here: it needs the whole stream (a stage's surrounding events, not just matches), so it's a separate pass in run
@@ -33,9 +34,8 @@ pub(crate) fn keep(e: &Event, opts: &Filter) -> bool {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let log = Log::open(Path::new(
-        &crate::config::load(Path::new("."))?.layout.harness_dir,
-    ));
+    let harness_dir = crate::config::load(Path::new("."))?.layout.harness_dir;
+    let log = Log::open(Path::new(&harness_dir));
     let (pairs, _skipped) = match log.read_lines() {
         Ok(pairs) => pairs,
         Err(err) => {
@@ -57,6 +57,16 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     if args.summary {
         let rows = summarize(pairs.iter().map(|(_, e)| e));
         print_summary(&rows, args.json);
+        return Ok(0);
+    }
+    if args.prefix {
+        let events: Vec<Event> = pairs.into_iter().map(|(_, e)| e).collect();
+        // the rendered file the launcher wrote for the role's last stage, not the source under roles/
+        let handed = |role: &str| {
+            let path = Path::new(&harness_dir).join(format!("run/roles/{role}.md"));
+            std::fs::metadata(path).ok().map(|m| m.len())
+        };
+        print!("{}", prefix_report(&events, &handed));
         return Ok(0);
     }
 

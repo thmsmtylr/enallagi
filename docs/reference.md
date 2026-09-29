@@ -27,6 +27,19 @@ finding raised twice on the same lines is one block.
 When that block lands, the launcher replies on the thread with the sha and resolves it.
 No host tool, no such branch, or a failed host call is a warning, never a halt.
 
+`enallagi events --prefix` prints one row per role stage in `events.jsonl`.
+Each row carries the stage's three input token lanes and the bytes of `run/roles/<role>.md`.
+`repaid` is input plus cache creation, which every stage pays in full.
+`cached` is the cache read, which a warm cache re-reads at a discount.
+A stage that logged no usage prints `-`.
+The first line names the window the log covers, and no figure is scaled past it.
+
+`enallagi skills --cost` prints one row per declared skill.
+Each row carries its vendored bytes and two stage counts.
+`loaded` counts the role stages whose role file names the skill.
+`used` counts the stages whose transcript shows a `Skill` tool call for it.
+A skill every stage loaded and none used is named as unproven in this log.
+
 ## Gates
 
 `[[stage]].post` names the gates run after a stage. A failed gate sends the task back to `ready` or
