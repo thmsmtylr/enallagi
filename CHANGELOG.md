@@ -5,6 +5,10 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.3.0-beta.5 (2026-09-29)
+
+- under `[pr] per_task`, a lane resumes an earlier lane branch only while one of its commits names a task not yet `done`, and a resumed lane merges in what the checkout's HEAD gained since, so a round never runs on a tree older than its checkout
+
 ## v0.3.0-beta.4 (2026-09-28)
 
 - `enallagi pr` builds its branch in a worktree under the harness directory, as a lane does, so a check that finds its tools in a parent directory, as npm finds `node_modules`, runs there
