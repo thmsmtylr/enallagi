@@ -1029,6 +1029,40 @@ fn a_ceiling_with_no_kill_line_is_still_reported() {
 }
 
 #[test]
+fn a_marker_in_prose_is_not_a_ceiling() {
+    let (repo, cfg) = seeded_with("[layout]\nsource_ext = [\".rs\", \".sh\", \".md\"]\n");
+    let m = marker();
+    repo.write(
+        "src/a.rs",
+        &format!("fn a() {{}}\n    // {m} a code ceiling\n"),
+    );
+    repo.write(
+        "src/b.sh",
+        &format!("#!/usr/bin/env bash\n#{m} a script ceiling\n"),
+    );
+    repo.write(
+        "docs/c.md",
+        &format!("| `{m}` | a table row |\n- {m} one helper\n- a bullet quoting `// {m} x`\n"),
+    );
+    repo.commit_all("markers");
+    let results = run(&repo, &cfg);
+    let out = render(&results);
+    assert_eq!(count(&results, "ponytail-ceiling"), Some(2), "{out}");
+    let named: Vec<&str> = out
+        .lines()
+        .filter(|l| l.starts_with("FINDING ponytail-ceiling "))
+        .collect();
+    assert!(
+        named[0].starts_with("FINDING ponytail-ceiling src/a.rs:2 "),
+        "{out}"
+    );
+    assert!(
+        named[1].starts_with("FINDING ponytail-ceiling src/b.sh:2 "),
+        "{out}"
+    );
+}
+
+#[test]
 fn a_slashed_row_resolves_under_source_root() {
     let (repo, cfg) = seeded_with(
         "[layout]\nsource_root = \"crate\"\ntest_file_suffix_re = '\\.rs'\ntest_decl_patterns = [\"fn {name}(\"]\n",

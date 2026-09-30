@@ -26,6 +26,17 @@ pub fn kill_lines(ctx: &ProbeCtx) -> Res<Vec<String>> {
     Ok(found)
 }
 
+// `///` and `//!` need their own entry: after `//` the next character is not whitespace
+const OPENERS: [&str; 7] = ["<!--", "///", "//!", "//", "/*", "--", "#"];
+
+// a line naming the marker in prose is not a marker: only a comment that opens with it is
+fn opens_with(text: &str, marker: &str) -> bool {
+    OPENERS.iter().any(|o| {
+        text.strip_prefix(o)
+            .is_some_and(|rest| rest.trim_start().starts_with(marker))
+    })
+}
+
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
     common::result(find(ctx))
 }
@@ -72,7 +83,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         }
         for (index, line) in common::lines_of(ctx.root, &path)?.iter().enumerate() {
             let text = line.trim();
-            if line.contains(marker) && !settled.contains(text) && !quoted.contains(text) {
+            if opens_with(text, marker) && !settled.contains(text) && !quoted.contains(text) {
                 found.push(common::finding(&path, index + 1, common::cut(text, 100)));
             }
         }
