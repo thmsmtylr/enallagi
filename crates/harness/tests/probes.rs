@@ -96,7 +96,7 @@ fn probes_exit_0_every_probe_ran() {
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     assert_eq!(errors(&results), Vec::<&str>::new());
-    assert_eq!(results.len(), 27, "{}", render(&results));
+    assert_eq!(results.len(), 28, "{}", render(&results));
 }
 
 #[test]
@@ -2241,5 +2241,77 @@ fn a_hung_host_tool_reads_unknown_after_the_bound() {
         alive().is_empty(),
         "the stub's sleep outlived the probe: {:?}",
         alive()
+    );
+}
+
+fn merged(repo: &Repo, cfg: &Config) -> ProbeResult {
+    let ctx = ProbeCtx {
+        root: &repo.root,
+        cfg,
+        check: Some(&GREEN),
+        driver: false,
+    };
+    probes::run_all(&ctx, &["review-merged".to_string()])
+        .pop()
+        .expect("one result")
+        .1
+}
+
+const REVIEW_AND_DONE: &str = "\n## [T-901] a block still at review\nscope: a.txt\nblockedBy:\nstatus: review\nrows: none — harness\n\n## [T-902] a block already done\nscope: b.txt\nblockedBy:\nstatus: done\nrows: none — harness\n\n## [T-903] a block at review nothing merged\nscope: c.txt\nblockedBy:\nstatus: review\nrows: none — harness\n";
+
+// the default branch gains commits naming T-901, T-902 and T-9030, and only T-901 is at review
+fn merged_origin(repo: &Repo) -> (tempfile::TempDir, String) {
+    append(repo, "TASKS.md", REVIEW_AND_DONE);
+    let (dir, branch) = tracked_clone(repo);
+    git(&repo.root, &["remote", "set-head", "origin", &branch]);
+    let base = git(&repo.root, &["rev-parse", "HEAD"]);
+    for (file, subject) in [
+        ("a.txt", "feat(a): T-901 the review block's change"),
+        ("b.txt", "feat(b): T-902 the done block's change"),
+        ("c.txt", "feat(c): T-9030 another id sharing a prefix"),
+    ] {
+        repo.write(file, "x");
+        repo.commit_all(subject);
+    }
+    let sha = git(&repo.root, &["rev-parse", "--short", "HEAD~2"]);
+    git(&repo.root, &["push", "-q", "origin", &branch]);
+    git(&repo.root, &["reset", "-q", "--hard", &base]);
+    git(&repo.root, &["fetch", "-q", "origin"]);
+    (dir, sha)
+}
+
+#[test]
+fn a_merged_review_block_is_reported() {
+    let (repo, cfg) = seeded();
+    let (_origin, sha) = merged_origin(&repo);
+    let ProbeResult::Count(found) = merged(&repo, &cfg) else {
+        panic!("{:?}", merged(&repo, &cfg));
+    };
+    assert_eq!(found.len(), 1, "{found:?}");
+    let tasks = config::instance_rel(&repo.root, &config::harness_dir(&repo.root), "TASKS.md");
+    let text = fs::read_to_string(repo.root.join(&tasks)).expect("tasks");
+    let heading = text
+        .lines()
+        .position(|l| l.starts_with("## [T-901]"))
+        .expect("heading")
+        + 1;
+    assert_eq!(
+        (found[0].path.as_str(), found[0].line),
+        (tasks.as_str(), heading)
+    );
+    assert!(found[0].message.contains("T-901"), "{}", found[0].message);
+    assert!(found[0].message.contains(&sha), "{}", found[0].message);
+}
+
+#[test]
+fn an_unmerged_or_done_block_reports_nothing() {
+    let (repo, cfg) = seeded();
+    append(&repo, "TASKS.md", REVIEW_AND_DONE);
+    let (_origin, branch) = tracked_clone(&repo);
+    git(&repo.root, &["remote", "set-head", "origin", &branch]);
+    let result = merged(&repo, &cfg);
+    assert!(
+        matches!(&result, ProbeResult::Count(f) if f.is_empty()),
+        "{result:?}"
     );
 }
