@@ -38,7 +38,8 @@ The first line names the window the log covers, and no figure is scaled past it.
 Each row carries its vendored bytes and two stage counts.
 `loaded` counts the role stages whose role file names the skill.
 `used` counts the stages whose transcript shows a `Skill` tool call for it.
-A skill every stage loaded and none used is named as unproven in this log.
+A skill that no stage loading it ever used is named as unproven in this log.
+`--cost` takes no subcommand and no `--frozen`.
 
 ## Gates
 

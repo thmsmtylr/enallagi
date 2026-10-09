@@ -214,7 +214,7 @@ pub enum Command {
         #[arg(long, hide = true)]
         frozen: bool,
         /// Print each skill's bytes and the stages that loaded it against the stages that used it
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["cmd", "frozen"])]
         cost: bool,
     },
     /// Query or edit TASKS.md

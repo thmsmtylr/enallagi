@@ -580,14 +580,14 @@ pub fn cost_report(
             "{id:<20} {:>8} {loaded:>7} {used:>5}\n",
             bytes.map_or_else(|| "-".to_string(), |b| b.to_string())
         ));
-        if loaded > 0 && loaded == stages.len() && used == 0 {
-            unproven.push(id.as_str());
+        // a role loads a skill for its own stages, so a use by a stage that never loaded it proves nothing
+        if loaded > 0 && !stages.iter().any(|(l, u)| l.contains(id) && u.contains(id)) {
+            unproven.push((id.as_str(), loaded));
         }
     }
-    for id in unproven {
+    for (id, loaded) in unproven {
         out.push_str(&format!(
-            "{id}: loaded by all {} stages and used by none, so its benefit is unproven in this log\n",
-            stages.len()
+            "{id}: loaded by {loaded} stages and used by none of them, so its benefit is unproven in this log\n"
         ));
     }
     out
@@ -1062,6 +1062,98 @@ mod tests {
         assert!(!tmp.exists(), "the .tmp clone must not survive");
         assert!(!dir.join("junk.txt").exists(), "junk must not be adopted");
         assert!(dir.join("skills/tdd/SKILL.md").is_file());
+    }
+
+    // the shape of the dogfood record: scout and adjudicator stages load no skill, so no skill is
+    // loaded by every stage, and a skill one role loads may be invoked by another role's stage
+    #[test]
+    fn cost_names_a_skill_its_loaders_never_used() {
+        let stage = |n: u32, role: &str, invoked: &[&str]| {
+            let kinds = [
+                Kind::StageStart {
+                    stage: role.into(),
+                    role: Some(role.into()),
+                    command: None,
+                    task: None,
+                },
+                Kind::StageOutput {
+                    stage: role.into(),
+                    chunk: invoked
+                        .iter()
+                        .map(|id| {
+                            serde_json::json!({"message": {"content": [
+                                {"type": "tool_use", "name": "Skill", "input": {"skill": id}}
+                            ]}})
+                            .to_string()
+                                + "\n"
+                        })
+                        .collect(),
+                },
+                Kind::StageEnd {
+                    stage: role.into(),
+                    task: None,
+                    seconds: 1,
+                    exit: 0,
+                    cost: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: None,
+                    turns: None,
+                    turn_cap: None,
+                },
+            ];
+            kinds.map(|kind| Event {
+                ts: "2026-09-20T00:00:00Z".into(),
+                run: "r".into(),
+                iter: n,
+                seq: 0,
+                sha: None,
+                kind,
+            })
+        };
+        let mut events = Vec::new();
+        for n in 0..40 {
+            let invoked: &[&str] = match n {
+                0 | 1 => &["tdd", "ponytail"],
+                2..=4 => &["ponytail"],
+                5 => &["verify-before-done"],
+                _ => &[],
+            };
+            events.extend(stage(n, "implementer", invoked));
+        }
+        for n in 40..75 {
+            let invoked: &[&str] = if n < 43 { &["ponytail"] } else { &[] };
+            events.extend(stage(n, "verifier", invoked));
+        }
+        for n in 75..87 {
+            events.extend(stage(n, "adjudicator", &[]));
+        }
+        let loads = |role: &str| -> Vec<String> {
+            let ids: &[&str] = match role {
+                "implementer" => &["tdd", "debugging", "ponytail"],
+                "verifier" => &["verify-before-done", "ponytail"],
+                _ => &[],
+            };
+            ids.iter().map(|id| id.to_string()).collect()
+        };
+        let skills: Vec<(String, Option<u64>)> =
+            ["tdd", "debugging", "ponytail", "verify-before-done"]
+                .iter()
+                .map(|id| (id.to_string(), Some(1)))
+                .collect();
+
+        let report = cost_report(&skills, &loads, &events);
+
+        let unproven: Vec<&str> = report.lines().filter(|l| l.contains("unproven")).collect();
+        assert_eq!(
+            unproven,
+            [
+                "debugging: loaded by 40 stages and used by none of them, so its benefit is unproven in this log",
+                "verify-before-done: loaded by 35 stages and used by none of them, so its benefit is unproven in this log",
+            ],
+            "{report}"
+        );
     }
 
     #[test]

@@ -496,10 +496,42 @@ fn skills_cost_counts_loads_against_uses() {
 fn skills_cost_names_an_unused_skill_unproven() {
     let dir = tempfile::tempdir().unwrap();
     let report = cost_in(dir.path());
-    let unproven: Vec<&str> = report.lines().filter(|l| l.contains("unproven")).collect();
-    assert_eq!(unproven.len(), 1, "{report}");
-    assert!(unproven[0].contains("ponytail"), "{report}");
+    let unproven: Vec<&str> = report
+        .lines()
+        .filter(|l| l.contains("unproven"))
+        .filter_map(|l| l.split(':').next())
+        .collect();
+    assert_eq!(
+        unproven,
+        [
+            "ponytail",
+            "debugging",
+            "review-received",
+            "verify-before-done",
+            "review-requested"
+        ],
+        "{report}"
+    );
     assert!(!report.contains("waste"), "{report}");
+}
+
+#[test]
+fn a_report_flag_refuses_a_flag_it_would_ignore() {
+    let dir = tempfile::tempdir().unwrap();
+    let pairs: [&[&str]; 2] = [
+        &["skills", "sync", "--cost"],
+        &["skills", "--frozen", "--cost"],
+    ];
+    for args in pairs {
+        let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .expect("run enallagi");
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("cannot be used with"), "{args:?}: {stderr}");
+    }
 }
 
 #[test]
