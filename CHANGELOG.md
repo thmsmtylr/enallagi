@@ -5,6 +5,14 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.3.0-beta.6 (2026-10-09)
+
+- the verifier reproduces each test, command and outside fact a task's notes claim before it returns a verdict, and rejects one it could not reproduce
+- `enallagi audit` has an auditor role name each recurring class of finding; the binary checks every citation it gives and merges classes that overlap. The auditor's prompt drops the role file's frontmatter, and a failed auditor writes nothing
+- `enallagi init` rewrites the config key in an existing `test-hashes.json`, so a config edit is re-hashed
+- with a detected runner other than `cargo` and `check.tally` unset, `enallagi init` asks the agent for `check.tally` on a terminal or under `--propose-check`, and writes it only once the check counts some passed and none failed
+- `docs/demo.sh` and `install.sh` create their temporary directories under `${TMPDIR:-/tmp}`, so both run inside a lane's sandbox
+
 ## v0.3.0-beta.5 (2026-09-29)
 
 - under `[pr] per_task`, a lane resumes an earlier lane branch only while one of its commits names a task not yet `done`, and a resumed lane merges in what the checkout's HEAD gained since, so a round never runs on a tree older than its checkout
