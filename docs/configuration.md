@@ -6,6 +6,7 @@ A key left out takes its default. The fields are declared in `crates/harness/src
 
 Keys under `[[pipeline]]`, `[[stage]]`, `[[skill]]` and `[[role]]` are written `stage.turns` here.
 Re-run `enallagi init` after every edit, as [setup.md](setup.md) says.
+The re-run rewrites this file's key in `test-hashes.json` to its new sha256 and leaves every other key as it was.
 
 ## `[agent]`
 
