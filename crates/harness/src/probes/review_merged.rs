@@ -1,4 +1,4 @@
-//! A block still at `status: review` whose id a commit on the remote's default branch names: merged, and nothing moved it on.
+//! A block still at `status: review` whose id a product commit on the remote's default branch names: merged, and nothing moved it on.
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
@@ -23,10 +23,10 @@ fn find(ctx: &ProbeCtx, default: &str) -> Res<Vec<Finding>> {
         if common::field(&block, "status").is_none_or(|(_, status)| status != "review") {
             continue;
         }
-        let Some((sha, _)) = commits
-            .iter()
-            .find(|(_, subject)| crate::gates::names_task(subject, &block.id))
-        else {
+        let Some((sha, _)) = commits.iter().find(|(_, subject)| {
+            // an in-tree install's state commits name the task on the product's branch too
+            git::recorded_sha(subject).is_none() && crate::gates::names_task(subject, &block.id)
+        }) else {
             continue;
         };
         found.push(common::finding(

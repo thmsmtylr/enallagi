@@ -2304,6 +2304,43 @@ fn a_merged_review_block_is_reported() {
 }
 
 #[test]
+fn no_origin_head_is_off() {
+    let (repo, cfg) = seeded();
+    let result = merged(&repo, &cfg);
+    assert!(
+        matches!(&result, ProbeResult::Off(m) if m.contains("refs/remotes/origin/HEAD names no default branch")),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn an_in_tree_state_commit_is_not_a_merge() {
+    let repo = Repo::new();
+    // a tracked TASKS.md at the root is the root layout: the loop's state commits land on the product's branch
+    repo.write("TASKS.md", &format!("# TASKS\n{REVIEW_AND_DONE}"));
+    repo.write("enallagi.toml", "");
+    repo.commit_all("product");
+    let cfg = config::load(&repo.root).expect("config");
+    let (_origin, branch) = tracked_clone(&repo);
+    git(&repo.root, &["remote", "set-head", "origin", &branch]);
+    append(&repo, "TASKS.md", "notes: VERIFIED\n");
+    let committed = enallagi::git::commit_instance(
+        &repo.root,
+        &cfg.layout.harness_dir,
+        &["TASKS.md"],
+        "verify: T-901 verdict",
+    );
+    assert!(committed.expect("commit"), "nothing was committed");
+    git(&repo.root, &["push", "-q", "origin", &branch]);
+    git(&repo.root, &["fetch", "-q", "origin"]);
+    let result = merged(&repo, &cfg);
+    assert!(
+        matches!(&result, ProbeResult::Count(f) if f.is_empty()),
+        "{result:?}"
+    );
+}
+
+#[test]
 fn an_unmerged_or_done_block_reports_nothing() {
     let (repo, cfg) = seeded();
     append(&repo, "TASKS.md", REVIEW_AND_DONE);
