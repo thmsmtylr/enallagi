@@ -135,6 +135,7 @@ Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGE
 - `issue` appends a GitHub issue, and `review` a pull request's review comments, as `proposed` tasks.
 - `probe` reports findings. `gate` runs one gate. `hook` is the agent's lifecycle entry point.
 - `skills` resolves declared skills. `eval` runs the evals. `pr` builds a pull request.
+- `pr` builds a task whose commits conflict with the default branch on the newest `task/<id>` branch, built this run or on the remote, that changed a conflicting file and takes the commits, and its description names that task. A `blockedBy:` task whose branch is on the remote is a base the same way. When no branch takes the commits, the refusal names the conflicting files.
 
 `enallagi pr --push` reads the target's contribution guide first.
 A sentence there that refuses or conditions generated changes stops the push.

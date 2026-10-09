@@ -103,6 +103,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
         &[
             "fetch",
             "-q",
+            "--prune",
             "origin",
             "+refs/heads/task/*:refs/remotes/origin/task/*",
         ],

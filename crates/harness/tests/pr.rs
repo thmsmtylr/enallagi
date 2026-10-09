@@ -718,6 +718,89 @@ fn a_blocker_pushed_earlier_is_the_base() {
 }
 
 #[test]
+fn a_conflict_skips_a_branch_off_its_files() {
+    let f = same_line(SAME_LINE);
+    // T-020 forks from a main whose two read `two a`, so T-011 applies there though T-020 never touched the file
+    git(&f.root, &["checkout", "-q", "main"]);
+    commit(
+        &f.root,
+        "src/thing.txt",
+        &replace(THING, "two\n", "two a\n"),
+        "upstream two gains an a",
+    );
+    git(&f.root, &["checkout", "-q", "-b", "task/T-020"]);
+    write(&f.root, "src/other.txt", "other\n");
+    git(&f.root, &["add", "--", "src/other.txt"]);
+    let newer = std::process::Command::new("git")
+        .current_dir(&f.root)
+        .env("GIT_COMMITTER_DATE", "2099-01-01T00:00:00Z")
+        .args(["-c", "commit.gpgsign=false", "commit", "-qm"])
+        .arg("feat(other): T-020 other")
+        .output()
+        .expect("spawn git");
+    assert!(newer.status.success(), "{newer:?}");
+    git(&f.root, &["checkout", "-q", "main"]);
+    push_and_forget(&f, "task/T-020");
+    commit(&f.root, "src/thing.txt", THING, "upstream two loses its a");
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    git(&f.root, &["checkout", "-q", "dogfood/round-1"]);
+    absorb_upstream(&f);
+    build(&f, "T-010", &[]);
+    push_and_forget(&f, "task/T-010");
+
+    let second = build(&f, "T-011", &[]);
+    assert_eq!(second.base, "task/T-010");
+}
+
+#[test]
+fn a_conflict_no_branch_takes_is_refused() {
+    let mut tasks = SAME_LINE.to_string();
+    tasks.push_str(
+        "\n## [T-012] two gains a c\nscope: src/thing.txt\nblockedBy: none\nstatus: done\n",
+    );
+    let f = same_line(&tasks);
+    commit(
+        &f.root,
+        "src/thing.txt",
+        &replace(&f.thing(), "two a b\n", "two a b c\n"),
+        "feat(thing): T-012 two gains a c",
+    );
+    build(&f, "T-010", &[]);
+    push_and_forget(&f, "task/T-010");
+
+    let third = enallagi::pr::build(
+        &f.root,
+        &["T-012".to_string()],
+        &enallagi::pr::PrOpts::default(),
+    );
+    let Err(enallagi::pr::PrError::Conflict { base, files }) = third else {
+        panic!("{third:?}");
+    };
+    assert_eq!(base, "origin/main");
+    assert_eq!(files, ["src/thing.txt"]);
+    assert!(git(&f.root, &["branch", "--list", "task/T-012"]).is_empty());
+}
+
+#[test]
+fn a_task_branch_deleted_on_the_remote_is_no_base() {
+    let f = same_line(SAME_LINE);
+    build(&f, "T-010", &[]);
+    git(&f.root, &["push", "-q", "origin", "task/T-010"]);
+    git(&f.root, &["branch", "-D", "task/T-010"]);
+    git(&f.origin, &["branch", "-D", "task/T-010"]);
+
+    let second = enallagi::pr::build(
+        &f.root,
+        &["T-011".to_string()],
+        &enallagi::pr::PrOpts::default(),
+    );
+    assert!(
+        matches!(second, Err(enallagi::pr::PrError::Conflict { .. })),
+        "{second:?}"
+    );
+}
+
+#[test]
 fn pr_commits_its_description_to_the_state_repo() {
     let (f, _) = landed("exit 0");
     let (code, out) = f.harness(&["pr", "T-001"]);
