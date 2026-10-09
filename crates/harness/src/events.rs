@@ -323,6 +323,143 @@ fn head_sha(git_dir: &Path, common_dir: &Path) -> Option<String> {
         .find_map(|l| l.strip_suffix(name)?.strip_suffix(' ').map(String::from))
 }
 
+fn dash(n: Option<u64>) -> String {
+    n.map_or_else(|| "-".to_string(), |n| n.to_string())
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrefixRow<'a> {
+    pub role: &'a str,
+    pub stage: &'a str,
+    pub task: Option<&'a str>,
+    pub input_tokens: Option<u64>,
+    pub cache_creation_input_tokens: Option<u64>,
+    pub cache_read_input_tokens: Option<u64>,
+    pub repaid: Option<u64>,
+    pub cached: Option<u64>,
+    // no event records the size of the prompt a stage was given; the role file on disk now is not it
+    pub handed_bytes: Option<u64>,
+}
+
+/// One row per role stage in the log: its usage lanes, rendered as text or one JSON object per line.
+pub fn prefix_report(events: &[Event], json: bool) -> String {
+    let mut roles: std::collections::HashMap<(&str, u32, &str), &str> = Default::default();
+    let mut window: Option<(&str, &str)> = None;
+    let mut rows = Vec::new();
+    let mut totals: std::collections::BTreeMap<&str, (u64, u64, u64, u64)> = Default::default();
+    for e in events {
+        match &e.kind {
+            Kind::StageStart {
+                stage,
+                role: Some(role),
+                ..
+            } => {
+                roles.insert((&e.run, e.iter, stage), role);
+                window = Some((window.map_or(e.ts.as_str(), |w| w.0), e.ts.as_str()));
+            }
+            Kind::StageEnd {
+                stage,
+                task,
+                input_tokens,
+                cache_creation_input_tokens,
+                cache_read_input_tokens,
+                ..
+            } => {
+                let Some(role) = roles.remove(&(e.run.as_str(), e.iter, stage.as_str())) else {
+                    continue;
+                };
+                window = window.map(|w| (w.0, e.ts.as_str()));
+                // a stage that logged no input count logged no usage: its other lanes print `-` too
+                let lanes = input_tokens.map(|input| {
+                    let creation = cache_creation_input_tokens.unwrap_or(0);
+                    let read = cache_read_input_tokens.unwrap_or(0);
+                    (input, creation, read)
+                });
+                let total = totals.entry(role).or_default();
+                total.0 += 1;
+                if let Some((input, creation, read)) = lanes {
+                    total.1 += 1;
+                    total.2 += input + creation;
+                    total.3 += read;
+                }
+                rows.push(PrefixRow {
+                    role,
+                    stage,
+                    task: task.as_deref(),
+                    input_tokens: lanes.map(|l| l.0),
+                    cache_creation_input_tokens: lanes.map(|l| l.1),
+                    cache_read_input_tokens: lanes.map(|l| l.2),
+                    repaid: lanes.map(|l| l.0 + l.1),
+                    cached: lanes.map(|l| l.2),
+                    handed_bytes: None,
+                });
+            }
+            _ => {}
+        }
+    }
+    if json {
+        let mut out = String::new();
+        for row in &rows {
+            out.push_str(&serde_json::json!(row).to_string());
+            out.push('\n');
+        }
+        for (role, (stages, measured, repaid, cached)) in totals {
+            let total = serde_json::json!({
+                "total": role,
+                "stages": stages,
+                "with_usage": measured,
+                "repaid": repaid,
+                "cached": cached,
+            });
+            out.push_str(&total.to_string());
+            out.push('\n');
+        }
+        return out;
+    }
+    let Some((from, to)) = window else {
+        return "window: no role stage in the log\n".to_string();
+    };
+    let mut out = format!(
+        "window {from} to {to}: {} role stages, summed as logged\n\
+         repaid = input_tokens + cache_creation_input_tokens, sent in full each stage; \
+         cached = cache_read_input_tokens, re-read at a discount; \
+         handed_bytes = -, the log records no prompt size\n",
+        rows.len()
+    );
+    out.push_str(&format!(
+        "{:<12} {:<10} {:<6} {:>12} {:>27} {:>23} {:>9} {:>9} {:>12}\n",
+        "role",
+        "stage",
+        "task",
+        "input_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "repaid",
+        "cached",
+        "handed_bytes"
+    ));
+    for r in rows {
+        out.push_str(&format!(
+            "{:<12} {:<10} {:<6} {:>12} {:>27} {:>23} {:>9} {:>9} {:>12}\n",
+            r.role,
+            r.stage,
+            r.task.unwrap_or("-"),
+            dash(r.input_tokens),
+            dash(r.cache_creation_input_tokens),
+            dash(r.cache_read_input_tokens),
+            dash(r.repaid),
+            dash(r.cached),
+            dash(r.handed_bytes),
+        ));
+    }
+    for (role, (stages, measured, repaid, cached)) in totals {
+        out.push_str(&format!(
+            "total {role}: {stages} stages, {measured} with usage, repaid {repaid}, cached {cached}\n"
+        ));
+    }
+    out
+}
+
 fn rfc3339_secs(ts: jiff::Timestamp) -> String {
     ts.strftime("%Y-%m-%dT%H:%M:%SZ").to_string()
 }

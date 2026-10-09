@@ -1,4 +1,4 @@
-//! `enallagi skills check|sync|list` -- the CLI surface over `skills`.
+//! `enallagi skills check|sync|list|--cost` -- the CLI surface over `skills`.
 
 use crate::agent;
 use crate::config;
@@ -16,8 +16,9 @@ pub enum SkillsCmd {
 }
 
 pub struct Args {
-    pub cmd: SkillsCmd,
+    pub cmd: Option<SkillsCmd>,
     pub frozen: bool,
+    pub cost: bool,
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
@@ -43,7 +44,27 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     let preset = presets.get(&cfg.agent.preset);
     let ids: Vec<String> = cfg.skill.iter().map(|s| s.id.clone()).collect();
 
-    if let SkillsCmd::List = args.cmd {
+    if args.cost {
+        let dir = root.join(skills::skills_dir(&cfg, preset));
+        let sized: Vec<(String, Option<u64>)> = ids
+            .iter()
+            .map(|id| (id.clone(), skills::dir_bytes(&dir.join(id))))
+            .collect();
+        let loads = |role: &str| {
+            role_source(&root, &cfg, role)
+                .map(|source| skills::required_ids(&config::subst(&source, &cfg)))
+                .unwrap_or_default()
+        };
+        let events = Log::open(&root.join(&cfg.layout.harness_dir)).read()?;
+        print!("{}", skills::cost_report(&sized, &loads, &events));
+        return Ok(0);
+    }
+    // clap requires a subcommand whenever --cost is absent
+    let Some(cmd) = &args.cmd else {
+        return Ok(2);
+    };
+
+    if let SkillsCmd::List = cmd {
         let lock = skills::read_lock(&root, &cfg.layout.harness_dir)?;
         for decl in &cfg.skill {
             let source = match &decl.rev {
@@ -66,7 +87,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         return Ok(0);
     }
 
-    let frozen = args.frozen || matches!(args.cmd, SkillsCmd::Check);
+    let frozen = args.frozen || matches!(cmd, SkillsCmd::Check);
     let opts = ResolveOpts {
         frozen,
         ..ResolveOpts::default()
@@ -85,7 +106,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         ) {
             Ok(resolved) => {
                 for r in resolved {
-                    if let SkillsCmd::Sync = args.cmd {
+                    if let SkillsCmd::Sync = cmd {
                         println!("{}  {}", r.id, r.result);
                     }
                 }
@@ -95,7 +116,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         }
     }
 
-    if let SkillsCmd::Sync = args.cmd {
+    if let SkillsCmd::Sync = cmd {
         if !frozen {
             for id in skills::prune(&root, &cfg, preset)? {
                 println!("{id}  removed");

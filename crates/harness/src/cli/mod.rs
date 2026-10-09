@@ -213,11 +213,15 @@ pub enum Command {
     /// list prints each declared skill with its source and its locked commit or hash.
     Skills {
         /// Which operation to perform
-        cmd: SkillsCmd,
+        #[arg(required_unless_present = "cost")]
+        cmd: Option<SkillsCmd>,
         // `check` is this flag: `sync --frozen` and `check` take the same arm. Hidden here, and
         // accepted for one release so a caller written against the old spelling still runs.
         #[arg(long, hide = true)]
         frozen: bool,
+        /// Print each skill's bytes and the stages that loaded it against the stages that used it
+        #[arg(long, conflicts_with_all = ["cmd", "frozen"])]
+        cost: bool,
     },
     /// Query or edit TASKS.md
     ///
@@ -257,6 +261,9 @@ pub enum Command {
         /// Print one row per task and a footer with the false-completion rate
         #[arg(long)]
         summary: bool,
+        /// Print each role stage's input token lanes
+        #[arg(long, conflicts_with = "summary")]
+        prefix: bool,
     },
     /// Run one lane in its own git worktree and fast-forward the branch
     Worktree {
@@ -347,7 +354,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         Command::Base { task } => base::run(&base::Args { task }),
         Command::Gate { which, task, base } => gate::run(&gate::Args { which, task, base }),
         Command::Hook { name } => hook::run(&hook::Args { name }),
-        Command::Skills { cmd, frozen } => skills::run(&skills::Args { cmd, frozen }),
+        Command::Skills { cmd, frozen, cost } => skills::run(&skills::Args { cmd, frozen, cost }),
         Command::Tasks { cmd, args } => tasks::run(&tasks::Args { cmd, args }),
         Command::Eval { gate, names } => eval::run(&eval::Args { gate, names }),
         Command::Events {
@@ -356,12 +363,14 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             since,
             json,
             summary,
+            prefix,
         } => events::run(&events::Args {
             role,
             task,
             since,
             json,
             summary,
+            prefix,
         }),
         Command::Worktree { n } => worktree::run(&worktree::Args { n }),
     }
@@ -382,7 +391,7 @@ mod tests {
         "hook", "skills", "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 37] = [
+    const FLAGS: [&str; 39] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
@@ -414,12 +423,14 @@ mod tests {
         "issue --dry-run",
         "review --dry-run",
         "gate --base",
+        "skills --cost",
         "eval --gate",
         "events --role",
         "events --task",
         "events --since",
         "events --json",
         "events --summary",
+        "events --prefix",
     ];
 
     fn visible_flags() -> Vec<String> {
