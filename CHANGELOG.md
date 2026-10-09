@@ -5,6 +5,14 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.3.0-beta.7 (2026-10-09)
+
+- a probe `review-merged` reports a block still at `status: review` whose id a product commit on the remote's default branch names; the loop's own state commits do not count
+- a probe `context-behind` reports a Commands line the context template renders that the installed context file lacks
+- `enallagi pr` builds a task whose commits conflict with the default branch on the newest `task/<id>` branch that changed a conflicting file and takes the commits, and names that task in the description; a task branch deleted on the remote is no longer a candidate
+- `enallagi skills --cost` prints each skill's vendored bytes and the role stages that loaded and used it, and names a skill its loading stages never used
+- `enallagi events --prefix` prints each role stage's repaid and cached prefix tokens, and `--json` prints them as objects
+
 ## v0.3.0-beta.6 (2026-10-09)
 
 - the verifier reproduces each test, command and outside fact a task's notes claim before it returns a verdict, and rejects one it could not reproduce
