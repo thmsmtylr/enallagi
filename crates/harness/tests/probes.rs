@@ -96,7 +96,7 @@ fn probes_exit_0_every_probe_ran() {
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     assert_eq!(errors(&results), Vec::<&str>::new());
-    assert_eq!(results.len(), 28, "{}", render(&results));
+    assert_eq!(results.len(), 29, "{}", render(&results));
 }
 
 #[test]
@@ -2347,5 +2347,55 @@ fn an_unmerged_or_done_block_reports_nothing() {
     assert!(
         matches!(&result, ProbeResult::Count(f) if f.is_empty()),
         "{result:?}"
+    );
+}
+
+fn behind(repo: &Repo, cfg: &Config) -> ProbeResult {
+    let ctx = ProbeCtx {
+        root: &repo.root,
+        cfg,
+        check: Some(&GREEN),
+        driver: false,
+    };
+    probes::run_all(&ctx, &["context-behind".to_string()])
+        .pop()
+        .expect("one result")
+        .1
+}
+
+#[test]
+fn a_current_context_file_reports_nothing() {
+    let (repo, cfg) = seeded();
+    let result = behind(&repo, &cfg);
+    assert!(
+        matches!(&result, ProbeResult::Count(f) if f.is_empty()),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn a_dropped_commands_line_is_reported() {
+    let (repo, cfg) = seeded();
+    let file = &cfg.layout.context_file;
+    let text = fs::read_to_string(repo.root.join(file)).expect("context");
+    let dropped = text
+        .lines()
+        .find(|l| l.starts_with("- One loop iteration"))
+        .expect("the line")
+        .to_string();
+    fs::write(
+        repo.root.join(file),
+        text.replace(&format!("{dropped}\n"), ""),
+    )
+    .expect("write");
+    let ProbeResult::Count(found) = behind(&repo, &cfg) else {
+        panic!("{:?}", behind(&repo, &cfg));
+    };
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].path, *file);
+    assert!(found[0].message.contains(&dropped), "{}", found[0].message);
+    assert_eq!(
+        fs::read_to_string(repo.root.join(file)).expect("context"),
+        text.replace(&format!("{dropped}\n"), "")
     );
 }

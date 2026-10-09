@@ -82,6 +82,7 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `upstream-drift` | the checkout's branch and its upstream each carrying commits the other lacks |
 | `branch-protection` | what this checkout and a host tool can establish about the default branch |
 | `review-merged` | a block at `status: review` whose id a product commit on the remote's default branch names |
+| `context-behind` | a Commands line the context template renders that the installed context file lacks |
 | `verdict-flip` | a task flipped from `done` to `ready` more than once in one run |
 | `rejection-repeat` | one rejection reason repeated across tasks |
 | `stage-outlier` | a stage over twice its role's median time or cost |
