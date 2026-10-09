@@ -3,6 +3,7 @@
 # its class by the `file:line` the audit handed it, whatever name the role gives the class.
 set -u
 d=.enallagi/DECISIONS.md
+# shellcheck disable=SC2016  # the backticks are markdown, not a command
 at() { printf '`%s:%s`' "$1" "$(grep -nF -- "$2" "$1" | head -1 | cut -d: -f1)"; }
 # read before the audit runs: the section it writes shifts every DECISIONS.md line below it
 lost=("$(at .enallagi/PROGRESS.md 'merged true on a failed fetch')" "$(at "$d" '## [T-010]')" "$(at "$d" 'REJECTED: the probe returns ok')")

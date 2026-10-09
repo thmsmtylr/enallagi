@@ -61,7 +61,7 @@ notes: https://github.com/o/r/pull/4#discussion_r12
   > this test selects 0 tests, so it passes with the logic deleted
 BLOCK
 
-grep -q 'merged true on a failed fetch' .enallagi/PROGRESS.md && grep -q '^## \[T-012\]' .enallagi/TASKS.md && grep -q 'a mutant survived' .enallagi/DECISIONS.md || {
+if ! { grep -q 'merged true on a failed fetch' .enallagi/PROGRESS.md && grep -q '^## \[T-012\]' .enallagi/TASKS.md && grep -q 'a mutant survived' .enallagi/DECISIONS.md; }; then
   echo "  setup.sh: the six findings did not all land in the fixture" >&2
   exit 1
-}
+fi
