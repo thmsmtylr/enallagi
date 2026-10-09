@@ -25,7 +25,7 @@ JSON
 { git add package.json && git commit -qm 'eval: a bun project' >/dev/null; } || fail "the project commit failed"
 
 # init is not re-run to name the check: it would re-render the role ablate.sh edited
-python3 - <<'PY'
+python3 - <<'PY' || exit 1
 import os
 for d, dirs, files in os.walk('.enallagi'):
     dirs[:] = [x for x in dirs if x != '.git']
@@ -47,7 +47,6 @@ assert '`bun run check` is the one command' in open('.enallagi/SPEC.md', encodin
     'the installed .enallagi/SPEC.md does not name the check'
 assert '## [T-001]' not in open('.enallagi/TASKS.md', encoding='utf-8').read(), 'the seeded queue already holds a T-001 block'
 PY
-[ $? = 0 ] || exit 1
 state 'eval: the check'
 
 # the queue, committed on its own so the verifier's $BASE is the project and the diff is only the work
@@ -100,7 +99,7 @@ JS
 out=$(bun run check 2>&1)
 printf '%s\n' "$out" | grep -q ' 2 pass' || fail "the fixture's check did not run its two tests green: $out"
 { git add src/registry.js src/registry.test.js && git commit -qm 'feat: T-001 register' >/dev/null; } || fail "the T-001 commit failed"
-python3 - <<'PY'
+python3 - <<'PY' || exit 1
 src = open('.enallagi/TASKS.md').read()
 block = src[src.index('## [T-001] add register,'):src.index('## [T-002]')]
 assert block.count('status: ready\n') == 1 and block.endswith('notes:\n\n'), 'the queued T-001 block is not what this fixture expects'
@@ -108,7 +107,6 @@ done = block.replace('status: ready\n', 'status: review\n').replace('notes:\n',
     'notes: implementer: added REGISTRY and register with two tests. `bun run check` → `2 pass 0 fail 3 expect() calls`, exit 0.\n', 1)
 open('.enallagi/TASKS.md', 'w').write(src.replace(block, done))
 PY
-[ $? = 0 ] || exit 1
 cat >>.enallagi/PROGRESS.md <<'ENTRY'
 
 ## 2026-09-15 — T-001 — landed
@@ -138,7 +136,7 @@ JS
 out=$(bun run check 2>&1)
 printf '%s\n' "$out" | grep -q ' 3 pass' || fail "the fixture's check did not run its three tests green: $out"
 { git add src/normalize.js src/normalize.test.js && git commit -qm 'feat: T-002 normalize' >/dev/null; } || fail "the T-002 commit failed"
-python3 - <<'PY'
+python3 - <<'PY' || exit 1
 src = open('.enallagi/TASKS.md').read()
 block = src[src.index('## [T-002] add normalize,'):]
 assert block.count('status: ready\n') == 1 and block.endswith('notes:\n'), 'the queued T-002 block is not what this fixture expects'
@@ -146,7 +144,6 @@ done = block.replace('status: ready\n', 'status: review\n').replace('notes:\n',
     'notes: implementer: added normalize with one test. `bun run check` → `3 pass 0 fail 5 expect() calls`, exit 0.\n')
 open('.enallagi/TASKS.md', 'w').write(src.replace(block, done))
 PY
-[ $? = 0 ] || exit 1
 cat >>.enallagi/PROGRESS.md <<'ENTRY'
 
 ## 2026-09-15 — T-002 — landed
