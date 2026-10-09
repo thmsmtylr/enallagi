@@ -255,8 +255,8 @@ pub enum Command {
         /// Print one row per task and a footer with the false-completion rate
         #[arg(long)]
         summary: bool,
-        /// Print each role stage's input token lanes beside the bytes of its role file
-        #[arg(long)]
+        /// Print each role stage's input token lanes
+        #[arg(long, conflicts_with = "summary")]
         prefix: bool,
     },
     /// Run one lane in its own git worktree and fast-forward the branch

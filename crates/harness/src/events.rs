@@ -327,8 +327,22 @@ fn dash(n: Option<u64>) -> String {
     n.map_or_else(|| "-".to_string(), |n| n.to_string())
 }
 
-/// One row per role stage in the log: its usage lanes and the bytes of the role file it was handed.
-pub fn prefix_report(events: &[Event], handed_bytes: &dyn Fn(&str) -> Option<u64>) -> String {
+#[derive(Debug, Serialize)]
+pub struct PrefixRow<'a> {
+    pub role: &'a str,
+    pub stage: &'a str,
+    pub task: Option<&'a str>,
+    pub input_tokens: Option<u64>,
+    pub cache_creation_input_tokens: Option<u64>,
+    pub cache_read_input_tokens: Option<u64>,
+    pub repaid: Option<u64>,
+    pub cached: Option<u64>,
+    // no event records the size of the prompt a stage was given; the role file on disk now is not it
+    pub handed_bytes: Option<u64>,
+}
+
+/// One row per role stage in the log: its usage lanes, rendered as text or one JSON object per line.
+pub fn prefix_report(events: &[Event], json: bool) -> String {
     let mut roles: std::collections::HashMap<(&str, u32, &str), &str> = Default::default();
     let mut window: Option<(&str, &str)> = None;
     let mut rows = Vec::new();
@@ -368,19 +382,39 @@ pub fn prefix_report(events: &[Event], handed_bytes: &dyn Fn(&str) -> Option<u64
                     total.2 += input + creation;
                     total.3 += read;
                 }
-                rows.push(format!(
-                    "{role:<12} {stage:<10} {:<6} {:>12} {:>27} {:>23} {:>9} {:>9} {:>12}",
-                    task.as_deref().unwrap_or("-"),
-                    dash(lanes.map(|l| l.0)),
-                    dash(lanes.map(|l| l.1)),
-                    dash(lanes.map(|l| l.2)),
-                    dash(lanes.map(|l| l.0 + l.1)),
-                    dash(lanes.map(|l| l.2)),
-                    dash(handed_bytes(role)),
-                ));
+                rows.push(PrefixRow {
+                    role,
+                    stage,
+                    task: task.as_deref(),
+                    input_tokens: lanes.map(|l| l.0),
+                    cache_creation_input_tokens: lanes.map(|l| l.1),
+                    cache_read_input_tokens: lanes.map(|l| l.2),
+                    repaid: lanes.map(|l| l.0 + l.1),
+                    cached: lanes.map(|l| l.2),
+                    handed_bytes: None,
+                });
             }
             _ => {}
         }
+    }
+    if json {
+        let mut out = String::new();
+        for row in &rows {
+            out.push_str(&serde_json::json!(row).to_string());
+            out.push('\n');
+        }
+        for (role, (stages, measured, repaid, cached)) in totals {
+            let total = serde_json::json!({
+                "total": role,
+                "stages": stages,
+                "with_usage": measured,
+                "repaid": repaid,
+                "cached": cached,
+            });
+            out.push_str(&total.to_string());
+            out.push('\n');
+        }
+        return out;
     }
     let Some((from, to)) = window else {
         return "window: no role stage in the log\n".to_string();
@@ -388,7 +422,8 @@ pub fn prefix_report(events: &[Event], handed_bytes: &dyn Fn(&str) -> Option<u64
     let mut out = format!(
         "window {from} to {to}: {} role stages, summed as logged\n\
          repaid = input_tokens + cache_creation_input_tokens, sent in full each stage; \
-         cached = cache_read_input_tokens, re-read at a discount\n",
+         cached = cache_read_input_tokens, re-read at a discount; \
+         handed_bytes = -, the log records no prompt size\n",
         rows.len()
     );
     out.push_str(&format!(
@@ -403,9 +438,19 @@ pub fn prefix_report(events: &[Event], handed_bytes: &dyn Fn(&str) -> Option<u64
         "cached",
         "handed_bytes"
     ));
-    for row in rows {
-        out.push_str(&row);
-        out.push('\n');
+    for r in rows {
+        out.push_str(&format!(
+            "{:<12} {:<10} {:<6} {:>12} {:>27} {:>23} {:>9} {:>9} {:>12}\n",
+            r.role,
+            r.stage,
+            r.task.unwrap_or("-"),
+            dash(r.input_tokens),
+            dash(r.cache_creation_input_tokens),
+            dash(r.cache_read_input_tokens),
+            dash(r.repaid),
+            dash(r.cached),
+            dash(r.handed_bytes),
+        ));
     }
     for (role, (stages, measured, repaid, cached)) in totals {
         out.push_str(&format!(

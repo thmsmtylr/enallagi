@@ -34,8 +34,9 @@ pub(crate) fn keep(e: &Event, opts: &Filter) -> bool {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let harness_dir = crate::config::load(Path::new("."))?.layout.harness_dir;
-    let log = Log::open(Path::new(&harness_dir));
+    let log = Log::open(Path::new(
+        &crate::config::load(Path::new("."))?.layout.harness_dir,
+    ));
     let (pairs, _skipped) = match log.read_lines() {
         Ok(pairs) => pairs,
         Err(err) => {
@@ -61,12 +62,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     }
     if args.prefix {
         let events: Vec<Event> = pairs.into_iter().map(|(_, e)| e).collect();
-        // the rendered file the launcher wrote for the role's last stage, not the source under roles/
-        let handed = |role: &str| {
-            let path = Path::new(&harness_dir).join(format!("run/roles/{role}.md"));
-            std::fs::metadata(path).ok().map(|m| m.len())
-        };
-        print!("{}", prefix_report(&events, &handed));
+        print!("{}", prefix_report(&events, args.json));
         return Ok(0);
     }
 

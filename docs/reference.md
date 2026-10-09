@@ -28,11 +28,13 @@ When that block lands, the launcher replies on the thread with the sha and resol
 No host tool, no such branch, or a failed host call is a warning, never a halt.
 
 `enallagi events --prefix` prints one row per role stage in `events.jsonl`.
-Each row carries the stage's three input token lanes and the bytes of `run/roles/<role>.md`.
+Each row carries the stage's three input token lanes.
+`handed_bytes` prints `-`: no event records the size of the prompt a stage was given.
 `repaid` is input plus cache creation, which every stage pays in full.
 `cached` is the cache read, which a warm cache re-reads at a discount.
 A stage that logged no usage prints `-`.
 The first line names the window the log covers, and no figure is scaled past it.
+`--json` prints one object per row, then one `total` object per role.
 
 `enallagi skills --cost` prints one row per declared skill.
 Each row carries its vendored bytes and two stage counts.

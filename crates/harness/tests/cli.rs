@@ -253,7 +253,7 @@ fn events_summary_counts_an_overturned_done() {
 }
 
 // one implementer stage with usage and a rendered role file, one verifier stage with neither
-fn prefix_in(dir: &std::path::Path) -> String {
+fn prefix_in(dir: &std::path::Path, json: bool) -> String {
     let harness_dir = dir.join(".enallagi");
     std::fs::create_dir_all(harness_dir.join("run/roles")).unwrap();
     std::fs::write(harness_dir.join("run/roles/implementer.md"), "0123456789").unwrap();
@@ -273,6 +273,7 @@ fn prefix_in(dir: &std::path::Path) -> String {
     .unwrap();
     let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["events", "--prefix"])
+        .args(json.then_some("--json"))
         .current_dir(dir)
         .output()
         .expect("run enallagi events --prefix");
@@ -292,7 +293,7 @@ fn row<'a>(report: &'a str, role: &str) -> Vec<&'a str> {
 #[test]
 fn events_prefix_prints_each_role_s_usage() {
     let dir = tempfile::tempdir().unwrap();
-    let report = prefix_in(dir.path());
+    let report = prefix_in(dir.path(), false);
     let header = row(&report, "role");
     let implementer = row(&report, "implementer");
     let at = |name: &str| {
@@ -304,13 +305,32 @@ fn events_prefix_prints_each_role_s_usage() {
     assert_eq!(at("cache_read_input_tokens"), "505740", "{report}");
     assert_eq!(at("repaid"), "54847", "{report}");
     assert_eq!(at("cached"), "505740", "{report}");
-    assert_eq!(at("handed_bytes"), "10", "{report}");
+    // the rendered role file on disk is 10 bytes, and not what any logged stage was given
+    assert_eq!(at("handed_bytes"), "-", "{report}");
+}
+
+#[test]
+fn events_prefix_json_prints_one_object_per_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let report = prefix_in(dir.path(), true);
+    let rows: Vec<serde_json::Value> = report
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{e}: {l}")))
+        .collect();
+    assert_eq!(rows.len(), 4, "{report}");
+    assert_eq!(rows[0]["role"], "implementer", "{report}");
+    assert_eq!(rows[0]["repaid"], 54847, "{report}");
+    assert_eq!(rows[0]["cached"], 505740, "{report}");
+    assert!(rows[0]["handed_bytes"].is_null(), "{report}");
+    assert!(rows[1]["input_tokens"].is_null(), "{report}");
+    assert_eq!(rows[2]["total"], "implementer", "{report}");
+    assert_eq!(rows[2]["repaid"], 54847, "{report}");
 }
 
 #[test]
 fn events_prefix_prints_a_dash_for_no_usage() {
     let dir = tempfile::tempdir().unwrap();
-    let report = prefix_in(dir.path());
+    let report = prefix_in(dir.path(), false);
     let verifier = row(&report, "verifier");
     assert_eq!(verifier[..3], ["verifier", "verify", "T-1"], "{report}");
     assert!(verifier[3..].iter().all(|v| *v == "-"), "{report}");
@@ -319,7 +339,7 @@ fn events_prefix_prints_a_dash_for_no_usage() {
 #[test]
 fn events_prefix_names_its_window_and_no_rate() {
     let dir = tempfile::tempdir().unwrap();
-    let report = prefix_in(dir.path());
+    let report = prefix_in(dir.path(), false);
     let window = report.lines().next().unwrap_or_default();
     assert!(
         window.contains("2026-09-07T00:00:00Z") && window.contains("2026-09-07T00:20:00Z"),
@@ -518,9 +538,10 @@ fn skills_cost_names_an_unused_skill_unproven() {
 #[test]
 fn a_report_flag_refuses_a_flag_it_would_ignore() {
     let dir = tempfile::tempdir().unwrap();
-    let pairs: [&[&str]; 2] = [
+    let pairs: [&[&str]; 3] = [
         &["skills", "sync", "--cost"],
         &["skills", "--frozen", "--cost"],
+        &["events", "--prefix", "--summary"],
     ];
     for args in pairs {
         let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
