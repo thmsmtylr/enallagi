@@ -98,6 +98,16 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
 
     let default = default_branch(root)?;
     git::git(root, &["fetch", "-q", "origin", &default])?;
+    git::git(
+        root,
+        &[
+            "fetch",
+            "-q",
+            "--prune",
+            "origin",
+            "+refs/heads/task/*:refs/remotes/origin/task/*",
+        ],
+    )?;
     let base = format!("origin/{default}");
     // a checkout behind its upstream makes every task's replay conflict on files that are not the task's
     let range = format!("HEAD..{base}");
@@ -109,6 +119,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     }
     let range = format!("{base}..HEAD");
     let landed = git::git(root, &["log", "--format=%B", &base])?;
+    let stacks = stacks(root, opts, &stem, &landed)?;
     let mut stacked: Option<usize> = None;
     let mut on: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     for task in &tasks {
@@ -121,10 +132,10 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
             if gates::names_task(&landed, &blocker) {
                 continue;
             }
-            // the blocker built last is the base; that it carries the others is checked below
-            if let Some(at) = opts.stack_on.iter().position(|id| *id == blocker) {
+            // the newest blocker branch is the base; that it carries the others is checked below
+            if let Some(at) = stacks.iter().position(|s| s.id == blocker) {
                 on.insert(at);
-                stacked = stacked.max(Some(at));
+                stacked = Some(stacked.map_or(at, |s| s.min(at)));
             } else {
                 refusals.push(format!(
                     "{} is blocked by {blocker}, whose product change is not on {base}",
@@ -135,14 +146,14 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     }
     // a branch has one base, so two blockers stack only when the later one already carries the earlier
     if let Some(at) = stacked {
-        let branch = format!("task/{}", opts.stack_on[at]);
-        let history = git::git(root, &["log", "--format=%B", &branch]).unwrap_or_default();
+        let branch = stacks[at].branch();
+        let history = git::git(root, &["log", "--format=%B", &stacks[at].rev]).unwrap_or_default();
         for other in on.iter().filter(|o| **o != at) {
-            let id = &opts.stack_on[*other];
+            let id = &stacks[*other].id;
             if !gates::names_task(&history, id) {
                 refusals.push(format!(
                     "{id} and {} are both unmerged blockers, and {branch} does not carry {id}",
-                    opts.stack_on[at]
+                    stacks[at].id
                 ));
             }
         }
@@ -150,13 +161,6 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     if !refusals.is_empty() {
         return Err(PrError::Refused(refusals));
     }
-    let (onto, base) = match stacked {
-        Some(at) => {
-            let branch = format!("task/{}", opts.stack_on[at]);
-            (branch.clone(), branch)
-        }
-        None => (default.clone(), base),
-    };
 
     let picked = commits(root, &range, ids)?;
     for id in ids {
@@ -173,31 +177,46 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
         return Err(PrError::Refused(refusals));
     }
     let branch = format!("task/{stem}");
-    // under the repository, as a lane's is: a runner that resolves its tools from a parent directory,
-    // as node does node_modules, finds the checkout's own; a system temp directory has none
-    let worktrees = root.join(&dir).join("worktrees");
-    fs::create_dir_all(&worktrees).map_err(io(worktrees.display()))?;
-    let scratch = tempfile::Builder::new()
-        .prefix("pr-")
-        .tempdir_in(&worktrees)
-        .map_err(io(worktrees.display()))?;
-    let wt = scratch.path().join("worktree");
-    let wt_arg = wt.display().to_string();
-    git::git(
-        root,
-        &["worktree", "add", "-q", "-b", &branch, &wt_arg, &base],
-    )?;
-    let built = apply_and_commit(root, &wt, &base, &cfg, &tasks, &picked);
-    git::git(root, &["worktree", "remove", "--force", &wt_arg])?;
-    if let Err(err) = built {
-        git::git(root, &["branch", "-D", &branch])?;
-        return Err(err);
+    let attempt = |rev: &str| try_build(root, &dir, &branch, rev, &cfg, &tasks, &picked);
+    let mut on = stacked.map(|at| &stacks[at]);
+    let mut built = attempt(on.map_or(base.as_str(), |s| s.rev.as_str()));
+    // a change on an earlier unmerged task's lines builds on that task's branch; none taking it keeps the first conflict
+    if let (None, Err(PrError::Conflict { files, .. })) = (on, &built) {
+        let files = files.clone();
+        let touching = |s: &&Stack| {
+            let range = format!("{base}...{}", s.rev);
+            git::git(root, &["diff", "--name-only", &range])
+                .is_ok_and(|changed| changed.lines().any(|l| files.iter().any(|f| f == l)))
+        };
+        for stack in stacks.iter().filter(touching) {
+            let tried = attempt(&stack.rev);
+            if matches!(tried, Err(PrError::Conflict { .. })) {
+                continue;
+            }
+            if tried.is_ok() {
+                on = Some(stack);
+            }
+            built = tried;
+            break;
+        }
     }
+    built?;
+    let (onto, base) = match on {
+        Some(stack) => (stack.branch(), stack.rev.clone()),
+        None => (default.clone(), base),
+    };
 
     let stat = git::git(root, &["diff", "--stat", &base, &branch])?;
     let policy = contribution_policy::find(root).map_err(|e| PrError::Refused(vec![e]))?;
     let refused = opts.push && !opts.policy_read && !policy.is_empty();
     let mut text = describe(root, &dir, &tasks, &picked, &stat)?;
+    if let Some(stack) = on {
+        text.push_str(&format!(
+            "\n## Stacks on\n\nStacks on {}, whose branch `{}` is not on `{default}` yet.\n",
+            stack.id,
+            stack.branch()
+        ));
+    }
     text.push_str(&policy_section(&policy, opts, refused));
     text.push_str(&format!("\npushed: no {}\n", today()));
     if let Some(parent) = description.parent() {
@@ -227,6 +246,93 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     Ok(report)
 }
 
+struct Stack {
+    id: String,
+    /// The ref the branch is built from: `task/<id>`, or `origin/task/<id>` for one an earlier run pushed.
+    rev: String,
+}
+
+impl Stack {
+    fn branch(&self) -> String {
+        format!("task/{}", self.id)
+    }
+}
+
+// the branches a task may build on, newest first: this run's in reverse build order, then the remote's
+fn stacks(root: &Path, opts: &PrOpts, stem: &str, landed: &str) -> Result<Vec<Stack>, PrError> {
+    let mut out: Vec<Stack> = opts
+        .stack_on
+        .iter()
+        .rev()
+        .map(|id| Stack {
+            id: id.clone(),
+            rev: format!("task/{id}"),
+        })
+        .collect();
+    let remote = git::git(
+        root,
+        &[
+            "for-each-ref",
+            "--sort=-committerdate",
+            "--format=%(refname:short)",
+            "refs/remotes/origin/task/",
+        ],
+    )?;
+    for rev in remote.lines() {
+        let Some(id) = rev.strip_prefix("origin/task/") else {
+            continue;
+        };
+        if id == stem || out.iter().any(|s| s.id == id) || gates::names_task(landed, id) {
+            continue;
+        }
+        out.push(Stack {
+            id: id.to_string(),
+            rev: rev.to_string(),
+        });
+    }
+    Ok(out)
+}
+
+fn try_build(
+    root: &Path,
+    dir: &str,
+    branch: &str,
+    base: &str,
+    cfg: &config::Config,
+    tasks: &[Task],
+    picked: &[(String, String)],
+) -> Result<(), PrError> {
+    // under the repository, as a lane's is: a runner that resolves its tools from a parent directory,
+    // as node does node_modules, finds the checkout's own; a system temp directory has none
+    let worktrees = root.join(dir).join("worktrees");
+    fs::create_dir_all(&worktrees).map_err(io(worktrees.display()))?;
+    let scratch = tempfile::Builder::new()
+        .prefix("pr-")
+        .tempdir_in(&worktrees)
+        .map_err(io(worktrees.display()))?;
+    let wt = scratch.path().join("worktree");
+    let wt_arg = wt.display().to_string();
+    git::git(
+        root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--no-track",
+            "-b",
+            branch,
+            &wt_arg,
+            base,
+        ],
+    )?;
+    let built = apply_and_commit(root, &wt, base, cfg, tasks, picked);
+    git::git(root, &["worktree", "remove", "--force", &wt_arg])?;
+    if built.is_err() {
+        git::git(root, &["branch", "-D", branch])?;
+    }
+    built
+}
+
 // a branch built without --push is pushed as it stands; its base is the task branch its parent tips, else the default
 fn push_built(
     root: &Path,
@@ -252,9 +358,14 @@ fn push_built(
             &parent,
             "--format=%(refname:short)",
             "refs/heads/task/",
+            "refs/remotes/origin/task/",
         ],
     )?;
-    let base = match stacked.lines().find(|b| *b != branch) {
+    let base = match stacked
+        .lines()
+        .map(|b| b.strip_prefix("origin/").unwrap_or(b))
+        .find(|b| *b != branch)
+    {
         Some(b) => b.to_string(),
         None => default_branch(root)?,
     };
