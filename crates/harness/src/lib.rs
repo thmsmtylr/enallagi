@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod archive;
+pub mod audit;
 pub mod cli;
 pub mod config;
 pub mod eject;
