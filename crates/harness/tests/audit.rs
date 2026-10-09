@@ -499,3 +499,203 @@ fn a_failed_auditor_writes_nothing() {
     assert!(err.to_string().contains("exited 1"), "{err}");
     assert_eq!(decisions(&repo), before);
 }
+
+fn commit_state(repo: &Repo, subject: &str) -> String {
+    let state = repo.root.join(".enallagi");
+    for (key, value) in [("user.email", "t@t"), ("user.name", "t")] {
+        enallagi::git::git(&state, &["config", key, value]).expect("identity");
+    }
+    enallagi::git::git(&state, &["add", "-A"]).expect("add");
+    enallagi::git::git(
+        &state,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            subject,
+        ],
+    )
+    .expect("commit");
+    enallagi::git::git(&state, &["rev-parse", "--short", "HEAD"]).expect("head")
+}
+
+const RULE: &str =
+    "- [2026-10-01] `lost result`: a result dropped before its caller → assert on what the caller receives";
+const LATER: &str = "friction: spawn dropped the stage result again before the caller saw it\n";
+
+fn earned(repo: &Repo, entry: &str) {
+    let text = decisions(repo).replacen(
+        "## Earned rules\n",
+        &format!("## Earned rules\n\n{entry}\n"),
+        1,
+    );
+    fs::write(repo.root.join(".enallagi/DECISIONS.md"), text).expect("write");
+}
+
+// a rule promoted over the fixture's signal, whose class then recurs in one later friction
+fn recurred(repo: &Repo, revised: &[&str]) -> (String, String) {
+    with_signal(repo);
+    earned(repo, RULE);
+    let sha = commit_state(repo, "a promoted rule");
+    append(repo, ".enallagi/PROGRESS.md", LATER);
+    let (lost, _) = two_classes(repo);
+    let new = at(
+        repo,
+        ".enallagi/PROGRESS.md",
+        "spawn dropped the stage result",
+    );
+    let mut lines = vec![
+        format!("  promoted: {sha}"),
+        format!("  instances: `{}`, `{}`, `{new}`", lost[0], lost[1]),
+    ];
+    lines.extend(revised.iter().map(|r| format!("  revised: {r}")));
+    let text = decisions(repo).replacen(
+        &format!("{RULE}\n"),
+        &format!("{RULE}\n{}\n", lines.join("\n")),
+        1,
+    );
+    fs::write(repo.root.join(".enallagi/DECISIONS.md"), text).expect("write");
+    (sha, new)
+}
+
+fn revision(handle: &str, cites: &[&str]) -> String {
+    learning("lost result", LOST, cites).replacen(
+        "END ENALLAGI LEARNING",
+        &format!("revises: `{handle}`\nEND ENALLAGI LEARNING"),
+        1,
+    )
+}
+
+#[test]
+fn an_audit_stamps_each_rule_with_its_promotion() {
+    let (repo, cfg) = seeded();
+    earned(&repo, RULE);
+    let sha = commit_state(&repo, "a promoted rule");
+    commit_state(&repo, "a later round");
+    audit::run(&repo.root, &cfg).expect("audit");
+    assert!(
+        decisions(&repo).contains(&format!("{RULE}\n  promoted: {sha}\n")),
+        "{}",
+        decisions(&repo)
+    );
+}
+
+#[test]
+fn an_ineffective_rule_goes_back_for_revision() {
+    let (repo, cfg) = seeded();
+    let (sha, new) = recurred(&repo, &[]);
+    let handle = at(&repo, ".enallagi/DECISIONS.md", "`lost result`");
+    let (lost, _) = two_classes(&repo);
+    answering(&repo, &revision(&handle, &[&lost[2], &new]));
+    let report = audit::run(&repo.root, &cfg).expect("audit");
+    let asked = prompts(&repo);
+    assert_eq!(asked.len(), 1, "{asked:#?}");
+    assert!(asked[0].contains(&format!("- `{handle}`")), "{}", asked[0]);
+    assert!(asked[0].contains(&format!("`{new}`")), "{}", asked[0]);
+    assert!(asked[0].contains(&sha), "{}", asked[0]);
+    let classes: Vec<&str> = report.proposed.iter().map(|p| p.class.as_str()).collect();
+    assert_eq!(classes, ["lost result"], "{report:?}");
+    let written = decisions(&repo);
+    assert!(
+        written.contains(&format!("- [proposed] `lost result`: {LOST}")),
+        "{written}"
+    );
+    let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
+    assert!(
+        written.contains(&format!("  revised: {today} `lost result`\n")),
+        "{written}"
+    );
+
+    fs::remove_file(repo.root.join("src/.prompts")).expect("clear");
+    let again = audit::run(&repo.root, &cfg).expect("audit");
+    assert!(again.proposed.is_empty(), "{again:?}");
+    assert!(
+        prompts(&repo)
+            .iter()
+            .all(|p| !p.contains(&format!("- `{handle}`"))),
+        "{:#?}",
+        prompts(&repo)
+    );
+}
+
+#[test]
+fn a_promoted_revision_replaces_its_rule() {
+    let (repo, cfg) = seeded();
+    let revised = "- [2026-10-05] `lost result v2`: spawn drops the result → return it whole";
+    earned(
+        &repo,
+        &format!("{RULE}\n  revised: 2026-10-02 `lost result v2`\n{revised}"),
+    );
+    audit::run(&repo.root, &cfg).expect("audit");
+    let written = decisions(&repo);
+    assert!(!written.contains(RULE), "{written}");
+    assert!(
+        written.contains(&format!(
+            "{revised}\n  revised: 2026-10-02 `lost result v2`\n"
+        )),
+        "{written}"
+    );
+}
+
+#[test]
+fn a_rule_recurring_after_two_revisions_is_removed() {
+    let (repo, cfg) = seeded();
+    let (_, new) = recurred(
+        &repo,
+        &["2026-10-02 `lost result`", "2026-10-04 `lost result`"],
+    );
+    let handle = at(&repo, ".enallagi/DECISIONS.md", "`lost result`");
+    audit::run(&repo.root, &cfg).expect("audit");
+    let written = decisions(&repo);
+    assert!(!written.contains(RULE), "{written}");
+    let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
+    let expired = written
+        .split("## Expired findings")
+        .nth(1)
+        .unwrap_or_else(|| panic!("{written}"));
+    assert!(
+        expired
+            .lines()
+            .any(|l| l.starts_with(&format!("- [{today}] "))
+                && l.contains("`lost result`")
+                && l.contains("2 revisions")
+                && l.contains(&format!("`{new}`"))),
+        "{written}"
+    );
+    assert!(
+        prompts(&repo)
+            .iter()
+            .all(|p| !p.contains(&format!("- `{handle}`"))),
+        "{:#?}",
+        prompts(&repo)
+    );
+}
+
+#[test]
+fn a_rule_not_recurring_is_not_handed_back() {
+    let (repo, cfg) = seeded();
+    with_signal(&repo);
+    let (lost, _) = two_classes(&repo);
+    earned(
+        &repo,
+        &format!("{RULE}\n  instances: `{}`, `{}`", lost[0], lost[1]),
+    );
+    let sha = commit_state(&repo, "a promoted rule");
+    let handle = at(&repo, ".enallagi/DECISIONS.md", "`lost result`");
+    audit::run(&repo.root, &cfg).expect("audit");
+    let written = decisions(&repo);
+    assert!(
+        written.contains(&format!("  promoted: {sha}\n")),
+        "{written}"
+    );
+    assert!(!written.contains("  revised: "), "{written}");
+    assert!(
+        prompts(&repo)
+            .iter()
+            .all(|p| !p.contains(&format!("- `{handle}`"))),
+        "{:#?}",
+        prompts(&repo)
+    );
+}
