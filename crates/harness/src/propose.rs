@@ -1,4 +1,4 @@
-//! Asks the configured agent for the check when no runner preset matches the tree, and writes it only once the check proves it.
+//! Asks the configured agent for the check when no runner preset matches the tree, or for its tally when one other than cargo does, and writes it only once the check proves it.
 
 use crate::config::{self, Config};
 use crate::runners::{self, Detected};
@@ -60,6 +60,28 @@ impl Proposal {
     }
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TallyProposal {
+    tally: String,
+    #[serde(default)]
+    origin: BTreeMap<String, String>,
+}
+
+impl TallyProposal {
+    fn keys(&self) -> Vec<Detected> {
+        vec![Detected {
+            key: "check.tally".to_string(),
+            value: self.tally.clone().into(),
+            origin: self
+                .origin
+                .get("tally")
+                .cloned()
+                .unwrap_or_else(|| "agent".to_string()),
+        }]
+    }
+}
+
 pub enum Outcome {
     Written(Vec<Detected>),
     /// Each attempt's proposal and the step it failed.
@@ -96,6 +118,105 @@ pub fn run(root: &Path, cfg: &Config) -> anyhow::Result<Outcome> {
         Err(err) => refused.push((Vec::new(), err.to_string())),
     }
     Ok(Outcome::Refused(refused))
+}
+
+/// Whether init asks for `check.tally` alone: the check is named, its tally is not, and exactly
+/// one runner preset other than cargo, whose `test result:` lines need no pattern, matched the tree.
+pub fn wants_tally(root: &Path, cfg: &Config) -> bool {
+    if cfg.check.command.is_empty() || !cfg.check.tally.is_empty() {
+        return false;
+    }
+    matches!(runners::detect(root).candidates.as_slice(), [one] if one.name != "cargo")
+}
+
+/// Runs the check once on the clean tree, asks for a `tally` that counts it, and writes it only
+/// when it counts some passed and none failed; a refusal is sent back once with the lines it saw.
+pub fn run_tally(root: &Path, cfg: &Config) -> anyhow::Result<Outcome> {
+    crate::agent::catch_stop_signals();
+    let clean = step(
+        &format!("running `{}` on the clean tree", cfg.check.command),
+        || crate::gates::check_delta(root, cfg, false),
+    );
+    if let Some(reason) = &clean.timed_out {
+        return Ok(Outcome::Refused(vec![(Vec::new(), reason.clone())]));
+    }
+    if clean.red {
+        return Ok(Outcome::Refused(vec![(
+            Vec::new(),
+            format!(
+                "the check exits {} on the clean tree:\n{}",
+                clean.exit,
+                clean.tail(20).join("\n")
+            ),
+        )]));
+    }
+    let seen = clean.tail(40).join("\n");
+    let mut refused: Vec<(Vec<Detected>, String)> = Vec::new();
+    let first: TallyProposal = ask_as(root, cfg, &tally_prompt(&cfg.check.command, &seen))?;
+    let Err(step) = counts(&first.tally, &clean.output) else {
+        return written(root, first.keys());
+    };
+    refused.push((first.keys(), step.clone()));
+    let again = format!(
+        "{}\nThis pattern was refused:\ntally = {:?}\n\nThe step it failed:\n{step}\n\nPropose again with that fixed.\n",
+        tally_prompt(&cfg.check.command, &seen),
+        first.tally
+    );
+    match ask_as::<TallyProposal>(root, cfg, &again) {
+        Ok(second) => match counts(&second.tally, &clean.output) {
+            Ok(()) => return written(root, second.keys()),
+            Err(step) => refused.push((second.keys(), step)),
+        },
+        Err(err) => refused.push((Vec::new(), err.to_string())),
+    }
+    Ok(Outcome::Refused(refused))
+}
+
+// the output is the clean run's, so a pattern is judged against lines the check really printed
+fn counts(pattern: &str, output: &str) -> Result<(), String> {
+    let re = regex::Regex::new(pattern).map_err(|e| format!("tally: {e}"))?;
+    let names: Vec<&str> = re.capture_names().flatten().collect();
+    if !names.contains(&"passed") || !names.contains(&"failed") {
+        return Err("tally needs both named groups, passed and failed".to_string());
+    }
+    let t = crate::gates::tally(output, pattern);
+    if t.passed == 0 || t.failed != 0 {
+        let matched: Vec<&str> = output.lines().filter(|l| re.is_match(l)).collect();
+        return Err(format!(
+            "on the clean tree tally counts {} passed and {} failed, and a green suite counts some passed and none failed.\nThe lines it matched:\n{}",
+            t.passed,
+            t.failed,
+            matched.join("\n")
+        ));
+    }
+    Ok(())
+}
+
+fn tally_prompt(command: &str, seen: &str) -> String {
+    format!(
+        "This repository's check is `{command}`, and enallagi reads the counts in its summary with \
+one regex named `tally`. The lines below are the end of one green run of the check on the clean \
+tree. Read them, and the runner's configuration if they are not enough. Do not edit, create or \
+delete any file, and install nothing: enallagi matches the answer against this output itself.
+
+`tally` is read by the Rust `regex` crate: no look-around and no backreferences. It is matched \
+against each output line with every ANSI escape sequence already removed. Its named groups \
+`passed` and `failed` capture the counts in the runner's summary, and every match on every line \
+is summed, so one line may carry both. Over this run it must count some passed and none failed.
+
+The check's last lines:
+{seen}
+
+End the reply with exactly one block in this form, TOML between the two marker lines:
+
+{BEGIN}
+tally = 'a regex with named groups passed and failed, matched against each output line'
+
+[origin]
+tally = \"the output line or file:line the pattern was read from\"
+{END}
+"
+    )
 }
 
 fn written(root: &Path, keys: Vec<Detected>) -> anyhow::Result<Outcome> {
@@ -144,6 +265,14 @@ test_decl_patterns = \"file:line\"
 }
 
 fn ask(root: &Path, cfg: &Config, prompt: &str) -> anyhow::Result<Proposal> {
+    ask_as(root, cfg, prompt)
+}
+
+fn ask_as<T: serde::de::DeserializeOwned>(
+    root: &Path,
+    cfg: &Config,
+    prompt: &str,
+) -> anyhow::Result<T> {
     let presets = crate::agent::presets();
     let resolved = crate::agent::resolve(&cfg.agent, "default", &presets)?;
     let dir = &cfg.layout.harness_dir;
@@ -165,7 +294,7 @@ fn ask(root: &Path, cfg: &Config, prompt: &str) -> anyhow::Result<Proposal> {
     let result = step(&label, || {
         crate::agent::spawn(&spawn, &mut events, &stop_file, &rate_limit)
     })?;
-    parse(&result.output).ok_or_else(|| {
+    parse_as(&result.output).ok_or_else(|| {
         anyhow::anyhow!(
             "the agent exited {} and printed no `{BEGIN}` block that parses",
             result.exit
@@ -175,6 +304,10 @@ fn ask(root: &Path, cfg: &Config, prompt: &str) -> anyhow::Result<Proposal> {
 
 /// The last marked block in the output that parses; a JSON event line is read for the strings it carries.
 pub fn parse(output: &str) -> Option<Proposal> {
+    parse_as(output)
+}
+
+fn parse_as<T: serde::de::DeserializeOwned>(output: &str) -> Option<T> {
     let mut texts = vec![String::new()];
     for line in output.lines() {
         match serde_json::from_str::<serde_json::Value>(line) {

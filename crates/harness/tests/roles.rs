@@ -261,3 +261,25 @@ fn the_notes_step_requires_the_author_marker() {
         "step 6 wants IMPLEMENTER: {step}"
     );
 }
+
+// each phrase is one reproduction rule; losing one lets an unreproduced claim reach done
+#[test]
+fn the_verifier_reproduces_each_claim() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/verifier.md");
+    let text = fs::read_to_string(&source).expect("read roles/verifier.md");
+    for want in [
+        "For each test the diff adds or changes",
+        "run that test alone",
+        "`git diff --quiet <file>` exits 0",
+        "still passes with its logic removed is a rejection",
+        "For each command, flag or probe the diff adds",
+        "read-only against this repository",
+        "For each fact about an outside tool",
+        "A check that exits non-zero is a rejection",
+        "never put down to the environment",
+        "out of a probe's reach",
+        "A verdict line with neither",
+    ] {
+        assert!(text.contains(want), "roles/verifier.md wants {want:?}");
+    }
+}

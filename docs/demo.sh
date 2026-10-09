@@ -23,7 +23,7 @@ if [ ! -x "$ENALLAGI_BIN" ]; then
 fi
 export ENALLAGI_BIN
 
-D=$(mktemp -d) || exit 3
+D=$(mktemp -d "${TMPDIR:-/tmp}/enallagi-demo.XXXXXX") || exit 3
 # the machine is left as it was found, on every exit path
 trap 'rm -rf "$D"' EXIT INT TERM
 

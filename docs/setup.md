@@ -74,6 +74,12 @@ A refused proposal goes back to the agent once, with the step it failed.
 A second refusal prints each value and both steps, and writes nothing.
 The agent is asked only on a terminal, never under `--yes`, unless `--propose-check` is given.
 
+A detected runner other than cargo sets the check but not `check.tally`.
+Init then asks the agent for `check.tally` alone, and leaves the check as detection wrote it.
+It runs the check once on the clean tree and writes the pattern only when it counts some passed and none failed.
+A refused pattern goes back once with the lines the check printed.
+Cargo is never asked, since its `test result:` lines need no pattern.
+
 The seven runners and their `fail_name` patterns are in [configuration.md](configuration.md#checkfail_name).
 
 Init then writes `.enallagi/enallagi.toml` and renders the role prompts, `RAILS.md`, the loop's

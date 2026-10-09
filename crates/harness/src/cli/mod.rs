@@ -1,5 +1,6 @@
 //! The parser and the dispatcher: one clap `Command` variant per subcommand, and `run` hands each to the sibling module of the same name.
 
+mod audit;
 mod base;
 mod eject;
 mod eval;
@@ -177,6 +178,11 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Propose a learning for each class of finding that recurs
+    ///
+    /// Reads review blocks, frictions and rejections, and writes proposed entries to DECISIONS.md.
+    /// The `auditor` role names each class, and it sits in no pipeline.
+    Audit,
     /// Print the product commit a task was queued against
     ///
     /// That commit is the base a gate measures the task's diff from.
@@ -337,6 +343,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         }),
         Command::Issue { reference, dry_run } => issue::run(&issue::Args { reference, dry_run }),
         Command::Review { reference, dry_run } => review::run(&review::Args { reference, dry_run }),
+        Command::Audit => audit::run(),
         Command::Base { task } => base::run(&base::Args { task }),
         Command::Gate { which, task, base } => gate::run(&gate::Args { which, task, base }),
         Command::Hook { name } => hook::run(&hook::Args { name }),
@@ -370,9 +377,9 @@ mod tests {
     const CI: &str = include_str!("../../../../.github/workflows/ci.yml");
     const RELEASE: &str = include_str!("../../../../.github/workflows/release.yml");
 
-    const SUBCOMMANDS: [&str; 16] = [
-        "init", "eject", "run", "watch", "probe", "pr", "issue", "review", "base", "gate", "hook",
-        "skills", "tasks", "eval", "events", "worktree",
+    const SUBCOMMANDS: [&str; 17] = [
+        "init", "eject", "run", "watch", "probe", "pr", "issue", "review", "audit", "base", "gate",
+        "hook", "skills", "tasks", "eval", "events", "worktree",
     ];
 
     const FLAGS: [&str; 37] = [
@@ -557,7 +564,8 @@ jobs:
         let wide: Vec<&str> = help.lines().filter(|l| l.chars().count() > 100).collect();
         assert!(wide.is_empty(), "past 100 columns: {wide:#?}");
         let lines = help.lines().count();
-        assert!(lines <= 25, "--help is {lines} lines");
+        // one line per subcommand, and nine for the usage, the headings and the two options
+        assert!(lines <= SUBCOMMANDS.len() + 9, "--help is {lines} lines");
     }
 
     #[test]
