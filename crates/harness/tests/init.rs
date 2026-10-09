@@ -1994,3 +1994,78 @@ fn a_fail_name_matching_a_pass_is_refused() {
         enallagi::propose::Outcome::Written(_) => panic!("written"),
     }
 }
+
+// a suite a runner preset detects, its check already named, and a scripted agent that logs each
+// prompt it is given and answers with one `tally`
+fn detected_suite(manifest: &str, tally: &str) -> Repo {
+    let repo = Repo::new();
+    repo.write(manifest, "module fixture\n");
+    repo.write("t/a_test.sh", "test a_passes\n");
+    repo.write("run.sh", PROBE_RUNNER);
+    let argv = repo.stub_agent(&format!(
+        "printf '%s\\n----\\n' \"$1\" >> src/.prompts\ncat <<'BLOCK'\nBEGIN ENALLAGI CHECK\ntally = '{tally}'\n\n[origin]\ntally = \"run.sh:7\"\nEND ENALLAGI CHECK\nBLOCK\n"
+    ));
+    repo.write(
+        ".enallagi/enallagi.toml",
+        &format!(
+            "[agent]\npreset = \"custom\"\ncommand = {argv:?}\n\n[check]\ncommand = \"sh run.sh\"\nfail_name = '^FAIL (.+)$'\n"
+        ),
+    );
+    repo.commit_all("suite");
+    repo
+}
+
+fn prompts(repo: &Repo) -> Vec<String> {
+    fs::read_to_string(repo.root.join("src/.prompts"))
+        .unwrap_or_default()
+        .split("\n----\n")
+        .filter(|p| !p.trim().is_empty())
+        .map(String::from)
+        .collect()
+}
+
+#[test]
+fn a_detected_runner_is_asked_for_its_tally() {
+    let pattern = r"^(?P<passed>\d+) passed, (?P<failed>\d+) failed$";
+    let repo = detected_suite("go.mod", pattern);
+    let unattended = harness_init(&repo, &["--yes"]);
+    assert!(prompts(&repo).is_empty(), "{unattended}");
+    let stdout = harness_init(&repo, &["--propose-check"]);
+    assert_eq!(prompts(&repo).len(), 1, "{stdout}");
+    assert!(stdout.contains("  proposed: check.tally = "), "{stdout}");
+    let cfg = enallagi::config::load(&repo.root).expect("config");
+    assert_eq!(cfg.check.tally, pattern);
+    assert_eq!(cfg.check.command, "sh run.sh");
+    assert_eq!(cfg.check.fail_name, "^FAIL (.+)$");
+}
+
+#[test]
+fn a_tally_counting_nothing_is_refused_twice() {
+    let blind = r"^(?P<passed>\d+) ok, (?P<failed>\d+) not ok$";
+    let repo = detected_suite("go.mod", blind);
+    let stdout = harness_init(&repo, &["--propose-check"]);
+    let asked = prompts(&repo);
+    assert_eq!(asked.len(), 2, "{stdout}");
+    assert!(asked[1].contains("1 passed, 0 failed"), "{}", asked[1]);
+    assert_eq!(stdout.matches("  refused: ").count(), 2, "{stdout}");
+    assert_eq!(
+        stdout.matches("  proposed: check.tally = ").count(),
+        2,
+        "{stdout}"
+    );
+    assert!(stdout.contains("  nothing written"), "{stdout}");
+    let cfg = enallagi::config::load(&repo.root).expect("config");
+    assert_eq!(cfg.check.tally, "");
+}
+
+#[test]
+fn a_cargo_runner_is_never_asked_for_a_tally() {
+    let repo = detected_suite(
+        "Cargo.toml",
+        r"^(?P<passed>\d+) passed, (?P<failed>\d+) failed$",
+    );
+    let stdout = harness_init(&repo, &["--propose-check"]);
+    assert!(prompts(&repo).is_empty(), "{stdout}");
+    let cfg = enallagi::config::load(&repo.root).expect("config");
+    assert_eq!(cfg.check.tally, "");
+}

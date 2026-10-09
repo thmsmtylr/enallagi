@@ -132,6 +132,32 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             }
             Err(err) => println!("  no check proposed: {err}"),
         }
+    } else if ask && crate::propose::wants_tally(&root, &cfg) {
+        println!(
+            "  no check.tally: asking the {} agent for one, then matching it against the check's output",
+            cfg.agent.preset
+        );
+        match crate::propose::run_tally(&root, &cfg) {
+            Ok(crate::propose::Outcome::Written(keys)) => {
+                for key in &keys {
+                    println!("  proposed: {} = {} ({})", key.key, key.value, key.origin);
+                }
+                println!(
+                    "  verified: the tally counts some passed and none failed on the clean tree"
+                );
+                cfg = config::load(&root)?;
+            }
+            Ok(crate::propose::Outcome::Refused(attempts)) => {
+                for (keys, step) in &attempts {
+                    for key in keys {
+                        println!("  proposed: {} = {} ({})", key.key, key.value, key.origin);
+                    }
+                    println!("  refused: {step}");
+                }
+                println!("  nothing written");
+            }
+            Err(err) => println!("  no check.tally proposed: {err}"),
+        }
     }
 
     // the skills a lane loads, vendored now rather than at the first stage; a stdin that is not a
