@@ -312,13 +312,17 @@ pub fn task_base(root: &Path, harness_dir: &str, task: &str) -> Result<String, S
         return Ok(commit);
     }
     let subject = git(&repo, &["log", "-1", "--format=%s", &commit]).map_err(|e| e.to_string())?;
+    recorded_sha(&subject).map(String::from).ok_or_else(|| {
+        format!("the state commit that added {task}, \"{subject}\", records no product sha")
+    })
+}
+
+/// The product sha `commit_instance` appends to every state commit's subject; None on a product commit.
+pub fn recorded_sha(subject: &str) -> Option<&str> {
     subject
         .rsplit_once(" at ")
-        .map(|(_, sha)| sha.to_string())
+        .map(|(_, sha)| sha)
         .filter(|sha| sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()))
-        .ok_or_else(|| {
-            format!("the state commit that added {task}, \"{subject}\", records no product sha")
-        })
 }
 
 #[cfg(test)]

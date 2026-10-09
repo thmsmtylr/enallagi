@@ -34,6 +34,22 @@ A learning that overlaps a standing entry adds its instances to that entry.
 A dated `killed: YYYY-MM-DD` line under an entry keeps its class from being proposed again.
 Moving an entry under `## Earned rules` accepts it.
 
+`enallagi events --prefix` prints one row per role stage in `events.jsonl`.
+Each row carries the stage's three input token lanes.
+`handed_bytes` prints `-`: no event records the size of the prompt a stage was given.
+`repaid` is input plus cache creation, which every stage pays in full.
+`cached` is the cache read, which a warm cache re-reads at a discount.
+A stage that logged no usage prints `-`.
+The first line names the window the log covers, and no figure is scaled past it.
+`--json` prints one object per row, then one `total` object per role.
+
+`enallagi skills --cost` prints one row per declared skill.
+Each row carries its vendored bytes and two stage counts.
+`loaded` counts the role stages whose role file names the skill.
+`used` counts the stages whose transcript shows a `Skill` tool call for it.
+A skill that no stage loading it ever used is named as unproven in this log.
+`--cost` takes no subcommand and no `--frozen`.
+
 ## Gates
 
 `[[stage]].post` names the gates run after a stage. A failed gate sends the task back to `ready` or
@@ -81,6 +97,8 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `contribution-policy` | a guide sentence that refuses or conditions generated changes |
 | `upstream-drift` | the checkout's branch and its upstream each carrying commits the other lacks |
 | `branch-protection` | what this checkout and a host tool can establish about the default branch |
+| `review-merged` | a block at `status: review` whose id a product commit on the remote's default branch names |
+| `context-behind` | a Commands line the context template renders that the installed context file lacks |
 | `verdict-flip` | a task flipped from `done` to `ready` more than once in one run |
 | `rejection-repeat` | one rejection reason repeated across tasks |
 | `stage-outlier` | a stage over twice its role's median time or cost |

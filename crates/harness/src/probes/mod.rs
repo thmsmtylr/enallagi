@@ -7,6 +7,7 @@ pub mod telemetry;
 mod branch_protection;
 mod check_red;
 mod check_unnamed;
+mod context_behind;
 mod driver;
 mod friction_repeat;
 mod hash_uncovered;
@@ -21,6 +22,7 @@ mod queue_hygiene;
 mod queue_uncovered;
 mod rail_unenforced;
 mod rejection_stale;
+mod review_merged;
 mod skill_ungated;
 mod spec_untested;
 mod title_length;
@@ -80,6 +82,8 @@ pub const NAMES: &[&str] = &[
     "contribution-policy",
     "upstream-drift",
     "branch-protection",
+    "review-merged",
+    "context-behind",
     "verdict-flip",
     "rejection-repeat",
     "stage-outlier",
@@ -90,7 +94,7 @@ pub const NAMES: &[&str] = &[
 
 type ProbeFn = fn(&ProbeCtx) -> ProbeResult;
 
-fn registry() -> [(&'static str, ProbeFn); 27] {
+fn registry() -> [(&'static str, ProbeFn); 29] {
     [
         ("spec-untested", spec_untested::probe),
         ("queue-uncovered", queue_uncovered::probe),
@@ -113,6 +117,8 @@ fn registry() -> [(&'static str, ProbeFn); 27] {
         ("contribution-policy", contribution_policy::probe),
         ("upstream-drift", upstream_drift::probe),
         ("branch-protection", branch_protection::probe),
+        ("review-merged", review_merged::probe),
+        ("context-behind", context_behind::probe),
         ("verdict-flip", telemetry_probe::verdict_flip),
         ("rejection-repeat", telemetry_probe::rejection_repeat),
         ("stage-outlier", telemetry_probe::stage_outlier),

@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::events::{render_line, stage_of, task_of, Event, Kind, Log};
+use crate::events::{prefix_report, render_line, stage_of, task_of, Event, Kind, Log};
 
 pub struct Args {
     pub role: Option<String>,
@@ -10,6 +10,7 @@ pub struct Args {
     pub since: Option<String>,
     pub json: bool,
     pub summary: bool,
+    pub prefix: bool,
 }
 
 // --role isn't here: it needs the whole stream (a stage's surrounding events, not just matches), so it's a separate pass in run
@@ -57,6 +58,11 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     if args.summary {
         let rows = summarize(pairs.iter().map(|(_, e)| e));
         print_summary(&rows, args.json);
+        return Ok(0);
+    }
+    if args.prefix {
+        let events: Vec<Event> = pairs.into_iter().map(|(_, e)| e).collect();
+        print!("{}", prefix_report(&events, args.json));
         return Ok(0);
     }
 
