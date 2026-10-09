@@ -28,11 +28,15 @@ When that block lands, the launcher replies on the thread with the sha and resol
 No host tool, no such branch, or a failed host call is a warning, never a halt.
 
 `enallagi audit` reads review findings, frictions and rejections, and writes proposed learnings to DECISIONS.md: a model names each class, and code checks each citation.
-It sits in no pipeline and never accepts what it proposes.
+`enallagi run` runs it once when a round ends, after its last iteration.
+It never accepts what it proposes.
 A learning that overlaps a standing entry adds its instances to that entry.
 
-A dated `killed: YYYY-MM-DD` line under an entry keeps its class from being proposed again.
-Moving an entry under `## Earned rules` accepts it.
+The adjudicator decides each proposed learning.
+It promotes one under `## Earned rules` only with three or more instances and a passing `enallagi eval --gate`.
+Otherwise it writes a dated `killed: YYYY-MM-DD` line under the entry, which keeps its class from being proposed again.
+A learning undecided for `queue.proposed_rounds` rounds moves to `## Expired findings` as a dated line.
+The run digest counts and names the learnings proposed, promoted, killed and expired.
 
 `enallagi events --prefix` prints one row per role stage in `events.jsonl`.
 Each row carries the stage's three input token lanes.
@@ -84,6 +88,7 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `check-unnamed` | a context file whose Commands section omits the configured check |
 | `learning-unenforced` | a LEARNINGS.md entry naming no file, command or hook |
 | `learning-ungated` | a dated rule naming no eval, or a library past its cap |
+| `learning-standing` | a proposed learning still undecided, with its age and the rounds left before it expires |
 | `skill-ungated` | a `[[skill]]` whose `gate` is `none` |
 | `ponytail-ceiling` | a `ponytail:` marker no kill line names |
 | `rejection-stale` | a block whose last verdict is REJECTED and whose status is not `ready` |

@@ -16,7 +16,7 @@ use crate::probes::{self, CheckOutcome, ProbeCtx};
 use crate::queue::{self, Queue};
 use crate::roles;
 use crate::skills::{self, ResolveOpts};
-use crate::{archive, git, pr, review};
+use crate::{archive, audit, git, pr, review};
 
 // A lane running ps to check for competing writers must ignore its parent.
 const LANE: &str = "You are this loop's own lane, spawned by the harness. There is no human in this session
@@ -26,11 +26,11 @@ rule is about a second operator, and it does not apply to the process that start
 
 const SCOUT: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/scout.md: read that file first and follow it exactly. Run `enallagi probe` and append to TASKS.md one 'status: proposed' block per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero blocks, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop.";
 
-const ADJUDICATOR: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/adjudicator.md: read that file first and follow it exactly. Act on exactly the 'status: proposed' blocks this prompt names, in the order it names them. Promote it to 'status: ready' with a scope and criteria an agent that has read only __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. A finding whose fix needs a change to __SPEC__ or __CONTEXT_FILE__ is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop.";
+const ADJUDICATOR: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/adjudicator.md: read that file first and follow it exactly. Act on exactly the 'status: proposed' blocks this prompt names, in the order it names them. Promote it to 'status: ready' with a scope and criteria an agent that has read only __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. Decide each learning under '## Proposed learnings' in DECISIONS.md the way your role file says. A finding whose fix needs a change to __SPEC__ or __CONTEXT_FILE__ is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop.";
 
-const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Your role is defined in __ENALLAGI_DIR__/run/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the product paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason. Never stage or commit TASKS.md, PROGRESS.md or any other file under __ENALLAGI_DIR__: this loop commits them when your stage ends. An implementation left uncommitted is a lost iteration.";
+const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Read the rules this loop earned with `sed -n '/^## Earned rules/,/^## Rejected findings/p' __ENALLAGI_DIR__/DECISIONS.md`. Your role is defined in __ENALLAGI_DIR__/run/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the product paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason. Never stage or commit TASKS.md, PROGRESS.md or any other file under __ENALLAGI_DIR__: this loop commits them when your stage ends. An implementation left uncommitted is a lost iteration.";
 
-const VERIFIER: &str = "Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons; this loop commits the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop.";
+const VERIFIER: &str = "Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Read the rules this loop earned with `sed -n '/^## Earned rules/,/^## Rejected findings/p' __ENALLAGI_DIR__/DECISIONS.md`. Your role is defined in __ENALLAGI_DIR__/run/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons; this loop commits the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop.";
 
 const GENERIC: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/__ROLE__.md: read that file first and follow it exactly. Then stop.";
 
@@ -149,6 +149,16 @@ pub struct Digest {
     pub proposed_standing: usize,
     pub proposed_oldest: usize,
     pub expired: usize,
+    pub learnings: Learnings,
+}
+
+// each names the learning's class
+#[derive(Debug, Clone, Default)]
+pub struct Learnings {
+    pub proposed: Vec<String>,
+    pub promoted: Vec<String>,
+    pub killed: Vec<String>,
+    pub expired: Vec<String>,
 }
 
 // an empty promoted/killed pair means nothing to decide only if the stage both spawned and ended
@@ -420,6 +430,7 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         spent_tokens: 0,
         needs_spec_at_start: Vec::new(),
         proposed_at_start: Vec::new(),
+        learnings_at_start: Vec::new(),
         dry_rounds: 0,
         dry_pipeline: None,
         spent: Vec::new(),
@@ -453,6 +464,7 @@ struct Loop<'a> {
     spent_tokens: u64,
     needs_spec_at_start: Vec<String>,
     proposed_at_start: Vec<String>,
+    learnings_at_start: Vec<String>,
     dry_rounds: u32,
     dry_pipeline: Option<String>,
     // pipelines whose end_after_dry_rounds this run has spent; `choose` passes over them until a
@@ -482,6 +494,7 @@ impl<'a> Loop<'a> {
 
     fn go(&mut self) -> anyhow::Result<Digest> {
         self.needs_spec_at_start = self.ids_at("needs-spec");
+        self.learnings_at_start = waiting_classes(self.root, self.cfg);
         self.emit(Kind::RunStart {
             config_sha256: config_sha256(self.root),
             pipeline: None,
@@ -539,10 +552,42 @@ impl<'a> Loop<'a> {
         }
     }
 
+    // once per run and never between stages: the audit reads what every iteration recorded
+    fn learnings(&mut self) {
+        let (promoted, killed) = audit::decided(self.root, self.cfg, &self.learnings_at_start);
+        self.digest.learnings.promoted = promoted;
+        self.digest.learnings.killed = killed;
+        let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
+        match audit::expire(self.root, self.cfg, &today) {
+            Ok(expired) => self.digest.learnings.expired = expired,
+            Err(err) => self.digest.warnings.push(err.to_string()),
+        }
+        match audit::run(self.root, self.cfg) {
+            Ok(report) => {
+                self.digest.learnings.proposed =
+                    report.proposed.into_iter().map(|p| p.class).collect();
+            }
+            Err(err) => self.digest.warnings.push(err.to_string()),
+        }
+        if let Err(err) = git::commit_instance(
+            self.root,
+            &self.cfg.layout.harness_dir,
+            &["DECISIONS.md", "LEARNINGS.md"],
+            "audit",
+        ) {
+            self.digest
+                .warnings
+                .push(format!("the audit's learnings are uncommitted: {err}"));
+        }
+    }
+
     // every exit path funnels through here, so every run ends with one digest
     fn finish(&mut self, iterations: u32) -> Digest {
         // the task the last iteration landed is archived by the run that landed it, not the next one
         self.archive();
+        if iterations > 0 {
+            self.learnings();
+        }
         let proposed = self.ids_at("proposed");
         self.digest.proposed_oldest = archive::ages(self.root, self.cfg, &proposed)
             .into_values()
@@ -719,7 +764,7 @@ impl<'a> Loop<'a> {
             false => Vec::new(),
         };
         // nothing filed this round and nothing standing to drain: the stage has no input at all
-        if adjudicating && handed.is_empty() {
+        if adjudicating && handed.is_empty() && waiting_classes(self.root, self.cfg).is_empty() {
             let stage_bases = iter_bases.clone();
             return self.gates(stage, task, iter_bases, stage_bases, String::new());
         }
@@ -1659,6 +1704,25 @@ pub fn digest_text(digest: &Digest) -> String {
         "proposed: {} standing, oldest {} rounds, expired {}",
         digest.proposed_standing, digest.proposed_oldest, digest.expired
     );
+    let l = &digest.learnings;
+    let _ = writeln!(
+        out,
+        "learnings: {} proposed, {} promoted, {} killed, {} expired",
+        l.proposed.len(),
+        l.promoted.len(),
+        l.killed.len(),
+        l.expired.len()
+    );
+    for (word, classes) in [
+        ("proposed", &l.proposed),
+        ("promoted", &l.promoted),
+        ("killed", &l.killed),
+        ("expired", &l.expired),
+    ] {
+        for class in classes {
+            let _ = writeln!(out, "  {word} `{class}`");
+        }
+    }
     if !digest.turn_caps.is_empty() {
         listing(&mut out, "turn caps hit:", &digest.turn_caps);
     }
@@ -1753,6 +1817,12 @@ fn clarifications(spec: &Path) -> Option<Vec<String>> {
     (!hits.is_empty()).then_some(hits)
 }
 
+fn waiting_classes(root: &Path, cfg: &Config) -> Vec<String> {
+    audit::waiting(root, cfg)
+        .map(|w| w.into_iter().map(|w| w.class).collect())
+        .unwrap_or_default()
+}
+
 fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>) -> bool {
     match when {
         Predicate::Not(inner) => !holds(root, cfg, inner, warnings),
@@ -1786,7 +1856,10 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
             .map_err(|e| e.to_string())
             .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
             {
-                Ok(blocks) => !queue::ids_at(&blocks, "proposed").is_empty(),
+                Ok(blocks) => {
+                    !queue::ids_at(&blocks, "proposed").is_empty()
+                        || !waiting_classes(root, cfg).is_empty()
+                }
                 Err(err) => {
                     warnings.push(format!(
                         "TASKS.md: {err}; queue.proposed treated as false (fail closed)"
@@ -1883,5 +1956,22 @@ fn shell_preset() -> Preset {
         model_flag: None,
         effort_flag: None,
         bypass_flag: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lanes_read_the_earned_rules_range() {
+        let cfg = Config::default();
+        for role in ["implementer", "verifier"] {
+            assert!(
+                prompt_for(role, &cfg)
+                    .contains("sed -n '/^## Earned rules/,/^## Rejected findings/p'"),
+                "{role}"
+            );
+        }
     }
 }

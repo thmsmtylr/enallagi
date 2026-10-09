@@ -12,6 +12,7 @@ mod driver;
 mod friction_repeat;
 mod hash_uncovered;
 mod install_stale;
+mod learning_standing;
 mod learning_unenforced;
 mod learning_ungated;
 mod litter;
@@ -68,6 +69,7 @@ pub const NAMES: &[&str] = &[
     "check-unnamed",
     "learning-unenforced",
     "learning-ungated",
+    "learning-standing",
     "skill-ungated",
     "ponytail-ceiling",
     "rejection-stale",
@@ -94,7 +96,7 @@ pub const NAMES: &[&str] = &[
 
 type ProbeFn = fn(&ProbeCtx) -> ProbeResult;
 
-fn registry() -> [(&'static str, ProbeFn); 29] {
+fn registry() -> [(&'static str, ProbeFn); 30] {
     [
         ("spec-untested", spec_untested::probe),
         ("queue-uncovered", queue_uncovered::probe),
@@ -103,6 +105,7 @@ fn registry() -> [(&'static str, ProbeFn); 29] {
         ("check-unnamed", check_unnamed::probe),
         ("learning-unenforced", learning_unenforced::probe),
         ("learning-ungated", learning_ungated::probe),
+        ("learning-standing", learning_standing::probe),
         ("skill-ungated", skill_ungated::probe),
         ("ponytail-ceiling", ponytail_ceiling::probe),
         ("rejection-stale", rejection_stale::probe),
