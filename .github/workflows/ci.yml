@@ -13,6 +13,8 @@ name: ci
 on:
   push:
   pull_request:
+  # bump.yml starts this on a branch it pushed, since a GITHUB_TOKEN push starts no workflow
+  workflow_dispatch:
   branch_protection_rule:
   schedule:
     - cron: '19 4 * * 2'
