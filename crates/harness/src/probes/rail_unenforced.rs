@@ -95,7 +95,7 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let rails = common::rails_file(ctx.cfg);
-    let tracked = common::tracked(ctx.root)?;
+    let tracked = common::tracked_with_state(ctx.root)?;
     let harness = harness_text(ctx)?;
     let mut found = Vec::new();
 
