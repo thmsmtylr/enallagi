@@ -994,6 +994,8 @@ fn tag_mismatch(tag: &str, version: &str) -> Option<String> {
 fn the_release_procedure_is_stated_in_one_file() {
     let procedure = release_yml();
     for step in [
+        "bump.yml",
+        "merging one releases it",
         "crates/harness/Cargo.toml",
         "CHANGELOG.md",
         "git tag -a v",
@@ -1067,6 +1069,92 @@ fn the_changelog_names_the_crate_version() {
         "CHANGELOG.md has no {heading}...) section for the crate version"
     );
     assert!(!section.is_empty(), "{heading}...) lists no change");
+}
+
+// origin/main carries `version`, so the bump reads the version a merge would land on
+fn bump_fixture(version: &str, unreleased: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    fs::create_dir_all(root.join("crates/harness/src")).expect("mkdir");
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/harness\"]\nresolver = \"2\"\n",
+    )
+    .expect("write");
+    fs::write(
+        root.join("crates/harness/Cargo.toml"),
+        format!("[package]\nname = \"fixture\"\nversion = \"{version}\"\nedition = \"2021\"\n"),
+    )
+    .expect("write");
+    fs::write(root.join("crates/harness/src/lib.rs"), "").expect("write");
+    fs::write(
+        root.join("CHANGELOG.md"),
+        format!("# CHANGELOG\n\n## Unreleased\n{unreleased}\n## v0.0.1 (2026-01-01)\n\n- first\n"),
+    )
+    .expect("write");
+    let git = |args: &[&str]| {
+        enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@t"]);
+    git(&["config", "user.name", "t"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base"]);
+    git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    dir
+}
+
+fn run_bump(root: &Path, title: &str) -> (String, String) {
+    let (code, out) = script(&repo_root().join(".github/scripts/bump.sh"), root, &[title]);
+    assert_eq!(code, 0, "{out}");
+    (
+        read(&root.join("crates/harness/Cargo.toml")),
+        read(&root.join("CHANGELOG.md")),
+    )
+}
+
+#[test]
+fn the_bump_raises_a_beta_and_takes_the_title() {
+    let repo = bump_fixture("0.3.0-beta.8", "\n");
+    let (manifest, changelog) = run_bump(
+        repo.path(),
+        "fix(probes): text probes skip the state repository's files",
+    );
+    assert_eq!(crate_version_in(&manifest), "0.3.0-beta.9");
+    assert!(
+        read(&repo.path().join("Cargo.lock")).contains("0.3.0-beta.9"),
+        "cargo update -w did not run"
+    );
+    let lines: Vec<&str> = changelog.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.starts_with("## v0.3.0-beta.9 ("))
+        .unwrap_or_else(|| panic!("no new heading:\n{changelog}"));
+    assert_eq!(
+        lines.get(at + 2).copied(),
+        Some("- text probes skip the state repository's files"),
+        "{changelog}"
+    );
+    let unreleased = lines.iter().position(|l| *l == "## Unreleased");
+    assert_eq!(unreleased.map(|u| u + 2), Some(at), "{changelog}");
+}
+
+#[test]
+fn the_bump_raises_a_patch_and_moves_unreleased() {
+    let repo = bump_fixture("1.2.3", "\n- a change already written\n\n");
+    let (manifest, changelog) = run_bump(repo.path(), "feat: a title not used");
+    assert_eq!(crate_version_in(&manifest), "1.2.4");
+    let expected = "## Unreleased\n\n## v1.2.4 (";
+    assert!(changelog.contains(expected), "{changelog}");
+    let section: Vec<&str> = changelog
+        .lines()
+        .skip_while(|l| !l.starts_with("## v1.2.4 ("))
+        .skip(1)
+        .take_while(|l| !l.starts_with("## "))
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    assert_eq!(section, vec!["- a change already written"], "{changelog}");
 }
 
 #[test]

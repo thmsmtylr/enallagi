@@ -3,6 +3,8 @@
 One line per user-visible change, newest first. `## Unreleased` is what is on main and not yet
 tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
+`## Unreleased` lines are optional. With none, the bump falls back to the pull request's title.
+
 ## Unreleased
 
 ## v0.3.0-beta.8 (2026-10-10)
