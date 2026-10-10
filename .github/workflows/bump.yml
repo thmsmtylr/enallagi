@@ -22,6 +22,9 @@ jobs:
   targets:
     name: targets
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       prs: ${{ steps.list.outputs.prs }}
     steps:
@@ -75,15 +78,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch -q origin main
           lease=$(git rev-parse HEAD)
-          bumped=false
-          if [ "$(git log -1 --format=%an)" = "github-actions[bot]" ]; then
-            case $(git log -1 --format=%s) in "chore(release): v"*) bumped=true ;; esac
-          fi
-          if $bumped && git merge-base --is-ancestor origin/main HEAD; then
+          # every earlier bump on the branch, newest first, so a commit pushed on top drops it too
+          bumps=$(git log --format='%H%x09%an%x09%s' origin/main..HEAD | awk -F '\t' \
+            '$2 == "github-actions[bot]" && index($3, "chore(release): v") == 1 { print $1 }')
+          if [ "$bumps" = "$lease" ] && git merge-base --is-ancestor origin/main HEAD; then
             echo "$BRANCH already carries the bump after origin/main"
             exit 0
           fi
-          if $bumped; then git reset -q --hard HEAD^; fi
+          for bump in $bumps; do git rebase -q --onto "$bump^" "$bump"; done
           # a conflict fails here, before anything is pushed, so the branch is left as it was
           git merge -q --no-edit origin/main
           next=$(.github/scripts/bump.sh "$TITLE")
