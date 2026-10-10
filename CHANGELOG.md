@@ -5,6 +5,10 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.3.0-beta.8 (2026-10-10)
+
+- the implementer role invokes each skill as a tool call at the step that uses it, and invokes `debugging` when a task reports a failure; before, lanes followed the restated steps and loaded `tdd` in 2 of 62 stages and `debugging` in none
+
 ## v0.3.0-beta.7 (2026-10-09)
 
 - a probe `review-merged` reports a block still at `status: review` whose id a product commit on the remote's default branch names; the loop's own state commits do not count
