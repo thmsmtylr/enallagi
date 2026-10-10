@@ -1,8 +1,11 @@
-//! `enallagi audit` -- prints each learning it proposed, each it merged into a standing entry, and each it refused with the reason.
+//! `enallagi audit` -- prints each learning it proposed, each it merged into a standing entry, and each it refused with the reason. With `--harness`, prints each rule two installs earned as a `[seed]` line.
 
 use crate::{audit, config, git};
 
-pub fn run() -> anyhow::Result<i32> {
+pub fn run(harness: &[std::path::PathBuf]) -> anyhow::Result<i32> {
+    if !harness.is_empty() {
+        return shared(harness);
+    }
     let cwd = std::env::current_dir()?;
     let root = match git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
         Ok(top) => std::path::PathBuf::from(top),
@@ -30,6 +33,35 @@ pub fn run() -> anyhow::Result<i32> {
         println!("audit: nothing written");
     } else {
         println!("audit: wrote {}", report.decisions);
+    }
+    Ok(0)
+}
+
+fn shared(dirs: &[std::path::PathBuf]) -> anyhow::Result<i32> {
+    if dirs.len() < 2 {
+        eprintln!("enallagi audit: --harness needs two or more install directories");
+        return Ok(1);
+    }
+    let shared = match audit::shared(dirs) {
+        Ok(shared) => shared,
+        Err(err) => {
+            eprintln!("{err}");
+            return Ok(1);
+        }
+    };
+    if shared.is_empty() {
+        println!("audit: no rule earned in two installs");
+    }
+    for rule in &shared {
+        println!(
+            "audit: `{}` earned in {} installs",
+            rule.class,
+            rule.earned.len()
+        );
+        for (path, line, first) in &rule.earned {
+            println!("  {}:{line} {first}", path.display());
+        }
+        println!("{}\n", rule.seed);
     }
     Ok(0)
 }

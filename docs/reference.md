@@ -44,6 +44,13 @@ The next audit hands an ineffective rule back to the auditor, which proposes a r
 The rule gains a dated `revised:` line, and a promoted revision replaces it and keeps those lines.
 A rule that recurs after two revisions moves to `## Expired findings` as a dated line.
 
+`enallagi audit --harness <dir>...` reads `DECISIONS.md` in each install directory given.
+It reports each rule that two or more installs earned under `## Earned rules`.
+A rule killed in any install is left out.
+Each report names every install's dated line and prints the rule as a `[seed]` line.
+It only reports: it writes to no install and to no file in this repository.
+A person adds the line to `templates/LEARNINGS.md` in a pull request.
+
 `enallagi events --prefix` prints one row per role stage in `events.jsonl`.
 Each row carries the stage's three input token lanes.
 `handed_bytes` prints `-`: no event records the size of the prompt a stage was given.

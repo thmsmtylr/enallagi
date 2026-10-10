@@ -699,3 +699,120 @@ fn a_rule_not_recurring_is_not_handed_back() {
         prompts(&repo)
     );
 }
+
+const INSTALL_A: &str = "# D\n\n## Earned rules\n\n- [2026-09-20] `lost result`: a result dropped before its caller → assert on what the caller receives\n  instances: `a:1`, `a:2`, `a:3`\n- [2026-09-21] `vacuous test`: a test that selects nothing passes → assert the filter ran a test\n- [2026-09-22] `slow disk`: a lane waits on a slow disk → raise the wait ceiling\n- [2026-09-23] a scope line written from readers halts the run → write scope from the declaring file\n\n## Rejected findings\n";
+const INSTALL_B: &str = "# D\n\n## Earned rules\n\n- [2026-09-25] `Lost result`: a stage result is dropped before the caller sees it\n  → assert on what the caller receives\n  promoted: abc1234\n- [2026-09-26] `vacuous test`: a filter that matches no test is green → count the tests run\n- [2026-09-27] the run halts when a scope line is written from readers → scope the declaring file\n\n## Rejected findings\n";
+const INSTALL_C: &str = "# D\n\n## Earned rules\n\n## Rejected findings\n\n## Proposed learnings\n\n- [proposed] `vacuous test`: a green filter ran nothing → assert a test ran\n  instances: `c:1`, `c:2`\n  killed: 2026-09-28 the filter was a fixture\n";
+
+fn installs() -> Vec<Repo> {
+    [INSTALL_A, INSTALL_B, INSTALL_C]
+        .iter()
+        .map(|text| {
+            let repo = Repo::new();
+            repo.write("DECISIONS.md", text);
+            repo
+        })
+        .collect()
+}
+
+fn shared_bin(cwd: &Repo, dirs: &[&Repo]) -> (i32, String) {
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .arg("audit")
+        .arg("--harness")
+        .args(dirs.iter().map(|d| &d.root))
+        .current_dir(&cwd.root)
+        .output()
+        .expect("spawn");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.code().unwrap_or(-1), text)
+}
+
+#[test]
+fn a_rule_two_installs_earned_is_a_seed() {
+    let all = installs();
+    let dirs: Vec<std::path::PathBuf> = all.iter().map(|r| r.root.clone()).collect();
+    let shared = audit::shared(&dirs).expect("shared");
+    let classes: Vec<&str> = shared.iter().map(|s| s.class.as_str()).collect();
+    assert_eq!(
+        classes,
+        [
+            "lost result",
+            "a scope line written from readers halts the run → write scope from the declaring file"
+        ],
+        "{shared:?}"
+    );
+    let lost = &shared[0];
+    assert_eq!(lost.earned.len(), 2, "{lost:?}");
+    assert_eq!(lost.earned[0].0, all[0].root.join("DECISIONS.md"));
+    assert_eq!(lost.earned[0].1, 5);
+    assert!(lost.earned[0].2.starts_with("- [2026-09-20] `lost result`"));
+    assert_eq!(lost.earned[1].0, all[1].root.join("DECISIONS.md"));
+    assert!(lost.earned[1].2.starts_with("- [2026-09-25] `Lost result`"));
+    assert_eq!(
+        lost.seed,
+        "- [seed] a result dropped before its caller → assert on what the caller receives"
+    );
+}
+
+#[test]
+fn one_install_or_a_kill_is_no_seed() {
+    let all = installs();
+    let dirs: Vec<std::path::PathBuf> = all.iter().map(|r| r.root.clone()).collect();
+    let shared = audit::shared(&dirs).expect("shared");
+    assert!(!shared.iter().any(|s| s.class == "slow disk"), "{shared:?}");
+    assert!(
+        !shared.iter().any(|s| s.class == "vacuous test"),
+        "{shared:?}"
+    );
+    let without_c = audit::shared(&dirs[..2]).expect("shared");
+    assert!(
+        without_c.iter().any(|s| s.class == "vacuous test"),
+        "{without_c:?}"
+    );
+}
+
+#[test]
+fn audit_harness_prints_seeds_and_writes_nothing() {
+    let all = installs();
+    let cwd = Repo::new();
+    let (code, out) = shared_bin(&cwd, &all.iter().collect::<Vec<_>>());
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("audit: `lost result` earned in 2 installs"),
+        "{out}"
+    );
+    let a = all[0].root.join("DECISIONS.md");
+    assert!(
+        out.contains(&format!("  {}:5 - [2026-09-20] `lost result`", a.display())),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "\n- [seed] a result dropped before its caller → assert on what the caller receives\n"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("slow disk"), "{out}");
+    assert!(!out.contains("vacuous test"), "{out}");
+    for (repo, text) in all.iter().zip([INSTALL_A, INSTALL_B, INSTALL_C]) {
+        assert_eq!(
+            fs::read_to_string(repo.root.join("DECISIONS.md")).unwrap(),
+            text
+        );
+    }
+    let status = enallagi::git::git(&cwd.root, &["status", "--porcelain"]).expect("status");
+    assert_eq!(status, "", "{status}");
+}
+
+#[test]
+fn audit_harness_refuses_one_install() {
+    let all = installs();
+    let cwd = Repo::new();
+    let (code, out) = shared_bin(&cwd, &[&all[0]]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("two or more"), "{out}");
+}

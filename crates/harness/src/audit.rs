@@ -7,7 +7,7 @@ use crate::queue::{self, QueueError};
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub const PROPOSED: &str = "## Proposed learnings";
@@ -963,6 +963,118 @@ pub fn run(root: &Path, cfg: &Config) -> Result<Report, AuditError> {
         }
     }
     Ok(report)
+}
+
+/// A class two or more installs earned and none killed, with each install's dated line.
+#[derive(Debug)]
+pub struct Shared {
+    pub class: String,
+    // the install's DECISIONS.md, the 1-based line the rule opens on, and that line
+    pub earned: Vec<(PathBuf, usize, String)>,
+    pub seed: String,
+}
+
+struct Ruled {
+    install: usize,
+    path: PathBuf,
+    line: usize,
+    first: String,
+    class: Option<String>,
+    text: String,
+    killed: bool,
+}
+
+// "`class`: rest" names its class, and a rule without one is matched on its words
+fn handle(said: &str) -> (Option<String>, String) {
+    said.strip_prefix('`')
+        .and_then(|r| r.split_once("`: "))
+        .map_or((None, said.to_string()), |(c, r)| {
+            (Some(c.to_lowercase()), r.to_string())
+        })
+}
+
+fn same(a: &Ruled, b: &Ruled) -> bool {
+    match (&a.class, &b.class) {
+        (Some(x), Some(y)) => x == y,
+        _ => overlaps(&a.text, &b.text),
+    }
+}
+
+// the line form templates/LEARNINGS.md uses: wrapped near 100 columns, continued two spaces in
+fn seed(text: &str) -> String {
+    let mut lines = vec![String::from("- [seed]")];
+    for word in text.split_whitespace() {
+        let last = lines.last_mut().expect("one line");
+        if last.chars().count() + 1 + word.chars().count() > 100 {
+            lines.push(format!("  {word}"));
+        } else {
+            last.push(' ');
+            last.push_str(word);
+        }
+    }
+    lines.join("\n")
+}
+
+/// Each class earned under `## Earned rules` in two or more of the installs' DECISIONS.md and killed in none. Reads only.
+pub fn shared(dirs: &[PathBuf]) -> Result<Vec<Shared>, AuditError> {
+    let mut rules = Vec::new();
+    for (install, dir) in dirs.iter().enumerate() {
+        let path = dir.join("DECISIONS.md");
+        let text = fs::read_to_string(&path)
+            .map_err(|e| AuditError::Read(format!("{}: {e}", path.display())))?;
+        for heading in [EARNED, PROPOSED] {
+            for (at, entry) in entries(&section(&text, heading)) {
+                let killed = entry.lines().any(|l| l.trim_start().starts_with("killed:"));
+                if heading == PROPOSED && !killed {
+                    continue;
+                }
+                let (class, text) = handle(&said(&entry));
+                rules.push(Ruled {
+                    install,
+                    path: path.clone(),
+                    line: at,
+                    first: entry.lines().next().unwrap_or_default().to_string(),
+                    class,
+                    text,
+                    killed,
+                });
+            }
+        }
+    }
+    let mut taken = vec![false; rules.len()];
+    let mut out = Vec::new();
+    for i in 0..rules.len() {
+        if taken[i] || rules[i].killed {
+            continue;
+        }
+        let mut group = vec![i];
+        for j in i + 1..rules.len() {
+            let installs: BTreeSet<usize> = group.iter().map(|&g| rules[g].install).collect();
+            if !taken[j]
+                && !rules[j].killed
+                && !installs.contains(&rules[j].install)
+                && same(&rules[i], &rules[j])
+            {
+                group.push(j);
+            }
+        }
+        if group.len() < 2 || rules.iter().any(|r| r.killed && same(&rules[i], r)) {
+            continue;
+        }
+        for &g in &group {
+            taken[g] = true;
+        }
+        let rule = &rules[i];
+        out.push(Shared {
+            class: rule.class.clone().unwrap_or_else(|| rule.text.clone()),
+            earned: group
+                .iter()
+                .map(|&g| (rules[g].path.clone(), rules[g].line, rules[g].first.clone()))
+                .collect(),
+            seed: seed(&rule.text),
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
