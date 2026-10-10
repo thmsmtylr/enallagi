@@ -1157,6 +1157,136 @@ fn the_bump_raises_a_patch_and_moves_unreleased() {
     assert_eq!(section, vec!["- a change already written"], "{changelog}");
 }
 
+fn bump_yml() -> String {
+    read(&repo_root().join(".github/workflows/bump.yml"))
+}
+
+// the step's `run: |` body, so the test runs the shell the workflow runs
+fn bump_step_shell() -> String {
+    let yml = bump_yml();
+    let lines: Vec<&str> = yml
+        .lines()
+        .skip_while(|l| !l.contains("- name: bump the branch to the version after main's"))
+        .skip_while(|l| l.trim() != "run: |")
+        .collect();
+    let indent = lines.first().map_or(0, |l| l.len() - l.trim_start().len());
+    let body: Vec<&str> = lines
+        .iter()
+        .skip(1)
+        .take_while(|l| l.trim().is_empty() || l.len() - l.trim_start().len() > indent)
+        .map(|l| l.get(indent + 2..).unwrap_or(""))
+        .collect();
+    assert!(!body.is_empty(), "no bump step shell in bump.yml");
+    body.join("\n")
+}
+
+fn run_bump_step(root: &Path, bin: &Path) {
+    let file = bin.join("step.sh");
+    fs::write(&file, bump_step_shell()).expect("write");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut step = enallagi::fixture::command("bash");
+    // a lane's exported identity beats the bot's `git config`, and the step finds its bump by author
+    for var in [
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+    ] {
+        step.env_remove(var);
+    }
+    let out = step
+        .arg("-e")
+        .arg(&file)
+        .current_dir(root)
+        .env("PATH", path)
+        .env("BRANCH", "feature")
+        .env("TITLE", "feat: a product change")
+        .output()
+        .expect("run the bump step");
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn a_commit_on_a_bump_keeps_one_heading() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = bump_fixture("0.3.0-beta.8", "\n");
+    let root = repo.path();
+    let origin = tempfile::tempdir().expect("tempdir");
+    let bin = tempfile::tempdir().expect("tempdir");
+    let gh = bin.path().join("gh");
+    fs::write(&gh, "#!/bin/sh\nexit 0\n").expect("write");
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).expect("chmod");
+    let git = |args: &[&str]| {
+        enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+    };
+    let as_person = |message: &str| {
+        git(
+            &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q"]
+                .into_iter()
+                .chain(["-m", message])
+                .collect::<Vec<_>>(),
+        )
+    };
+    fs::create_dir_all(root.join(".github/scripts")).expect("mkdir");
+    fs::copy(
+        repo_root().join(".github/scripts/bump.sh"),
+        root.join(".github/scripts/bump.sh"),
+    )
+    .expect("copy bump.sh");
+    git(&["add", "."]);
+    as_person("scripts");
+    enallagi::git::git(origin.path(), &["init", "-q", "--bare"]).expect("init origin");
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        &origin.path().display().to_string(),
+    ]);
+    git(&["push", "-q", "origin", "main"]);
+    git(&["fetch", "-q", "origin"]);
+    git(&["checkout", "-q", "-b", "feature"]);
+    fs::write(root.join("a"), "a").expect("write");
+    git(&["add", "a"]);
+    as_person("feat: a product change");
+    git(&["push", "-q", "origin", "feature"]);
+    run_bump_step(root, bin.path());
+    fs::write(root.join("b"), "b").expect("write");
+    git(&["add", "b"]);
+    as_person("fix: a change on top of the bump");
+    git(&["push", "-q", "origin", "feature"]);
+
+    run_bump_step(root, bin.path());
+
+    let changelog = read(&root.join("CHANGELOG.md"));
+    let headings = changelog
+        .lines()
+        .filter(|l| l.starts_with("## v0.3.0-beta.9 ("))
+        .count();
+    assert_eq!(headings, 1, "{changelog}");
+    assert_eq!(
+        git(&["log", "-1", "--format=%an %s"]),
+        "github-actions[bot] chore(release): v0.3.0-beta.9"
+    );
+    assert_eq!(
+        git(&["rev-parse", "HEAD"]),
+        git(&["rev-parse", "origin/feature"])
+    );
+    assert!(root.join("b").exists(), "the commit on top was dropped");
+    assert!(
+        job_block(&bump_yml(), "targets").contains("pull-requests: read"),
+        "the targets job cannot list pull requests"
+    );
+}
+
 #[test]
 fn the_release_runs_when_main_gains_a_new_version() {
     let yml = release_yml();
