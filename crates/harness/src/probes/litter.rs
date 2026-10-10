@@ -54,7 +54,7 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let mut found = Vec::new();
     let ignored = tracked_and_ignored(ctx.root)?;
-    for path in common::tracked(ctx.root)? {
+    for path in common::tracked_with_state(ctx.root)? {
         if ctx.cfg.layout.strict_prefixes {
             if !allowed(ctx, &path) {
                 found.push(common::finding(
