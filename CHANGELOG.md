@@ -7,6 +7,10 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.3.0-beta.9 (2026-10-10)
+
+- write the version bump onto each pull request
+
 ## v0.3.0-beta.8 (2026-10-10)
 
 - the implementer role invokes each skill as a tool call at the step that uses it, and invokes `debugging` when a task reports a failure; before, lanes followed the restated steps and loaded `tdd` in 2 of 62 stages and `debugging` in none
