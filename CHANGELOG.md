@@ -7,6 +7,10 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.3.0-beta.10 (2026-10-10)
+
+- learning-standing test ages the learning two rounds and as...
+
 ## v0.3.0-beta.9 (2026-10-10)
 
 - write the version bump onto each pull request
