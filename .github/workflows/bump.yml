@@ -1,0 +1,96 @@
+# Writes the release bump onto each open pull request into main, so merging one releases it.
+# main is protected against GITHUB_TOKEN, so the bump goes onto the pull request's own branch.
+# A push to main re-bumps every other open pull request, so no two of them release one version.
+# A pull request from a fork, or into any other base, is skipped. Every `uses:` is pinned to a
+# commit SHA (`every_github_action_is_pinned_to_a_commit_sha`, crates/harness/tests/floor.rs).
+name: bump
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited]
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  targets:
+    name: targets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      prs: ${{ steps.list.outputs.prs }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - name: the pull requests to bump
+        id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            prs=$(jq -c --arg repo "$REPO" '[.pull_request | select(.head.repo.full_name == $repo)
+              | {number, branch: .head.ref, title}]' "$GITHUB_EVENT_PATH")
+          else
+            prs=$(gh pr list --base main --state open --json number,headRefName,title,isCrossRepository \
+              | jq -c '[.[] | select(.isCrossRepository | not) | {number, branch: .headRefName, title}]')
+          fi
+          echo "prs=$prs" >> "$GITHUB_OUTPUT"
+
+  bump:
+    name: bump (#${{ matrix.pr.number }})
+    needs: targets
+    if: needs.targets.outputs.prs != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJSON(needs.targets.outputs.prs) }}
+    concurrency:
+      group: bump-${{ matrix.pr.branch }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.pr.branch }}
+          fetch-depth: 0
+      - name: bump the branch to the version after main's
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ matrix.pr.branch }}
+          TITLE: ${{ matrix.pr.title }}
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch -q origin main
+          lease=$(git rev-parse HEAD)
+          # every earlier bump on the branch, newest first, so a commit pushed on top drops it too
+          bumps=$(git log --format='%H%x09%an%x09%s' origin/main..HEAD | awk -F '\t' \
+            '$2 == "github-actions[bot]" && index($3, "chore(release): v") == 1 { print $1 }')
+          if [ "$bumps" = "$lease" ] && git merge-base --is-ancestor origin/main HEAD; then
+            echo "$BRANCH already carries the bump after origin/main"
+            exit 0
+          fi
+          for bump in $bumps; do git rebase -q --onto "$bump^" "$bump"; done
+          # a conflict fails here, before anything is pushed, so the branch is left as it was
+          git merge -q --no-edit origin/main
+          next=$(.github/scripts/bump.sh "$TITLE")
+          git add crates/harness/Cargo.toml Cargo.lock CHANGELOG.md
+          git commit -q -m "chore(release): v$next"
+          git push --force-with-lease="$BRANCH:$lease" origin "HEAD:$BRANCH"
+          # a push made with GITHUB_TOKEN starts no workflow, so ci.yml is started by hand
+          gh workflow run ci.yml --ref "$BRANCH"

@@ -3,10 +3,12 @@
 # whose tree carries a dogfood instance, or whose `vX.Y.Z` does not equal the crate version, is
 # refused before anything is built.
 #
-# The release procedure, and the only statement of it: merge a pull request that
+# The release procedure, and the only statement of it:
 #
-#   1. sets `version` in crates/harness/Cargo.toml to X.Y.Z (and `cargo update -w`)
-#   2. moves the CHANGELOG.md `## Unreleased` lines under a new `## vX.Y.Z (YYYY-MM-DD)` heading
+#   1. bump.yml writes the bump onto each pull request into main. It sets `version` in
+#      crates/harness/Cargo.toml to X.Y.Z (and `cargo update -w`), and moves the CHANGELOG.md
+#      `## Unreleased` lines under a new `## vX.Y.Z (YYYY-MM-DD)` heading.
+#   2. merging one releases it.
 #
 # The push to main that carries a crate version with no tag runs the `tag` job, which does
 # `git tag -a vX.Y.Z -m vX.Y.Z` and `git push origin vX.Y.Z` itself, then `release` builds that tag
