@@ -96,7 +96,7 @@ fn probes_exit_0_every_probe_ran() {
     let (repo, cfg) = seeded();
     let results = run(&repo, &cfg);
     assert_eq!(errors(&results), Vec::<&str>::new());
-    assert_eq!(results.len(), 29, "{}", render(&results));
+    assert_eq!(results.len(), 30, "{}", render(&results));
 }
 
 #[test]
@@ -2397,5 +2397,48 @@ fn a_dropped_commands_line_is_reported() {
     assert_eq!(
         fs::read_to_string(repo.root.join(file)).expect("context"),
         text.replace(&format!("{dropped}\n"), "")
+    );
+}
+
+#[test]
+fn learning_standing_names_age_and_rounds_left() {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "DECISIONS.md",
+        "\n## Proposed learnings\n\n- [proposed] `vacuous-test`: a test passed with its logic deleted → watch it fail first\n  instances: `SPEC.md:1`, `SPEC.md:2`\n- [proposed] `slow-disk`: the lane waited on a slow disk → nothing\n  instances: `SPEC.md:1`, `SPEC.md:2`\n  killed: 2026-09-29 two instances, a promotion needs three\n",
+    );
+    let state = repo.root.join(".enallagi");
+    for (key, value) in [("user.email", "t@t"), ("user.name", "t")] {
+        enallagi::git::git(&state, &["config", key, value]).expect("identity");
+    }
+    enallagi::git::git(&state, &["add", "-A"]).expect("add");
+    for subject in [
+        "a proposed learning",
+        "a later round",
+        "another later round",
+    ] {
+        enallagi::git::git(
+            &state,
+            &[
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                subject,
+            ],
+        )
+        .expect("commit");
+    }
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "learning-standing");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0]
+            .message
+            .contains("`vacuous-test` has stood 2 rounds, 4 left before it expires"),
+        "{}",
+        found[0].message
     );
 }

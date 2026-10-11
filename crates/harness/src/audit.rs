@@ -442,7 +442,6 @@ fn ask(root: &Path, cfg: &Config, prompt: String) -> Result<String, AuditError> 
     Ok(result.output)
 }
 
-// the section sits after the earned rules, so an agent reading those does not take a proposal for one
 pub fn with_proposed(decisions: &str, rendered: &[String]) -> String {
     let lines: Vec<&str> = decisions.lines().collect();
     let (head, body, tail) = match lines.iter().position(|l| l.trim_end() == PROPOSED) {
@@ -455,17 +454,18 @@ pub fn with_proposed(decisions: &str, rendered: &[String]) -> String {
             (&lines[..at], &rest[..end], &rest[end..])
         }
         None => {
-            let anchor = match lines.iter().position(|l| l.trim_end() == EARNED) {
+            // after the rejected findings, so the earned-rules range a lane reads stops short of a proposal
+            let heading = [REJECTED, EARNED]
+                .into_iter()
+                .find_map(|h| lines.iter().position(|l| l.trim_end() == h));
+            let anchor = match heading {
                 Some(at) => lines[at + 1..]
                     .iter()
                     .position(|l| l.starts_with("## "))
                     .map_or(lines.len(), |i| at + 1 + i),
                 None => lines
                     .iter()
-                    .position(|l| {
-                        let l = l.trim_end();
-                        l == REJECTED || l == EXPIRED
-                    })
+                    .position(|l| l.trim_end() == EXPIRED)
                     .unwrap_or(lines.len()),
             };
             (&lines[..anchor], &[][..], &lines[anchor..])
@@ -492,6 +492,127 @@ pub fn with_proposed(decisions: &str, rendered: &[String]) -> String {
         out.extend(tail.iter().map(|l| l.to_string()));
     }
     out.join("\n") + "\n"
+}
+
+#[derive(Debug)]
+pub struct Waiting {
+    pub class: String,
+    // 1-based line in DECISIONS.md
+    pub line: usize,
+    // state commits since the entry was first committed
+    pub age: usize,
+}
+
+fn class_of(entry: &str) -> Option<String> {
+    let rest = entry.strip_prefix("- [proposed] `")?;
+    rest.split_once('`').map(|(class, _)| class.to_string())
+}
+
+// an entry no commit carries is one just written, which is as new as an entry gets
+fn age(root: &Path, cfg: &Config, rel: &str, needle: &str) -> usize {
+    let (repo, inner, _) = git::locate(root, &cfg.layout.harness_dir, rel);
+    let commits = git::git(&repo, &["log", "--format=%H"]).unwrap_or_default();
+    git::git(
+        &repo,
+        &[
+            "log",
+            "--reverse",
+            "--format=%H",
+            "-S",
+            needle,
+            "--",
+            &inner,
+        ],
+    )
+    .ok()
+    .and_then(|found| found.lines().next().map(String::from))
+    .and_then(|sha| commits.lines().position(|c| c == sha))
+    .unwrap_or(0)
+}
+
+/// Each proposed learning no `killed:` line has decided, with its age in rounds.
+pub fn waiting(root: &Path, cfg: &Config) -> Result<Vec<Waiting>, AuditError> {
+    let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
+    let text = read(root, &rel)?;
+    Ok(entries(&section(&text, PROPOSED))
+        .into_iter()
+        .filter(|(_, entry)| !entry.lines().any(|l| l.trim_start().starts_with("killed:")))
+        .filter_map(|(line, entry)| {
+            let class = class_of(&entry)?;
+            let age = age(root, cfg, &rel, &format!("- [proposed] `{class}`:"));
+            Some(Waiting { class, line, age })
+        })
+        .collect())
+}
+
+/// Of the classes that were waiting, those since moved under `## Earned rules`, and those since killed.
+pub fn decided(root: &Path, cfg: &Config, before: &[String]) -> (Vec<String>, Vec<String>) {
+    let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
+    let text = read(root, &rel).unwrap_or_default();
+    let still: Vec<String> = waiting(root, cfg)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|w| w.class)
+        .collect();
+    let earned: Vec<String> = section(&text, EARNED)
+        .into_iter()
+        .map(|(_, l)| l.to_string())
+        .collect();
+    let (mut promoted, mut killed) = (Vec::new(), Vec::new());
+    for class in before.iter().filter(|c| !still.contains(c)) {
+        let named = format!("`{class}`");
+        if earned.iter().any(|l| l.contains(&named)) {
+            promoted.push(class.clone());
+        } else if entries(&section(&text, PROPOSED))
+            .iter()
+            .any(|(_, e)| class_of(e).as_ref() == Some(class) && e.contains("killed:"))
+        {
+            killed.push(class.clone());
+        }
+    }
+    (promoted, killed)
+}
+
+/// Moves each learning waiting `queue.proposed_rounds` rounds or more out of `## Proposed learnings`, as a dated line under `## Expired findings`.
+pub fn expire(root: &Path, cfg: &Config, today: &str) -> Result<Vec<String>, AuditError> {
+    let stale: Vec<Waiting> = waiting(root, cfg)?
+        .into_iter()
+        .filter(|w| w.age >= cfg.queue.proposed_rounds)
+        .collect();
+    if stale.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
+    let text = read(root, &rel)?;
+    let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
+    let mut dated = Vec::new();
+    // from the bottom, so removing an entry leaves every earlier line number true
+    for w in stale.iter().rev() {
+        let at = w.line - 1;
+        let end = at
+            + 1
+            + lines[at + 1..]
+                .iter()
+                .take_while(|l| l.starts_with("  ") && !l.trim().is_empty())
+                .count();
+        let entry: Vec<String> = lines.drain(at..end).collect();
+        dated.push(format!(
+            "- [{today}] `{}` expired after {} rounds undecided: {}",
+            w.class,
+            w.age,
+            said(&entry.join("\n"))
+        ));
+    }
+    dated.reverse();
+    let mut out = lines.join("\n").trim_end().to_string();
+    if !out.lines().any(|l| l.trim_end() == EXPIRED) {
+        out.push_str(&format!("\n\n{EXPIRED}\n"));
+    }
+    out.push('\n');
+    out.push_str(&dated.join("\n"));
+    out.push('\n');
+    fs::write(root.join(&rel), out)?;
+    Ok(stale.into_iter().map(|w| w.class).collect())
 }
 
 /// Hands the signal to the auditor role, and writes each learning whose citations resolve, merged into an entry it overlaps.
@@ -639,16 +760,16 @@ mod tests {
     }
 
     #[test]
-    fn a_new_section_lands_before_rejected_findings() {
-        let text = "# D\n\n## Earned rules\n\n- [2026-01-01] a\n\n## Rejected findings\n\n- x\n";
+    fn a_new_section_lands_after_rejected_findings() {
+        let text = "# D\n\n## Earned rules\n\n- [2026-01-01] a\n\n## Rejected findings\n\n- x\n\n## [T-001] done\n";
         let once = with_proposed(text, &["- one\n  instances: `a:1`".to_string()]);
         assert_eq!(
             once,
-            "# D\n\n## Earned rules\n\n- [2026-01-01] a\n\n## Proposed learnings\n\n- one\n  instances: `a:1`\n\n## Rejected findings\n\n- x\n"
+            "# D\n\n## Earned rules\n\n- [2026-01-01] a\n\n## Rejected findings\n\n- x\n\n## Proposed learnings\n\n- one\n  instances: `a:1`\n\n## [T-001] done\n"
         );
         let twice = with_proposed(&once, &["- two".to_string()]);
         assert!(
-            twice.contains("  instances: `a:1`\n- two\n\n## Rejected findings"),
+            twice.contains("  instances: `a:1`\n- two\n\n## [T-001] done"),
             "{twice}"
         );
         assert_eq!(
