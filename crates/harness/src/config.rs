@@ -36,6 +36,7 @@ pub const GATE_NAMES: &[&str] = &[
     "implementer-not-done",
     "commit-verdict",
     "verdict",
+    "claims",
     "scope",
     "queue-intact",
     "commit-identity",
@@ -158,6 +159,8 @@ pub struct CheckConfig {
     pub tally: String,
     /// `<n>s`, `<n>m` or `<n>h`; empty means `DEFAULT_CHECK_TIMEOUT`.
     pub timeout: String,
+    /// Command prefixes the `claims` gate may re-run from a verdict's `ran:` lines.
+    pub claims_allow: Vec<String>,
 }
 
 /// The bound on `command` and `force` when `[check] timeout` is unset.
