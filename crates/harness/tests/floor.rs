@@ -1163,10 +1163,14 @@ fn bump_yml() -> String {
 
 // the step's `run: |` body, so the test runs the shell the workflow runs
 fn bump_step_shell() -> String {
+    step_shell("bump the branch to the version after main's")
+}
+
+fn step_shell(name: &str) -> String {
     let yml = bump_yml();
     let lines: Vec<&str> = yml
         .lines()
-        .skip_while(|l| !l.contains("- name: bump the branch to the version after main's"))
+        .skip_while(|l| !l.contains(&format!("- name: {name}")))
         .skip_while(|l| l.trim() != "run: |")
         .collect();
     let indent = lines.first().map_or(0, |l| l.len() - l.trim_start().len());
@@ -1176,7 +1180,7 @@ fn bump_step_shell() -> String {
         .take_while(|l| l.trim().is_empty() || l.len() - l.trim_start().len() > indent)
         .map(|l| l.get(indent + 2..).unwrap_or(""))
         .collect();
-    assert!(!body.is_empty(), "no bump step shell in bump.yml");
+    assert!(!body.is_empty(), "no {name} step shell in bump.yml");
     body.join("\n")
 }
 
@@ -1285,6 +1289,45 @@ fn a_commit_on_a_bump_keeps_one_heading() {
         job_block(&bump_yml(), "targets").contains("pull-requests: read"),
         "the targets job cannot list pull requests"
     );
+}
+
+// a push made with GITHUB_TOKEN starts no workflow, so the required checks never report on the bump
+#[test]
+fn the_bump_pushes_with_bump_token() {
+    let bump = job_block(&bump_yml(), "bump");
+    let checkout = bump
+        .split("- uses: ")
+        .find(|s| s.starts_with("actions/checkout@"))
+        .expect("a checkout in the bump job");
+    assert!(
+        checkout.contains("token: ${{ secrets.BUMP_TOKEN }}"),
+        "{checkout}"
+    );
+    assert!(
+        !checkout.contains("persist-credentials: false"),
+        "{checkout}"
+    );
+    assert!(!bump.contains("gh workflow run"), "{bump}");
+    let ci = read(&repo_root().join(".github/workflows/ci.yml"));
+    assert!(!ci.contains("workflow_dispatch"), "ci.yml still dispatched");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("guard.sh");
+    fs::write(&file, step_shell("BUMP_TOKEN is set")).expect("write");
+    let run = |token: &str| {
+        enallagi::fixture::command("bash")
+            .arg("-e")
+            .arg(&file)
+            .env("BUMP_TOKEN", token)
+            .output()
+            .expect("run the guard step")
+    };
+    let missing = run("");
+    let said = String::from_utf8_lossy(&missing.stdout).to_string()
+        + &String::from_utf8_lossy(&missing.stderr);
+    assert!(!missing.status.success(), "{said}");
+    assert!(said.contains("BUMP_TOKEN"), "{said}");
+    assert!(run("a-token").status.success());
 }
 
 #[test]

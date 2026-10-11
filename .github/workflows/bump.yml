@@ -1,5 +1,6 @@
 # Writes the release bump onto each open pull request into main, so merging one releases it.
 # main is protected against GITHUB_TOKEN, so the bump goes onto the pull request's own branch.
+# It pushes with BUMP_TOKEN, because a GITHUB_TOKEN push starts no ci.yml run on the pull request.
 # A push to main re-bumps every other open pull request, so no two of them release one version.
 # A pull request from a fork, or into any other base, is skipped. Every `uses:` is pinned to a
 # commit SHA (`every_github_action_is_pinned_to_a_commit_sha`, crates/harness/tests/floor.rs).
@@ -16,7 +17,6 @@ on:
 
 permissions:
   contents: write
-  actions: write
 
 jobs:
   targets:
@@ -62,14 +62,21 @@ jobs:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+      - name: BUMP_TOKEN is set
+        env:
+          BUMP_TOKEN: ${{ secrets.BUMP_TOKEN }}
+        run: |
+          if [ -z "$BUMP_TOKEN" ]; then
+            echo "::error::the repository secret BUMP_TOKEN is not set, so the bump cannot start ci.yml"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ matrix.pr.branch }}
           fetch-depth: 0
+          token: ${{ secrets.BUMP_TOKEN }}
       - name: bump the branch to the version after main's
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
           BRANCH: ${{ matrix.pr.branch }}
           TITLE: ${{ matrix.pr.title }}
         run: |
@@ -92,5 +99,3 @@ jobs:
           git add crates/harness/Cargo.toml Cargo.lock CHANGELOG.md
           git commit -q -m "chore(release): v$next"
           git push --force-with-lease="$BRANCH:$lease" origin "HEAD:$BRANCH"
-          # a push made with GITHUB_TOKEN starts no workflow, so ci.yml is started by hand
-          gh workflow run ci.yml --ref "$BRANCH"
