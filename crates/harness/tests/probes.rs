@@ -1029,6 +1029,34 @@ fn a_ceiling_with_no_kill_line_is_still_reported() {
 }
 
 #[test]
+fn the_queue_is_not_read_as_product_source() {
+    let (repo, cfg) = seeded_with("[layout]\nsource_ext = [\".rs\", \".md\"]\n");
+    let m = marker();
+    repo.write(
+        "src/a.rs",
+        &format!("fn a() {{\n    let x = f(); // {m} a trailing comment marker\n}}\n"),
+    );
+    repo.commit_all("trailing marker");
+    append(
+        &repo,
+        "TASKS.md",
+        &format!("\n# {m} a marker in the queue\nprintln!(\"fix: four failures, four causes\");\n"),
+    );
+    let results = run(&repo, &cfg);
+    let out = render(&results);
+    let ceilings: Vec<&str> = out
+        .lines()
+        .filter(|l| l.starts_with("FINDING ponytail-ceiling "))
+        .collect();
+    assert_eq!(ceilings.len(), 1, "{out}");
+    assert!(
+        ceilings[0].starts_with("FINDING ponytail-ceiling src/a.rs:2 "),
+        "{out}"
+    );
+    assert_eq!(count(&results, "plain-record"), Some(0), "{out}");
+}
+
+#[test]
 fn a_slashed_row_resolves_under_source_root() {
     let (repo, cfg) = seeded_with(
         "[layout]\nsource_root = \"crate\"\ntest_file_suffix_re = '\\.rs'\ntest_decl_patterns = [\"fn {name}(\"]\n",

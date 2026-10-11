@@ -7,6 +7,10 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+## v0.3.0-beta.11 (2026-10-11)
+
+- text probes skip the state repository's files
+
 ## v0.3.0-beta.10 (2026-10-10)
 
 - commit-task refuses a commit naming no task
