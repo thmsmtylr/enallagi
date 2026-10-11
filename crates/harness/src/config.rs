@@ -39,6 +39,7 @@ pub const GATE_NAMES: &[&str] = &[
     "scope",
     "queue-intact",
     "commit-identity",
+    "commit-task",
     "check-delta",
     "commit-round",
     "adjudicator-halt",
