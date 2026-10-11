@@ -42,6 +42,7 @@ For each task with `status: review`:
 7. Try to break it: write one or two probe inputs in a scratch file outside the repo and run them if practical.
 
 Verdict per task, appended to its `notes:`. Every verdict line carries the command it ran and that command's output. A verdict line with neither is refused by this checklist: rewrite it before you write the status.
+The verdict ends with one `ran: <command>` line and one `exit: <n>` line, each on its own line, for every command the verdict relies on. The `claims` gate re-runs the ones `[check] claims_allow` names and forces back a `done` whose exit does not reproduce.
 - `VERIFIED` → set `status: done`. Include the exact commands you ran and their results.
 - `REJECTED: <reasons>` → set `status: ready`, listing concrete reproducible failures. A vague objection is not a rejection — every one names the command or input that demonstrates the problem.
 

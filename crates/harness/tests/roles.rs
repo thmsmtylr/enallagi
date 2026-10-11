@@ -283,3 +283,19 @@ fn the_verifier_reproduces_each_claim() {
         assert!(text.contains(want), "roles/verifier.md wants {want:?}");
     }
 }
+
+// the `claims` gate parses these two lines, so the rendered prompt must ask for both
+#[test]
+fn the_verifier_ends_with_ran_and_exit_lines() {
+    let repo = Repo::new();
+    repo.write("enallagi.toml", "[check]\ncommand = \"true\"\n");
+    let cfg = config::load(&repo.root).expect("load");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/verifier.md");
+    let text = config::subst(
+        &fs::read_to_string(&source).expect("read roles/verifier.md"),
+        &cfg,
+    );
+    for want in ["`ran: <command>`", "`exit: <n>`"] {
+        assert!(text.contains(want), "the rendered verifier wants {want:?}");
+    }
+}

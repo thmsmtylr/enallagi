@@ -4107,3 +4107,26 @@ fn a_missing_host_tool_warns_and_the_run_goes_on() {
     let log = std::fs::read_to_string(r.root.join(".enallagi/events.jsonl")).unwrap_or_default();
     assert!(log.contains("stage.start"), "{out}");
 }
+
+#[test]
+fn claims_runs_directly_after_verdict() {
+    let repo = Repo::new();
+    repo.write("enallagi.toml", "[check]\ncommand = \"true\"\n");
+    let cfg = enallagi::config::load(&repo.root).expect("load");
+    let verify = cfg
+        .stage
+        .iter()
+        .find(|s| s.name == "verify")
+        .expect("a verify stage");
+    let at = verify
+        .post
+        .iter()
+        .position(|g| g == "verdict")
+        .expect("verdict on verify");
+    assert_eq!(
+        verify.post.get(at + 1).map(String::as_str),
+        Some("claims"),
+        "{:?}",
+        verify.post
+    );
+}

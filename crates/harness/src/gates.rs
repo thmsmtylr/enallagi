@@ -65,6 +65,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "implementer-not-done" => implementer_not_done(ctx),
         "commit-verdict" => commit_verdict(ctx),
         "verdict" => verdict(ctx),
+        "claims" => claims(ctx),
         "scope" => scope(ctx),
         "queue-intact" => queue_intact(ctx),
         "commit-identity" => commit_identity(ctx),
@@ -453,6 +454,102 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         ),
     );
     GateOutcome { tally, ..outcome }
+}
+
+// the `ran:`/`exit:` pairs after the block's last VERIFIER marker, the latest verdict
+fn claimed_runs(ctx: &GateCtx, task: &str) -> Vec<(String, i32)> {
+    let text = tasks_file(ctx.root, ctx.cfg).read().unwrap_or_default();
+    let blocks = queue::parse(&text).unwrap_or_default();
+    let Some(block) = blocks.iter().find(|b| b.id == task) else {
+        return Vec::new();
+    };
+    let lines: Vec<&str> = block.body.iter().map(|(_, l)| l.trim()).collect();
+    let marker = regex::Regex::new(r"\bVERIFIER\b").expect("pattern");
+    let Some(start) = lines.iter().rposition(|l| marker.is_match(l)) else {
+        return Vec::new();
+    };
+    let mut runs = Vec::new();
+    for pair in lines[start..].windows(2) {
+        let (Some(cmd), Some(exit)) = (pair[0].strip_prefix("ran:"), pair[1].strip_prefix("exit:"))
+        else {
+            continue;
+        };
+        if let Ok(exit) = exit.trim().trim_matches('`').parse() {
+            runs.push((cmd.trim().trim_matches('`').to_string(), exit));
+        }
+    }
+    runs
+}
+
+// a verdict's pasted exit is otherwise its word alone; the allowlist bounds what a lane's text may run here
+fn claims(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(task) = ctx.task.clone() else {
+        return pass("no task");
+    };
+    match status_of(ctx, &task) {
+        Err(_) => return unreadable(ctx, &task),
+        Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
+        Ok(_) => {}
+    }
+    let allow = &ctx.cfg.check.claims_allow;
+    if allow.is_empty() {
+        return pass("claims_allow is empty");
+    }
+    let runs = claimed_runs(ctx, &task);
+    if runs.is_empty() {
+        return pass("the latest VERIFIER entry claims no ran:/exit: pair");
+    }
+    let timeout = ctx
+        .cfg
+        .check
+        .timeout_duration()
+        .unwrap_or(crate::config::DEFAULT_CHECK_TIMEOUT);
+    let (mut refuted, mut flaky, mut held, mut skipped) = (vec![], vec![], vec![], vec![]);
+    for (cmd, claimed) in runs {
+        if !allow.iter().any(|p| cmd.starts_with(p.as_str())) {
+            skipped.push(format!("`{cmd}`"));
+            continue;
+        }
+        let exit = || run_bounded(ctx.root, &cmd, timeout).map_or(-1, |r| r.exit);
+        let (a, b) = (exit(), exit());
+        let line = format!("`{cmd}` claimed exit {claimed}, re-ran exit {a} and {b}");
+        if a != claimed && b != claimed {
+            refuted.push(line);
+        } else if a != b {
+            flaky.push(line);
+        } else {
+            held.push(line);
+        }
+    }
+    if !refuted.is_empty() {
+        let reason = format!(
+            "the verifier returned done and a claimed exit did not reproduce: {}",
+            refuted.join("; ")
+        );
+        return force_back(
+            ctx,
+            "claims",
+            &task,
+            "ready",
+            &reason,
+            &format!("chore({task}): enallagi gate rejected a claimed exit"),
+            &format!("{task} was forced back to ready: {}", refuted.join("; ")),
+        );
+    }
+    let mut parts = Vec::new();
+    if !flaky.is_empty() {
+        parts.push(format!("flaky: {}", flaky.join("; ")));
+    }
+    if !held.is_empty() {
+        parts.push(format!("reproduced: {}", held.join("; ")));
+    }
+    if !skipped.is_empty() {
+        parts.push(format!(
+            "not re-run, outside claims_allow: {}",
+            skipped.join(", ")
+        ));
+    }
+    pass(parts.join(". "))
 }
 
 // word boundaries, so one id never matches a longer id it prefixes
@@ -2178,6 +2275,96 @@ mod tests {
         assert!(out.pass, "{}", out.reason);
         assert!(env.tasks_text().contains("status: done"));
         assert!(env.warnings.is_empty());
+    }
+
+    impl Env {
+        fn claimed(&mut self, allow: &[&str], verdicts: &str) {
+            let path = self.repo.root.join("enallagi.toml");
+            let toml = std::fs::read_to_string(&path).expect("read enallagi.toml");
+            let allow: Vec<String> = allow.iter().map(|p| format!("'{p}'")).collect();
+            self.repo.write(
+                "enallagi.toml",
+                &format!("{toml}claims_allow = [{}]\n", allow.join(", ")),
+            );
+            self.cfg = crate::config::load(&self.repo.root).expect("load enallagi.toml");
+            self.repo.write(
+                "TASKS.md",
+                &format!(
+                    "## [T-001] first\nscope: src/a.ts\nrows: none — harness\nblockedBy: none\nstatus: done\nnotes: IMPLEMENTER: did it.\n{verdicts}"
+                ),
+            );
+            self.repo.commit_all("verdict");
+        }
+    }
+
+    #[test]
+    fn a_claimed_pass_that_fails_is_forced_back() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(
+            &["true", "false"],
+            "VERIFIER: VERIFIED.\nran: false\nexit: 0\n",
+        );
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(!out.pass, "{}", out.reason);
+        assert!(out.reason.contains("`false`"), "{}", out.reason);
+        assert!(out.reason.contains("claimed exit 0"), "{}", out.reason);
+        assert!(out.reason.contains("1 and 1"), "{}", out.reason);
+        assert!(
+            env.tasks_text().contains("status: ready"),
+            "{}",
+            env.tasks_text()
+        );
+        assert!(env.events().iter().any(|e| matches!(&e.kind,
+            Kind::TaskStatus { to, by, .. } if to == "ready" && by == "claims")));
+    }
+
+    #[test]
+    fn a_claim_that_reproduces_passes() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(
+            &["true", "false"],
+            "VERIFIER: REJECTED.\nran: false\nexit: 0\nVERIFIER: VERIFIED.\nran: true\nexit: 0\n",
+        );
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert!(env.tasks_text().contains("status: done"));
+    }
+
+    #[test]
+    fn a_claim_that_flips_between_runs_is_flaky() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(
+            &["test "],
+            "VERIFIER: VERIFIED.\nran: test -e flaky.mark && exit 1; touch flaky.mark\nexit: 0\n",
+        );
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert!(out.reason.starts_with("flaky:"), "{}", out.reason);
+        assert!(out.reason.contains("touch flaky.mark"), "{}", out.reason);
+        assert!(out.reason.contains("0 and 1"), "{}", out.reason);
+    }
+
+    #[test]
+    fn a_claim_outside_the_allowlist_never_runs() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(
+            &["true"],
+            "VERIFIER: VERIFIED.\nran: touch outside.mark\nexit: 0\n",
+        );
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert!(!env.repo.root.join("outside.mark").exists());
+        assert!(out.reason.contains("not re-run"), "{}", out.reason);
+        assert!(out.reason.contains("touch outside.mark"), "{}", out.reason);
+    }
+
+    #[test]
+    fn an_empty_claims_allow_passes() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(&[], "VERIFIER: VERIFIED.\nran: false\nexit: 0\n");
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert_eq!(out.reason, "claims_allow is empty");
     }
 
     #[test]

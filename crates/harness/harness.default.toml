@@ -16,6 +16,8 @@ fail_name = ""
 tally = ""
 # timeout bounds both forms; a check that runs past it is killed with its process group and halts the run.
 timeout = "30m"
+# claims_allow is the command prefixes the claims gate re-runs from a verdict's ran: lines, twice each; empty re-runs nothing.
+claims_allow = []
 
 # drain is the standing proposed blocks one adjudicate stage takes; turns_per_block sizes that stage; proposed_rounds is how long a proposed block may stand; title_cap_from is the first id the 72-character title cap applies to.
 [queue]
@@ -160,7 +162,7 @@ post = ["queue-intact", "commit-identity", "commit-task", "implementer-not-done"
 name = "verify"
 role = "verifier"
 turns = 100
-post = ["commit-verdict", "queue-intact", "commit-identity", "verdict", "scope", "install-stale"]
+post = ["commit-verdict", "queue-intact", "commit-identity", "verdict", "claims", "scope", "install-stale"]
 
 [[stage]]
 name = "scout"
