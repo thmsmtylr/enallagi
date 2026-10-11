@@ -2442,3 +2442,132 @@ fn learning_standing_names_age_and_rounds_left() {
         found[0].message
     );
 }
+
+fn commit_state(repo: &Repo, subject: &str) -> String {
+    let state = repo.root.join(".enallagi");
+    for (key, value) in [("user.email", "t@t"), ("user.name", "t")] {
+        enallagi::git::git(&state, &["config", key, value]).expect("identity");
+    }
+    enallagi::git::git(&state, &["add", "-A"]).expect("add");
+    enallagi::git::git(
+        &state,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            subject,
+        ],
+    )
+    .expect("commit");
+    enallagi::git::git(&state, &["rev-parse", "--short", "HEAD"]).expect("head")
+}
+
+fn line_of(repo: &Repo, name: &str, needle: &str) -> usize {
+    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), name);
+    fs::read_to_string(&path)
+        .expect("read")
+        .lines()
+        .position(|l| l.contains(needle))
+        .unwrap_or_else(|| panic!("{needle} not in {name}"))
+        + 1
+}
+
+// one friction before the rule's promotion, and the rule citing it plus `later` when given
+fn promoted_rule(later: Option<&str>) -> (Repo, Config, String) {
+    let (repo, cfg) = seeded();
+    append(
+        &repo,
+        "PROGRESS.md",
+        "\nfriction: the mutant ran against a stale test binary\n",
+    );
+    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "DECISIONS.md");
+    let rule =
+        "- [2026-10-01] `stale binary`: a mutant read a stale test binary → `touch` the file";
+    let text = fs::read_to_string(&path).expect("decisions").replacen(
+        "## Earned rules\n",
+        &format!("## Earned rules\n\n{rule}\n"),
+        1,
+    );
+    fs::write(&path, text).expect("write");
+    let sha = commit_state(&repo, "a promoted rule");
+    let mut cites = vec![format!(
+        "`.enallagi/PROGRESS.md:{}`",
+        line_of(&repo, "PROGRESS.md", "stale test binary")
+    )];
+    if let Some(friction) = later {
+        append(&repo, "PROGRESS.md", &format!("friction: {friction}\n"));
+        cites.push(format!(
+            "`.enallagi/PROGRESS.md:{}`",
+            line_of(&repo, "PROGRESS.md", friction)
+        ));
+    }
+    let text = fs::read_to_string(&path).expect("decisions").replacen(
+        &format!("{rule}\n"),
+        &format!(
+            "{rule}\n  promoted: {sha}\n  instances: {}\n",
+            cites.join(", ")
+        ),
+        1,
+    );
+    fs::write(&path, text).expect("write");
+    (repo, cfg, sha)
+}
+
+#[test]
+fn a_rule_recurring_after_promotion_is_reported() {
+    let later = "cargo reused the binary built from the mutation";
+    let (repo, cfg, sha) = promoted_rule(Some(later));
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "friction-repeat");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].path, ".enallagi/DECISIONS.md");
+    assert_eq!(
+        found[0].line,
+        line_of(&repo, "DECISIONS.md", "`stale binary`")
+    );
+    let new = format!(
+        "`.enallagi/PROGRESS.md:{}`",
+        line_of(&repo, "PROGRESS.md", later)
+    );
+    let old = format!(
+        "`.enallagi/PROGRESS.md:{}`",
+        line_of(&repo, "PROGRESS.md", "stale test binary")
+    );
+    let message = &found[0].message;
+    assert!(message.contains("ineffective"), "{message}");
+    assert!(message.contains("`stale binary`"), "{message}");
+    assert!(message.contains(&new), "{message}");
+    assert!(message.contains(&sha), "{message}");
+    assert!(!message.contains(&old), "{message}");
+}
+
+#[test]
+fn a_rule_not_recurring_after_promotion_is_silent() {
+    let (repo, cfg, sha) = promoted_rule(Some("cargo reused the binary built from the mutation"));
+    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "DECISIONS.md");
+    let quiet = format!(
+        "- [2026-10-01] `quiet rule`: a mutant outlived its test → rerun the test\n  promoted: {sha}\n  instances: `.enallagi/PROGRESS.md:{}`\n",
+        line_of(&repo, "PROGRESS.md", "stale test binary")
+    );
+    let text = fs::read_to_string(&path).expect("decisions").replacen(
+        "## Earned rules\n",
+        &format!("## Earned rules\n\n{quiet}"),
+        1,
+    );
+    fs::write(&path, text).expect("write");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "friction-repeat");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0].message.contains("`stale binary`"),
+        "{}",
+        found[0].message
+    );
+    assert!(
+        !found[0].message.contains("`quiet rule`"),
+        "{}",
+        found[0].message
+    );
+}

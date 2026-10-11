@@ -182,7 +182,11 @@ pub enum Command {
     ///
     /// Reads review blocks, frictions and rejections, and writes proposed entries to DECISIONS.md.
     /// The `auditor` role names each class, and it sits in no pipeline.
-    Audit,
+    Audit {
+        /// Print each rule two or more of these installs earned as a `[seed]` line, and write nothing
+        #[arg(long, num_args = 1.., value_name = "DIR")]
+        harness: Vec<std::path::PathBuf>,
+    },
     /// Print the product commit a task was queued against
     ///
     /// That commit is the base a gate measures the task's diff from.
@@ -350,7 +354,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         }),
         Command::Issue { reference, dry_run } => issue::run(&issue::Args { reference, dry_run }),
         Command::Review { reference, dry_run } => review::run(&review::Args { reference, dry_run }),
-        Command::Audit => audit::run(),
+        Command::Audit { harness } => audit::run(&harness),
         Command::Base { task } => base::run(&base::Args { task }),
         Command::Gate { which, task, base } => gate::run(&gate::Args { which, task, base }),
         Command::Hook { name } => hook::run(&hook::Args { name }),
@@ -391,7 +395,7 @@ mod tests {
         "hook", "skills", "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 39] = [
+    const FLAGS: [&str; 40] = [
         "init --adapter",
         "init --dry-run",
         "init --move",
@@ -422,6 +426,7 @@ mod tests {
         "pr --policy-read",
         "issue --dry-run",
         "review --dry-run",
+        "audit --harness",
         "gate --base",
         "skills --cost",
         "eval --gate",
