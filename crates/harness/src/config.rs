@@ -155,6 +155,9 @@ pub struct CheckConfig {
     /// A regex over each output line whose named groups `passed` and `failed` are summed into the
     /// tally; empty reads cargo's `test result:` lines.
     pub tally: String,
+    /// A JUnit XML file, relative to the checkout, the check writes. When set it replaces
+    /// `fail_name` and `tally`.
+    pub report: String,
     /// `<n>s`, `<n>m` or `<n>h`; empty means `DEFAULT_CHECK_TIMEOUT`.
     pub timeout: String,
 }

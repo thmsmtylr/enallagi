@@ -14,6 +14,8 @@ force = ""
 fail_name = ""
 # tally is a regex over each output line; its named groups passed and failed are summed. Empty reads cargo's `test result:` lines.
 tally = ""
+# report is a JUnit XML file, relative to the checkout, that the check writes; when set it replaces fail_name and tally.
+report = ""
 # timeout bounds both forms; a check that runs past it is killed with its process group and halts the run.
 timeout = "30m"
 

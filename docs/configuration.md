@@ -38,7 +38,22 @@ The context file tells each lane to run the check that way.
 - `check.force`: the same check with its cache defeated. Empty by default. Left out of `enallagi.toml`, it follows `check.command`.
 - `check.fail_name`: a regex over the check's output whose group 1 is a failing test's name. Empty by default. Init writes the detected runner's pattern below, or the verified proposal's. It reads the output with ANSI escape sequences removed.
 - `check.tally`: a regex over each line of the check's output. Every match's named groups `passed` and `failed` are summed into the gate's tally. Empty by default, which reads cargo's `test result:` lines. The verified proposal writes one, and so does init for a detected runner other than cargo. A runner with neither records no tally, rather than a tally of zero.
+- `check.report`: a JUnit XML file the check writes, relative to the checkout. Empty by default. When set, the gate reads failing names and the tally from it instead of `check.fail_name` and `check.tally`. A report that is absent, does not parse, or predates the run makes the check red.
 - `check.timeout`: `<n>s`, `<n>m` or `<n>h`. Default `"30m"`. A check that runs past it halts the run.
+
+### `check.report`
+
+A `<testcase>` holding `<failure>` or `<error>` is failed, and its `name` is matched against `.check-baseline`.
+One holding `<skipped>` is ignored, and every other one passed.
+These runners write JUnit XML with no added package, each read on 2026-09-29:
+
+- pytest: `--junit-xml=<path>` ([docs](https://docs.pytest.org/en/stable/how-to/output.html))
+- Vitest: `--reporter=junit --outputFile=<path>` ([docs](https://vitest.dev/guide/reporters))
+- Bun: `bun test --reporter=junit --reporter-outfile=<path>` ([docs](https://bun.sh/docs/cli/test))
+- Deno: `deno test --junit-path=<path>` ([docs](https://docs.deno.com/runtime/reference/cli/test/))
+- cargo-nextest: `[profile.ci.junit] path = "junit.xml"` in `.config/nextest.toml`, written to `target/nextest/ci/junit.xml` under `--profile ci` ([docs](https://nexte.st/docs/machine-readable/junit/))
+
+A runner not listed here keeps `check.fail_name` and `check.tally`.
 
 ### `check.fail_name`
 
