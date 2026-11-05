@@ -295,7 +295,11 @@ fn the_verifier_ends_with_ran_and_exit_lines() {
         &fs::read_to_string(&source).expect("read roles/verifier.md"),
         &cfg,
     );
-    for want in ["`ran: <command>`", "`exit: <n>`"] {
+    for want in [
+        "`ran: <command>`",
+        "`exit: <n>`",
+        "except a run against a mutant",
+    ] {
         assert!(text.contains(want), "the rendered verifier wants {want:?}");
     }
 }
