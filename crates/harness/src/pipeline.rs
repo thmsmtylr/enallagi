@@ -567,19 +567,25 @@ impl<'a> Loop<'a> {
         let stopped = agent::stop_signal().is_some()
             || self.file("STOP").is_file()
             || self.over_budget().is_some();
-        match (!stopped).then(|| audit::run(self.root, self.cfg)) {
+        let audited = (!stopped).then(|| audit::run(self.root, self.cfg));
+        let spent = match &audited {
+            Some(Ok(report)) => report.spent,
+            Some(Err(err)) => err.spent(),
+            None => None,
+        };
+        if let Some((seconds, cost)) = spent {
+            self.digest.seconds += seconds;
+            *self
+                .digest
+                .role_seconds
+                .entry("auditor".to_string())
+                .or_default() += seconds;
+            if let Some(cost) = cost {
+                self.digest.cost = round4(self.digest.cost + cost);
+            }
+        }
+        match audited {
             Some(Ok(report)) => {
-                if let Some((seconds, cost)) = report.spent {
-                    self.digest.seconds += seconds;
-                    *self
-                        .digest
-                        .role_seconds
-                        .entry("auditor".to_string())
-                        .or_default() += seconds;
-                    if let Some(cost) = cost {
-                        self.digest.cost = round4(self.digest.cost + cost);
-                    }
-                }
                 self.digest.learnings.proposed =
                     report.proposed.into_iter().map(|p| p.class).collect();
                 self.digest.learnings.removed = report.removed;
