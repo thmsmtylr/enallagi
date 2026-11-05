@@ -38,11 +38,18 @@ pub fn run(harness: &[std::path::PathBuf]) -> anyhow::Result<i32> {
 }
 
 fn shared(dirs: &[std::path::PathBuf]) -> anyhow::Result<i32> {
+    // one install named twice, by a relative path or a symlink, is still one install
+    let mut seen = std::collections::BTreeSet::new();
+    let dirs: Vec<std::path::PathBuf> = dirs
+        .iter()
+        .filter(|d| seen.insert(std::fs::canonicalize(d).unwrap_or_else(|_| d.to_path_buf())))
+        .cloned()
+        .collect();
     if dirs.len() < 2 {
         eprintln!("enallagi audit: --harness needs two or more install directories");
         return Ok(1);
     }
-    let shared = match audit::shared(dirs) {
+    let shared = match audit::shared(&dirs) {
         Ok(shared) => shared,
         Err(err) => {
             eprintln!("{err}");

@@ -831,6 +831,23 @@ fn audit_harness_prints_seeds_and_writes_nothing() {
 }
 
 #[test]
+fn audit_harness_counts_an_install_named_twice_once() {
+    let all = installs();
+    let cwd = Repo::new();
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .arg("audit")
+        .arg("--harness")
+        .arg(&all[0].root)
+        .arg(all[0].root.join("."))
+        .current_dir(&cwd.root)
+        .output()
+        .expect("spawn");
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("two or more"), "{text}");
+}
+
+#[test]
 fn audit_harness_refuses_one_install() {
     let all = installs();
     let cwd = Repo::new();

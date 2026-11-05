@@ -46,6 +46,7 @@ The rule gains a dated `revised:` line, and a promoted revision replaces it and 
 A rule that recurs after two revisions moves to `## Expired findings` as a dated line.
 
 `enallagi audit --harness <dir>...` reads `DECISIONS.md` in each install directory given.
+A directory named twice, by any path, counts as one install.
 It reports each rule that two or more installs earned under `## Earned rules`.
 A rule killed in any install is left out.
 Each report names every install's dated line and prints the rule as a `[seed]` line.
