@@ -68,6 +68,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "scope" => scope(ctx),
         "queue-intact" => queue_intact(ctx),
         "commit-identity" => commit_identity(ctx),
+        "commit-task" => commit_task(ctx),
         "check-delta" => check_gate(ctx),
         "commit-round" => commit_round(ctx),
         "adjudicator-halt" => adjudicator_halt(ctx),
@@ -785,6 +786,46 @@ fn commit_identity(ctx: &mut GateCtx) -> GateOutcome {
     fail(format!(
         "the repository commits as {want}, and these do not: {}",
         strangers.join(", ")
+    ))
+}
+
+// an empty commit touches no file, so the identity and scope gates both pass it
+fn commit_task(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
+        return pass("no base");
+    };
+    let id = regex::Regex::new(r"\bT-[0-9]+\b").expect("task id pattern");
+    let mut state: Vec<String> = BOOKKEEPING.iter().map(|name| rel(ctx, name)).collect();
+    state.push(rel(ctx, "STOP"));
+    let skills_dir = format!("{}/", skills_dir_for(ctx.cfg));
+    // the launcher's own state and vendoring commits name no task, and touch nothing a lane writes
+    let launcher = |files: &[&str]| {
+        !files.is_empty()
+            && files.iter().all(|f| {
+                state.iter().any(|s| s == f)
+                    || is_harness_path(ctx.cfg, f)
+                    || f.starts_with(&skills_dir)
+            })
+    };
+    let range = format!("{base}..HEAD");
+    let log = git(ctx.root, &["log", "--no-merges", "--format=%h %s", &range]).unwrap_or_default();
+    let unnamed: Vec<String> = log
+        .lines()
+        .filter_map(|l| l.split_once(' '))
+        .filter(|(_, subject)| !id.is_match(subject))
+        .filter(|(sha, _)| {
+            let files =
+                git(ctx.root, &["show", "--format=", "--name-only", sha]).unwrap_or_default();
+            !launcher(&files.lines().filter(|f| !f.is_empty()).collect::<Vec<_>>())
+        })
+        .map(|(sha, subject)| format!("{sha} {subject}"))
+        .collect();
+    if unnamed.is_empty() {
+        return pass(format!("every commit on {range} names a task"));
+    }
+    fail(format!(
+        "these commits on {range} name no task id: {}",
+        unnamed.join(", ")
     ))
 }
 
@@ -1686,6 +1727,61 @@ mod tests {
         env.repo.commit_all("T-001 by the repository");
         let mut ctx = env.ctx(Some("T-001"), Some(&base));
         let out = commit_identity(&mut ctx);
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
+    fn a_commit_naming_no_task_is_refused() {
+        let mut env = Env::new("exit 0\n");
+        let base = head(&env.repo.root).expect("base");
+        env.repo.write("src/schema.ts", "export const x = 5\n");
+        env.repo.commit_all("feat(schema): T-001 bump x");
+        git(
+            &env.repo.root,
+            &[
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "chore(release): v1",
+            ],
+        )
+        .expect("an empty commit");
+        let stray = git(&env.repo.root, &["rev-parse", "--short", "HEAD"]).expect("sha");
+        let mut ctx = env.ctx(Some("T-001"), Some(&base));
+        let out = commit_task(&mut ctx);
+        assert!(!out.pass, "{}", out.reason);
+        assert!(
+            out.reason.contains(&stray) && out.reason.contains("chore(release): v1"),
+            "{}",
+            out.reason
+        );
+    }
+
+    #[test]
+    fn commits_naming_the_task_pass() {
+        let mut env = Env::new("exit 0\n");
+        let base = head(&env.repo.root).expect("base");
+        env.repo.write("src/schema.ts", "export const x = 6\n");
+        env.repo.commit_all("feat(schema): T-001 bump x");
+        let mut ctx = env.ctx(Some("T-001"), Some(&base));
+        let out = commit_task(&mut ctx);
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
+    fn a_launcher_state_commit_is_exempt() {
+        let mut env = Env::new("exit 0\n");
+        let base = head(&env.repo.root).expect("base");
+        env.repo.write("src/schema.ts", "export const x = 7\n");
+        env.repo.commit_all("feat(schema): T-001 bump x");
+        env.queue("review", "src/schema.ts", "none — harness");
+        commit_instance(&env.ctx(None, None), &["TASKS.md"], "queue: verdict").expect("state");
+        assert!(env.log().contains("queue: verdict"), "{}", env.log());
+        let mut ctx = env.ctx(Some("T-001"), Some(&base));
+        let out = commit_task(&mut ctx);
         assert!(out.pass, "{}", out.reason);
     }
 
