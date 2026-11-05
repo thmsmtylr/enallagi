@@ -55,6 +55,8 @@ pub struct Report {
     pub merged: Vec<String>,
     pub refused: Vec<String>,
     pub decisions: String,
+    // the auditor's call, when one ran: its seconds and cost
+    pub spent: Option<(u64, Option<f64>)>,
 }
 
 fn read(root: &Path, rel: &str) -> Result<String, AuditError> {
@@ -409,7 +411,7 @@ fn body(role: &str) -> &str {
         .trim_start()
 }
 
-fn ask(root: &Path, cfg: &Config, prompt: String) -> Result<String, AuditError> {
+fn ask(root: &Path, cfg: &Config, prompt: String) -> Result<crate::agent::StageResult, AuditError> {
     let presets = crate::agent::presets();
     let resolved = crate::agent::resolve(&cfg.agent, "auditor", &presets)
         .map_err(|e| AuditError::Agent(e.to_string()))?;
@@ -439,7 +441,7 @@ fn ask(root: &Path, cfg: &Config, prompt: String) -> Result<String, AuditError> 
             result.exit
         )));
     }
-    Ok(result.output)
+    Ok(result)
 }
 
 pub fn with_proposed(decisions: &str, rendered: &[String]) -> String {
@@ -657,8 +659,9 @@ pub fn run(root: &Path, cfg: &Config) -> Result<Report, AuditError> {
     if signal.len() < RECURS {
         return Ok(report);
     }
-    let output = ask(root, cfg, prompt(&role(root, cfg), &signal))?;
-    let bodies = answers(&output);
+    let result = ask(root, cfg, prompt(&role(root, cfg), &signal))?;
+    report.spent = Some((result.seconds, result.usage.cost));
+    let bodies = answers(&result.output);
     if bodies.is_empty() {
         report
             .refused

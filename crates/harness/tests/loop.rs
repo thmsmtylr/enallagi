@@ -4229,4 +4229,38 @@ fn the_audit_runs_once_after_the_last_iteration() {
         "{text}"
     );
     assert!(text.contains("proposed `slow-check`"), "{text}");
+    // every stub prints $0.5, the auditor's included
+    assert_eq!(
+        digest.cost,
+        0.5 * (digest.stages_run + 1) as f64,
+        "{digest:#?}"
+    );
+    assert!(digest.role_seconds.contains_key("auditor"), "{digest:#?}");
+}
+
+#[test]
+fn a_stop_skips_the_audit() {
+    let r = repo("", "");
+    script(
+        &r,
+        "src/fakeagent.sh",
+        &format!(
+            "case \"$1\" in *'BEGIN ENALLAGI LEARNING'*) echo ran >>auditor-ran ;; esac\n{QUIET}"
+        ),
+    );
+    write_toml(&r, &base_toml(""));
+    r.write("TASKS.md", TASKS);
+    r.write(
+        "PROGRESS.md",
+        "# progress\nfriction: the check ran past its timeout\nfriction: the check timed out again\n",
+    );
+    r.commit_all("stubs");
+    r.write("STOP", "");
+
+    let (digest, _) = go(&r, &opts(1));
+    assert!(
+        digest.halts.iter().any(|h| h.contains("STOP")),
+        "{digest:#?}"
+    );
+    assert!(!r.root.join("auditor-ran").exists(), "{digest:#?}");
 }

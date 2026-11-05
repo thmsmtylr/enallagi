@@ -562,12 +562,28 @@ impl<'a> Loop<'a> {
             Ok(expired) => self.digest.learnings.expired = expired,
             Err(err) => self.digest.warnings.push(err.to_string()),
         }
-        match audit::run(self.root, self.cfg) {
-            Ok(report) => {
+        // the auditor is a paid call, so a stop or a spent budget skips it like a stage
+        let stopped = agent::stop_signal().is_some()
+            || self.file("STOP").is_file()
+            || self.over_budget().is_some();
+        match (!stopped).then(|| audit::run(self.root, self.cfg)) {
+            Some(Ok(report)) => {
+                if let Some((seconds, cost)) = report.spent {
+                    self.digest.seconds += seconds;
+                    *self
+                        .digest
+                        .role_seconds
+                        .entry("auditor".to_string())
+                        .or_default() += seconds;
+                    if let Some(cost) = cost {
+                        self.digest.cost = round4(self.digest.cost + cost);
+                    }
+                }
                 self.digest.learnings.proposed =
                     report.proposed.into_iter().map(|p| p.class).collect();
             }
-            Err(err) => self.digest.warnings.push(err.to_string()),
+            Some(Err(err)) => self.digest.warnings.push(err.to_string()),
+            None => {}
         }
         if let Err(err) = git::commit_instance(
             self.root,
