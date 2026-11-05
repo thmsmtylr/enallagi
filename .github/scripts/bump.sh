@@ -1,9 +1,10 @@
 #!/bin/sh
 # Writes the release bump onto the checked-out branch: the version after origin/main's, and its
-# CHANGELOG.md section. Usage: bump.sh <pull request title>. Prints the new version.
+# CHANGELOG.md section. Usage: bump.sh <changelog line>; the line is used only when `## Unreleased`
+# is empty. Prints the new version.
 set -eu
 
-title=${1:?usage: bump.sh <pull request title>}
+title=${1:?usage: bump.sh <changelog line>}
 manifest=crates/harness/Cargo.toml
 
 current=$(git show "origin/main:$manifest" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
