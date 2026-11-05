@@ -4154,7 +4154,8 @@ fn a_learning_killed_on_a_red_gate_is_named() {
         "{LEARNING}  killed: 2026-09-29 `enallagi eval --gate vacuous-test`: REFUSE, the eval passes without the rule\n"
     );
     let r = deciding_learning(&decisions("", &killed), "");
-    let text = pipeline::digest_text(&go(&r, &opts(1)).0);
+    let (digest, _) = go(&r, &opts(1));
+    let text = pipeline::digest_text(&digest);
     assert!(
         text.contains("learnings: 0 proposed, 0 promoted, 1 killed, 0 expired"),
         "{text}"
