@@ -535,7 +535,7 @@ fn earned(repo: &Repo, entry: &str) {
 }
 
 // a rule promoted over the fixture's signal, whose class then recurs in one later friction
-fn recurred(repo: &Repo, revised: &[&str]) -> (String, String) {
+fn recurred(repo: &Repo, extra: &[&str]) -> (String, String) {
     with_signal(repo);
     earned(repo, RULE);
     let sha = commit_state(repo, "a promoted rule");
@@ -550,7 +550,7 @@ fn recurred(repo: &Repo, revised: &[&str]) -> (String, String) {
         format!("  promoted: {sha}"),
         format!("  instances: `{}`, `{}`, `{new}`", lost[0], lost[1]),
     ];
-    lines.extend(revised.iter().map(|r| format!("  revised: {r}")));
+    lines.extend(extra.iter().map(|r| format!("  {r}")));
     let text = decisions(repo).replacen(
         &format!("{RULE}\n"),
         &format!("{RULE}\n{}\n", lines.join("\n")),
@@ -633,10 +633,28 @@ fn a_promoted_revision_replaces_its_rule() {
     assert!(!written.contains(RULE), "{written}");
     assert!(
         written.contains(&format!(
-            "{revised}\n  revised: 2026-10-02 `lost result v2`\n"
+            "{revised}\n  adopted: 2026-10-02 `lost result v2`\n"
         )),
         "{written}"
     );
+}
+
+#[test]
+fn a_rule_whose_revisions_died_is_handed_back() {
+    let (repo, cfg) = seeded();
+    recurred(
+        &repo,
+        &[
+            "revised: 2026-10-02 `lost result`",
+            "revised: 2026-10-04 `lost result`",
+        ],
+    );
+    let handle = at(&repo, ".enallagi/DECISIONS.md", "`lost result`");
+    let report = audit::run(&repo.root, &cfg).expect("audit");
+    assert!(report.removed.is_empty(), "{report:?}");
+    assert!(decisions(&repo).contains(RULE), "{}", decisions(&repo));
+    let asked = prompts(&repo);
+    assert!(asked[0].contains(&format!("- `{handle}`")), "{}", asked[0]);
 }
 
 #[test]
@@ -644,7 +662,10 @@ fn a_rule_recurring_after_two_revisions_is_removed() {
     let (repo, cfg) = seeded();
     let (_, new) = recurred(
         &repo,
-        &["2026-10-02 `lost result`", "2026-10-04 `lost result`"],
+        &[
+            "adopted: 2026-10-02 `lost result`",
+            "adopted: 2026-10-04 `lost result`",
+        ],
     );
     let handle = at(&repo, ".enallagi/DECISIONS.md", "`lost result`");
     audit::run(&repo.root, &cfg).expect("audit");
@@ -727,7 +748,7 @@ fn a_removal_above_leaves_a_revised_rule_its_line() {
     let (repo, cfg) = seeded();
     let (sha, new) = recurred(&repo, &[]);
     let upper = format!(
-        "- [2026-09-30] `stale rule`: a stale rule → drop it\n  promoted: {sha}\n  instances: `{new}`\n  revised: 2026-10-02 `stale rule`\n  revised: 2026-10-04 `stale rule`"
+        "- [2026-09-30] `stale rule`: a stale rule → drop it\n  promoted: {sha}\n  instances: `{new}`\n  adopted: 2026-10-02 `stale rule`\n  adopted: 2026-10-04 `stale rule`"
     );
     earned(&repo, &upper);
     let before = at(&repo, ".enallagi/DECISIONS.md", "`lost result`");
@@ -756,7 +777,10 @@ fn a_removal_alone_is_reported() {
     let (repo, _) = seeded();
     recurred(
         &repo,
-        &["2026-10-02 `lost result`", "2026-10-04 `lost result`"],
+        &[
+            "adopted: 2026-10-02 `lost result`",
+            "adopted: 2026-10-04 `lost result`",
+        ],
     );
     let (code, out) = audit_bin(&repo);
     assert_eq!(code, 0, "{out}");

@@ -16,6 +16,8 @@ const REJECTED: &str = "## Rejected findings";
 const EXPIRED: &str = "## Expired findings";
 const PROMOTED: &str = "promoted:";
 const REVISED: &str = "revised:";
+// a revision the adjudicator promoted; `revised:` only says one was proposed
+const ADOPTED: &str = "adopted:";
 // a rule revised this many times that recurs again is removed, never handed back
 const REVISIONS: usize = 2;
 // a class with fewer instances than this is one occurrence, which PROGRESS.md keeps as evidence
@@ -320,7 +322,7 @@ fn said(entry: &str) -> String {
     };
     std::iter::once(first)
         .chain(lines.map(str::trim).filter(|l| {
-            !["instances:", "killed:", PROMOTED, REVISED]
+            !["instances:", "killed:", PROMOTED, REVISED, ADOPTED]
                 .iter()
                 .any(|k| l.starts_with(k))
         }))
@@ -714,6 +716,8 @@ pub struct Ineffective {
     pub recurred: Vec<String>,
     // the class each revision was proposed under
     pub revised: Vec<String>,
+    // the class of each revision promoted, the last being this rule
+    pub adopted: Vec<String>,
 }
 
 // ponytail: a sha cite never reads as recurred; judging one needs commit order across both repositories
@@ -758,6 +762,10 @@ fn recurring(root: &Path, cfg: &Config, text: &str) -> Vec<Ineffective> {
                     .iter()
                     .filter_map(|v| cites(v).pop())
                     .collect(),
+                adopted: values(&entry, ADOPTED)
+                    .iter()
+                    .filter_map(|v| cites(v).pop())
+                    .collect(),
             })
         })
         .collect()
@@ -793,7 +801,7 @@ fn stamp(root: &Path, cfg: &Config, rel: &str, text: &str) -> String {
     lines.join("\n")
 }
 
-// a rule whose last revision was promoted under `## Earned rules` gives way to it, which carries its revisions on
+// a rule whose last revision was promoted under `## Earned rules` gives way to it, which carries its adoptions on
 fn supersede(text: &str) -> String {
     let mut text = text.to_string();
     'again: loop {
@@ -812,7 +820,11 @@ fn supersede(text: &str) -> String {
             };
             let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
             let to = end(&lines, later - 1);
-            let carried: Vec<String> = revised.iter().map(|v| format!("  {REVISED} {v}")).collect();
+            let carried: Vec<String> = values(entry, ADOPTED)
+                .into_iter()
+                .chain(revised.last().copied())
+                .map(|v| format!("  {ADOPTED} {v}"))
+                .collect();
             lines.splice(to..to, carried);
             let to = end(&lines, at - 1);
             lines.drain(at - 1..to);
@@ -866,7 +878,7 @@ pub fn run(root: &Path, cfg: &Config) -> Result<Report, AuditError> {
         if rule.revised.last().is_some_and(|c| waiting.contains(c)) {
             continue;
         }
-        if rule.revised.len() < REVISIONS {
+        if rule.adopted.len() < REVISIONS {
             handed.push(rule);
             continue;
         }
@@ -876,12 +888,12 @@ pub fn run(root: &Path, cfg: &Config) -> Result<Report, AuditError> {
         for below in &mut handed {
             below.line -= to - (rule.line - 1);
         }
-        let class = rule.revised.last().cloned().unwrap_or_default();
+        let class = rule.adopted.last().cloned().unwrap_or_default();
         let cited: Vec<String> = rule.recurred.iter().map(|c| format!("`{c}`")).collect();
         removed.push(format!(
             "- [{today}] `{class}` removed: {} recurred after {} revisions since {}: {}",
             cited.join(", "),
-            rule.revised.len(),
+            rule.adopted.len(),
             rule.promoted,
             rule.rule
         ));
