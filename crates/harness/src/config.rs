@@ -159,7 +159,7 @@ pub struct CheckConfig {
     pub tally: String,
     /// `<n>s`, `<n>m` or `<n>h`; empty means `DEFAULT_CHECK_TIMEOUT`.
     pub timeout: String,
-    /// Command prefixes the `claims` gate may re-run from a verdict's `ran:` lines.
+    /// Command prefixes the `claims` gate may re-run from a verdict's `ran:` lines; a command with a shell operator never runs.
     pub claims_allow: Vec<String>,
 }
 
