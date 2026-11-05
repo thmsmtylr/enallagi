@@ -660,7 +660,8 @@ pub fn expire(root: &Path, cfg: &Config, today: &str) -> Result<Vec<String>, Aud
         ));
     }
     dated.reverse();
-    fs::write(root.join(&rel), with_expired(&lines.join("\n"), &dated))?;
+    let out = with_expired(&lines.join("\n"), &dated);
+    fs::write(root.join(&rel), rehome(&text, &out, &rel))?;
     Ok(stale.into_iter().map(|w| w.class).collect())
 }
 
@@ -775,6 +776,36 @@ fn recurring(root: &Path, cfg: &Config, text: &str) -> Vec<Ineffective> {
 pub fn ineffective(root: &Path, cfg: &Config) -> Result<Vec<Ineffective>, AuditError> {
     let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
     Ok(recurring(root, cfg, &read(root, &rel)?))
+}
+
+// `old` and `new` are one file before and after an edit: each `instances:` cite into it moves to its line's same copy in `new`
+fn rehome(old: &str, new: &str, rel: &str) -> String {
+    let old: Vec<&str> = old.split('\n').collect();
+    let now: Vec<&str> = new.split('\n').collect();
+    let cite = Regex::new(&format!(r"`{}:(\d+)`", regex::escape(rel))).expect("pattern");
+    let moved = |c: &regex::Captures| {
+        let at = c[1].parse::<usize>().unwrap_or(0);
+        let Some(line) = at.checked_sub(1).and_then(|i| old.get(i)) else {
+            return c[0].to_string();
+        };
+        let nth = old[..at].iter().filter(|l| *l == line).count();
+        now.iter()
+            .enumerate()
+            .filter(|(_, l)| *l == line)
+            .nth(nth - 1)
+            .map_or(c[0].to_string(), |(i, _)| format!("`{rel}:{}`", i + 1))
+    };
+    now.iter()
+        .map(|l| {
+            if l.trim_start().starts_with("instances:") {
+                cite.replace_all(l, |c: &regex::Captures| moved(c))
+                    .into_owned()
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // the commit that first carried the rule's opening line, or HEAD while it is uncommitted
@@ -905,6 +936,7 @@ pub fn run(root: &Path, cfg: &Config) -> Result<Report, AuditError> {
     if !removed.is_empty() {
         kept = with_expired(&kept, &removed);
     }
+    let kept = rehome(&held, &kept, &decisions_rel);
     if kept != held {
         fs::write(root.join(&decisions_rel), &kept)?;
     }
@@ -1007,6 +1039,7 @@ pub fn run(root: &Path, cfg: &Config) -> Result<Report, AuditError> {
             }
         }
     }
+    texts[1] = rehome(&original[1], &texts[1], &decisions_rel);
     for i in 0..2 {
         if texts[i] != original[i] {
             fs::write(root.join(&rels[i]), &texts[i]).map_err(|e| AuditError::Spent {

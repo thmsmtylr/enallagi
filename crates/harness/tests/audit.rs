@@ -217,6 +217,8 @@ fn six_findings_of_two_classes_are_two_learnings() {
         written.contains(&format!("- [proposed] `vacuous test`: {VACUOUS}")),
         "{written}"
     );
+    // the proposals sit above the archived blocks, so their cites move with them
+    let (lost, vacuous) = two_classes(&repo);
     for cite in lost.iter().chain(&vacuous) {
         assert!(written.contains(&format!("`{cite}`")), "{cite}: {written}");
     }
@@ -284,17 +286,17 @@ fn a_learning_whose_citations_fail_is_refused() {
 fn an_overlapping_learning_merges_into_its_entry() {
     let (repo, cfg) = seeded();
     with_signal(&repo);
-    let (lost, vacuous) = two_classes(&repo);
     let rel = ".enallagi/DECISIONS.md";
-    let standing = format!(
-        "- [proposed] `dropped result`: a result is dropped before the caller sees it → assert on what the caller receives\n  instances: `{}`, `{}`",
-        lost[0], lost[1]
-    );
+    let standing = "- [proposed] `dropped result`: a result is dropped before the caller sees it → assert on what the caller receives\n  instances: CITES";
     let text = decisions(&repo).replacen(
         "\n## Rejected findings\n",
         &format!("\n## Proposed learnings\n\n{standing}\n\n## Rejected findings\n"),
         1,
     );
+    fs::write(repo.root.join(rel), text).expect("write");
+    let (lost, vacuous) = two_classes(&repo);
+    let cites = format!("`{}`, `{}`", lost[0], lost[1]);
+    let text = decisions(&repo).replacen("CITES", &cites, 1);
     fs::write(repo.root.join(rel), text).expect("write");
     answering(
         &repo,
@@ -309,6 +311,7 @@ fn an_overlapping_learning_merges_into_its_entry() {
     assert_eq!(classes, ["vacuous test"], "{report:?}");
     assert_eq!(report.merged.len(), 1, "{report:?}");
     let written = decisions(&repo);
+    let (lost, _) = two_classes(&repo);
     assert_eq!(written.matches("- [proposed] ").count(), 2, "{written}");
     assert!(!written.contains("`lost result`"), "{written}");
     assert!(
@@ -324,7 +327,6 @@ fn an_overlapping_learning_merges_into_its_entry() {
 fn an_earned_rule_takes_the_instances_of_its_class() {
     let (repo, cfg) = seeded();
     with_signal(&repo);
-    let (lost, _) = two_classes(&repo);
     let rel = ".enallagi/DECISIONS.md";
     let rule = "- [2026-09-29] a result dropped before its caller: assert on what the caller receives in `src/agent.rs`";
     let text = decisions(&repo).replacen(
@@ -333,10 +335,12 @@ fn an_earned_rule_takes_the_instances_of_its_class() {
         1,
     );
     fs::write(repo.root.join(rel), text).expect("write");
+    let (lost, _) = two_classes(&repo);
     answering(&repo, &learning("lost result", LOST, &refs(&lost)));
     let report = audit::run(&repo.root, &cfg).expect("audit");
     assert!(report.proposed.is_empty(), "{report:?}");
     let written = decisions(&repo);
+    let (lost, _) = two_classes(&repo);
     let cites: Vec<String> = lost.iter().map(|c| format!("`{c}`")).collect();
     assert!(
         written.contains(&format!("{rule}\n  instances: {}\n", cites.join(", "))),
@@ -349,17 +353,17 @@ fn an_earned_rule_takes_the_instances_of_its_class() {
 fn a_killed_learning_is_not_proposed_again() {
     let (repo, _) = seeded();
     with_signal(&repo);
-    let (lost, vacuous) = two_classes(&repo);
     let rel = ".enallagi/DECISIONS.md";
-    let killed = format!(
-        "- [proposed] `dropped result`: a result is dropped before the caller sees it → assert on what the caller receives\n  instances: `{}`, `{}`\n  killed: 2026-09-29 the fetch was a fixture",
-        lost[0], lost[1]
-    );
+    let killed = "- [proposed] `dropped result`: a result is dropped before the caller sees it → assert on what the caller receives\n  instances: CITES\n  killed: 2026-09-29 the fetch was a fixture";
     let text = decisions(&repo).replacen(
         "\n## Rejected findings\n",
         &format!("\n## Proposed learnings\n\n{killed}\n\n## Rejected findings\n"),
         1,
     );
+    fs::write(repo.root.join(rel), text).expect("write");
+    let (lost, vacuous) = two_classes(&repo);
+    let cites = format!("`{}`, `{}`", lost[0], lost[1]);
+    let text = decisions(&repo).replacen("CITES", &cites, 1);
     fs::write(repo.root.join(rel), text).expect("write");
     answering(
         &repo,
@@ -375,6 +379,8 @@ fn a_killed_learning_is_not_proposed_again() {
     assert!(!out.contains("proposed `lost result`"), "{out}");
     assert!(out.contains("proposed `vacuous test`"), "{out}");
     let written = decisions(&repo);
+    let (moved, _) = two_classes(&repo);
+    let killed = killed.replacen("CITES", &format!("`{}`, `{}`", moved[0], moved[1]), 1);
     assert!(written.contains(&killed), "{written}");
     assert!(!written.contains("`lost result`"), "{written}");
 }
@@ -466,6 +472,15 @@ fn a_second_audit_repeats_no_proposal() {
         2
     );
     let once = decisions(&repo);
+    let (lost, vacuous) = two_classes(&repo);
+    answering(
+        &repo,
+        &format!(
+            "{}{}",
+            learning("lost result", LOST, &refs(&lost)),
+            learning("vacuous test", VACUOUS, &refs(&vacuous))
+        ),
+    );
     let again = audit::run(&repo.root, &cfg).expect("audit");
     assert!(again.proposed.is_empty(), "{again:?}");
     assert_eq!(again.merged.len(), 2, "{again:?}");
@@ -655,6 +670,35 @@ fn a_rule_whose_revisions_died_is_handed_back() {
     assert!(decisions(&repo).contains(RULE), "{}", decisions(&repo));
     let asked = prompts(&repo);
     assert!(asked[0].contains(&format!("- `{handle}`")), "{}", asked[0]);
+}
+
+#[test]
+fn a_stamp_moves_the_cites_below_it() {
+    let (repo, cfg) = seeded();
+    with_signal(&repo);
+    let rel = ".enallagi/DECISIONS.md";
+    let (rejected, verdict) = ("a mutant survived", "REJECTED: the probe returns ok");
+    earned(&repo, &format!("{RULE}\n  instances: CITES"));
+    let cites = format!(
+        "`{}`, `{}`",
+        at(&repo, rel, rejected),
+        at(&repo, rel, verdict)
+    );
+    let text = decisions(&repo).replacen("CITES", &cites, 1);
+    fs::write(repo.root.join(rel), text).expect("write");
+    commit_state(&repo, "a promoted rule");
+    audit::run(&repo.root, &cfg).expect("audit");
+    let written = decisions(&repo);
+    assert!(written.contains("  promoted: "), "{written}");
+    let moved = format!(
+        "`{}`, `{}`",
+        at(&repo, rel, rejected),
+        at(&repo, rel, verdict)
+    );
+    assert!(
+        written.contains(&format!("  instances: {moved}\n")),
+        "{written}"
+    );
 }
 
 #[test]

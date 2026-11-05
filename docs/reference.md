@@ -44,6 +44,7 @@ A line appended again word for word counts as a new one.
 The next audit hands an ineffective rule back to the auditor, which proposes a revision like any learning.
 The rule gains a dated `revised:` line, and a promoted revision replaces it with an `adopted:` line for it and for each adoption before.
 A rule that recurs after two adopted revisions moves to `## Expired findings` as a dated line.
+The audit moves each citation into `DECISIONS.md` with the line it names when it edits the file.
 
 `enallagi audit --harness <dir>...` reads `DECISIONS.md` in each install directory given.
 A directory named twice, by any path, counts as one install.
