@@ -604,13 +604,33 @@ pub fn expire(root: &Path, cfg: &Config, today: &str) -> Result<Vec<String>, Aud
         ));
     }
     dated.reverse();
-    let mut out = lines.join("\n").trim_end().to_string();
-    if !out.lines().any(|l| l.trim_end() == EXPIRED) {
-        out.push_str(&format!("\n\n{EXPIRED}\n"));
-    }
-    out.push('\n');
-    out.push_str(&dated.join("\n"));
-    out.push('\n');
+    let out = match lines.iter().position(|l| l.trim_end() == EXPIRED) {
+        // archived task blocks sit under the section, so the lines go before its first heading
+        Some(at) => {
+            let end = lines[at + 1..]
+                .iter()
+                .position(|l| l.starts_with("## "))
+                .map_or(lines.len(), |i| at + 1 + i);
+            let last = at
+                + lines[at..end]
+                    .iter()
+                    .rposition(|l| !l.trim().is_empty())
+                    .unwrap_or(0);
+            let mut out = lines[..=last].to_vec();
+            if !lines[last].starts_with("- ") {
+                out.push(String::new());
+            }
+            out.extend(dated);
+            out.push(String::new());
+            out.extend(lines[end..].iter().cloned());
+            out.join("\n")
+        }
+        None => format!(
+            "{}\n\n{EXPIRED}\n\n{}\n",
+            lines.join("\n").trim_end(),
+            dated.join("\n")
+        ),
+    };
     fs::write(root.join(&rel), out)?;
     Ok(stale.into_iter().map(|w| w.class).collect())
 }

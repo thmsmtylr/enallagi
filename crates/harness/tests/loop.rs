@@ -4165,6 +4165,12 @@ fn a_learning_killed_on_a_red_gate_is_named() {
 #[test]
 fn a_learning_past_its_rounds_expires() {
     let r = deciding_learning(&decisions("", LEARNING), "\n[queue]\nproposed_rounds = 1\n");
+    let archived = format!(
+        "{}\n## Expired findings\n\n## [T-009] expired earlier\nstatus: proposed\n",
+        decisions("", LEARNING)
+    );
+    r.write("DECISIONS.md", &archived);
+    r.write("src/decided.md", &archived);
     r.write("src/later.md", "later\n");
     r.commit_all("a later round");
     let text = pipeline::digest_text(&go(&r, &opts(1)).0);
@@ -4180,6 +4186,13 @@ fn a_learning_past_its_rounds_expires() {
         .nth(1)
         .unwrap_or_default();
     assert!(expired.contains("`vacuous-test` expired after"), "{after}");
+    let task = expired
+        .find("## [T-009]")
+        .expect("the archived block stays");
+    assert!(
+        expired[..task].contains("`vacuous-test` expired after"),
+        "{after}"
+    );
 }
 
 #[test]
