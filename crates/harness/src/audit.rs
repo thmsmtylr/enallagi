@@ -38,6 +38,21 @@ pub enum AuditError {
     Read(String),
     #[error("enallagi audit: {0}")]
     Agent(String),
+    // the auditor's call ran before the failure, so its seconds and cost are still owed
+    #[error("{err}")]
+    Spent {
+        err: Box<AuditError>,
+        spent: (u64, Option<f64>),
+    },
+}
+
+impl AuditError {
+    pub fn spent(&self) -> Option<(u64, Option<f64>)> {
+        match self {
+            AuditError::Spent { spent, .. } => Some(*spent),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -436,10 +451,13 @@ fn ask(root: &Path, cfg: &Config, prompt: String) -> Result<crate::agent::StageR
     // a failed agent's output can quote the role's own template, which parses as a learning
     if result.exit != 0 {
         let first = result.output.lines().next().unwrap_or_default();
-        return Err(AuditError::Agent(format!(
-            "the auditor exited {}: {first}",
-            result.exit
-        )));
+        return Err(AuditError::Spent {
+            err: Box::new(AuditError::Agent(format!(
+                "the auditor exited {}: {first}",
+                result.exit
+            ))),
+            spent: (result.seconds, result.usage.cost),
+        });
     }
     Ok(result)
 }
@@ -659,8 +677,11 @@ pub fn run(root: &Path, cfg: &Config) -> Result<Report, AuditError> {
     if signal.len() < RECURS {
         return Ok(report);
     }
+    let rels = [learnings_rel, decisions_rel];
+    let original = [read(root, &rels[0])?, decisions];
     let result = ask(root, cfg, prompt(&role(root, cfg), &signal))?;
-    report.spent = Some((result.seconds, result.usage.cost));
+    let spent = (result.seconds, result.usage.cost);
+    report.spent = Some(spent);
     let bodies = answers(&result.output);
     if bodies.is_empty() {
         report
@@ -668,8 +689,6 @@ pub fn run(root: &Path, cfg: &Config) -> Result<Report, AuditError> {
             .push(format!("the auditor printed no `{BEGIN}` block"));
     }
 
-    let rels = [learnings_rel, decisions_rel];
-    let original = [read(root, &rels[0])?, decisions];
     let mut texts = original.clone();
     for body in &bodies {
         let learning = parse(body);
@@ -721,7 +740,10 @@ pub fn run(root: &Path, cfg: &Config) -> Result<Report, AuditError> {
     }
     for i in 0..2 {
         if texts[i] != original[i] {
-            fs::write(root.join(&rels[i]), &texts[i])?;
+            fs::write(root.join(&rels[i]), &texts[i]).map_err(|e| AuditError::Spent {
+                err: Box::new(e.into()),
+                spent,
+            })?;
         }
     }
     Ok(report)

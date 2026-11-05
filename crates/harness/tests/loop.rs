@@ -4240,6 +4240,37 @@ fn the_audit_runs_once_after_the_last_iteration() {
 }
 
 #[test]
+fn a_failed_audit_still_counts_its_spend() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    script(
+        &r,
+        "src/fakeagent.sh",
+        &format!("{QUIET}case \"$1\" in *'BEGIN ENALLAGI LEARNING'*) exit 1 ;; esac\n"),
+    );
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
+    r.write("TASKS.md", TASKS);
+    r.write(
+        "PROGRESS.md",
+        "# progress\nfriction: the check ran past its timeout\nfriction: the check timed out again\n",
+    );
+    r.commit_all("stubs");
+
+    let (digest, _) = go(&r, &opts(1));
+    assert!(
+        digest.warnings.iter().any(|w| w.contains("exited 1")),
+        "{digest:#?}"
+    );
+    assert_eq!(
+        digest.cost,
+        0.5 * (digest.stages_run + 1) as f64,
+        "{digest:#?}"
+    );
+    assert!(digest.role_seconds.contains_key("auditor"), "{digest:#?}");
+}
+
+#[test]
 fn a_stop_skips_the_audit() {
     let r = repo("", "");
     script(
