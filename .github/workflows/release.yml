@@ -5,12 +5,13 @@
 #
 # The release procedure, and the only statement of it:
 #
-#   1. on a branch off main, run `.github/scripts/bump.sh "<changelog line>"`. It sets `version` in
-#      crates/harness/Cargo.toml to the next X.Y.Z (and `cargo update -w`), and moves the
-#      CHANGELOG.md `## Unreleased` lines under a new `## vX.Y.Z (YYYY-MM-DD)` heading
-#   2. merge that pull request into main
-#   3. `git tag -a vX.Y.Z -m vX.Y.Z` on the merged commit
-#   4. `git push origin vX.Y.Z`
+#   1. `git fetch origin && git switch -c release origin/main`; bump.sh reads the local origin/main
+#   2. `.github/scripts/bump.sh "<changelog line>"`. It sets `version` in crates/harness/Cargo.toml
+#      to the next X.Y.Z (and `cargo update -w`), and moves the CHANGELOG.md `## Unreleased` lines
+#      under a new `## vX.Y.Z (YYYY-MM-DD)` heading
+#   3. merge that pull request into main
+#   4. `git fetch origin && git tag -a vX.Y.Z -m vX.Y.Z origin/main`
+#   5. `git push origin vX.Y.Z`
 #
 # Every `uses:` is pinned to a 40-character commit SHA with its tag in a trailing comment, the
 # same discipline ci.yml documents and `every_github_action_is_pinned_to_a_commit_sha`
