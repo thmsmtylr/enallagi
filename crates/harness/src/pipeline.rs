@@ -28,9 +28,9 @@ const SCOUT: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is define
 
 const ADJUDICATOR: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/adjudicator.md: read that file first and follow it exactly. Act on exactly the 'status: proposed' blocks this prompt names, in the order it names them. Promote it to 'status: ready' with a scope and criteria an agent that has read only __CONTEXT_FILE__, __SPEC__, LEARNINGS.md and the block can run, or kill it and append one line to '## Rejected findings' in DECISIONS.md. Decide each learning under '## Proposed learnings' in DECISIONS.md the way your role file says. A finding whose fix needs a change to __SPEC__ or __CONTEXT_FILE__ is neither: leave it at proposed and print a line beginning HALT that names the block's id. Do not commit; this loop commits your round. Then stop.";
 
-const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Read the rules this loop earned with `sed -n '/^## Earned rules/,/^## Rejected findings/p' __ENALLAGI_DIR__/DECISIONS.md`. Your role is defined in __ENALLAGI_DIR__/run/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the product paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason. Never stage or commit TASKS.md, PROGRESS.md or any other file under __ENALLAGI_DIR__: this loop commits them when your stage ends. An implementation left uncommitted is a lost iteration.";
+const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, TASKS.md, git log --oneline -20, and the TAIL of PROGRESS.md (tail -200 PROGRESS.md -- it is append-only and newest-last, so reading it from the top gives you the oldest entries and none of the handoff). The tail and the log are what the one-row rail has you re-read at the start of an iteration. Read the rules this loop earned with `sed -n '/^## Earned rules/,/^## /p' __ENALLAGI_DIR__/DECISIONS.md`. Your role is defined in __ENALLAGI_DIR__/run/roles/implementer.md: read that file first and follow it exactly. Complete exactly ONE task: the first with status 'ready' whose blockers are done and which is NOT marked 'attended: true'. If that task's scope files already carry uncommitted work, a prior lane was terminated mid-flight: finish it, never restart it and never discard it. Follow the task protocol strictly. Before you stop you MUST git add the product paths named on the task's scope: line (never git add -A, LEARNINGS.md 2026-08-26), commit them, paste the exact commands and their output into the task's notes:, and set status: review. You MUST also append this iteration's PROGRESS.md entry in the format written at the top of that file -- what happened, which rows moved, and any BLOCKED with its written reason. Never stage or commit TASKS.md, PROGRESS.md or any other file under __ENALLAGI_DIR__: this loop commits them when your stage ends. An implementation left uncommitted is a lost iteration.";
 
-const VERIFIER: &str = "Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Read the rules this loop earned with `sed -n '/^## Earned rules/,/^## Rejected findings/p' __ENALLAGI_DIR__/DECISIONS.md`. Your role is defined in __ENALLAGI_DIR__/run/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons; this loop commits the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop.";
+const VERIFIER: &str = "Read __CONTEXT_FILE__, __SPEC__ and TASKS.md. Read the rules this loop earned with `sed -n '/^## Earned rules/,/^## /p' __ENALLAGI_DIR__/DECISIONS.md`. Your role is defined in __ENALLAGI_DIR__/run/roles/verifier.md: read that file first and follow it exactly. Verify every task with status 'review'. Promote to done or reject to ready with concrete reasons; this loop commits the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop.";
 
 const GENERIC: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/__ROLE__.md: read that file first and follow it exactly. Then stop.";
 
@@ -562,12 +562,28 @@ impl<'a> Loop<'a> {
             Ok(expired) => self.digest.learnings.expired = expired,
             Err(err) => self.digest.warnings.push(err.to_string()),
         }
-        match audit::run(self.root, self.cfg) {
-            Ok(report) => {
+        // the auditor is a paid call, so a stop or a spent budget skips it like a stage
+        let stopped = agent::stop_signal().is_some()
+            || self.file("STOP").is_file()
+            || self.over_budget().is_some();
+        match (!stopped).then(|| audit::run(self.root, self.cfg)) {
+            Some(Ok(report)) => {
+                if let Some((seconds, cost)) = report.spent {
+                    self.digest.seconds += seconds;
+                    *self
+                        .digest
+                        .role_seconds
+                        .entry("auditor".to_string())
+                        .or_default() += seconds;
+                    if let Some(cost) = cost {
+                        self.digest.cost = round4(self.digest.cost + cost);
+                    }
+                }
                 self.digest.learnings.proposed =
                     report.proposed.into_iter().map(|p| p.class).collect();
             }
-            Err(err) => self.digest.warnings.push(err.to_string()),
+            Some(Err(err)) => self.digest.warnings.push(err.to_string()),
+            None => {}
         }
         if let Err(err) = git::commit_instance(
             self.root,
@@ -1965,13 +1981,33 @@ mod tests {
 
     #[test]
     fn lanes_read_the_earned_rules_range() {
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
         let cfg = Config::default();
-        for role in ["implementer", "verifier"] {
-            assert!(
-                prompt_for(role, &cfg)
-                    .contains("sed -n '/^## Earned rules/,/^## Rejected findings/p'"),
-                "{role}"
-            );
-        }
+        let script = |role: &str| {
+            let prompt = prompt_for(role, &cfg);
+            let from = prompt.find("sed -n '").expect(role) + "sed -n '".len();
+            let len = prompt[from..].find('\'').expect(role);
+            prompt[from..from + len].to_string()
+        };
+        let sed = script("implementer");
+        assert_eq!(sed, script("verifier"));
+        // an older install holds its proposed learnings between the earned and rejected sections
+        let mut child = Command::new("sed")
+            .args(["-n", &sed])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("sed");
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(b"# D\n\n## Earned rules\n\n- earned\n\n## Proposed learnings\n\n- [proposed] `p`: x\n\n## Rejected findings\n\n- r\n")
+            .expect("write");
+        let out = child.wait_with_output().expect("sed").stdout;
+        let out = String::from_utf8_lossy(&out);
+        assert!(out.contains("- earned"), "{out}");
+        assert!(!out.contains("[proposed]"), "{out}");
     }
 }

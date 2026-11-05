@@ -61,6 +61,8 @@ pub struct Report {
     pub revised: Vec<String>,
     pub removed: Vec<String>,
     pub decisions: String,
+    // the auditor's call, when one ran: its seconds and cost
+    pub spent: Option<(u64, Option<f64>)>,
 }
 
 fn read(root: &Path, rel: &str) -> Result<String, AuditError> {
@@ -447,7 +449,7 @@ fn body(role: &str) -> &str {
         .trim_start()
 }
 
-fn ask(root: &Path, cfg: &Config, prompt: String) -> Result<String, AuditError> {
+fn ask(root: &Path, cfg: &Config, prompt: String) -> Result<crate::agent::StageResult, AuditError> {
     let presets = crate::agent::presets();
     let resolved = crate::agent::resolve(&cfg.agent, "auditor", &presets)
         .map_err(|e| AuditError::Agent(e.to_string()))?;
@@ -477,7 +479,7 @@ fn ask(root: &Path, cfg: &Config, prompt: String) -> Result<String, AuditError> 
             result.exit
         )));
     }
-    Ok(result.output)
+    Ok(result)
 }
 
 pub fn with_proposed(decisions: &str, rendered: &[String]) -> String {
@@ -642,14 +644,28 @@ pub fn expire(root: &Path, cfg: &Config, today: &str) -> Result<Vec<String>, Aud
 }
 
 fn with_expired(text: &str, dated: &[String]) -> String {
-    let mut out = text.trim_end().to_string();
-    if !out.lines().any(|l| l.trim_end() == EXPIRED) {
-        out.push_str(&format!("\n\n{EXPIRED}\n"));
+    let lines: Vec<&str> = text.split('\n').collect();
+    let Some(at) = lines.iter().position(|l| l.trim_end() == EXPIRED) else {
+        return format!("{}\n\n{EXPIRED}\n\n{}\n", text.trim_end(), dated.join("\n"));
+    };
+    // archived task blocks sit under the section, so the lines go before its first heading
+    let next = lines[at + 1..]
+        .iter()
+        .position(|l| l.starts_with("## "))
+        .map_or(lines.len(), |i| at + 1 + i);
+    let last = at
+        + lines[at..next]
+            .iter()
+            .rposition(|l| !l.trim().is_empty())
+            .unwrap_or(0);
+    let mut out: Vec<String> = lines[..=last].iter().map(|l| l.to_string()).collect();
+    if !lines[last].starts_with("- ") {
+        out.push(String::new());
     }
-    out.push('\n');
-    out.push_str(&dated.join("\n"));
-    out.push('\n');
-    out
+    out.extend(dated.iter().cloned());
+    out.push(String::new());
+    out.extend(lines[next..].iter().map(|l| l.to_string()));
+    out.join("\n")
 }
 
 // the trimmed value of each indented `key` line under an entry
@@ -872,12 +888,13 @@ pub fn run(root: &Path, cfg: &Config) -> Result<Report, AuditError> {
     if signal.len() < RECURS && handed.is_empty() {
         return Ok(report);
     }
-    let output = ask(
+    let result = ask(
         root,
         cfg,
         prompt(&role(root, cfg), &signal, &decisions_rel, &handed),
     )?;
-    let bodies = answers(&output);
+    report.spent = Some((result.seconds, result.usage.cost));
+    let bodies = answers(&result.output);
     if bodies.is_empty() {
         report
             .refused
