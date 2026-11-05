@@ -1099,7 +1099,11 @@ pub fn shared(dirs: &[PathBuf]) -> Result<Vec<Shared>, AuditError> {
                 group.push(j);
             }
         }
-        if group.len() < 2 || rules.iter().any(|r| r.killed && same(&rules[i], r)) {
+        if group.len() < 2
+            || rules
+                .iter()
+                .any(|r| r.killed && group.iter().any(|&g| same(&rules[g], r)))
+        {
             continue;
         }
         for &g in &group {

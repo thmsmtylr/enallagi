@@ -840,6 +840,27 @@ fn one_install_or_a_kill_is_no_seed() {
 }
 
 #[test]
+fn a_kill_of_any_group_member_is_no_seed() {
+    let texts = [
+        "# D\n\n## Earned rules\n\n- [2026-09-23] a scope line written from readers halts the run → write scope from the declaring file\n",
+        "# D\n\n## Earned rules\n\n- [2026-09-27] `scope readers`: the run halts when a scope line is written from readers → scope the declaring file\n",
+        "# D\n\n## Proposed learnings\n\n- [proposed] `scope readers`: a lane edits a file nobody owns\n  killed: 2026-09-28 one instance\n",
+    ];
+    let all: Vec<Repo> = texts
+        .iter()
+        .map(|text| {
+            let repo = Repo::new();
+            repo.write("DECISIONS.md", text);
+            repo
+        })
+        .collect();
+    let dirs: Vec<std::path::PathBuf> = all.iter().map(|r| r.root.clone()).collect();
+    assert_eq!(audit::shared(&dirs[..2]).expect("shared").len(), 1);
+    let shared = audit::shared(&dirs).expect("shared");
+    assert!(shared.is_empty(), "{shared:?}");
+}
+
+#[test]
 fn audit_harness_prints_seeds_and_writes_nothing() {
     let all = installs();
     let cwd = Repo::new();
