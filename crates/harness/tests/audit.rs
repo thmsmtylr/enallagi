@@ -700,6 +700,28 @@ fn a_rule_not_recurring_is_not_handed_back() {
     );
 }
 
+#[test]
+fn a_friction_repeated_after_promotion_recurs() {
+    let (repo, cfg) = seeded();
+    append(&repo, ".enallagi/PROGRESS.md", LATER);
+    let (_, first) = recurred(&repo, &[]);
+    let progress = fs::read_to_string(repo.root.join(".enallagi/PROGRESS.md")).expect("read");
+    let copy = progress
+        .lines()
+        .collect::<Vec<_>>()
+        .iter()
+        .rposition(|l| *l == LATER.trim_end())
+        .expect("the copy");
+    let second = format!(".enallagi/PROGRESS.md:{}", copy + 1);
+    assert_ne!(first, second);
+    let text =
+        decisions(&repo).replacen(&format!("`{first}`"), &format!("`{first}`, `{second}`"), 1);
+    fs::write(repo.root.join(".enallagi/DECISIONS.md"), text).expect("write");
+    let found = audit::ineffective(&repo.root, &cfg).expect("ineffective");
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].recurred, [second], "{found:?}");
+}
+
 const INSTALL_A: &str = "# D\n\n## Earned rules\n\n- [2026-09-20] `lost result`: a result dropped before its caller → assert on what the caller receives\n  instances: `a:1`, `a:2`, `a:3`\n- [2026-09-21] `vacuous test`: a test that selects nothing passes → assert the filter ran a test\n- [2026-09-22] `slow disk`: a lane waits on a slow disk → raise the wait ceiling\n- [2026-09-23] a scope line written from readers halts the run → write scope from the declaring file\n\n## Rejected findings\n";
 const INSTALL_B: &str = "# D\n\n## Earned rules\n\n- [2026-09-25] `Lost result`: a stage result is dropped before the caller sees it\n  → assert on what the caller receives\n  promoted: abc1234\n- [2026-09-26] `vacuous test`: a filter that matches no test is green → count the tests run\n- [2026-09-27] the run halts when a scope line is written from readers → scope the declaring file\n\n## Rejected findings\n";
 const INSTALL_C: &str = "# D\n\n## Earned rules\n\n## Rejected findings\n\n## Proposed learnings\n\n- [proposed] `vacuous test`: a green filter ran nothing → assert a test ran\n  instances: `c:1`, `c:2`\n  killed: 2026-09-28 the filter was a fixture\n";

@@ -40,6 +40,7 @@ The run digest counts and names the learnings proposed, promoted, killed and exp
 
 The audit stamps each earned rule with a `promoted:` line naming the commit that added it.
 An instance merged into the rule whose line that commit did not hold makes the rule ineffective.
+A line appended again word for word counts as a new one.
 The next audit hands an ineffective rule back to the auditor, which proposes a revision like any learning.
 The rule gains a dated `revised:` line, and a promoted revision replaces it and keeps those lines.
 A rule that recurs after two revisions moves to `## Expired findings` as a dated line.

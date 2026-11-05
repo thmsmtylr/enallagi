@@ -705,20 +705,19 @@ fn recurred(root: &Path, cfg: &Config, sha: &str, cite: &str) -> bool {
     let Ok(line) = line.parse::<usize>() else {
         return false;
     };
-    let now = fs::read_to_string(root.join(file))
-        .ok()
-        .and_then(|t| {
-            t.lines()
-                .nth(line.wrapping_sub(1))
-                .map(|l| l.trim().to_string())
-        })
-        .unwrap_or_default();
+    let text = fs::read_to_string(root.join(file)).unwrap_or_default();
+    let upto: Vec<&str> = text.lines().take(line).map(str::trim).collect();
+    let Some(&now) = line.checked_sub(1).and_then(|i| upto.get(i)) else {
+        return false;
+    };
     let (repo, inner, _) = git::locate(root, &cfg.layout.harness_dir, file);
     if now.is_empty() || !git::git_ok(&repo, &["cat-file", "-e", &format!("{sha}^{{commit}}")]) {
         return false;
     }
     let then = git::git(&repo, &["show", &format!("{sha}:{inner}")]).unwrap_or_default();
-    !then.lines().any(|l| l.trim() == now)
+    // a friction appended again word for word is a new occurrence, so count copies, not presence
+    let nth = upto.iter().filter(|l| **l == now).count();
+    then.lines().filter(|l| l.trim() == now).count() < nth
 }
 
 fn recurring(root: &Path, cfg: &Config, text: &str) -> Vec<Ineffective> {
