@@ -59,6 +59,7 @@ pub struct Report {
     pub merged: Vec<String>,
     pub refused: Vec<String>,
     pub revised: Vec<String>,
+    // the class each removed rule was last revised under
     pub removed: Vec<String>,
     pub decisions: String,
     // the auditor's call, when one ran: its seconds and cost
@@ -853,18 +854,20 @@ pub fn run(root: &Path, cfg: &Config) -> Result<Report, AuditError> {
         }
         let to = end(&lines, rule.line - 1);
         lines.drain(rule.line - 1..to);
+        // every rule handed so far sits below this one
+        for below in &mut handed {
+            below.line -= to - (rule.line - 1);
+        }
+        let class = rule.revised.last().cloned().unwrap_or_default();
         let cited: Vec<String> = rule.recurred.iter().map(|c| format!("`{c}`")).collect();
         removed.push(format!(
-            "- [{today}] `{}` removed: {} recurred after {} revisions since {}: {}",
-            rule.revised.last().map_or("", String::as_str),
+            "- [{today}] `{class}` removed: {} recurred after {} revisions since {}: {}",
             cited.join(", "),
             rule.revised.len(),
             rule.promoted,
             rule.rule
         ));
-        report
-            .removed
-            .push(format!("{decisions_rel}:{}", rule.line));
+        report.removed.push(class);
     }
     handed.reverse();
     removed.reverse();

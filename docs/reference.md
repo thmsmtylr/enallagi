@@ -36,7 +36,7 @@ The adjudicator decides each proposed learning.
 It promotes one under `## Earned rules` only with three or more instances and a passing `enallagi eval --gate`.
 Otherwise it writes a dated `killed: YYYY-MM-DD` line under the entry, which keeps its class from being proposed again.
 A learning undecided for `queue.proposed_rounds` rounds moves to `## Expired findings` as a dated line.
-The run digest counts and names the learnings proposed, promoted, killed and expired.
+The run digest counts and names the learnings proposed, promoted, killed and expired, and the rules removed.
 
 The audit stamps each earned rule with a `promoted:` line naming the commit that added it.
 An instance merged into the rule whose line that commit did not hold makes the rule ineffective.

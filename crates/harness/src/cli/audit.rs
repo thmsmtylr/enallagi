@@ -26,10 +26,13 @@ pub fn run(harness: &[std::path::PathBuf]) -> anyhow::Result<i32> {
             proposal.instances.len()
         );
     }
+    for class in &report.removed {
+        println!("audit: removed `{class}` from {}", report.decisions);
+    }
     for line in report.merged.iter().chain(&report.refused) {
         println!("audit: {line}");
     }
-    if report.proposed.is_empty() && report.merged.is_empty() {
+    if report.proposed.is_empty() && report.merged.is_empty() && report.removed.is_empty() {
         println!("audit: nothing written");
     } else {
         println!("audit: wrote {}", report.decisions);

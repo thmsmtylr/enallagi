@@ -722,6 +722,48 @@ fn a_friction_repeated_after_promotion_recurs() {
     assert_eq!(found[0].recurred, [second], "{found:?}");
 }
 
+#[test]
+fn a_removal_above_leaves_a_revised_rule_its_line() {
+    let (repo, cfg) = seeded();
+    let (sha, new) = recurred(&repo, &[]);
+    let upper = format!(
+        "- [2026-09-30] `stale rule`: a stale rule → drop it\n  promoted: {sha}\n  instances: `{new}`\n  revised: 2026-10-02 `stale rule`\n  revised: 2026-10-04 `stale rule`"
+    );
+    earned(&repo, &upper);
+    let before = at(&repo, ".enallagi/DECISIONS.md", "`lost result`");
+    let (rel, line) = before.rsplit_once(':').expect("cite");
+    let handle = format!("{rel}:{}", line.parse::<usize>().expect("line") - 5);
+    // a DECISIONS.md cite would move with the removal, so both are PROGRESS.md lines
+    let (lost, _) = two_classes(&repo);
+    answering(&repo, &revision(&handle, &[&lost[0], &new]));
+    let report = audit::run(&repo.root, &cfg).expect("audit");
+    assert_eq!(report.removed, ["stale rule"], "{report:?}");
+    assert_eq!(at(&repo, ".enallagi/DECISIONS.md", "`lost result`"), handle);
+    let asked = prompts(&repo);
+    assert!(asked[0].contains(&format!("- `{handle}`")), "{}", asked[0]);
+    let written = decisions(&repo);
+    let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
+    let rule = written.split(RULE).nth(1).expect("the rule stays");
+    let rule = rule.split("\n- ").next().unwrap_or_default();
+    assert!(
+        rule.contains(&format!("  revised: {today} `lost result`")),
+        "{report:?}\n{written}"
+    );
+}
+
+#[test]
+fn a_removal_alone_is_reported() {
+    let (repo, _) = seeded();
+    recurred(
+        &repo,
+        &["2026-10-02 `lost result`", "2026-10-04 `lost result`"],
+    );
+    let (code, out) = audit_bin(&repo);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("audit: removed `lost result`"), "{out}");
+    assert!(!out.contains("nothing written"), "{out}");
+}
+
 const INSTALL_A: &str = "# D\n\n## Earned rules\n\n- [2026-09-20] `lost result`: a result dropped before its caller → assert on what the caller receives\n  instances: `a:1`, `a:2`, `a:3`\n- [2026-09-21] `vacuous test`: a test that selects nothing passes → assert the filter ran a test\n- [2026-09-22] `slow disk`: a lane waits on a slow disk → raise the wait ceiling\n- [2026-09-23] a scope line written from readers halts the run → write scope from the declaring file\n\n## Rejected findings\n";
 const INSTALL_B: &str = "# D\n\n## Earned rules\n\n- [2026-09-25] `Lost result`: a stage result is dropped before the caller sees it\n  → assert on what the caller receives\n  promoted: abc1234\n- [2026-09-26] `vacuous test`: a filter that matches no test is green → count the tests run\n- [2026-09-27] the run halts when a scope line is written from readers → scope the declaring file\n\n## Rejected findings\n";
 const INSTALL_C: &str = "# D\n\n## Earned rules\n\n## Rejected findings\n\n## Proposed learnings\n\n- [proposed] `vacuous test`: a green filter ran nothing → assert a test ran\n  instances: `c:1`, `c:2`\n  killed: 2026-09-28 the filter was a fixture\n";

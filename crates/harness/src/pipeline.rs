@@ -159,6 +159,7 @@ pub struct Learnings {
     pub promoted: Vec<String>,
     pub killed: Vec<String>,
     pub expired: Vec<String>,
+    pub removed: Vec<String>,
 }
 
 // an empty promoted/killed pair means nothing to decide only if the stage both spawned and ended
@@ -581,6 +582,7 @@ impl<'a> Loop<'a> {
                 }
                 self.digest.learnings.proposed =
                     report.proposed.into_iter().map(|p| p.class).collect();
+                self.digest.learnings.removed = report.removed;
             }
             Some(Err(err)) => self.digest.warnings.push(err.to_string()),
             None => {}
@@ -1723,17 +1725,19 @@ pub fn digest_text(digest: &Digest) -> String {
     let l = &digest.learnings;
     let _ = writeln!(
         out,
-        "learnings: {} proposed, {} promoted, {} killed, {} expired",
+        "learnings: {} proposed, {} promoted, {} killed, {} expired, {} removed",
         l.proposed.len(),
         l.promoted.len(),
         l.killed.len(),
-        l.expired.len()
+        l.expired.len(),
+        l.removed.len()
     );
     for (word, classes) in [
         ("proposed", &l.proposed),
         ("promoted", &l.promoted),
         ("killed", &l.killed),
         ("expired", &l.expired),
+        ("removed", &l.removed),
     ] {
         for class in classes {
             let _ = writeln!(out, "  {word} `{class}`");
