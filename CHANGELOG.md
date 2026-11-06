@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `queue-intact` halts on any ticket file deleted since the base, whatever DECISIONS.md holds; a kill is `wontfix`
 - a `claims_allow` entry matches whole command words only, so `cargo test` no longer admits `cargo testx`
 - skill clones are cached under `~/.cache/enallagi/` (or `$XDG_CACHE_HOME/enallagi/`); the old `~/.cache/harness/` is no longer read
 - `commit-task`, `commit-identity` and `scope` fail with git's error when the commit range cannot be read, instead of passing an empty one

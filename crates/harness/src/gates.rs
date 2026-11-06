@@ -1017,14 +1017,13 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
         .unwrap_or(&path)
         .to_string_lossy()
         .into_owned();
-    let archived =
-        std::fs::read_to_string(ctx.root.join(rel(ctx, "DECISIONS.md"))).unwrap_or_default();
+    // a kill is wontfix, never a deletion, so DECISIONS.md accounts for nothing
     let lost: Vec<String> = before
         .into_iter()
-        .filter(|id| !now.iter().any(|b| &b.id == id) && !archived.contains(&format!("[{id}]")))
+        .filter(|id| !now.iter().any(|b| &b.id == id))
         .collect();
     if lost.is_empty() {
-        return pass("every id at the base is still in the queue or in DECISIONS.md");
+        return pass("every ticket at the base still has its file");
     }
     let (_, inner, nested) = git::locate(ctx.root, &ctx.cfg.layout.harness_dir, &tasks);
     let show = if nested {
@@ -1034,7 +1033,7 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
     };
     let base = at_base(ctx, &tasks).map(|(_, _, b)| b).unwrap_or(base);
     let reason = format!(
-        "{} left the queue without reaching DECISIONS.md; recover with `{show} {base}:{inner}`",
+        "{} lost its ticket file; a kill is wontfix, never a deletion; recover with `{show} {base}:{inner}`",
         lost.join(", "),
     );
     ctx.warnings.push(reason.clone());
@@ -2561,7 +2560,7 @@ mod tests {
     }
 
     #[test]
-    fn lost_id_halts() {
+    fn intact_refuses_deletion() {
         let mut env = Env::new("exit 0\n");
         env.write_queue(
             "## [T-001] first\nscope: src/*\nstatus: review\n\n## [T-002] second\nscope: src/*\nstatus: ready-for-agent\n",
@@ -2569,11 +2568,14 @@ mod tests {
         env.repo.commit_all("queue");
         let base = env.head();
         env.write_queue("## [T-001] first\nscope: src/*\nstatus: done\n");
-        env.repo.commit_all("heading lost");
+        env.repo.write(
+            &env.instance("DECISIONS.md"),
+            "# DECISIONS\n\n## Rejected findings\n\n- [2026-11-06] T-002 claimed a gap\n\n## [T-002] second\n",
+        );
+        env.repo.commit_all("ticket deleted");
 
         let out = run("queue-intact", &mut env.ctx(Some("T-001"), Some(&base)));
-        assert!(!out.pass);
-        assert!(out.halt);
+        assert!(!out.pass && out.halt, "{}", out.reason);
         assert!(out.reason.contains("T-002"), "{}", out.reason);
         assert!(
             out.reason
@@ -2584,19 +2586,17 @@ mod tests {
     }
 
     #[test]
-    fn an_archived_id_is_not_a_loss() {
+    fn intact_passes_wontfix() {
         let mut env = Env::new("exit 0\n");
         env.write_queue(
-            "## [T-001] first\nscope: src/*\nstatus: review\n\n## [T-002] second\nscope: src/*\nstatus: done\n",
+            "## [T-001] first\nscope: src/*\nstatus: review\n\n## [T-002] second\nscope: src/*\nstatus: needs-triage\n",
         );
         env.repo.commit_all("queue");
         let base = env.head();
-        env.write_queue("## [T-001] first\nscope: src/*\nstatus: review\n");
-        env.repo.write(
-            &env.instance("DECISIONS.md"),
-            "# DECISIONS\n\n## [T-002] second\nstatus: done\n",
-        );
-        env.repo.commit_all("archived");
+        env.tracker()
+            .set_status("T-002", "wontfix", "out of scope: a gap already closed")
+            .expect("wontfix");
+        env.repo.commit_all("killed");
 
         let out = run("queue-intact", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);

@@ -82,7 +82,7 @@ or halts the run. The names are matched in `crates/harness/src/gates.rs`.
 | `verdict` | a `done` whose work is uncommitted, or whose check is red on delta | verify |
 | `claims` | a `done` whose latest verdict claims an exit on a `ran:` line that two re-runs both contradict, for commands `[check] claims_allow` names | verify |
 | `scope` | a file outside the task's `scope:` globs, or a product task editing the harness | verify |
-| `queue-intact` | a ticket id at the iteration's base commit whose file is gone and that DECISIONS.md does not hold | implement, verify, adjudicate |
+| `queue-intact` | a ticket id at the iteration's base commit whose file is gone; a kill is `wontfix`, never a deletion | implement, verify, adjudicate |
 | `commit-identity` | a commit in the iteration's range whose author is not the repository's configured `user.email` | implement, verify |
 | `commit-task` | a commit in the iteration's range whose subject names no task id, unless it touches only the loop's own state | implement |
 | `check-delta` | a check failure that is not already in `.check-baseline` | wherever a stage's `post` names it |
