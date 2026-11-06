@@ -1,6 +1,6 @@
 //! issue: one GitHub issue, read with gh, becomes one `proposed` block. No model writes it.
 
-use crate::queue::{self, QueueError};
+use crate::block::{self, QueueError};
 use std::process::Command;
 
 const FIELDS: &str = "number,title,body,url,labels,state";
@@ -86,13 +86,13 @@ pub(crate) fn carries(line: &str, url: &str) -> bool {
 // the fields a proposed block carries before anyone writes what done means
 pub(crate) fn scaffold(id: &str, title: &str, scope: &str) -> Vec<String> {
     vec![
-        queue::heading(id, title),
+        block::heading(id, title),
         format!("scope: {scope}"),
         "blockedBy:".to_string(),
-        "status: proposed".to_string(),
+        "status: needs-triage".to_string(),
         "rows: none — harness".to_string(),
         "criteria:".to_string(),
-        format!("  - {}", queue::CRITERIA_PLACEHOLDER),
+        format!("  - {}", block::CRITERIA_PLACEHOLDER),
     ]
 }
 
@@ -105,7 +105,7 @@ pub(crate) fn quote(text: &str, lines: &mut Vec<String>) {
 
 pub fn render(issue: &Issue, id: &str) -> String {
     let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
-    let mut lines = scaffold(id, issue.title.trim(), queue::SCOPE_PLACEHOLDER);
+    let mut lines = scaffold(id, issue.title.trim(), block::SCOPE_PLACEHOLDER);
     // the adjudicator kills a block with no probe, command and output unread; an issue's are its state
     lines.splice(
         4..4,
@@ -134,7 +134,7 @@ pub(crate) fn expired_at(decisions: &str) -> usize {
 
 // an expired ticket stays in its file under the files layout, and may return like one in `## Expired findings`
 pub(crate) fn carrier<'a>(
-    blocks: impl Iterator<Item = &'a queue::Block>,
+    blocks: impl Iterator<Item = &'a block::Block>,
     url: &str,
 ) -> Option<String> {
     blocks
@@ -149,12 +149,12 @@ pub(crate) fn carrier<'a>(
 
 /// The block an issue becomes, given the queue's tickets; the caller appends it through the tracker.
 pub fn append(
-    blocks: &[queue::Block],
+    blocks: &[block::Block],
     decisions: &str,
     issue: &Issue,
 ) -> Result<String, IssueError> {
     let expired = expired_at(decisions);
-    let archived = queue::parse(decisions)?;
+    let archived = block::parse(decisions)?;
     let queued = carrier(blocks.iter(), &issue.url)
         .or_else(|| carrier(archived.iter().filter(|b| b.line < expired), &issue.url));
     if let Some(task) = queued {
@@ -163,7 +163,7 @@ pub fn append(
             url: issue.url.clone(),
         });
     }
-    Ok(render(issue, &queue::next_id(blocks, &archived)))
+    Ok(render(issue, &block::next_id(blocks, &archived)))
 }
 
 #[cfg(test)]
@@ -192,15 +192,15 @@ mod tests {
     }
 
     #[test]
-    fn a_longer_issue_number_is_not_a_duplicate() {
+    fn longer_issue_number_distinct() {
         let q = format!(
             "{}\nnotes: https://x/issues/123\n",
-            queue::heading("T-001", "a")
+            block::heading("T-001", "a")
         );
-        let q = queue::parse(&q).unwrap();
+        let q = block::parse(&q).unwrap();
         let block = append(&q, "", &issue("https://x/issues/12", "")).unwrap();
         assert!(
-            block.starts_with(&queue::heading("T-002", "a title")),
+            block.starts_with(&block::heading("T-002", "a title")),
             "{block}"
         );
         assert!(matches!(
@@ -210,10 +210,10 @@ mod tests {
     }
 
     #[test]
-    fn a_longer_archived_number_is_not_a_duplicate() {
+    fn longer_archived_number_distinct() {
         let decisions = format!(
             "{}\nnotes: https://x/issues/123\n",
-            queue::heading("T-001", "a")
+            block::heading("T-001", "a")
         );
         assert!(append(&[], &decisions, &issue("https://x/issues/12", "")).is_ok());
         assert!(matches!(
@@ -223,21 +223,21 @@ mod tests {
     }
 
     #[test]
-    fn an_expired_ticket_may_return() {
+    fn expired_ticket_returns() {
         let q = format!(
             "{}\nstatus: wontfix\ngate: expired after 5 rounds\nnotes: https://x/issues/12\n",
-            queue::heading("T-001", "a")
+            block::heading("T-001", "a")
         );
-        let q = queue::parse(&q).unwrap();
+        let q = block::parse(&q).unwrap();
         let block = append(&q, "", &issue("https://x/issues/12", "")).unwrap();
-        assert!(block.starts_with(&queue::heading("T-002", "a title")));
+        assert!(block.starts_with(&block::heading("T-002", "a title")));
     }
 
     #[test]
-    fn a_body_fence_leaves_the_queue_parseable() {
-        let body = format!("```\n{}", queue::heading("T-9", "x"));
+    fn body_fence_parseable() {
+        let body = format!("```\n{}", block::heading("T-9", "x"));
         let block = append(&[], "", &issue("https://x/issues/1", &body)).unwrap();
-        let blocks = queue::parse(&block).unwrap();
+        let blocks = block::parse(&block).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].id, "T-001");
     }

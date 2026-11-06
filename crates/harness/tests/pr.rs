@@ -133,8 +133,6 @@ impl Fixture {
 }
 
 const DONE_AND_REJECTED: &str = "\
-# TASKS
-
 ## [T-001] the thing says two twice
 scope: src/thing.txt
 blockedBy: none
@@ -144,7 +142,7 @@ archived: DECISIONS.md
 ## [T-002] the thing says five loudly
 scope: src/thing.txt
 blockedBy: none
-status: ready
+status: ready-for-agent
 notes: verifier: rejected, it shouts
 ";
 
@@ -531,10 +529,10 @@ fn pr_without_push_prints_the_policy_finding() {
 }
 
 #[test]
-fn a_blocker_built_this_run_is_the_base() {
+fn built_blocker_is_base() {
     let (f, _) = landed("exit 0\n");
     let tasks = DONE_AND_REJECTED.replace(
-        "blockedBy: none\nstatus: ready\nnotes: verifier: rejected, it shouts\n",
+        "blockedBy: none\nstatus: ready-for-agent\nnotes: verifier: rejected, it shouts\n",
         "blockedBy: T-001\nstatus: done\n",
     );
     enallagi::fixture::queue(&f.root, ".enallagi", &tasks);
@@ -571,10 +569,10 @@ fn a_blocker_built_this_run_is_the_base() {
 }
 
 #[test]
-fn two_sibling_blockers_are_refused() {
+fn sibling_blockers_refused() {
     let (f, _) = landed("exit 0\n");
     let mut tasks = DONE_AND_REJECTED.replace(
-        "blockedBy: none\nstatus: ready\nnotes: verifier: rejected, it shouts\n",
+        "blockedBy: none\nstatus: ready-for-agent\nnotes: verifier: rejected, it shouts\n",
         "blockedBy: none\nstatus: done\n",
     );
     tasks.push_str("\n## [T-003] the thing carries both\nscope: src/thing.txt\nblockedBy: T-001, T-002\nstatus: done\n");
@@ -606,8 +604,6 @@ fn two_sibling_blockers_are_refused() {
 }
 
 const SAME_LINE: &str = "\
-# TASKS
-
 ## [T-010] two gains an a
 scope: src/thing.txt
 blockedBy: none

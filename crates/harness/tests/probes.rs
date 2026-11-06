@@ -1,9 +1,9 @@
 //! The probe assertions, one test per assertion and named after it.
 
+use enallagi::block::{self, Block};
 use enallagi::config::{self, Config};
 use enallagi::fixture::Repo;
 use enallagi::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
-use enallagi::queue::{self, Block};
 use enallagi::tracker::Tracker;
 use std::fs;
 
@@ -97,13 +97,13 @@ fn tracker(repo: &Repo) -> Tracker {
     Tracker::open(&repo.root, &config::harness_dir(&repo.root))
 }
 
-// the queue as held, read back through the tracker, so either layout is rewritten from the same blocks
+// the queue as held, read back through the tracker, so it is rewritten from the same blocks
 fn held(repo: &Repo, keep: impl Fn(&Block) -> bool) -> String {
     let blocks = tracker(repo).blocks().expect("the queue");
     let kept: Vec<String> = blocks
         .iter()
         .filter(|b| keep(b))
-        .map(queue::block_text)
+        .map(block::block_text)
         .collect();
     kept.join("\n\n")
 }
@@ -113,7 +113,14 @@ fn queue(repo: &Repo, text: &str) {
     repo.queue(&config::harness_dir(&repo.root), &format!("{held}\n{text}"));
 }
 
-// the file a finding about `id` cites: TASKS.md, or the ticket's own file
+fn spec(repo: &Repo) -> String {
+    format!(
+        ".enallagi/specs/{}/spec.md",
+        enallagi::tracker::repo_slug(&repo.root)
+    )
+}
+
+// the file a finding about `id` cites: the ticket's own file
 fn cited(repo: &Repo, id: &str) -> String {
     let path = tracker(repo).path_of(id).expect("the ticket's file");
     let rel = path.strip_prefix(&repo.root).expect("under the repo");
@@ -171,7 +178,7 @@ fn check_unnamed_reports_an_unset_check() {
 }
 
 #[test]
-fn the_row_parser_reads_the_seeded_criteria_table() {
+fn seeded_criteria_rows() {
     let (repo, cfg) = seeded();
     // the seeded table is empty and still a table: read, and nothing to report
     assert_eq!(count(&run(&repo, &cfg), "spec-untested"), Some(0));
@@ -179,34 +186,14 @@ fn the_row_parser_reads_the_seeded_criteria_table() {
     assert_eq!(count(&run(&repo, &cfg), "spec-untested"), Some(1));
 }
 
-#[test]
-fn migrated_spec_rows() {
-    let (repo, cfg) = seeded();
-    seeded_row(&repo, &cfg);
-    let instance = repo.root.join(".enallagi");
-    enallagi::git::git(&instance, &["add", "-A"]).expect("add");
-    enallagi::git::git(&instance, &["commit", "-qm", "instance"]).expect("commit");
-    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
-        .args(["tasks", "migrate"])
-        .current_dir(&repo.root)
-        .output()
-        .expect("run migrate");
-    assert!(out.status.success(), "{out:?}");
-    let results = run(&repo, &cfg);
-    let found = findings(&results, "spec-untested");
-    assert_eq!(found.len(), 1, "{}", render(&results));
-    let slug = enallagi::tracker::repo_slug(&repo.root);
-    assert_eq!(found[0].path, format!(".enallagi/specs/{slug}/spec.md"));
-}
-
 // one row under the seeded table's header, naming a test the tree lacks
 fn seeded_row(repo: &Repo, cfg: &Config) {
-    let path = config::instance_path(&repo.root, &cfg.layout.harness_dir, &cfg.layout.spec);
-    let text = fs::read_to_string(&path).expect("SPEC.md");
+    let path = repo.root.join(&cfg.layout.spec);
+    let text = fs::read_to_string(&path).expect("spec.md");
     let header = "| Behaviour | Test |\n| --- | --- |\n";
     let at = text.find(header).expect("the seeded table header") + header.len();
     let row = "| the thing happens | `src/thing.test.ts::a name copied from your suite` |\n";
-    fs::write(&path, format!("{}{}{}", &text[..at], row, &text[at..])).expect("SPEC.md");
+    fs::write(&path, format!("{}{}{}", &text[..at], row, &text[at..])).expect("spec.md");
 }
 
 #[test]
@@ -232,8 +219,8 @@ fn an_unclaimed_row_is_uncovered() {
 const COMMA_ROWS: &str = "# SPEC\n\n## 11. Exit criteria\n\n| Behaviour | Test |\n| --- | --- |\n| a | `tests/x.test.ts::the frames FRAMES held, in order` |\n| b | `tests/x.test.ts::the packs a core pack holds, named` |\n\n## 12. Notes\n";
 
 fn claiming(repo: &Repo, rows: &str) {
-    repo.write(".enallagi/SPEC.md", COMMA_ROWS);
-    queue(repo, &format!("\n## [T-002] the block that claims them\nscope: src/tests/x.test.ts\nblockedBy: none\nstatus: ready\nrows: {rows}\n"),
+    repo.write(&spec(repo), COMMA_ROWS);
+    queue(repo, &format!("\n## [T-002] the block that claims them\nscope: src/tests/x.test.ts\nblockedBy: none\nstatus: ready-for-agent\nrows: {rows}\n"),
     );
 }
 
@@ -276,7 +263,7 @@ const PIECE_ROWS: &str = "# SPEC\n\n## 11. Exit criteria\n\n| Behaviour | Test |
 
 fn claiming_pieces(repo: &Repo, rows: &str) {
     claiming(repo, rows);
-    repo.write(".enallagi/SPEC.md", PIECE_ROWS);
+    repo.write(&spec(repo), PIECE_ROWS);
 }
 
 #[test]
@@ -308,7 +295,7 @@ fn an_undefined_piece_reports_the_whole_claim() {
 }
 
 #[test]
-fn a_missing_hash_file_uncovers_the_config() {
+fn missing_hash_uncovers_config() {
     // the rail names the file that is the gate; with the launcher a binary, that file is enallagi.toml
     let (repo, cfg) = seeded();
     fs::remove_file(repo.root.join(".enallagi/test-hashes.json")).expect("remove the hash file");
@@ -318,7 +305,7 @@ fn a_missing_hash_file_uncovers_the_config() {
     assert!(
         found[0]
             .message
-            .contains("`harness-immutable` names enallagi.toml"),
+            .contains("`harness-immutable` names .enallagi/enallagi.toml"),
         "{}",
         found[0].message
     );
@@ -340,10 +327,7 @@ fn no_driver_command_is_not_a_zero() {
 #[test]
 fn no_queue_errors() {
     let (repo, cfg) = seeded();
-    match tracker(&repo) {
-        Tracker::Legacy(path) => fs::remove_file(path).expect("remove TASKS.md"),
-        Tracker::Files(path) => fs::remove_dir_all(path).expect("remove specs/"),
-    }
+    fs::remove_dir_all(tracker(&repo).0).expect("remove specs/");
     let results = run(&repo, &cfg);
     let errored = errors(&results);
     for name in [
@@ -452,31 +436,8 @@ fn conventional_with(layout_extra: &str) -> (Repo, Config) {
 }
 
 #[test]
-fn a_repository_of_conventions_has_no_litter() {
+fn conventions_no_litter() {
     let (repo, cfg) = conventional();
-    let results = run(&repo, &cfg);
-    assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
-}
-
-#[test]
-fn a_root_layout_lock_is_not_litter() {
-    let repo = Repo::new();
-    // a tracked TASKS.md at the root and none under the harness directory is the root layout
-    repo.write("src/main.rs", "fn main() {}\n");
-    repo.write("TASKS.md", "# TASKS\n");
-    let toml = format!(
-        "[check]\ncommand = \"true\"\n\n[layout]\nallowed_prefixes = [\"src/\", \".enallagi/\", \".claude/\"]\n{}",
-        vendored_skills(&repo)
-    );
-    repo.write("enallagi.toml", &toml);
-    repo.commit_all("product");
-
-    skills_sync(&repo);
-    repo.commit_all("skills");
-    let tracked = enallagi::git::git(&repo.root, &["ls-files", "--", "harness.lock"]).expect("ls");
-    assert!(!tracked.is_empty(), "harness.lock is untracked");
-
-    let cfg = config::load(&repo.root).expect("config");
     let results = run(&repo, &cfg);
     assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
 }
@@ -1122,18 +1083,19 @@ fn the_queue_is_not_read_as_product_source() {
 }
 
 #[test]
-fn a_slashed_row_resolves_under_source_root() {
+fn slashed_row_source_root() {
     let (repo, cfg) = seeded_with(
         "[layout]\nsource_root = \"crate\"\ntest_file_suffix_re = '\\.rs'\ntest_decl_patterns = [\"fn {name}(\"]\n",
     );
     repo.write(
-        ".enallagi/SPEC.md",
+        &spec(&repo),
         "# SPEC\n\n## 11. Exit criteria\n\n| Criterion | Test |\n| --- | --- |\n| c | `tests/x.rs::t` |\n\n## 12. Notes\n",
     );
+    let finding = format!("FINDING spec-untested {}:7 ", spec(&repo));
     let untested = |results: &[(String, ProbeResult)]| {
         render(results)
             .lines()
-            .filter(|l| l.starts_with("FINDING spec-untested .enallagi/SPEC.md:7 "))
+            .filter(|l| l.starts_with(&finding))
             .count()
     };
     assert_eq!(untested(&run(&repo, &cfg)), 1);
@@ -1160,9 +1122,9 @@ fn only_a_review_block_needs_a_scope_file() {
 }
 
 #[test]
-fn a_ready_block_may_name_a_file_it_creates() {
+fn ready_block_new_file() {
     let (repo, cfg) = seeded();
-    queue(&repo, "\n## [T-002] the one that adds two files\nscope: src/packs/core.ts, tests/cli.test.ts\nblockedBy: none\nstatus: ready\n",
+    queue(&repo, "\n## [T-002] the one that adds two files\nscope: src/packs/core.ts, tests/cli.test.ts\nblockedBy: none\nstatus: ready-for-agent\n",
     );
     let results = run(&repo, &cfg);
     assert_eq!(
@@ -1174,10 +1136,10 @@ fn a_ready_block_may_name_a_file_it_creates() {
 }
 
 #[test]
-fn a_scope_directory_is_reported_as_matching_none() {
+fn scope_dir_matches_none() {
     let (repo, cfg) = seeded();
     repo.write("evals/verifier/setup.sh", "");
-    queue(&repo, "\n## [T-002] the eval that adds files under a directory\nscope: evals/verifier, evals/other/new.sh\nblockedBy: none\nstatus: ready\n",
+    queue(&repo, "\n## [T-002] the eval that adds files under a directory\nscope: evals/verifier, evals/other/new.sh\nblockedBy: none\nstatus: ready-for-agent\n",
     );
     let results = run(&repo, &cfg);
     let found = findings(&results, "queue-hygiene");
@@ -1192,19 +1154,15 @@ fn a_scope_directory_is_reported_as_matching_none() {
     );
 }
 
-// the tracker refuses a repeat, so it is written by hand: a second block, or a copied ticket file
+// the tracker refuses a repeat, so it is written by hand: a copied ticket file
 #[test]
-fn a_repeated_id_is_one_finding() {
+fn repeated_id_one_finding() {
     let (repo, cfg) = seeded();
-    let block = "\n## [T-002] the block\nscope: src/a.rs\nblockedBy: none\nstatus: ready\n";
+    let block =
+        "\n## [T-002] the block\nscope: src/a.rs\nblockedBy: none\nstatus: ready-for-agent\n";
     queue(&repo, block);
-    match tracker(&repo) {
-        Tracker::Legacy(_) => append(&repo, "TASKS.md", block),
-        Tracker::Files(_) => {
-            let path = tracker(&repo).path_of("T-002").expect("the ticket");
-            fs::copy(&path, path.with_file_name("T-002-a-copy.md")).expect("copy");
-        }
-    }
+    let path = tracker(&repo).path_of("T-002").expect("the ticket");
+    fs::copy(&path, path.with_file_name("T-002-a-copy.md")).expect("copy");
     let results = run(&repo, &cfg);
     let found = findings(&results, "queue-hygiene");
     assert_eq!(found.len(), 1, "{}", render(&results));
@@ -1212,14 +1170,14 @@ fn a_repeated_id_is_one_finding() {
 }
 
 #[test]
-fn a_killed_id_reused_is_reported() {
+fn killed_id_reused() {
     let (repo, cfg) = seeded();
     append(
         &repo,
         "DECISIONS.md",
         "\n- [2026-09-01] T-002 claimed a thing — refuted by `x`: y, and T-004 already carries it\n",
     );
-    queue(&repo, "\n## [T-002] a later finding under the killed number\nscope: src/a.rs\nblockedBy: none\nstatus: ready\n\n## [T-003] done under a killed number before the rule\nscope: src/b.rs\nblockedBy: none\nstatus: done\n\n## [T-004] the block the kill line names as the duplicate\nscope: src/c.rs\nblockedBy: none\nstatus: ready\n",
+    queue(&repo, "\n## [T-002] a later finding under the killed number\nscope: src/a.rs\nblockedBy: none\nstatus: ready-for-agent\n\n## [T-003] done under a killed number before the rule\nscope: src/b.rs\nblockedBy: none\nstatus: done\n\n## [T-004] the block the kill line names as the duplicate\nscope: src/c.rs\nblockedBy: none\nstatus: ready-for-agent\n",
     );
     append(
         &repo,
@@ -1336,9 +1294,9 @@ fn the_state_repository_log_is_read_too() {
 }
 
 #[test]
-fn a_note_saying_what_the_work_meant_fails() {
+fn meaning_note_fails() {
     let (repo, cfg) = seeded();
-    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the fixture was moved, which is why the run went green.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready-for-agent\nnotes: the fixture was moved, which is why the run went green.\n",
     );
     let found = plain_record(&repo, &cfg);
     assert_eq!(found.len(), 1, "{found:?}");
@@ -1347,17 +1305,17 @@ fn a_note_saying_what_the_work_meant_fails() {
 }
 
 #[test]
-fn a_fenced_note_is_never_reported() {
+fn fenced_note_quiet() {
     let (repo, cfg) = seeded();
-    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the run is below.\n\n```\nfour failures, four causes, none of them the same, which is why the check was red \u{2014} and it is green now.\n```\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready-for-agent\nnotes: the run is below.\n\n```\nfour failures, four causes, none of them the same, which is why the check was red \u{2014} and it is green now.\n```\n",
     );
     assert_eq!(plain_record(&repo, &cfg), Vec::<String>::new());
 }
 
 #[test]
-fn a_pasted_command_in_a_note_is_exempt() {
+fn pasted_command_exempt() {
     let (repo, cfg) = seeded();
-    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: `cargo test` prints `four failures, four causes, none of them the same`.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready-for-agent\nnotes: `cargo test` prints `four failures, four causes, none of them the same`.\n",
     );
     assert_eq!(plain_record(&repo, &cfg), Vec::<String>::new());
 }
@@ -1377,17 +1335,17 @@ fn a_printed_em_dash_aside_is_reported() {
 
 // a verifier writes its verdict into notes:, and an implementer cannot clear someone else's words
 #[test]
-fn a_rejection_verdict_in_a_note_is_exempt() {
+fn rejection_verdict_exempt() {
     let (repo, cfg) = seeded();
-    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  the heading list was rewritten, three numbers, and the fences are stripped.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready-for-agent\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  the heading list was rewritten, three numbers, and the fences are stripped.\n",
     );
     assert_eq!(plain_record(&repo, &cfg), Vec::<String>::new());
 }
 
 #[test]
-fn a_note_counting_outside_a_verdict_is_reported() {
+fn counting_note_reported() {
     let (repo, cfg) = seeded();
-    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  IMPLEMENTER 2026-09-17: the heading list was rewritten, three numbers, and the fences are stripped.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready-for-agent\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  IMPLEMENTER 2026-09-17: the heading list was rewritten, three numbers, and the fences are stripped.\n",
     );
     let found = plain_record(&repo, &cfg);
     assert_eq!(found.len(), 1, "{found:?}");
@@ -1395,9 +1353,9 @@ fn a_note_counting_outside_a_verdict_is_reported() {
 }
 
 #[test]
-fn a_verified_note_after_a_rejection_is_read() {
+fn verified_after_rejection() {
     let (repo, cfg) = seeded();
-    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  VERIFIED (verifier, 2026-09-17). the heading list was rewritten, three numbers, and the fences are stripped.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready-for-agent\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  VERIFIED (verifier, 2026-09-17). the heading list was rewritten, three numbers, and the fences are stripped.\n",
     );
     let found = plain_record(&repo, &cfg);
     assert_eq!(found.len(), 1, "{found:?}");
@@ -1614,9 +1572,9 @@ fn a_rejection_behind_a_dated_label_is_reported() {
 const LONG_TITLE: &str = "a task/ branch that outlives its merged pull request calls gh pr list once every iteration for good";
 
 #[test]
-fn a_title_past_the_cap_is_reported_with_its_count() {
+fn long_title_reported() {
     let (repo, cfg) = seeded();
-    queue(&repo, &format!("\n## [T-002] merged task/ branch still polls gh pr list every iteration\nscope: src/a.rs\nstatus: ready\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n"),
+    queue(&repo, &format!("\n## [T-002] merged task/ branch still polls gh pr list every iteration\nscope: src/a.rs\nstatus: ready-for-agent\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready-for-agent\n"),
     );
     let results = run(&repo, &cfg);
     let found = findings(&results, "title-length");
@@ -1633,9 +1591,9 @@ fn a_title_past_the_cap_is_reported_with_its_count() {
 }
 
 #[test]
-fn an_imported_issue_keeps_its_title_until_promotion() {
+fn imported_title_kept() {
     let (repo, cfg) = seeded();
-    queue(&repo, &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: proposed\nprobe: issue\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\nprobe: issue\n"),
+    queue(&repo, &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: needs-triage\nprobe: issue\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready-for-agent\nprobe: issue\n"),
     );
     let results = run(&repo, &cfg);
     let found = findings(&results, "title-length");
@@ -1648,9 +1606,9 @@ fn an_imported_issue_keeps_its_title_until_promotion() {
 }
 
 #[test]
-fn a_title_written_before_the_cap_is_left_alone() {
+fn old_title_left() {
     let (repo, mut cfg) = seeded();
-    queue(&repo, &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n"),
+    queue(&repo, &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready-for-agent\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready-for-agent\n"),
     );
     cfg.queue.title_cap_from = 3;
     let results = run(&repo, &cfg);
@@ -1891,10 +1849,10 @@ fn renamed(repo: &Repo) {
 }
 
 #[test]
-fn a_criterion_naming_a_removed_test_is_found() {
+fn removed_test_criterion() {
     let (repo, cfg) = seeded_with("[layout]\nsource_root = \"src\"\n");
     renamed(&repo);
-    criterion(&repo, "ready", "the_old_test_name");
+    criterion(&repo, "ready-for-agent", "the_old_test_name");
     let results = run(&repo, &cfg);
     let found: Vec<_> = findings(&results, "queue-uncovered")
         .iter()
@@ -1912,7 +1870,7 @@ fn a_criterion_naming_a_removed_test_is_found() {
 // rewrites T-002 in place, so one fixture is read under each filter
 fn filtered_criterion(repo: &Repo, filter: &str, names: &str) {
     let kept = held(repo, |b| b.id != "T-002");
-    let block = format!("## [T-002] the block whose criteria run a filter\nscope: src/a.rs\nblockedBy: none\nstatus: ready\nrows: none — harness\ncriteria:\n  - `cargo test -q -p enallagi --test probes {filter}` passes, with {names} in its run\n  - the check exits 0\nnotes: none\n");
+    let block = format!("## [T-002] the block whose criteria run a filter\nscope: src/a.rs\nblockedBy: none\nstatus: ready-for-agent\nrows: none — harness\ncriteria:\n  - `cargo test -q -p enallagi --test probes {filter}` passes, with {names} in its run\n  - the check exits 0\nnotes: none\n");
     repo.queue(
         &config::harness_dir(&repo.root),
         &format!("{kept}\n\n{block}"),
@@ -1968,10 +1926,14 @@ fn a_criterion_filter_that_selects_no_test_is_found() {
 }
 
 #[test]
-fn a_criterion_naming_a_live_or_new_test_is_quiet() {
+fn live_test_criterion() {
     let (repo, cfg) = seeded_with("[layout]\nsource_root = \"src\"\n");
     renamed(&repo);
-    criterion(&repo, "ready", "the_new_test_name` and `the_unwritten_test");
+    criterion(
+        &repo,
+        "ready-for-agent",
+        "the_new_test_name` and `the_unwritten_test",
+    );
     let results = run(&repo, &cfg);
     let found = findings(&results, "queue-uncovered");
     assert!(
@@ -2353,38 +2315,11 @@ fn a_merged_review_block_is_reported() {
 }
 
 #[test]
-fn no_origin_head_is_off() {
+fn no_origin_head_off() {
     let (repo, cfg) = seeded();
     let result = merged(&repo, &cfg);
     assert!(
         matches!(&result, ProbeResult::Off(m) if m.contains("refs/remotes/origin/HEAD names no default branch")),
-        "{result:?}"
-    );
-}
-
-#[test]
-fn an_in_tree_state_commit_is_not_a_merge() {
-    let repo = Repo::new();
-    // a tracked TASKS.md at the root is the root layout: the loop's state commits land on the product's branch
-    repo.write("TASKS.md", &format!("# TASKS\n{REVIEW_AND_DONE}"));
-    repo.write("enallagi.toml", "");
-    repo.commit_all("product");
-    let cfg = config::load(&repo.root).expect("config");
-    let (_origin, branch) = tracked_clone(&repo);
-    git(&repo.root, &["remote", "set-head", "origin", &branch]);
-    append(&repo, "TASKS.md", "notes: VERIFIED\n");
-    let committed = enallagi::git::commit_instance(
-        &repo.root,
-        &cfg.layout.harness_dir,
-        &["TASKS.md"],
-        "verify: T-901 verdict",
-    );
-    assert!(committed.expect("commit"), "nothing was committed");
-    git(&repo.root, &["push", "-q", "origin", &branch]);
-    git(&repo.root, &["fetch", "-q", "origin"]);
-    let result = merged(&repo, &cfg);
-    assert!(
-        matches!(&result, ProbeResult::Count(f) if f.is_empty()),
         "{result:?}"
     );
 }

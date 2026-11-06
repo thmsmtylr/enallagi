@@ -3,12 +3,10 @@
 use super::common::{self, Res};
 use super::spec_untested::untested_rows;
 use super::{Finding, ProbeCtx, ProbeResult};
+use crate::block::{self, Block};
 use crate::git;
-use crate::queue::{self, Block};
-use crate::tracker;
 use std::collections::BTreeSet;
 
-// in Pocock's names: the legacy proposed, ready (attended or not), blocked and review
 const OPEN_STATUS: &[&str] = &[
     "needs-triage",
     "ready-for-agent",
@@ -34,13 +32,13 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
 
     let mut tree: Option<Vec<String>> = None;
     for (tasks, block) in common::tickets(ctx)? {
-        // the whole value, so `ready -- a reason` stays closed as it always read
-        let status = queue::field_at(&block, "status").map(|(_, v)| v);
-        if !status.is_some_and(|s| OPEN_STATUS.contains(&tracker::canonical(&s))) {
+        // the whole value, so `ready-for-agent -- a reason` stays closed
+        let status = block::field_at(&block, "status").map(|(_, v)| v);
+        if !status.is_some_and(|s| OPEN_STATUS.contains(&s.as_str())) {
             continue;
         }
         found.extend(stale_criteria(ctx, &block, &tasks, &mut tree)?);
-        let Some((rows_at, rows)) = queue::field_at(&block, "rows") else {
+        let Some((rows_at, rows)) = block::field_at(&block, "rows") else {
             continue;
         };
         let refs: Vec<_> = row_ref.captures_iter(&rows).collect();
@@ -87,7 +85,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         }
     }
 
-    let spec = &crate::tracker::spec_rel(ctx.root, ctx.cfg);
+    let spec = &ctx.cfg.layout.spec;
     for row in untested_rows(ctx)? {
         if !claimed.contains(&(row.name.clone(), row.test.clone())) {
             found.push(common::finding(

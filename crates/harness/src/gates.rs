@@ -6,16 +6,15 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::block::{self, Block};
 use crate::config::Config;
 use crate::events::{Kind, Tally, Writer};
 use crate::git::{self, git, head, porcelain};
-use crate::queue::{self, Block};
 use crate::skills::LockEntry;
-use crate::tracker::{self, Tracker, QUEUE};
+use crate::tracker::{self, Tracker, SPECS};
 
 pub(crate) const BOOKKEEPING: &[&str] = &[
-    QUEUE[0],
-    QUEUE[1],
+    SPECS,
     "PROGRESS.md",
     "PROGRESS.archive.md",
     "DECISIONS.md",
@@ -124,10 +123,10 @@ fn queue_of(ctx: &GateCtx) -> Tracker {
     Tracker::open(ctx.root, &ctx.cfg.layout.harness_dir)
 }
 
-fn status_of(ctx: &GateCtx, task: &str) -> Result<Option<String>, queue::QueueError> {
+fn status_of(ctx: &GateCtx, task: &str) -> Result<Option<String>, block::QueueError> {
     Ok(queue_of(ctx)
         .get(task)?
-        .and_then(|b| queue::field(&b, "status"))
+        .and_then(|b| block::field(&b, "status"))
         .filter(|s| !s.is_empty()))
 }
 
@@ -136,26 +135,26 @@ fn field_of(ctx: &GateCtx, task: &str, key: &str) -> String {
         .get(task)
         .ok()
         .flatten()
-        .and_then(|b| queue::field(&b, key))
+        .and_then(|b| block::field(&b, key))
         .unwrap_or_default()
 }
 
 fn blocks_at_base(ctx: &GateCtx) -> Option<Vec<Block>> {
-    let (_, _, base) = at_base(ctx, &rel(ctx, QUEUE[1]))?;
+    let (_, _, base) = at_base(ctx, &rel(ctx, SPECS))?;
     tracker::blocks_at(ctx.root, &ctx.cfg.layout.harness_dir, &base)
 }
 
 // the field at a revision, the base when rev is None, the way lock_at reads
 
 fn field_at(ctx: &GateCtx, task: &str, key: &str, rev: Option<&str>) -> Option<String> {
-    let (_, _, base) = at_base(ctx, &rel(ctx, QUEUE[1]))?;
+    let (_, _, base) = at_base(ctx, &rel(ctx, SPECS))?;
     let b = tracker::get_at(
         ctx.root,
         &ctx.cfg.layout.harness_dir,
         task,
         rev.unwrap_or(&base),
     )?;
-    queue::field(&b, key)
+    block::field(&b, key)
 }
 
 fn unreadable(ctx: &mut GateCtx, task: &str) -> GateOutcome {
@@ -182,7 +181,7 @@ fn force_back(
     if !ctx.dry_run {
         match queue_of(ctx).set_status(task, to, reason) {
             Ok(()) => {
-                if let Err(err) = commit_instance(ctx, &QUEUE, commit_msg) {
+                if let Err(err) = commit_instance(ctx, &[SPECS], commit_msg) {
                     ctx.warnings
                         .push(format!("{task}: the queue was not committed: {err}"));
                 }
@@ -228,7 +227,7 @@ fn implementer_not_done(ctx: &mut GateCtx) -> GateOutcome {
                 ctx,
                 "implementer-not-done",
                 &task,
-                "ready",
+                "ready-for-agent",
                 "the implementer set done; only the verifier may, and the launcher gates that",
                 &format!("chore({task}): the implementer marked its own task done"),
                 &format!("{task} was forced back to ready: the implementer marked it done itself."),
@@ -266,7 +265,7 @@ fn commit_verdict(ctx: &mut GateCtx) -> GateOutcome {
         out.skip_rest = true;
         return out;
     }
-    commit(ctx, &QUEUE, &format!("verify: {task} verdict"))
+    commit(ctx, &[SPECS], &format!("verify: {task} verdict"))
 }
 
 enum DeferredIn {
@@ -281,7 +280,7 @@ struct Deferred {
 
 // a finding left only in notes is archived with its block and never reaches the queue
 fn deferred_finding(ctx: &GateCtx, task: &str) -> Option<Deferred> {
-    at_base(ctx, &rel(ctx, QUEUE[1]))?;
+    at_base(ctx, &rel(ctx, SPECS))?;
     let before = blocks_at_base(ctx).unwrap_or_default();
     let now = queue_of(ctx).blocks().ok()?;
     let proposed_before = tracker::ids_in(&before, &["needs-triage"]);
@@ -364,7 +363,7 @@ fn commit_round(ctx: &mut GateCtx) -> GateOutcome {
     let iter = ctx.events.iter;
     commit(
         ctx,
-        &[QUEUE[0], QUEUE[1], "DECISIONS.md"],
+        &[SPECS, "DECISIONS.md"],
         &format!("queue: scout and adjudicator round (iteration {iter})"),
     )
 }
@@ -405,7 +404,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
             ctx,
             "verdict",
             &task,
-            "ready",
+            "ready-for-agent",
             &reason,
             &format!(
                 "chore({task}): enallagi gate rejected a done verdict with work off the branch"
@@ -441,7 +440,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         ctx,
         "verdict",
         &task,
-        "ready",
+        "ready-for-agent",
         &reason,
         &format!("chore({task}): enallagi gate rejected a false VERIFIED"),
         &format!(
@@ -539,7 +538,7 @@ fn claims(ctx: &mut GateCtx) -> GateOutcome {
             ctx,
             "claims",
             &task,
-            "ready",
+            "ready-for-agent",
             &reason,
             &format!("chore({task}): enallagi gate rejected a claimed exit"),
             &format!("{task} was forced back to ready: {}", refuted.join("; ")),
@@ -647,14 +646,13 @@ fn task_files(ctx: &GateCtx, base: &str, task: &str, filter: &str) -> Vec<String
 
 // a proposed block's scope: line is the adjudicator's to write, so widening counts from its promotion
 fn promoted_at(ctx: &GateCtx, task: &str, queued: &str) -> Option<String> {
-    let proposed = |s: &str| tracker::canonical(s) == "needs-triage";
-    if !field_at(ctx, task, "status", Some(queued)).is_some_and(|s| proposed(&s)) {
+    if field_at(ctx, task, "status", Some(queued)).as_deref() != Some("needs-triage") {
         return None;
     }
     let range = format!("{queued}..HEAD");
     tracker::ticket_revs(ctx.root, &ctx.cfg.layout.harness_dir, task, &range)?
         .into_iter()
-        .find(|rev| field_at(ctx, task, "status", Some(rev)).is_some_and(|s| !proposed(&s)))
+        .find(|rev| field_at(ctx, task, "status", Some(rev)).is_some_and(|s| s != "needs-triage"))
 }
 
 fn filed_untriaged(ctx: &GateCtx, path: &str) -> bool {
@@ -716,7 +714,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     // written mid-run into whatever task the lane held
     let stop = rel(ctx, "STOP");
     // the lane's own ticket is the one queue path it may edit; another ticket's file is out of scope
-    let tickets = format!("{}/", rel(ctx, QUEUE[1]));
+    let tickets = format!("{}/", rel(ctx, SPECS));
     let own = queue_of(ctx).path_of(&task).and_then(|p| {
         Some(
             p.strip_prefix(ctx.root)
@@ -879,7 +877,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         ctx,
         "scope",
         &task,
-        "ready",
+        "ready-for-agent",
         &reason,
         &format!("chore({task}): harness scope gate rejected a done verdict"),
         &format!(
@@ -977,7 +975,7 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
     let Ok(now) = q.blocks() else {
         return pass("the queue is unreadable; queue-hygiene owns that");
     };
-    let (Tracker::Legacy(path) | Tracker::Files(path)) = q;
+    let Tracker(path) = q;
     let tasks = path
         .strip_prefix(ctx.root)
         .unwrap_or(&path)
@@ -1700,7 +1698,7 @@ mod tests {
             repo.write(".enallagi/.gitignore", "events.jsonl\n*.log\nlogs/\n");
             let cmd = repo.stub_check(check_body);
             repo.write(
-                "enallagi.toml",
+                ".enallagi/enallagi.toml",
                 &format!(
                     "[check]\ncommand = \"{cmd}\"\ntimeout = \"{timeout}\"\nfail_name = '\\(fail\\) (.+)$'\n"
                 ),
@@ -1741,24 +1739,21 @@ mod tests {
             ));
         }
 
-        // the root layout has no files form until layout detection learns `specs/`, so a files run nests the instance
         fn write_queue(&self, text: &str) {
-            self.repo
-                .queue(if files_layout() { ".enallagi" } else { "" }, text);
+            self.repo.queue(".enallagi", text);
         }
 
-        // two blocks under one id, which the legacy parser refuses to convert, so the second is written by hand
+        // two files under one id, which append refuses, so the second is written by hand
         fn duplicate_queue(&self, status: &str) {
-            let block = |title: &str| format!("## [T-001] {title}\nstatus: {status}\n");
-            if !files_layout() {
-                return self.write_queue(&format!("{}\n{}", block("first"), block("again")));
-            }
-            self.write_queue(&block("first"));
+            let text = |title: &str| format!("## [T-001] {title}\nstatus: {status}\n");
+            self.write_queue(&text("first"));
             let first = self.tracker().path_of("T-001").expect("T-001");
-            let (name, text) = tracker::convert(&block("again"))
-                .expect("convert")
-                .remove(0);
-            std::fs::write(first.with_file_name(name), text).expect("write the duplicate");
+            let again = &block::parse(&text("again")).expect("parse")[0];
+            std::fs::write(
+                first.with_file_name(tracker::file_name(&again.id, &again.title)),
+                tracker::ticket_text(again),
+            )
+            .expect("write the duplicate");
         }
 
         fn tracker(&self) -> Tracker {
@@ -1766,17 +1761,14 @@ mod tests {
         }
 
         fn instance(&self, name: &str) -> String {
-            match files_layout() {
-                true => format!(".enallagi/{name}"),
-                false => name.to_string(),
-            }
+            format!(".enallagi/{name}")
         }
 
         fn tasks_text(&self) -> String {
             let blocks = self.tracker().blocks().expect("read the queue");
             blocks
                 .iter()
-                .map(queue::block_text)
+                .map(block::block_text)
                 .collect::<Vec<_>>()
                 .join("\n\n")
         }
@@ -1798,7 +1790,7 @@ mod tests {
             assert!(events.iter().any(|e| matches!(&e.kind,
                 Kind::Gate { gate, pass, .. } if gate == "scope" && !*pass)));
             assert!(events.iter().any(|e| matches!(&e.kind,
-                Kind::TaskStatus { to, by, .. } if to == "ready" && by == "scope")));
+                Kind::TaskStatus { to, by, .. } if to == "ready-for-agent" && by == "scope")));
             // the reason rides in the block, where the next implement stage reads it first
             assert!(
                 self.tasks_text()
@@ -1807,10 +1799,6 @@ mod tests {
                 self.tasks_text()
             );
         }
-    }
-
-    fn files_layout() -> bool {
-        std::env::var("ENALLAGI_TEST_LAYOUT").as_deref() == Ok("files")
     }
 
     fn globs(v: &[&str]) -> Vec<String> {
@@ -1934,13 +1922,13 @@ mod tests {
     }
 
     #[test]
-    fn a_launcher_state_commit_is_exempt() {
+    fn launcher_state_commit_exempt() {
         let mut env = Env::new("exit 0\n");
         let base = head(&env.repo.root).expect("base");
         env.repo.write("src/schema.ts", "export const x = 7\n");
         env.repo.commit_all("feat(schema): T-001 bump x");
         env.queue("review", "src/schema.ts", "none — harness");
-        commit_instance(&env.ctx(None, None), &QUEUE, "queue: verdict").expect("state");
+        commit_instance(&env.ctx(None, None), &[SPECS], "queue: verdict").expect("state");
         assert!(env.log().contains("queue: verdict"), "{}", env.log());
         let mut ctx = env.ctx(Some("T-001"), Some(&base));
         let out = commit_task(&mut ctx);
@@ -2277,7 +2265,7 @@ mod tests {
     }
 
     #[test]
-    fn verdict_forces_back_a_done_with_a_dirty_tree() {
+    fn verdict_dirty_tree() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.commit_all("verdict");
@@ -2286,7 +2274,7 @@ mod tests {
         let out = run("verdict", &mut env.ctx(Some("T-001"), None));
         assert!(!out.pass);
         let text = env.tasks_text();
-        assert!(text.contains("status: ready"), "{text}");
+        assert!(text.contains("status: ready-for-agent"), "{text}");
         assert!(
             text.contains("gate: the verifier returned done with 1 uncommitted path(s): the work is not on the branch"),
             "{text}"
@@ -2297,13 +2285,13 @@ mod tests {
         assert_eq!(env.warnings.len(), 1);
         let events = env.events();
         assert!(events.iter().any(|e| matches!(&e.kind,
-            Kind::TaskStatus { task, to, by, .. } if task == "T-001" && to == "ready" && by == "verdict")));
+            Kind::TaskStatus { task, to, by, .. } if task == "T-001" && to == "ready-for-agent" && by == "verdict")));
         assert!(events.iter().any(|e| matches!(&e.kind,
             Kind::Gate { gate, pass, .. } if gate == "verdict" && !*pass)));
     }
 
     #[test]
-    fn verdict_forces_back_a_done_with_a_red_check() {
+    fn verdict_red_check() {
         let mut env = Env::new(
             "echo boom\necho 'error: something'\necho 'test result: FAILED. 0 passed; 1 failed; 0 ignored'\necho done\nexit 101\n",
         );
@@ -2316,7 +2304,7 @@ mod tests {
         assert!(out.reason.contains("exit 101"), "{}", out.reason);
         assert!(out.reason.contains("check tail:"), "{}", out.reason);
         assert!(out.reason.contains("error: something"), "{}", out.reason);
-        assert!(env.tasks_text().contains("status: ready"));
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
         assert!(env
             .log()
             .contains("chore(T-001): enallagi gate rejected a false VERIFIED"));
@@ -2344,11 +2332,11 @@ mod tests {
 
     impl Env {
         fn claimed(&mut self, allow: &[&str], verdicts: &str) {
-            let path = self.repo.root.join("enallagi.toml");
+            let path = self.repo.root.join(".enallagi/enallagi.toml");
             let toml = std::fs::read_to_string(&path).expect("read enallagi.toml");
             let allow: Vec<String> = allow.iter().map(|p| format!("'{p}'")).collect();
             self.repo.write(
-                "enallagi.toml",
+                ".enallagi/enallagi.toml",
                 &format!("{toml}claims_allow = [{}]\n", allow.join(", ")),
             );
             self.cfg = crate::config::load(&self.repo.root).expect("load enallagi.toml");
@@ -2360,7 +2348,7 @@ mod tests {
     }
 
     #[test]
-    fn a_claimed_pass_that_fails_is_forced_back() {
+    fn claimed_pass_fails() {
         let mut env = Env::new("exit 0\n");
         env.claimed(
             &["true", "false"],
@@ -2372,12 +2360,12 @@ mod tests {
         assert!(out.reason.contains("claimed exit 0"), "{}", out.reason);
         assert!(out.reason.contains("1 and 1"), "{}", out.reason);
         assert!(
-            env.tasks_text().contains("status: ready"),
+            env.tasks_text().contains("status: ready-for-agent"),
             "{}",
             env.tasks_text()
         );
         assert!(env.events().iter().any(|e| matches!(&e.kind,
-            Kind::TaskStatus { to, by, .. } if to == "ready" && by == "claims")));
+            Kind::TaskStatus { to, by, .. } if to == "ready-for-agent" && by == "claims")));
     }
 
     #[test]
@@ -2478,10 +2466,10 @@ mod tests {
     }
 
     #[test]
-    fn a_task_id_lost_from_the_queue_halts() {
+    fn lost_id_halts() {
         let mut env = Env::new("exit 0\n");
         env.write_queue(
-            "## [T-001] first\nscope: src/*\nstatus: review\n\n## [T-002] second\nscope: src/*\nstatus: ready\n",
+            "## [T-001] first\nscope: src/*\nstatus: review\n\n## [T-002] second\nscope: src/*\nstatus: ready-for-agent\n",
         );
         env.repo.commit_all("queue");
         let base = env.head();
@@ -2493,10 +2481,8 @@ mod tests {
         assert!(out.halt);
         assert!(out.reason.contains("T-002"), "{}", out.reason);
         assert!(
-            out.reason.contains(&format!(
-                "git show {base}:{}",
-                env.instance(QUEUE[usize::from(files_layout())])
-            )),
+            out.reason
+                .contains(&format!("git show {base}:{}", env.instance(SPECS))),
             "{}",
             out.reason
         );
@@ -2524,13 +2510,9 @@ mod tests {
     #[test]
     fn scope_rejects_another_tickets_file() {
         let mut env = Env::new("exit 0\n");
-        let specs = crate::config::instance_path(&env.repo.root, ".enallagi", QUEUE[1]);
-        tracker::write_converted(
-            &specs,
-            "repo",
-            "## [T-001] first\nscope: src/a.ts\nrows: §11 row 1\nstatus: review\n\n## [T-002] second\nscope: src/b.ts\nstatus: ready\n",
-        )
-        .expect("write the tickets");
+        env.write_queue(
+            "## [T-001] first\nscope: src/a.ts\nrows: §11 row 1\nstatus: review\n\n## [T-002] second\nscope: src/b.ts\nstatus: ready-for-agent\n",
+        );
         env.repo.commit_all("queue");
         let base = env.head();
         env.repo.write("src/a.ts", "a");
@@ -2540,8 +2522,8 @@ mod tests {
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
 
-        let filed = "## [T-003] filed\nstatus: proposed\n";
-        tracker::write_converted(&specs, "repo", filed).expect("file a finding");
+        let filed = "## [T-003] filed\nstatus: needs-triage\n";
+        env.tracker().append("repo", filed).expect("file a finding");
         env.repo.commit_all("verify: T-001 verdict");
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
@@ -2557,16 +2539,14 @@ mod tests {
     #[test]
     fn scope_rejects_an_added_ticket_past_triage() {
         let mut env = Env::new("exit 0\n");
-        let specs = crate::config::instance_path(&env.repo.root, ".enallagi", QUEUE[1]);
-        let first = "## [T-001] first\nscope: src/a.ts\nrows: §11 row 1\nstatus: review\n";
-        tracker::write_converted(&specs, "repo", first).expect("write the ticket");
+        env.write_queue("## [T-001] first\nscope: src/a.ts\nrows: §11 row 1\nstatus: review\n");
         env.repo.commit_all("queue");
         let base = env.head();
         env.repo.write("src/a.ts", "a");
         env.repo.commit_all("feat: T-001 a");
         env.tracker().set_status("T-001", "done", "").expect("done");
-        let filed = "## [T-002] filed ready\nstatus: ready\n";
-        tracker::write_converted(&specs, "repo", filed).expect("file a ticket");
+        let filed = "## [T-002] filed ready\nstatus: ready-for-agent\n";
+        env.tracker().append("repo", filed).expect("file a ticket");
         env.repo.commit_all("verify: T-001 verdict");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -2579,7 +2559,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_rejects_a_file_outside_the_globs() {
+    fn scope_outside_globs() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.commit_all("verdict");
@@ -2595,7 +2575,7 @@ mod tests {
             "{}",
             out.reason
         );
-        assert!(env.tasks_text().contains("status: ready"));
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
         assert!(
             env.warnings
                 .iter()
@@ -2654,7 +2634,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_rejects_the_same_edit_under_a_product_task() {
+    fn scope_product_task_edit() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", ".enallagi/*", "§11 row 1");
         env.repo.commit_all("verdict");
@@ -2665,7 +2645,7 @@ mod tests {
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
         assert!(out.reason.contains("touched the harness"), "{}", out.reason);
-        assert!(env.tasks_text().contains("status: ready"));
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
         assert!(env
             .log()
             .contains("chore(T-001): harness scope gate rejected a done verdict"));
@@ -2887,7 +2867,7 @@ mod tests {
     }
 
     #[test]
-    fn implementer_not_done_forces_back_and_skips_rest() {
+    fn implementer_not_done_forced() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.commit_all("implement");
@@ -2895,7 +2875,7 @@ mod tests {
         let out = run("implementer-not-done", &mut env.ctx(Some("T-001"), None));
         assert!(!out.pass && out.skip_rest);
         let text = env.tasks_text();
-        assert!(text.contains("status: ready"), "{text}");
+        assert!(text.contains("status: ready-for-agent"), "{text}");
         assert!(text.contains(
             "gate: the implementer set done; only the verifier may, and the launcher gates that"
         ));
@@ -2905,18 +2885,19 @@ mod tests {
     }
 
     #[test]
-    fn stopping_short_of_review_skips_the_rest() {
-        for status in ["blocked", "needs-spec", "deferred", "ready"] {
+    fn short_of_review_skips() {
+        for status in [
+            "needs-info",
+            "wontfix",
+            "ready-for-agent",
+            "ready-for-human",
+        ] {
             let mut env = Env::new("exit 0\n");
             env.queue(status, "src/a.ts", "§11 row 1");
             env.repo.commit_all("implement");
             let out = run("implementer-not-done", &mut env.ctx(Some("T-001"), None));
             assert!(out.pass && out.skip_rest, "{status}: {out:?}");
-            let want = match files_layout() {
-                true => tracker::canonical(status),
-                false => status,
-            };
-            assert!(out.reason.contains(want), "{status}: {}", out.reason);
+            assert!(out.reason.contains(status), "{status}: {}", out.reason);
         }
 
         let mut missing = Env::new("exit 0\n");
@@ -2951,13 +2932,13 @@ mod tests {
     }
 
     #[test]
-    fn dry_round_counts_and_resets() {
+    fn dry_round_counts() {
         let mut env = Env::new("exit 0\n");
-        env.queue("proposed", "src/a.ts", "§11 row 1");
+        env.queue("needs-triage", "src/a.ts", "§11 row 1");
         run("dry-round", &mut env.ctx(None, None));
         assert_eq!(env.dry_rounds, 1);
 
-        env.queue("ready", "src/a.ts", "§11 row 1");
+        env.queue("ready-for-agent", "src/a.ts", "§11 row 1");
         assert!(run("dry-round", &mut env.ctx(None, None)).pass);
         assert_eq!(env.dry_rounds, 0);
     }
@@ -3275,11 +3256,11 @@ mod tests {
     }
 
     #[test]
-    fn force_runs_the_force_form_of_the_check() {
+    fn force_runs_force_form() {
         let repo = Repo::new();
         let cmd = repo.stub_check("echo \"$1\" >> ran.txt\nexit 0\n");
         repo.write(
-            "enallagi.toml",
+            ".enallagi/enallagi.toml",
             &format!(
                 "[check]\ncommand = \"{cmd} plain\"\nforce = \"{cmd} forced\"\nfail_name = '\\(fail\\) (.+)$'\n"
             ),
@@ -3323,9 +3304,9 @@ mod tests {
     }
 
     #[test]
-    fn takeable_is_none_on_an_unreadable_queue() {
+    fn unreadable_queue_not_takeable() {
         let mut env = Env::new("exit 0\n");
-        env.duplicate_queue("ready");
+        env.duplicate_queue("ready-for-agent");
         assert!(!run("dry-round", &mut env.ctx(None, None)).pass);
     }
 }

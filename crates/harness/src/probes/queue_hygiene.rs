@@ -3,7 +3,7 @@
 use super::common::{self, Res};
 use super::ponytail_ceiling::kill_lines;
 use super::{Finding, ProbeCtx, ProbeResult};
-use crate::queue::{self, QueueError};
+use crate::block::{self, QueueError};
 use std::collections::BTreeSet;
 
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
@@ -38,7 +38,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
 
     for block in &blocks {
         let tasks = common::cite(ctx, &tracker, &block.id);
-        let status = queue::field_at(block, "status").map(|(_, v)| v);
+        let status = block::field_at(block, "status").map(|(_, v)| v);
         if status.is_none() {
             found.push(common::finding(
                 &tasks,
@@ -47,7 +47,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             ));
         }
 
-        if let Some((blocked_at, blocked)) = queue::field_at(block, "blockedBy") {
+        if let Some((blocked_at, blocked)) = block::field_at(block, "blockedBy") {
             for m in task_id.find_iter(&blocked) {
                 if !ids.contains(m.as_str()) {
                     found.push(common::finding(
@@ -73,7 +73,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
                 format!("{} reuses the id of a killed finding", block.id),
             ));
         }
-        let Some((scope_at, scope)) = queue::field_at(block, "scope") else {
+        let Some((scope_at, scope)) = block::field_at(block, "scope") else {
             continue;
         };
         for pattern in scope.split(',') {

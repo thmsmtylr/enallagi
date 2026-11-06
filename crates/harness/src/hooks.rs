@@ -392,9 +392,8 @@ mod tests {
     }
 
     #[test]
-    fn immutable_refuses_an_edit_config_refused() {
+    fn immutable_bad_config() {
         let r = Repo::new();
-        r.write(".enallagi/TASKS.md", "# TASKS\n");
         r.write("src/a.ts", "export const a = 1\n");
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         r.write(".enallagi/enallagi.toml", "[check]\ncomand = \"x\"\n");
@@ -501,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn a_write_from_another_session_is_refused() {
+    fn other_session_write_refused() {
         let r = Repo::new();
         r.queue(
             ".enallagi",
@@ -515,22 +514,22 @@ mod tests {
         r.write(".enallagi/loop.pid", &child.id().to_string());
         let _reaper = Reaper(child);
 
-        let (code, msg) = one_writer(&r.root, &input("TASKS.md"));
+        let (code, msg) = one_writer(&r.root, &input(".enallagi/specs/x/issues/T-001-x.md"));
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("one-writer:"), "{msg}");
         assert!(msg.contains("T-001"), "{msg}");
     }
 
     #[test]
-    fn a_write_from_under_the_loop_itself_is_allowed() {
+    fn own_loop_write_allowed() {
         let r = Repo::new();
         r.write(".enallagi/loop.pid", &std::process::id().to_string());
-        let (code, msg) = one_writer(&r.root, &input("TASKS.md"));
+        let (code, msg) = one_writer(&r.root, &input(".enallagi/specs/x/issues/T-001-x.md"));
         assert_eq!(code, 0, "{msg}");
     }
 
     #[test]
-    fn a_stale_pid_file_is_not_a_live_loop() {
+    fn stale_pid_not_live() {
         let r = Repo::new();
         let child = StdCommand::new("sleep")
             .arg("30")
@@ -540,7 +539,7 @@ mod tests {
         drop(Reaper(child)); // kills and waits immediately: the pid file must name a dead loop
         r.write(".enallagi/loop.pid", &pid.to_string());
 
-        let (code, msg) = one_writer(&r.root, &input("TASKS.md"));
+        let (code, msg) = one_writer(&r.root, &input(".enallagi/specs/x/issues/T-001-x.md"));
         assert_eq!(code, 0, "{msg}");
     }
 
@@ -553,11 +552,11 @@ mod tests {
     }
 
     #[test]
-    fn verify_done_runs_check_delta_otherwise() {
+    fn verify_done_check_delta() {
         let r = Repo::new();
         let cmd = r.stub_check("echo '(fail) alpha'\nexit 1\n");
         r.write(
-            "enallagi.toml",
+            ".enallagi/enallagi.toml",
             &format!("[check]\ncommand = \"{cmd}\"\nfail_name = '\\(fail\\) (.+)$'\n"),
         );
         let (code, msg) = verify_done(&r.root, "{}");
@@ -567,7 +566,7 @@ mod tests {
 
         let cmd = r.stub_check("exit 0\n");
         r.write(
-            "enallagi.toml",
+            ".enallagi/enallagi.toml",
             &format!("[check]\ncommand = \"{cmd}\"\nfail_name = '\\(fail\\) (.+)$'\n"),
         );
         let (code, msg) = verify_done(&r.root, "{}");
@@ -576,10 +575,10 @@ mod tests {
     }
 
     #[test]
-    fn the_skills_contract_lists_every_declared_skill() {
+    fn skills_contract_lists_skills() {
         let r = Repo::new();
         r.write(
-            "enallagi.toml",
+            ".enallagi/enallagi.toml",
             "[[skill]]\nid = \"tdd\"\nsource = \"path:skills/tdd\"\npath = \"skills/tdd\"\ngate = \"verdict\"\nwhy = \"forces a failing test first\"\n",
         );
         let (code, _) = skills_contract(&r.root);

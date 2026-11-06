@@ -9,7 +9,7 @@ const TASKS: &str = "\
 
 scope: src/thing.ts
 rows: none — harness
-status: ready
+status: ready-for-agent
 criteria:
   - it happens
 ";
@@ -176,7 +176,7 @@ fn removed(out: &str, verb: &str) -> Vec<String> {
 }
 
 #[test]
-fn an_ejected_repository_looks_untouched() {
+fn ejected_repo_untouched() {
     let r = Repo::new();
     let tools = tempfile::tempdir().expect("tools");
     let (status, index, excluded) = snapshot(&r.root);
@@ -188,7 +188,7 @@ fn an_ejected_repository_looks_untouched() {
         stub_config(tools.path()),
     )
     .expect("config");
-    std::fs::write(r.root.join(".enallagi/TASKS.md"), TASKS).expect("queue");
+    r.queue(".enallagi", TASKS);
     // the run refuses an install that has not seen this config, so init runs once more over it
     let (code, out) = harness(&r.root, &["init", "--adapter", "claude"]);
     assert_eq!(code, 0, "{out}");
@@ -261,7 +261,7 @@ impl Drop for Reaper {
 }
 
 #[test]
-fn eject_refuses_a_live_lane_or_loop() {
+fn eject_refuses_live_lane() {
     let r = Repo::new();
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
@@ -287,7 +287,7 @@ fn eject_refuses_a_live_lane_or_loop() {
         assert_ne!(code, 0, "{out}");
         assert!(out.contains("lane-x"), "{out}");
         assert!(out.contains(&pid.to_string()), "{out}");
-        assert!(r.root.join(".enallagi/TASKS.md").is_file(), "{out}");
+        assert!(r.root.join(".enallagi/PROGRESS.md").is_file(), "{out}");
     }
     let _ = git(
         &r.root,
@@ -296,7 +296,7 @@ fn eject_refuses_a_live_lane_or_loop() {
 }
 
 #[test]
-fn eject_refuses_its_own_ancestor_loop() {
+fn eject_refuses_ancestor_loop() {
     let r = Repo::new();
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
@@ -317,12 +317,12 @@ fn eject_refuses_its_own_ancestor_loop() {
         );
         assert_ne!(out.status.code(), Some(0), "{text}");
         assert!(text.contains("a loop is live"), "{text}");
-        assert!(r.root.join(".enallagi/TASKS.md").is_file(), "{text}");
+        assert!(r.root.join(".enallagi/PROGRESS.md").is_file(), "{text}");
     }
 }
 
 #[test]
-fn eject_keep_record_moves_the_directory_out() {
+fn eject_keep_record() {
     let r = Repo::new();
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
@@ -338,14 +338,14 @@ fn eject_keep_record_moves_the_directory_out() {
         ],
     );
     assert_ne!(code, 0, "{out}");
-    assert!(r.root.join(".enallagi/TASKS.md").is_file(), "{out}");
+    assert!(r.root.join(".enallagi/PROGRESS.md").is_file(), "{out}");
 
     let (code, out) = harness(
         &r.root,
         &["eject", "--keep-record", &record.to_string_lossy()],
     );
     assert_eq!(code, 0, "{out}");
-    assert!(record.join("TASKS.md").is_file(), "{out}");
+    assert!(record.join("PROGRESS.md").is_file(), "{out}");
     assert!(record.join(".git").exists(), "{out}");
     assert!(!r.root.join(".enallagi").exists(), "{out}");
     assert_eq!(git(&r.root, &["status", "--porcelain", "--ignored"]), "");

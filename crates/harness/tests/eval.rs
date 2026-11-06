@@ -186,12 +186,13 @@ fn an_eval_argv_carries_dir_and_context() {
 }
 
 #[test]
-fn no_agent_configured_refuses_the_evals() {
+fn evals_need_an_agent() {
     let pkg = package();
     write_eval(pkg.path(), "case", "do the thing", "true", "true", None);
     // a preset that resolves to nothing: agent resolution fails closed
+    fs::create_dir_all(pkg.path().join(".enallagi")).unwrap();
     fs::write(
-        pkg.path().join("enallagi.toml"),
+        pkg.path().join(".enallagi/enallagi.toml"),
         "[agent]\npreset = \"doesnotexist\"\n",
     )
     .unwrap();
@@ -346,15 +347,16 @@ fn a_rule_that_only_fixes_its_case_is_accepted() {
 }
 
 #[test]
-fn an_eval_with_no_prompt_needs_no_agent() {
+fn promptless_eval_no_agent() {
     let pkg = package();
     let dir = pkg.path().join("evals").join("case");
     fs::create_dir_all(&dir).unwrap();
     write_exec(&dir.join("setup.sh"), "echo done >state.txt\n");
     write_exec(&dir.join("assert.sh"), r#"[ "$(cat state.txt)" = done ]"#);
     // a preset that resolves to nothing: an eval carrying a prompt would be refused here
+    fs::create_dir_all(pkg.path().join(".enallagi")).unwrap();
     fs::write(
-        pkg.path().join("enallagi.toml"),
+        pkg.path().join(".enallagi/enallagi.toml"),
         "[agent]\npreset = \"doesnotexist\"\n",
     )
     .unwrap();

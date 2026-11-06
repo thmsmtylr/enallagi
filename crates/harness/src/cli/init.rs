@@ -1,4 +1,4 @@
-//! `enallagi init` -- installs in one pass: answers, files, adapter, skills, the state commit and a probe; or moves instance files into the harness directory, or prunes the defaulted keys out of enallagi.toml.
+//! `enallagi init` -- installs in one pass: answers, files, adapter, skills, the state commit and a probe; or prunes the defaulted keys out of enallagi.toml.
 
 use crate::config;
 use crate::init::{self, Answers, InitOpts};
@@ -7,7 +7,6 @@ use std::io::IsTerminal;
 pub struct Args {
     pub adapter: Option<String>,
     pub dry_run: bool,
-    pub move_files: bool,
     pub prune_defaults: bool,
     pub yes: bool,
     pub answers: Answers,
@@ -55,26 +54,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         root.display(),
         if args.dry_run { "  (dry run)" } else { "" }
     );
-    if args.move_files {
-        let moves = init::moves(&root)?;
-        if !args.dry_run {
-            init::relocate(&root, &moves)?;
-        }
-        let verb = if args.dry_run { "would move" } else { "moved" };
-        for (old, new) in &moves {
-            println!("  {verb}: {old} -> {new}");
-        }
-        println!("\nNext: git add the old and new paths, then re-run `enallagi init`.");
-        return Ok(0);
-    }
     let report = init::install(&root, &opts)?;
-
-    for (old, new) in &report.moves {
-        println!("  would move: {old} -> {new}");
-    }
-    if !report.moves.is_empty() {
-        println!("  nothing was moved; `enallagi init --move` moves them");
-    }
 
     let verb = if args.dry_run { "would write" } else { "wrote" };
     for path in &report.wrote {
@@ -281,6 +261,6 @@ fn queue_issue(root: &std::path::Path, dir: &str, reference: &str) -> anyhow::Re
     let block = crate::issue::append(&t.blocks()?, &decisions, &found)?;
     t.append(&crate::tracker::repo_slug(root), &block)?;
     let id = block.lines().next().unwrap_or_default().to_string();
-    crate::git::commit_instance(root, dir, &crate::tracker::QUEUE, &format!("queue: {id}"))?;
+    crate::git::commit_instance(root, dir, &[crate::tracker::SPECS], &format!("queue: {id}"))?;
     Ok(id)
 }

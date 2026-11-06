@@ -115,7 +115,7 @@ fn notes(ctx: &ProbeCtx, rules: &Rules, found: &mut Vec<Finding>) -> Res<()> {
     // a notes: field carries no blank line, so the verifier's paragraph ends where the next author signs
     let author = common::re(r"^\s*(IMPLEMENTER|VERIFIED|VERIFIER|OPERATOR)\b")?;
     for (tasks, block) in common::tickets(ctx)? {
-        let Some((start, _)) = crate::queue::field_at(&block, "notes") else {
+        let Some((start, _)) = crate::block::field_at(&block, "notes") else {
             continue;
         };
         let mut fenced = false;

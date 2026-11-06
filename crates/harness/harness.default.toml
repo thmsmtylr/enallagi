@@ -41,7 +41,8 @@ skill_invocation = "invoke it via the Skill tool"
 # driver_command runs the built artifact in a throwaway directory and prints one `FINDING ` line per shortfall; empty is off, and ENALLAGI_DRIVER=1 is also required.
 driver_command = ""
 
-spec = "SPEC.md"
+# spec is relative to harness_dir; empty is the first specs/<slug>/spec.md holding rows_heading, else the one init seeds.
+spec = ""
 rows_heading = "## 11. Exit criteria"
 rows_end_heading = "## 12."
 source_root = ""

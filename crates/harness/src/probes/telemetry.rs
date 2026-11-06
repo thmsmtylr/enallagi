@@ -103,7 +103,7 @@ pub fn verdict_flip(log: &Log) -> ProbeResult {
             task, from, to, by, ..
         } = &e.kind
         {
-            if from == "done" && to == "ready" && by == "verdict" {
+            if from == "done" && to == "ready-for-agent" && by == "verdict" {
                 groups
                     .entry((e.run.clone(), task.clone()))
                     .or_default()
@@ -149,7 +149,7 @@ pub fn rejection_repeat(log: &Log) -> ProbeResult {
             ..
         } = &e.kind
         {
-            if from == "review" && to == "ready" {
+            if from == "review" && to == "ready-for-agent" {
                 let key = tokens(reason);
                 if key.is_empty() {
                     continue;
@@ -433,13 +433,19 @@ mod tests {
     }
 
     #[test]
-    fn verdict_flip_fires_on_two_forced_backs_in_one_run() {
+    fn verdict_flip_two_flips() {
         let (dir, mut w) = writer();
-        w.emit(status("T-1", "done", "ready", "forced back", "verdict"));
         w.emit(status(
             "T-1",
             "done",
-            "ready",
+            "ready-for-agent",
+            "forced back",
+            "verdict",
+        ));
+        w.emit(status(
+            "T-1",
+            "done",
+            "ready-for-agent",
             "forced back again",
             "verdict",
         ));
@@ -457,9 +463,15 @@ mod tests {
     }
 
     #[test]
-    fn verdict_flip_needs_two_flips_on_the_same_task() {
+    fn verdict_flip_same_task() {
         let (dir, mut w) = writer();
-        w.emit(status("T-1", "done", "ready", "forced back", "verdict"));
+        w.emit(status(
+            "T-1",
+            "done",
+            "ready-for-agent",
+            "forced back",
+            "verdict",
+        ));
         let log = Log::open(dir.path());
         match verdict_flip(&log) {
             ProbeResult::Count(findings) => assert_eq!(findings.len(), 0),
@@ -467,8 +479,20 @@ mod tests {
         }
 
         let (dir2, mut w2) = writer();
-        w2.emit(status("T-1", "done", "ready", "forced back", "verdict"));
-        w2.emit(status("T-2", "done", "ready", "forced back", "verdict"));
+        w2.emit(status(
+            "T-1",
+            "done",
+            "ready-for-agent",
+            "forced back",
+            "verdict",
+        ));
+        w2.emit(status(
+            "T-2",
+            "done",
+            "ready-for-agent",
+            "forced back",
+            "verdict",
+        ));
         let log2 = Log::open(dir2.path());
         match verdict_flip(&log2) {
             ProbeResult::Count(findings) => assert_eq!(findings.len(), 0),
@@ -477,26 +501,26 @@ mod tests {
     }
 
     #[test]
-    fn rejection_repeat_uses_the_friction_measure() {
+    fn rejection_repeat_friction() {
         let (dir, mut w) = writer();
         w.emit(status(
             "T-1",
             "review",
-            "ready",
+            "ready-for-agent",
             "REJECTED: test weakened in journal.test.ts",
             "adjudicator",
         ));
         w.emit(status(
             "T-2",
             "review",
-            "ready",
+            "ready-for-agent",
             "REJECTED: weakened test journal.test.ts",
             "adjudicator",
         ));
         w.emit(status(
             "T-3",
             "review",
-            "ready",
+            "ready-for-agent",
             "REJECTED: out of scope",
             "adjudicator",
         ));
@@ -514,12 +538,12 @@ mod tests {
     }
 
     #[test]
-    fn rejection_repeat_fires_at_the_boundary() {
+    fn rejection_repeat_at_boundary() {
         let (dir, mut w) = writer();
         w.emit(status(
             "T-1",
             "review",
-            "ready",
+            "ready-for-agent",
             "SECOND occurrence of a probe firing on the prose that documents it \
              the first was this",
             "adjudicator",
@@ -527,7 +551,7 @@ mod tests {
         w.emit(status(
             "T-2",
             "review",
-            "ready",
+            "ready-for-agent",
             "FIFTH sighting of a check firing on the prose that documents it \
              and the first where the",
             "adjudicator",
@@ -541,12 +565,12 @@ mod tests {
     }
 
     #[test]
-    fn rejection_repeat_holds_under_the_boundary() {
+    fn rejection_repeat_under_boundary() {
         let (dir, mut w) = writer();
         w.emit(status(
             "T-1",
             "review",
-            "ready",
+            "ready-for-agent",
             "none new. One thing worth the next lane's time, not a rule: \
              harness hooks probes.sh",
             "adjudicator",
@@ -554,7 +578,7 @@ mod tests {
         w.emit(status(
             "T-2",
             "review",
-            "ready",
+            "ready-for-agent",
             "none new. One thing worth the next lane's time: the selftest \
              assertion deliberately does",
             "adjudicator",

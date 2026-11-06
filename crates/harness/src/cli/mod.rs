@@ -48,9 +48,6 @@ pub enum Command {
         /// Print what would be written and write nothing
         #[arg(long)]
         dry_run: bool,
-        /// Move instance files at the repository root, or in a legacy .harness/, into the harness directory, and install nothing
-        #[arg(long = "move")]
-        move_files: bool,
         /// Rewrite enallagi.toml without the keys that equal their default
         #[arg(long)]
         prune_defaults: bool,
@@ -157,7 +154,7 @@ pub enum Command {
         #[arg(long)]
         policy_read: bool,
     },
-    /// Append a proposed block to TASKS.md from a GitHub issue
+    /// Queue a needs-triage ticket from a GitHub issue
     ///
     /// Reads the issue with gh. Scope and criteria stay placeholders until you write them.
     Issue {
@@ -227,10 +224,10 @@ pub enum Command {
         #[arg(long, conflicts_with_all = ["cmd", "frozen"])]
         cost: bool,
     },
-    /// Query or edit TASKS.md
+    /// Query or edit the queue
     ///
-    /// Subcommands: list, ready, ready-unattended, ids-at, block, field, set-status, unblock,
-    /// rejections, archive, migrate, landed [--built].
+    /// Subcommands: list, ready, ids-at, block, field, set-status, rejections, archive,
+    /// landed [--built].
     Tasks {
         /// Subcommand to run
         cmd: String,
@@ -281,7 +278,6 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         Command::Init {
             adapter,
             dry_run,
-            move_files,
             prune_defaults,
             yes,
             preset,
@@ -295,7 +291,6 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         } => init::run(&init::Args {
             adapter,
             dry_run,
-            move_files,
             prune_defaults,
             yes,
             answers: crate::init::Answers {
@@ -395,10 +390,9 @@ mod tests {
         "hook", "skills", "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 40] = [
+    const FLAGS: [&str; 39] = [
         "init --adapter",
         "init --dry-run",
-        "init --move",
         "init --prune-defaults",
         "init --yes",
         "init --preset",
@@ -616,7 +610,7 @@ jobs:
     fn every_ci_job_id_names_what_it_runs() {
         let mut jobs = job_steps(CI);
         jobs.extend(job_steps(RELEASE));
-        assert_eq!(jobs.len(), 9, "jobs found: {:?}", jobs);
+        assert_eq!(jobs.len(), 8, "jobs found: {:?}", jobs);
         for (id, steps) in &jobs {
             assert!(!steps.is_empty(), "{id} has no named step");
             for word in id.split('-') {

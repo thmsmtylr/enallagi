@@ -17,8 +17,8 @@ use crossterm::terminal::{
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::Terminal;
 
+use crate::block::Block;
 use crate::events::{Event, Kind, Log};
-use crate::queue::Block;
 use crate::tracker::Tracker;
 
 pub use view::view;
@@ -372,7 +372,7 @@ mod tests {
             }),
         ];
 
-        let tasks_md = "## [T-001] Do the thing\nstatus: review\n\n## [T-002] Another thing\nstatus: ready\n\n## [T-003] Then this\nstatus: blocked\nblockedBy: T-001, T-002\n";
+        let tasks_md = "## [T-001] Do the thing\nstatus: review\n\n## [T-002] Another thing\nstatus: ready-for-agent\n\n## [T-003] Then this\nstatus: ready-for-agent\nblockedBy: T-001, T-002\n";
         let repo = crate::fixture::Repo::new();
         repo.queue(".enallagi", tasks_md);
 
@@ -460,12 +460,12 @@ mod tests {
     }
 
     #[test]
-    fn q_writes_stop_and_no_key_touches_the_queue() {
+    fn q_writes_stop() {
         let mut model = fixture_model();
         let queue_before = format!("{:?}", model.queue);
         assert!(!model.stop_requested);
 
-        // handle_key never mutates queue or writes TASKS.md -- checked for every recognised key, not just `q`
+        // handle_key never mutates the queue -- checked for every recognised key, not just `q`
         for key in [
             press('q'),
             KeyEvent {

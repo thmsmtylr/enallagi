@@ -22,6 +22,13 @@ fn adapter(name: &str) -> InitOpts {
     }
 }
 
+fn spec(repo: &Repo) -> String {
+    format!(
+        ".enallagi/specs/{}/spec.md",
+        enallagi::tracker::repo_slug(&repo.root)
+    )
+}
+
 fn read(repo: &Repo, rel: &str) -> String {
     fs::read_to_string(repo.root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
 }
@@ -154,7 +161,7 @@ fn init_leaves_a_clean_fixture_clean() {
 }
 
 #[test]
-fn init_excludes_the_dir_in_one_block() {
+fn init_excludes_dir() {
     let repo = Repo::new();
     let report = with(&repo, &adapter("gemini"));
     with(&repo, &adapter("gemini"));
@@ -185,30 +192,6 @@ fn init_excludes_the_dir_in_one_block() {
         "{:?}",
         report.track
     );
-}
-
-#[test]
-fn a_root_layout_seeds_the_context_file() {
-    let repo = Repo::new();
-    repo.write("TASKS.md", "# TASKS\n");
-    let report = install(&repo);
-    let cfg = enallagi::config::load(&repo.root).expect("config");
-    assert_eq!(cfg.layout.context_file, "AGENTS.md");
-    assert!(
-        report.wrote.contains(&"AGENTS.md".to_string()),
-        "{:?}",
-        report.wrote
-    );
-    assert!(!repo.root.join(".enallagi/AGENTS.md").exists());
-}
-
-#[test]
-fn init_leaves_a_root_queue_in_the_product() {
-    let repo = Repo::new();
-    repo.write("TASKS.md", "# TASKS\n");
-    repo.commit_all("queue");
-    install(&repo);
-    assert!(!repo.root.join(".enallagi/.git").exists());
 }
 
 #[test]
@@ -328,17 +311,28 @@ fn init_writes_the_harness_gitignore() {
 }
 
 #[test]
-fn documents_with_content_are_kept() {
+fn content_is_kept() {
     let repo = Repo::new();
-    repo.write("TASKS.md", "# my own queue\n");
-    repo.write("SPEC.md", "# my own spec\n");
+    repo.write(".enallagi/PROGRESS.md", "# my own progress\n");
+    repo.write(&spec(&repo), "# my own spec\n");
     let report = install(&repo);
-    assert_eq!(read(&repo, "TASKS.md"), "# my own queue\n");
-    assert_eq!(read(&repo, "SPEC.md"), "# my own spec\n");
-    assert!(report.kept.contains(&"TASKS.md".to_string()), "{report:?}");
-    assert!(report.kept.contains(&"SPEC.md".to_string()), "{report:?}");
-    // a kept document is still tracked, or the first verdict fails on it
-    assert!(report.track.contains(&"TASKS.md".to_string()));
+    assert_eq!(read(&repo, ".enallagi/PROGRESS.md"), "# my own progress\n");
+    assert_eq!(read(&repo, &spec(&repo)), "# my own spec\n");
+    assert!(
+        report.kept.contains(&".enallagi/PROGRESS.md".to_string()),
+        "{report:?}"
+    );
+    assert!(report.kept.contains(&spec(&repo)), "{report:?}");
+}
+
+#[test]
+fn init_seeds_spec() {
+    let repo = Repo::new();
+    install(&repo);
+    assert!(read(&repo, &spec(&repo)).contains("\n## 11. Exit criteria"));
+    assert!(!repo.root.join(".enallagi/TASKS.md").exists());
+    let t = enallagi::tracker::Tracker::open(&repo.root, ".enallagi");
+    assert!(t.blocks().expect("the queue").is_empty());
 }
 
 #[test]
@@ -424,14 +418,14 @@ fn a_reinstall_rehashes_an_edited_config() {
 }
 
 #[test]
-fn a_fresh_install_leaves_the_hash_rails_true() {
+fn fresh_hash_rails_true() {
     let repo = Repo::new();
     install(&repo);
     assert_eq!(findings(&repo, "rail-unenforced"), Vec::new());
     assert_eq!(findings(&repo, "hash-uncovered"), Vec::new());
     // a name the row carries in prose is one hash-uncovered cannot see and init does not hash
-    for doc in [".enallagi/RAILS.md", ".enallagi/SPEC.md"] {
-        let text = read(&repo, doc);
+    for doc in [".enallagi/RAILS.md".to_string(), spec(&repo)] {
+        let text = read(&repo, &doc);
         let row = text
             .lines()
             .find(|l| l.starts_with("| `harness-immutable`"))
@@ -495,17 +489,17 @@ fn init_names_the_keys_left_unset() {
 }
 
 #[test]
-fn the_spec_resyncs_the_check() {
+fn spec_resyncs_check() {
     let repo = Repo::new();
     install(&repo);
     let unset = format!("`{}`", enallagi::config::UNSET_CHECK);
-    assert!(read(&repo, ".enallagi/SPEC.md").contains(&unset));
+    assert!(read(&repo, &spec(&repo)).contains(&unset));
     repo.write(
         ".enallagi/enallagi.toml",
         "[check]\ncommand = \"make check\"\n",
     );
     install(&repo);
-    let spec = read(&repo, ".enallagi/SPEC.md");
+    let spec = read(&repo, &spec(&repo));
     let at = spec.find("### 0.4").expect("no 0.4 heading");
     let section = &spec[at..];
     assert!(section.contains("`make check`"), "{section:.400}");
@@ -514,17 +508,17 @@ fn the_spec_resyncs_the_check() {
 
 // the seeded spec must not name a check stage the configured check never runs
 #[test]
-fn the_seeded_spec_names_no_stage_the_check_lacks() {
+fn seeded_spec_stages() {
     let repo = Repo::new();
     install(&repo);
-    let spec = read(&repo, ".enallagi/SPEC.md");
+    let spec = read(&repo, &spec(&repo));
     for claim in ["precheck", "hash-verify", "trace", "The check greps"] {
         assert!(!spec.contains(claim), "{claim} in {spec}");
     }
 }
 
 #[test]
-fn a_drifted_install_is_reported() {
+fn drifted_install_reported() {
     let repo = Repo::new();
     install(&repo);
     // zero on a freshly installed tree, or this is a permanent finding nobody reads
@@ -548,7 +542,7 @@ fn a_drifted_install_is_reported() {
     );
 
     // a document the project has edited is not drift: seed never overwrites one
-    repo.write(".enallagi/TASKS.md", "# my own queue\n");
+    repo.write(".enallagi/PROGRESS.md", "# my own progress\n");
     assert_eq!(stale(&repo).len(), 2);
 
     install(&repo);
@@ -923,7 +917,7 @@ fn the_claude_preset_loads_the_plugin() {
 }
 
 #[test]
-fn the_default_skills_plugin_is_harness() {
+fn default_skills_plugin() {
     let repo = Repo::new();
     install(&repo);
     let manifest: serde_json::Value = serde_json::from_str(&read(
@@ -932,29 +926,6 @@ fn the_default_skills_plugin_is_harness() {
     ))
     .expect("plugin json");
     assert_eq!(manifest["name"], "harness");
-}
-
-#[test]
-fn a_root_layout_keeps_dot_claude_skills() {
-    let repo = root_layout();
-    let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
-    let paths: Vec<&str> = planned.iter().map(|(path, _)| path.as_str()).collect();
-    assert!(
-        paths.contains(&".claude/skills/running-the-loop/SKILL.md"),
-        "{paths:?}"
-    );
-    let cfg = enallagi::config::load(&repo.root).expect("config");
-    assert_eq!(cfg.layout.skills_dir.as_deref(), Some(".claude/skills"));
-
-    let unconfigured = Repo::new();
-    unconfigured.write("TASKS.md", "# TASKS\n");
-    let planned = init::planned_files(&unconfigured.root, &adapter("claude")).expect("plan");
-    assert!(
-        planned
-            .iter()
-            .any(|(path, _)| path == ".claude/skills/running-the-loop/SKILL.md"),
-        "{planned:?}"
-    );
 }
 
 #[test]
@@ -1056,7 +1027,7 @@ fn a_tracked_instruction_file_is_never_written() {
 }
 
 #[test]
-fn a_settings_file_that_is_not_json_is_refused() {
+fn non_json_settings_refused() {
     let repo = Repo::new();
     let hooks = ".enallagi/adapters/claude/hooks/hooks.json";
     repo.write(hooks, "{ not json at all\n");
@@ -1066,7 +1037,7 @@ fn a_settings_file_that_is_not_json_is_refused() {
         "{err}"
     );
     assert!(!repo.root.join(".enallagi/adapters/claude/agents").exists());
-    assert!(!repo.root.join(".enallagi/TASKS.md").exists());
+    assert!(!repo.root.join(".enallagi/PROGRESS.md").exists());
 }
 
 #[test]
@@ -1165,7 +1136,7 @@ fn the_seeded_documents_state_rules_and_do_not_argue() {
 }
 
 #[test]
-fn init_plans_every_instance_file() {
+fn init_plans_instance_files() {
     let repo = Repo::new();
     let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
     let entry_points = [
@@ -1182,31 +1153,14 @@ fn init_plans_every_instance_file() {
             "{path} is planned outside the harness directory"
         );
     }
+    let spec = spec(&repo);
     for path in [
         ".enallagi/enallagi.toml",
-        ".enallagi/TASKS.md",
-        ".enallagi/SPEC.md",
+        spec.as_str(),
         ".enallagi/evals/README.md",
     ] {
         assert!(paths.contains(&path), "{path} not planned: {paths:?}");
     }
-}
-
-const ROOT_LAYOUT: &[(&str, &str)] = &[
-    ("TASKS.md", "# TASKS\n"),
-    ("PROGRESS.md", "# PROGRESS\n"),
-    ("SPEC.md", "# spec\n"),
-    ("enallagi.toml", "[check]\ncommand = \"true\"\n"),
-    (".harness/RAILS.md", "rails\n"),
-    (".harness/roles/scout.md", "scout\n"),
-];
-
-fn root_layout() -> Repo {
-    let repo = Repo::new();
-    for (rel, text) in ROOT_LAYOUT {
-        repo.write(rel, text);
-    }
-    repo
 }
 
 fn instance_mentions(planned: &[(String, String)]) -> Vec<(String, String)> {
@@ -1228,7 +1182,7 @@ fn instance_mentions(planned: &[(String, String)]) -> Vec<(String, String)> {
 }
 
 #[test]
-fn rendered_files_name_the_harness_dir() {
+fn rendered_files_name_dir() {
     let repo = Repo::new();
     let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
     let off: Vec<_> = instance_mentions(&planned)
@@ -1239,21 +1193,6 @@ fn rendered_files_name_the_harness_dir() {
         })
         .collect();
     assert!(off.is_empty(), "{off:#?}");
-}
-
-#[test]
-fn a_root_layout_renders_instance_files_at_the_root() {
-    let repo = root_layout();
-    let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
-    let off: Vec<_> = instance_mentions(&planned)
-        .into_iter()
-        .filter(|(_, m)| m.contains('/'))
-        .collect();
-    assert!(off.is_empty(), "{off:#?}");
-}
-
-fn moved_to(rel: &str) -> String {
-    format!(".enallagi/{}", rel.trim_start_matches(".harness/"))
 }
 
 fn harness_init(repo: &Repo, args: &[&str]) -> String {
@@ -1271,7 +1210,7 @@ fn harness_init(repo: &Repo, args: &[&str]) -> String {
 // holds one commit naming the version, its tree is clean, the product's porcelain is empty, and
 // a re-run with nothing changed commits nothing more
 #[test]
-fn init_commits_the_state_it_wrote() {
+fn init_commits_state() {
     let repo = Repo::new();
     let stdout = harness_init(&repo, &[]);
     assert!(stdout.contains("  committed: .enallagi"), "{stdout}");
@@ -1294,55 +1233,6 @@ fn init_commits_the_state_it_wrote() {
     let again = harness_init(&repo, &[]);
     assert!(!again.contains("  committed: .enallagi"), "{again}");
     assert_eq!(git(&["log", "--format=%s"]).lines().count(), 1);
-}
-
-#[test]
-fn init_lists_new_paths_and_moves_nothing() {
-    let repo = root_layout();
-    let stdout = harness_init(&repo, &[]);
-    for (rel, _) in ROOT_LAYOUT {
-        let line = format!("{rel} -> {}", moved_to(rel));
-        assert!(stdout.contains(&line), "no `{line}` in:\n{stdout}");
-        assert!(repo.root.join(rel).is_file(), "{rel} was moved");
-    }
-    assert!(!repo.root.join(".enallagi").exists());
-}
-
-#[test]
-fn init_move_puts_files_at_their_new_paths() {
-    let repo = root_layout();
-    let stdout = harness_init(&repo, &["--move"]);
-    for (rel, text) in ROOT_LAYOUT {
-        let new = moved_to(rel);
-        assert!(
-            stdout.contains(&format!("{rel} -> {new}")),
-            "{rel} not listed:\n{stdout}"
-        );
-        assert_eq!(read(&repo, &new), *text, "{new}");
-        assert!(!repo.root.join(rel).exists(), "{rel} remains");
-    }
-    assert!(!repo.root.join(".harness").exists());
-}
-
-#[test]
-fn migrated_init_no_tasks() {
-    let repo = Repo::new();
-    harness_init(&repo, &[]);
-    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
-        .args(["tasks", "migrate"])
-        .current_dir(&repo.root)
-        .output()
-        .expect("run migrate");
-    assert!(out.status.success(), "{out:?}");
-    let spec = format!(
-        ".enallagi/specs/{}/spec.md",
-        enallagi::tracker::repo_slug(&repo.root)
-    );
-    let before = read(&repo, &spec);
-    harness_init(&repo, &[]);
-    assert!(!repo.root.join(".enallagi/TASKS.md").exists());
-    assert!(!repo.root.join(".enallagi/SPEC.md").exists());
-    assert_eq!(read(&repo, &spec), before);
 }
 
 // the failing-test line each preset's fail_name is written against, captured from the runner itself
@@ -1724,11 +1614,20 @@ fn a_non_terminal_init_takes_the_defaults() {
 
 // the configured preset names the tool, so a bare init writes what --adapter claude writes
 #[test]
-fn the_adapter_defaults_to_the_configured_preset() {
+fn adapter_defaults_to_preset() {
     let bare = Repo::new();
     let named = Repo::new();
-    let wrote_bare = install(&bare).wrote;
-    let wrote_named = with(&named, &adapter("claude")).wrote;
+    // the spec's directory is each repository's own name
+    let wrote = |repo: &Repo, report: init::InitReport| -> Vec<String> {
+        let slug = enallagi::tracker::repo_slug(&repo.root);
+        report
+            .wrote
+            .iter()
+            .map(|p| p.replace(&slug, "repo"))
+            .collect()
+    };
+    let wrote_bare = wrote(&bare, install(&bare));
+    let wrote_named = wrote(&named, with(&named, &adapter("claude")));
     assert_eq!(wrote_bare, wrote_named);
     assert!(
         wrote_bare
@@ -1790,7 +1689,7 @@ fn init_sync_vendors_the_declared_skills() {
 
 // --issue appends the block `enallagi issue` writes and commits it, so the first run finds it
 #[test]
-fn init_issue_queues_the_block_and_commits_it() {
+fn init_issue_queues_and_commits() {
     let repo = Repo::new();
     let tools = tempfile::tempdir().expect("tools");
     let gh = tools.path().join("gh");
@@ -1821,9 +1720,12 @@ fn init_issue_queues_the_block_and_commits_it() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{stdout}");
     assert!(stdout.contains("  proposed: ## [T-001] "), "{stdout}");
-    let tasks = read(&repo, ".enallagi/TASKS.md");
-    assert!(tasks.contains("## [T-001] "), "{tasks}");
-    assert!(tasks.contains("status: proposed"), "{tasks}");
+    let t = enallagi::tracker::Tracker::open(&repo.root, ".enallagi");
+    let b = t.get("T-001").expect("the queue").expect("T-001");
+    assert_eq!(
+        enallagi::tracker::state(&b).as_deref(),
+        Some("needs-triage")
+    );
     let state = repo.root.join(".enallagi");
     assert_eq!(
         enallagi::git::git(&state, &["status", "--porcelain"]).expect("git"),

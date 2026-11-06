@@ -71,7 +71,8 @@ for id in tdd ponytail debugging review-received verify-before-done review-reque
 done
 
 # a real repo puts its test command in check.command
-cat >enallagi.toml <<'TOML'
+mkdir -p .enallagi
+cat >.enallagi/enallagi.toml <<'TOML'
 [agent]
 preset = "custom"
 command = ["./src/lane.sh", "{prompt}", "{turns}"]
@@ -84,7 +85,7 @@ command = "true"
 TOML
 for id in tdd ponytail debugging review-received verify-before-done review-requested brainstorming caveman-commit; do
   printf '\n[[skill]]\nid = "%s"\nsource = "path:vendor/%s"\npath = ""\ngate = "none"\nwhy = "the demo fixture"\n' \
-    "$id" "$id" >>enallagi.toml
+    "$id" "$id" >>.enallagi/enallagi.toml
 done
 
 step "install into a throwaway repo  ($D)"
@@ -98,17 +99,23 @@ printf 'installed %s files\n' "$(printf '%s\n' "$INSTALL" | grep -c '^  wrote: '
 
 # init seeds no task. The demo queues one with a scope: line, so the scope gate below has
 # something to judge the lane's diff against.
-cat >>.enallagi/TASKS.md <<'BLOCK'
+issues="$(ls -d .enallagi/specs/*/)issues"
+mkdir -p "$issues"
+cat >"$issues/T-001-the-demo-task.md" <<'TICKET'
+# T-001: the demo task
 
-## [T-001] the demo task
+**Status:** ready-for-agent
+**Blocked by:** None
+
+## Acceptance criteria
+
+- [ ] the demo lane writes src/allowed.ts
+
+## Harness
+
 scope: src/allowed.ts
-blockedBy: none
-status: ready
 rows: none — harness
-criteria:
-  - the demo lane writes src/allowed.ts
-notes:
-BLOCK
+TICKET
 git add -A && git commit -qm 'chore: T-001 setup' >/dev/null
 
 # `CI` forces --frozen, which refuses a stage whose skills are not already vendored and locked, so

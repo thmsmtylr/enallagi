@@ -10,7 +10,7 @@ const TASKS: &str = "\
 
 scope: src/thing.ts
 rows: none — harness
-status: ready
+status: ready-for-agent
 criteria:
   - it happens
 ";
@@ -48,7 +48,7 @@ criteria:
 
 scope: src/other.ts
 rows: none — harness
-status: ready
+status: ready-for-agent
 criteria:
   - it happens
 ";
@@ -58,7 +58,7 @@ const LEVELLED_TASK: &str = "\
 
 scope: src/thing.ts
 rows: none — harness
-status: ready
+status: ready-for-agent
 model: m-task
 effort: e-task
 criteria:
@@ -152,7 +152,7 @@ post = ["commit-round", "queue-intact", "adjudicator-halt", "dry-round"]
 // base_toml alone falls back to the shipped `[[skill]]` table, whose sources are github clones, and
 // the test then reaches the network.
 fn write_toml(r: &Repo, toml: &str) {
-    write_toml_at(r, "enallagi.toml", toml);
+    write_toml_at(r, ".enallagi/enallagi.toml", toml);
 }
 
 fn write_toml_at(r: &Repo, rel: &str, toml: &str) {
@@ -166,57 +166,59 @@ fn write_toml_at(r: &Repo, rel: &str, toml: &str) {
     r.write(rel, &full);
 }
 
-fn files_layout() -> bool {
-    std::env::var("ENALLAGI_TEST_LAYOUT").as_deref() == Ok("files")
-}
-
-// the root layout has no files form until layout detection learns `specs/`, so a files run nests the instance
 fn instance(rel: &str) -> String {
-    match files_layout() {
-        true => format!(".enallagi/{rel}"),
-        false => rel.to_string(),
-    }
+    format!(".enallagi/{rel}")
 }
 
 fn queue_path() -> String {
-    match files_layout() {
-        true => ".enallagi/specs".to_string(),
-        false => "TASKS.md".to_string(),
-    }
+    ".enallagi/specs".to_string()
 }
 
 fn queue(r: &Repo, text: &str) {
-    r.queue(if files_layout() { ".enallagi" } else { "" }, text);
+    r.queue(".enallagi", text);
+}
+
+fn issues(r: &Repo) -> String {
+    format!(
+        ".enallagi/specs/{}/issues",
+        enallagi::tracker::repo_slug(&r.root)
+    )
+}
+
+fn spec(r: &Repo) -> String {
+    format!(
+        ".enallagi/specs/{}/spec.md",
+        enallagi::tracker::repo_slug(&r.root)
+    )
 }
 
 // the file a stub agent appends a ticket's lines to; it may run before the queue is written
 fn ticket(r: &Repo, id: &str, title: &str) -> String {
-    match files_layout() {
-        true => format!(
-            ".enallagi/specs/{}/issues/{}",
-            enallagi::tracker::repo_slug(&r.root),
-            enallagi::tracker::file_name(id, title)
-        ),
-        false => "TASKS.md".to_string(),
-    }
+    format!("{}/{}", issues(r), enallagi::tracker::file_name(id, title))
 }
 
-// a stub's shell line that queues legacy block text: appended to TASKS.md, or written as its ticket file
+// a stub's shell line that writes block text as its ticket file
 fn queues(r: &Repo, block: &str) -> String {
     if block.is_empty() {
         return String::new();
     }
-    if !files_layout() {
-        return format!("printf '%s' '{block}' >>TASKS.md\n");
-    }
-    let (name, text) = enallagi::tracker::convert(block)
-        .expect("convert")
-        .remove(0);
-    let dir = format!(
-        ".enallagi/specs/{}/issues",
-        enallagi::tracker::repo_slug(&r.root)
-    );
-    format!("printf '%s' '{text}' >{dir}/{name}\n")
+    let b = &enallagi::block::parse(block).expect("parse")[0];
+    format!(
+        "printf '%s' '{}' >{}\n",
+        enallagi::tracker::ticket_text(b),
+        ticket(r, &b.id, &b.title)
+    )
+}
+
+// the queue rendered as blocks, for asserts that read it whole
+fn tasks_text(r: &Repo) -> String {
+    let t = enallagi::tracker::Tracker::open(&r.root, ".enallagi");
+    t.blocks()
+        .expect("the queue")
+        .iter()
+        .map(enallagi::block::block_text)
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn state_of(r: &Repo, id: &str) -> Option<String> {
@@ -236,7 +238,7 @@ fn repo(toml: &str, tasks: &str) -> Repo {
     if !tasks.is_empty() {
         queue(&repo, tasks);
     }
-    repo.write(&instance("SPEC.md"), "# spec\n");
+    repo.write(&spec(&repo), "# spec\n");
     repo.write(&instance("PROGRESS.md"), "# progress\n");
     write_toml(&repo, toml);
     repo.commit_all("harness");
@@ -447,12 +449,9 @@ fn a_preset_argv_carries_dir_and_context() {
 }
 
 #[test]
-fn a_bare_clarification_marker_halts_the_loop() {
+fn clarification_halts() {
     let r = repo(&base_toml(""), TASKS);
-    r.write(
-        &instance("SPEC.md"),
-        "# spec\n\n[NEEDS CLARIFICATION] which store?\n",
-    );
+    r.write(&spec(&r), "# spec\n\n[NEEDS CLARIFICATION] which store?\n");
     let (digest, events) = go(&r, &opts(1));
     assert!(
         digest
@@ -466,10 +465,10 @@ fn a_bare_clarification_marker_halts_the_loop() {
 }
 
 #[test]
-fn a_backticked_marker_does_not_halt() {
+fn backticked_marker_runs() {
     let r = repo(&base_toml(""), TASKS);
     r.write(
-        "SPEC.md",
+        &spec(&r),
         "# spec\n\nA `[NEEDS CLARIFICATION]` marker is prose about the rail.\n",
     );
     let (digest, _) = go(&r, &opts(1));
@@ -798,7 +797,7 @@ fn a_command_stage_runs_with_the_harness_environment() {
 }
 
 #[test]
-fn queue_empty_fails_closed_on_a_bad_queue() {
+fn queue_empty_bad_queue() {
     let toml = r#"
 [agent]
 preset = "custom"
@@ -817,20 +816,13 @@ name = "note"
 command = "touch ran-empty-pipeline"
 turns = 1
 "#;
-    // duplicate ids are what makes `queue::parse` fail; the same fixture `takeable_is_none_on_an_unreadable_queue` uses
-    let broken_tasks = "## [T-001] first\nstatus: ready\n\n## [T-001] again\nstatus: ready\n";
-    let r = match files_layout() {
-        false => repo(toml, broken_tasks),
-        true => {
-            let r = repo(toml, "## [T-001] first\nstatus: ready\n");
-            r.write(
-                ".enallagi/specs/x/issues/T-001-again.md",
-                "# T-001: again\n\n**Status:** ready-for-agent\n",
-            );
-            r.commit_all("a second T-001");
-            r
-        }
-    };
+    // a duplicate id is what makes the queue unreadable
+    let r = repo(toml, "## [T-001] first\nstatus: ready-for-agent\n");
+    r.write(
+        ".enallagi/specs/x/issues/T-001-again.md",
+        "# T-001: again\n\n**Status:** ready-for-agent\n",
+    );
+    r.commit_all("a second T-001");
 
     let (digest, _) = go(&r, &opts(1));
     assert!(
@@ -863,12 +855,12 @@ fn stop_file_halts_at_the_next_boundary() {
 }
 
 #[test]
-fn a_new_needs_spec_halts() {
+fn new_needs_info_halts() {
     let r = repo("", "");
     let implement = implementer(
         &r,
         &format!(
-            "{bin} tasks set-status T-001 needs-spec 'the contract does not answer it'\n",
+            "{bin} tasks set-status T-001 needs-info 'the contract does not answer it'\n",
             bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
@@ -883,20 +875,17 @@ fn a_new_needs_spec_halts() {
     // one iteration: the halt must come from this round's end, not the next round's boundary
     let (digest, _) = go(&r, &opts(1));
     assert!(
-        digest.halts.iter().any(|h| h.contains("needs-spec")),
+        digest.halts.iter().any(|h| h.contains("needs-info")),
         "{:?}",
         digest.halts
     );
 }
 
 #[test]
-fn two_dry_rounds_end_the_run() {
+fn two_dry_rounds_end() {
     let r = repo(&base_toml(""), "");
     queue(&r, "# queue\n");
-    // an empty queue is an empty directory under files, which git does not track
-    if !files_layout() {
-        r.commit_all("empty queue");
-    }
+    // an empty queue is an empty directory, which git does not track
     let (digest, _) = go(&r, &opts(5));
     assert_eq!(digest.iterations, 2, "{digest:#?}");
 }
@@ -1013,7 +1002,7 @@ fn harness(root: &std::path::Path, args: &[&str]) -> (i32, String) {
 
 // the first external run's shape: enallagi.toml's check was edited and no one re-ran init
 #[test]
-fn a_stale_install_refuses_the_run_until_init() {
+fn stale_install_refuses_run() {
     let r = Repo::new();
     script(&r, "src/fakecheck.sh", "exit 0\n");
     script(&r, "src/fakeagent.sh", QUIET);
@@ -1021,7 +1010,7 @@ fn a_stale_install_refuses_the_run_until_init() {
     assert_eq!(code, 0, "{out}");
 
     write_toml_at(&r, ".enallagi/enallagi.toml", &base_toml(""));
-    r.write(".enallagi/TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("a check the install has not seen");
 
     let (code, out) = harness(&r.root, &["run", "--no-tui", "--iterations", "1"]);
@@ -1042,7 +1031,7 @@ fn a_stale_install_refuses_the_run_until_init() {
 
 // the gate spawns current_exe(), which in-process would be the test binary, so this drives enallagi
 #[test]
-fn a_stale_install_fails_the_verify_stage() {
+fn stale_install_fails_verify() {
     let r = Repo::new();
     script(&r, "src/fakecheck.sh", "exit 0\n");
     script(&r, "src/fakeagent.sh", QUIET);
@@ -1066,7 +1055,7 @@ fn a_stale_install_fails_the_verify_stage() {
         r#"post = ["install-stale"]"#,
     );
     write_toml_at(&r, ".enallagi/enallagi.toml", &toml);
-    r.write(".enallagi/TASKS.md", REVIEW_TASK);
+    queue(&r, REVIEW_TASK);
     // the toml the install was rendered from just changed, and preflight refuses a stale install
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
@@ -1099,7 +1088,7 @@ why = "the failing test is written first"
 "#;
 
 #[test]
-fn rendering_a_role_keeps_its_source() {
+fn role_render_keeps_source() {
     let toml = base_toml(SKILL).replace(
         "stages = [\"implement\", \"verify\", \"adjudicate\"]",
         "stages = [\"implement\"]",
@@ -1132,7 +1121,7 @@ const SKILL_TASKS: &str = "\
 
 scope: src/a.ts
 rows: none — harness
-status: ready
+status: ready-for-agent
 criteria:
   - it happens
 ";
@@ -1286,7 +1275,10 @@ fn proposed_contract_halt() {
         "src/fakescout.sh",
         &queues(
             &r,
-            "\n## [T-002] the schema is wrong\nstatus: proposed\nprobe: spec-untested\noutput: SPEC.md does not say which store\n",
+            &format!(
+                "\n## [T-002] the schema is wrong\nstatus: needs-triage\nprobe: spec-untested\noutput: {} does not say which store\n",
+                spec(&r)
+            ),
         ),
     );
     write_toml(&r, &base_toml(&role_command("scout", &scout)));
@@ -1377,12 +1369,12 @@ fn an_implementer_done_skips_verify() {
 }
 
 #[test]
-fn stopping_short_of_review_skips_verify() {
+fn short_of_review_skips_verify() {
     let r = repo("", "");
     let implement = implementer(
         &r,
         &format!(
-            "{bin} tasks set-status T-001 blocked 'the fixture is missing'\n",
+            "{bin} tasks set-status T-001 ready-for-agent 'the fixture is missing'\n",
             bin = env!("CARGO_BIN_EXE_enallagi"),
         ),
     );
@@ -1400,13 +1392,7 @@ fn stopping_short_of_review_skips_verify() {
         "{events:#?}"
     );
     assert!(!r.root.join("verify-ran").exists());
-    // `blocked` is no state of its own under files, so the CLI writes ready-for-agent
-    let at = if files_layout() {
-        "ready-for-agent"
-    } else {
-        "blocked"
-    };
-    let warning = format!("T-001 ended the iteration at {at}, not done.");
+    let warning = "T-001 ended the iteration at ready-for-agent, not done.".to_string();
     assert!(digest.warnings.contains(&warning), "{:?}", digest.warnings);
 }
 
@@ -1446,7 +1432,7 @@ fn a_stranded_review_verifies_next_run() {
 }
 
 fn entries(r: &Repo) -> usize {
-    std::fs::read_to_string(r.root.join("PROGRESS.md"))
+    std::fs::read_to_string(r.root.join(instance("PROGRESS.md")))
         .expect("PROGRESS.md")
         .lines()
         .filter(|l| l.starts_with("## "))
@@ -1454,7 +1440,7 @@ fn entries(r: &Repo) -> usize {
 }
 
 #[test]
-fn a_verify_only_iteration_leaves_one_entry() {
+fn verify_only_one_entry() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = verifier(&r);
     with_verifier(&r, &verify);
@@ -1465,7 +1451,7 @@ fn a_verify_only_iteration_leaves_one_entry() {
         entries(&r),
         1,
         "{}",
-        std::fs::read_to_string(r.root.join("PROGRESS.md")).unwrap()
+        std::fs::read_to_string(r.root.join(instance("PROGRESS.md"))).unwrap()
     );
     assert!(
         !digest
@@ -1475,7 +1461,7 @@ fn a_verify_only_iteration_leaves_one_entry() {
         "{:?}",
         digest.warnings
     );
-    let text = std::fs::read_to_string(r.root.join("PROGRESS.md")).expect("PROGRESS.md");
+    let text = std::fs::read_to_string(r.root.join(instance("PROGRESS.md"))).expect("PROGRESS.md");
     assert!(text.contains("review pipeline"), "{text}");
     assert!(text.contains("\nfriction: none\n"), "{text}");
     assert!(
@@ -1485,9 +1471,12 @@ fn a_verify_only_iteration_leaves_one_entry() {
 }
 
 #[test]
-fn an_implementer_entry_gets_no_second() {
+fn implementer_entry_no_second() {
     let r = repo("", "");
-    let implement = implementer(&r, "echo '## stub entry' >>PROGRESS.md\n");
+    let implement = implementer(
+        &r,
+        &format!("echo '## stub entry' >>{}\n", instance("PROGRESS.md")),
+    );
     let verify = verifier(&r);
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
     queue(&r, TASKS);
@@ -1498,7 +1487,7 @@ fn an_implementer_entry_gets_no_second() {
         entries(&r),
         1,
         "{}",
-        std::fs::read_to_string(r.root.join("PROGRESS.md")).unwrap()
+        std::fs::read_to_string(r.root.join(instance("PROGRESS.md"))).unwrap()
     );
     assert!(
         !digest
@@ -1537,7 +1526,7 @@ fn review_wins_over_ready() {
 }
 
 #[test]
-fn the_run_archives_the_task_it_landed() {
+fn landed_task_stays_whole() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = verifier(&r);
     with_verifier(&r, &verify);
@@ -1551,19 +1540,10 @@ fn the_run_archives_the_task_it_landed() {
         .expect("the queue");
     let decisions =
         std::fs::read_to_string(r.root.join(instance("DECISIONS.md"))).expect("DECISIONS.md");
-    // the files layout retired archiving: a done ticket stays whole where it is
-    if files_layout() {
-        assert!(tasks.contains("**Status:** done"), "{tasks}");
-        assert!(tasks.contains("- [ ] it happens"), "{tasks}");
-        assert!(!decisions.contains("T-001"), "{decisions}");
-    } else {
-        assert!(tasks.contains("archived: DECISIONS.md"), "{tasks}");
-        assert!(
-            !tasks.contains("criteria:"),
-            "the body went with it: {tasks}"
-        );
-        assert!(decisions.contains("## [T-001] do the thing"), "{decisions}");
-    }
+    // a done ticket stays whole where it is
+    assert!(tasks.contains("**Status:** done"), "{tasks}");
+    assert!(tasks.contains("- [ ] it happens"), "{tasks}");
+    assert!(!decisions.contains("T-001"), "{decisions}");
     // loop.pid still names this process on the way out, so the live-loop refusal must not fire
     assert!(
         !digest
@@ -1623,11 +1603,11 @@ fn a_deferred_finding_with_no_block_is_refused() {
 }
 
 #[test]
-fn the_same_verdict_proposed_is_committed() {
+fn same_verdict_filed() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = deferring_verifier(
         &r,
-        "\n## [T-002] the test never removes the entry it registers\nscope: src/thing.test.ts\nstatus: proposed\n",
+        "\n## [T-002] the test never removes the entry it registers\nscope: src/thing.test.ts\nstatus: needs-triage\n",
     );
     with_verifier(&r, &verify);
     r.commit_all("stubs");
@@ -1757,7 +1737,7 @@ fn an_implementer_minor_is_not_the_verdict() {
 }
 
 #[test]
-fn an_uncommitted_minor_is_not_the_verdict() {
+fn uncommitted_minor() {
     let r = repo("", "");
     let implement = script(
         &r,
@@ -1776,24 +1756,7 @@ fn an_uncommitted_minor_is_not_the_verdict() {
 }
 
 #[test]
-fn a_root_layout_lands_a_stub_task() {
-    let r = repo("", "");
-    let implement = implementer(&r, "");
-    let verify = verifier(&r);
-    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    queue(&r, TASKS);
-    r.commit_all("stubs");
-
-    let (digest, _) = go(&r, &opts(1));
-    assert_eq!(digest.landed, vec!["T-001".to_string()]);
-    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    assert!(tasks.contains("status: done"), "{tasks}");
-    assert!(!r.root.join(".enallagi/TASKS.md").exists());
-    assert!(enallagi::git::porcelain(&r.root).is_empty());
-}
-
-#[test]
-fn a_nested_layout_lands_a_stub_task() {
+fn nested_lands_stub() {
     let r = Repo::new();
     r.write(
         ".enallagi/.gitignore",
@@ -1801,8 +1764,8 @@ fn a_nested_layout_lands_a_stub_task() {
     );
     script(&r, "src/fakecheck.sh", "exit 0\n");
     script(&r, "src/fakeagent.sh", QUIET);
-    r.write(".enallagi/TASKS.md", TASKS);
-    r.write(".enallagi/SPEC.md", "# spec\n");
+    queue(&r, TASKS);
+    r.write(&spec(&r), "# spec\n");
     r.write(".enallagi/PROGRESS.md", "# progress\n");
     let implement = script(
         &r,
@@ -1827,10 +1790,10 @@ fn a_nested_layout_lands_a_stub_task() {
 
     let (digest, events) = go(&r, &opts(1));
     assert_eq!(digest.landed, vec!["T-001".to_string()], "{events:#?}");
-    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
+    let tasks = tasks_text(&r);
     assert!(tasks.contains("status: done"), "{tasks}");
     for name in [
-        "TASKS.md",
+        "specs",
         "PROGRESS.md",
         "DECISIONS.md",
         "SPEC.md",
@@ -1847,7 +1810,7 @@ fn a_nested_layout_lands_a_stub_task() {
 }
 
 #[test]
-fn an_install_lands_a_task_and_touches_nothing_else() {
+fn install_lands_task() {
     let r = Repo::new();
     enallagi::init::install(
         &r.root,
@@ -1878,7 +1841,7 @@ fn an_install_lands_a_task_and_touches_nothing_else() {
         ".enallagi/enallagi.toml",
         &format!("{toml}{}", r.local_skills(&toml)),
     );
-    r.write(".enallagi/TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("installed");
     let base = enallagi::git::git(&r.root, &["rev-parse", "HEAD"]).expect("HEAD");
 
@@ -1894,7 +1857,7 @@ fn an_install_lands_a_task_and_touches_nothing_else() {
         );
     }
     for name in [
-        "TASKS.md",
+        "specs",
         "PROGRESS.md",
         "SPEC.md",
         "enallagi.toml",
@@ -1906,7 +1869,7 @@ fn an_install_lands_a_task_and_touches_nothing_else() {
 }
 
 #[test]
-fn a_claude_install_writes_nothing_under_dot_claude() {
+fn claude_install_no_dot_claude() {
     let r = Repo::new();
     enallagi::init::install(
         &r.root,
@@ -1941,7 +1904,7 @@ fn a_claude_install_writes_nothing_under_dot_claude() {
         ".enallagi/enallagi.toml",
         &format!("{toml}{}", r.local_skills(&toml)),
     );
-    r.write(".enallagi/TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("installed");
 
     let (digest, events) = go(&r, &opts(1));
@@ -1968,8 +1931,8 @@ fn nested(check: &str, implement_extra: &str) -> Repo {
     );
     script(&r, "src/fakecheck.sh", check);
     script(&r, "src/fakeagent.sh", QUIET);
-    r.write(".enallagi/TASKS.md", TASKS);
-    r.write(".enallagi/SPEC.md", "# spec\n");
+    queue(&r, TASKS);
+    r.write(&spec(&r), "# spec\n");
     r.write(".enallagi/PROGRESS.md", "# progress\n");
     r.write(".enallagi/.check-baseline", "# inherited red\n");
     let implement = script(
@@ -2006,19 +1969,16 @@ fn nested(check: &str, implement_extra: &str) -> Repo {
 }
 
 fn nested_status(r: &Repo) -> Option<String> {
-    let text = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
-    let blocks = enallagi::queue::parse(&text).expect("parse");
-    let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
-    enallagi::queue::field(t001, "status")
+    state_of(r, "T-001")
 }
 
 #[test]
-fn an_unsupported_done_is_forced_back_to_ready() {
+fn unsupported_done_forced_back() {
     let r = nested("echo '(fail) alpha'\nexit 1\n", "");
 
     let (digest, events) = go(&r, &opts(1));
     assert!(digest.landed.is_empty(), "{events:#?}");
-    assert_eq!(nested_status(&r).as_deref(), Some("ready"));
+    assert_eq!(nested_status(&r).as_deref(), Some("ready-for-agent"));
     let state_log = in_dir(&r.root.join(".enallagi"), &["log", "--format=%s"]);
     assert!(
         state_log
@@ -2030,13 +1990,13 @@ fn an_unsupported_done_is_forced_back_to_ready() {
 }
 
 #[test]
-fn a_nested_install_refuses_a_grown_baseline() {
+fn nested_grown_baseline() {
     let r = nested("exit 0\n", "echo alpha >>.enallagi/.check-baseline\n");
 
     let (digest, events) = go(&r, &opts(1));
     assert!(digest.landed.is_empty(), "{events:#?}");
     // back to the implementer, the one role that can remove the line; the commits stay on the branch
-    assert_eq!(nested_status(&r).as_deref(), Some("ready"));
+    assert_eq!(nested_status(&r).as_deref(), Some("ready-for-agent"));
     let refusal = events.iter().find_map(|e| match &e.kind {
         Kind::Gate {
             gate, pass, reason, ..
@@ -2050,25 +2010,32 @@ fn a_nested_install_refuses_a_grown_baseline() {
     );
 }
 
-// the implement round rewrites the block, widening scope: with no `widened:` line
-const WIDENED: &str = "cat > .enallagi/TASKS.md <<'EOF'\n\
-## [T-001] do the thing\n\
+// the implement round rewrites the ticket, widening scope: with no `widened:` line
+const WIDENED: &str = "cat > .enallagi/specs/*/issues/T-001-*.md <<'EOF'\n\
+# T-001: do the thing\n\
+\n\
+**Status:** review\n\
+**Blocked by:** None\n\
+\n\
+## Acceptance criteria\n\
+\n\
+- [ ] it happens\n\
+\n\
+## Harness\n\
 \n\
 scope: src/thing.ts, src/other.ts\n\
 rows: none \u{2014} harness\n\
-status: review\n\
-criteria:\n\
-  - it happens\n\
 EOF\n";
 
 // the implement round that follows a scope refusal finds its commits on the branch and answers the
 // gate: it adds the `widened:` line, commits no product change, and the task lands on the widening
 #[test]
-fn a_scope_refusal_is_answered_by_the_next_implement() {
+fn scope_refusal_answered() {
     let confirm = format!(
-        "if grep -q 'scope gate rejected it' .enallagi/TASKS.md; then\n\
-         awk '{{print}} /^scope: src\\/thing.ts, src\\/other.ts$/{{print \"widened: src/other.ts holds the flag\"}}' .enallagi/TASKS.md >.enallagi/TASKS.new\n\
-         mv .enallagi/TASKS.new .enallagi/TASKS.md\n\
+        "t=$(ls .enallagi/specs/*/issues/T-001-*.md)\n\
+         if grep -q 'scope gate rejected it' \"$t\"; then\n\
+         awk '{{print}} /^scope: src\\/thing.ts, src\\/other.ts$/{{print \"widened: src/other.ts holds the flag\"}}' \"$t\" >\"$t.new\"\n\
+         mv \"$t.new\" \"$t\"\n\
          else\n{WIDENED}fi\n"
     );
     let r = nested("exit 0\n", &confirm);
@@ -2081,7 +2048,7 @@ fn a_scope_refusal_is_answered_by_the_next_implement() {
         .count();
     assert_eq!(refusals, 1, "{events:#?}");
     assert!(events.iter().any(|e| matches!(&e.kind,
-        Kind::TaskStatus { to, by, .. } if to == "ready" && by == "scope")));
+        Kind::TaskStatus { to, by, .. } if to == "ready-for-agent" && by == "scope")));
     // one product commit: the confirm round committed nothing
     let subjects = in_dir(&r.root, &["log", "--format=%s"]);
     assert_eq!(
@@ -2103,12 +2070,12 @@ fn a_scope_refusal_is_answered_by_the_next_implement() {
 // the widening lands in the first implement round, so the second round's own bases already carry
 // it and only the queued commit still shows it; a lane that widens silently twice halts the run
 #[test]
-fn a_review_round_reads_the_queued_scope() {
+fn review_reads_queued_scope() {
     let r = nested("exit 0\n", WIDENED);
 
     let (digest, events) = go(&r, &opts(3));
     assert!(digest.landed.is_empty(), "{events:#?}");
-    assert_eq!(nested_status(&r).as_deref(), Some("ready"));
+    assert_eq!(nested_status(&r).as_deref(), Some("ready-for-agent"));
     assert!(
         digest
             .halts
@@ -2134,7 +2101,7 @@ fn a_review_round_reads_the_queued_scope() {
             .all(|r| r.contains("widened scope: with src/other.ts")),
         "{refusals:?}"
     );
-    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
+    let tasks = tasks_text(&r);
     assert!(
         tasks.contains("gate: ") && tasks.contains("widened scope: with src/other.ts"),
         "{tasks}"
@@ -2142,7 +2109,7 @@ fn a_review_round_reads_the_queued_scope() {
 }
 
 #[test]
-fn a_landed_iteration_leaves_no_instance_path() {
+fn landed_leaves_no_instance_path() {
     let r = nested("exit 0\n", "");
     let before = in_dir(&r.root, &["rev-parse", "HEAD"]);
 
@@ -2155,7 +2122,7 @@ fn a_landed_iteration_leaves_no_instance_path() {
         assert!(
             !path.starts_with(".enallagi")
                 && ![
-                    "TASKS.md",
+                    "specs",
                     "PROGRESS.md",
                     "DECISIONS.md",
                     ".check-baseline",
@@ -2182,23 +2149,23 @@ fn a_landed_iteration_leaves_no_instance_path() {
 
 // A drain round needs a block filed this iteration; the verifier files one when its rejection turns
 // something up, which is where every finding this session came from.
-const FILED: &str = "\n## [T-009] the fence scan reads one language only\n\nscope: src/thing.ts\nrows: none — harness\nstatus: proposed\ncriteria:\n  - the scan reads every fence\n";
+const FILED: &str = "\n## [T-009] the fence scan reads one language only\n\nscope: src/thing.ts\nrows: none — harness\nstatus: needs-triage\ncriteria:\n  - the scan reads every fence\n";
 
-const RESTATED: &str = "\n## [T-009] the check was red at HEAD\n\nscope: src/thing.ts\nrows: none — harness\nstatus: proposed\ncriteria:\n  - the check was red at HEAD\n";
+const RESTATED: &str = "\n## [T-009] the check was red at HEAD\n\nscope: src/thing.ts\nrows: none — harness\nstatus: needs-triage\ncriteria:\n  - the check was red at HEAD\n";
 
 const REJECTION: &str = "the check was red at HEAD";
 
 const NOTED_REJECTION: &str =
     "the fence scan reads one language only and nothing in the queue says so";
 
-const NOTED_RESTATED: &str = "\n## [T-009] the fence scan reads one language only\n\nscope: src/thing.ts\nrows: none — harness\nstatus: proposed\ncriteria:\n  - the fence scan reads one language only and nothing in the queue says so\n";
+const NOTED_RESTATED: &str = "\n## [T-009] the fence scan reads one language only\n\nscope: src/thing.ts\nrows: none — harness\nstatus: needs-triage\ncriteria:\n  - the fence scan reads one language only and nothing in the queue says so\n";
 
 const ATTENDED_TASKS: &str = "\
 ## [T-001] do the thing
 
 scope: src/thing.ts
 rows: none — harness
-status: ready
+status: ready-for-agent
 criteria:
   - it happens
 
@@ -2206,8 +2173,7 @@ criteria:
 
 scope: src/other.ts
 rows: none — harness
-status: ready
-attended: true
+status: ready-for-human
 criteria:
   - it happens
 ";
@@ -2221,7 +2187,7 @@ fn rejecting_verifier(r: &Repo) -> String {
         r,
         "src/fakeverify.sh",
         &format!(
-            "{bin} tasks set-status T-001 ready '{REJECTION}'\n\
+            "{bin} tasks set-status T-001 ready-for-agent '{REJECTION}'\n\
              {filing}\
              {QUIET}",
             bin = env!("CARGO_BIN_EXE_enallagi"),
@@ -2235,48 +2201,28 @@ fn verifier_rejecting_in_notes(r: &Repo) -> String {
     script(
         r,
         "src/fakeverify.sh",
-        &if files_layout() {
-            format!(
-                "sed -i.bak 's/^\\*\\*Status:\\*\\* review$/**Status:** ready-for-agent/' {t}\n\
-                 rm -f {t}.bak\n\
-                 printf '\\n## Comments\\n\\nVerifier: REJECTED on criterion 1. {NOTED_REJECTION}. Re-run it.\\n' >>{t}\n\
-                 {filing}\
-                 {QUIET}",
-                t = ticket(r, "T-001", "do the thing"),
-                filing = filing(r),
-            )
-        } else {
-            format!(
-                "sed -i.bak 's/^status: review$/status: ready/' TASKS.md\n\
-                 rm -f TASKS.md.bak\n\
-                 printf 'notes: Verifier: REJECTED on criterion 1. {NOTED_REJECTION}. Re-run it.\\n' >>TASKS.md\n\
-                 {filing}\
-                 {QUIET}",
-                filing = filing(r),
-            )
-        },
+        &format!(
+            "sed -i.bak 's/^\\*\\*Status:\\*\\* review$/**Status:** ready-for-agent/' {t}\n\
+             rm -f {t}.bak\n\
+             printf '\\n## Comments\\n\\nVerifier: REJECTED on criterion 1. {NOTED_REJECTION}. Re-run it.\\n' >>{t}\n\
+             {filing}\
+             {QUIET}",
+            t = ticket(r, "T-001", "do the thing"),
+            filing = filing(r),
+        ),
     )
 }
 
-// files what `draining_with` wrote to src/filed.md, a block or its ticket file; empty files nothing
+// files what `draining_with` wrote to src/filed.md as its ticket file; empty files nothing
 fn filing(r: &Repo) -> String {
-    let to = match files_layout() {
-        true => ticket(r, "T-009", "filed"),
-        false => "TASKS.md".to_string(),
-    };
-    let op = if files_layout() { ">" } else { ">>" };
-    format!("if [ -s src/filed.md ]; then cat src/filed.md {op}{to}; fi\n")
+    let to = ticket(r, "T-009", "filed");
+    format!("if [ -s src/filed.md ]; then cat src/filed.md >{to}; fi\n")
 }
 
 fn write_filed(r: &Repo, filed: &str) {
-    let filed = match files_layout() && !filed.is_empty() {
-        true => {
-            enallagi::tracker::convert(filed)
-                .expect("convert")
-                .remove(0)
-                .1
-        }
-        false => filed.to_string(),
+    let filed = match enallagi::block::parse(filed).expect("parse").first() {
+        Some(b) => enallagi::tracker::ticket_text(b),
+        None => String::new(),
     };
     r.write("src/filed.md", &filed);
 }
@@ -2287,7 +2233,7 @@ fn adjudicator(r: &Repo, body: &str) -> String {
 
 fn promotes(id: &str) -> String {
     format!(
-        "{bin} tasks set-status {id} ready 'promoted'\n",
+        "{bin} tasks set-status {id} ready-for-agent 'promoted'\n",
         bin = env!("CARGO_BIN_EXE_enallagi"),
     )
 }
@@ -2628,10 +2574,11 @@ fn a_promotion_repeating_a_rejection_is_refused() {
 }
 
 #[test]
-fn no_scout_still_reaches_the_adjudicator() {
+fn no_scout_adjudicates() {
     let r = repo("", "");
     draining(&r, FILED, &promotes("T-009"));
-    let toml = std::fs::read_to_string(r.root.join("enallagi.toml")).expect("enallagi.toml");
+    let toml =
+        std::fs::read_to_string(r.root.join(".enallagi/enallagi.toml")).expect("enallagi.toml");
     let toml = toml
         .replace(
             "[[pipeline]]\nname = \"discover\"\nwhen = \"!queue.takeable\"\nstages = [\"scout\", \"adjudicate\"]\nend_after_dry_rounds = 2\n",
@@ -2639,7 +2586,7 @@ fn no_scout_still_reaches_the_adjudicator() {
         )
         .replace("[[stage]]\nname = \"scout\"\nrole = \"scout\"\nturns = 5\n", "");
     assert!(!toml.contains("scout"), "{toml}");
-    r.write("enallagi.toml", &toml);
+    r.write(".enallagi/enallagi.toml", &toml);
     r.commit_all("no scout");
 
     let (digest, events) = go(&r, &opts(1));
@@ -2693,9 +2640,9 @@ fn the_dry_plan_names_adjudicate_after_verify() {
 }
 
 #[test]
-fn the_shipped_task_pipeline_adjudicates() {
+fn task_pipeline_adjudicates() {
     let r = Repo::new();
-    r.write("enallagi.toml", "[check]\ncommand = \"true\"\n");
+    r.write(".enallagi/enallagi.toml", "[check]\ncommand = \"true\"\n");
     let cfg = enallagi::config::load(&r.root).expect("load");
     let task = cfg
         .pipeline
@@ -2706,9 +2653,9 @@ fn the_shipped_task_pipeline_adjudicates() {
 }
 
 #[test]
-fn the_shipped_triage_runs_before_discover() {
+fn triage_before_discover() {
     let r = Repo::new();
-    r.write("enallagi.toml", "[check]\ncommand = \"true\"\n");
+    r.write(".enallagi/enallagi.toml", "[check]\ncommand = \"true\"\n");
     let cfg = enallagi::config::load(&r.root).expect("load");
     let triage = cfg
         .pipeline
@@ -2755,7 +2702,7 @@ fn an_attended_block_waits_for_a_scout_round() {
 }
 
 #[test]
-fn the_adjudicator_prompt_names_the_filed_ids() {
+fn adjudicator_names_filed_ids() {
     let r = repo("", "");
     draining(&r, FILED, "printf '%s' \"$1\" >adjudicate-prompt\n");
 
@@ -2769,7 +2716,7 @@ const REJECTED_TASK: &str = "\
 
 scope: src/thing.ts, implement-prompt
 rows: none — harness
-status: ready
+status: ready-for-agent
 criteria:
   - it happens
 notes: REJECTED: the red deleted the whole call site, so it covered no branch.
@@ -2878,7 +2825,7 @@ fn a_promotion_repeating_a_noted_verdict_is_refused() {
 }
 
 fn standing(n: u32) -> String {
-    format!("\n## [T-{n}] a standing proposal\n\nscope: src/thing.ts\nrows: none — harness\nstatus: proposed\ncriteria:\n  - it happens\n")
+    format!("\n## [T-{n}] a standing proposal\n\nscope: src/thing.ts\nrows: none — harness\nstatus: needs-triage\ncriteria:\n  - it happens\n")
 }
 
 #[test]
@@ -2984,7 +2931,7 @@ fn named(pipelines: &[&str], max_iter: u32) -> RunOpts {
     }
 }
 
-// no TASKS.md and a scout stub: `!queue.takeable` holds and discover is the round's pipeline
+// no queue and a scout stub: `!queue.takeable` holds and discover is the round's pipeline
 fn empty_queue_with_scout() -> Repo {
     let r = repo("", "");
     let scout = script(&r, "src/fakescout.sh", QUIET);
@@ -3666,7 +3613,7 @@ const TAUTOLOGY_TASK: &str = "\
 
 scope: src/thing.rs
 rows: none — harness
-status: ready
+status: ready-for-agent
 criteria:
   - it happens
 ";
@@ -3681,7 +3628,7 @@ fn diff_reading_verifier(r: &Repo) -> String {
              specs=$(grep 'Tests weakened' \"$role\" | grep -o 'git diff \\$BASE -- [^`]*' | sed 's/^git diff \\$BASE -- //')\n\
              base=$(git rev-list --max-parents=0 HEAD)\n\
              if [ -n \"$specs\" ] && eval \"git diff $base -- $specs\" | grep -q '^+.*assert!(true)'; then\n\
-             {bin} tasks set-status T-001 ready 'REJECTED: assert!(true) replaced an assertion'\n\
+             {bin} tasks set-status T-001 ready-for-agent 'REJECTED: assert!(true) replaced an assertion'\n\
              else\n\
              {bin} tasks set-status T-001 done 'stub verified'\n\
              fi\n\
@@ -3692,7 +3639,7 @@ fn diff_reading_verifier(r: &Repo) -> String {
 }
 
 #[test]
-fn a_tautologised_test_does_not_reach_done() {
+fn tautologised_test_not_done() {
     let r = repo("", "");
     let implement = script(
         &r,
@@ -3727,7 +3674,7 @@ fn a_tautologised_test_does_not_reach_done() {
     assert!(thing.contains("assert!(true);"), "{thing}");
     let t = enallagi::tracker::Tracker::open(&r.root, ".enallagi");
     let block = t.get("T-001").expect("the queue").expect("T-001");
-    let tasks = enallagi::queue::block_text(&block);
+    let tasks = enallagi::block::block_text(&block);
     assert!(!tasks.contains("status: done"), "{tasks}");
     assert!(tasks.contains("REJECTED: assert!(true)"), "{tasks}");
     let role = std::fs::read_to_string(r.root.join(".enallagi/run/roles/verifier.md"))
@@ -3842,7 +3789,7 @@ const THREADED_TASK: &str = "\
 
 scope: src/thing.ts
 rows: none — harness
-status: ready
+status: ready-for-agent
 criteria:
   - it happens
 notes: https://github.com/owner/repo/pull/13#discussion_r1000000007
@@ -4117,7 +4064,7 @@ fn driven_repo(tasks: &str) -> Repo {
     script(&r, "src/fakeagent.sh", QUIET);
     installed(&r);
     write_toml_at(&r, ".enallagi/enallagi.toml", &base_toml(""));
-    r.write(".enallagi/TASKS.md", tasks);
+    queue(&r, tasks);
     installed(&r);
     r.commit_all("a fixture the binary drives");
     r
@@ -4170,19 +4117,19 @@ fn an_unmerged_pull_branch_is_still_asked_about() {
 }
 
 #[test]
-fn an_iteration_queues_an_open_review_comment() {
+fn iteration_queues_review() {
     let r = driven_repo(DONE_TASK);
     pull_branch(&r);
     let path = gh_recording(&r, OPEN_PULL, PLAIN_REVIEW);
     let out = run_with_path(&r, &path);
 
-    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
+    let tasks = tasks_text(&r);
     assert!(
         tasks.contains("parse drops the timezone here"),
         "{tasks}\n{out}"
     );
     assert!(tasks.contains("#discussion_r1000000003"), "{tasks}");
-    assert!(tasks.contains("status: proposed"), "{tasks}");
+    assert!(tasks.contains("status: needs-triage"), "{tasks}");
 
     let log = std::fs::read_to_string(r.root.join("gh.log")).expect("gh ran");
     let calls: Vec<&str> = log.lines().collect();
@@ -4283,10 +4230,10 @@ fn a_killed_revision_of_a_rule_is_not_promoted() {
 }
 
 #[test]
-fn a_learning_past_its_rounds_expires() {
+fn learning_expires() {
     let r = deciding_learning(&decisions("", LEARNING), "\n[queue]\nproposed_rounds = 1\n");
     let archived = format!(
-        "{}\n## Expired findings\n\n## [T-009] expired earlier\nstatus: proposed\n",
+        "{}\n## Expired findings\n\n## [T-009] expired earlier\nstatus: needs-triage\n",
         decisions("", LEARNING)
     );
     r.write(&instance("DECISIONS.md"), &archived);
@@ -4424,9 +4371,9 @@ fn a_stop_skips_the_audit() {
 }
 
 #[test]
-fn claims_runs_directly_after_verdict() {
+fn claims_after_verdict() {
     let repo = Repo::new();
-    repo.write("enallagi.toml", "[check]\ncommand = \"true\"\n");
+    repo.write(".enallagi/enallagi.toml", "[check]\ncommand = \"true\"\n");
     let cfg = enallagi::config::load(&repo.root).expect("load");
     let verify = cfg
         .stage

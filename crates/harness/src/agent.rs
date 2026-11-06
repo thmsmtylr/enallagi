@@ -602,7 +602,6 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
 
     use std::os::unix::process::CommandExt;
     let mut command = Command::new(program);
-    crate::config::drop_legacy_env(&mut command);
     // a lane commits as the repository's configured identity; left to itself it invents one from
     // whatever the agent's own session knows, and that identity lands in the operator's history
     for (var, key) in [

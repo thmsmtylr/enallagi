@@ -1,10 +1,10 @@
 //! audit: review findings, frictions and rejections the repository already holds, handed to the `auditor` role, which names each class that recurs. The binary writes a learning only when every citation it carries resolves.
 
+use crate::block::{self, QueueError};
 use crate::config::{self, Config};
 use crate::events::{Kind, Writer};
 use crate::git;
 use crate::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
-use crate::queue::{self, QueueError};
 use crate::tracker::Tracker;
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
@@ -166,7 +166,7 @@ fn frictions(root: &Path, cfg: &Config, rel: &str) -> Result<Vec<Signal>, AuditE
 }
 
 // a block `enallagi review` queued carries its comment's permalink; `rel` names the file each block is in
-fn reviewed(blocks: Vec<queue::Block>, rel: impl Fn(&str) -> String) -> Vec<Signal> {
+fn reviewed(blocks: Vec<block::Block>, rel: impl Fn(&str) -> String) -> Vec<Signal> {
     let permalink = Regex::new(r"/pull/\d+#(discussion_r|pullrequestreview)").expect("pattern");
     blocks
         .into_iter()
@@ -190,7 +190,7 @@ fn rejections(text: &str, rel: &str) -> Result<Vec<Signal>, AuditError> {
             text,
         })
         .collect();
-    for block in queue::parse(text)? {
+    for block in block::parse(text)? {
         out.extend(
             block
                 .body
@@ -984,7 +984,7 @@ pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, Aud
             .to_string()
     };
     signal.extend(reviewed(t.blocks()?, rel));
-    signal.extend(reviewed(queue::parse(&decisions)?, |_| {
+    signal.extend(reviewed(block::parse(&decisions)?, |_| {
         decisions_rel.clone()
     }));
     signal.extend(rejections(&decisions, &decisions_rel)?);

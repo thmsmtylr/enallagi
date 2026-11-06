@@ -2,7 +2,7 @@
 
 use crate::probes::{contribution_policy, Finding};
 use crate::tracker::Tracker;
-use crate::{config, gates, git, queue};
+use crate::{block, config, gates, git};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -53,7 +53,7 @@ pub enum PrError {
 struct Task {
     id: String,
     title: String,
-    block: queue::Block,
+    block: block::Block,
 }
 
 pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrError> {
@@ -66,13 +66,13 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     let mut refusals = Vec::new();
     let mut tasks = Vec::new();
     for id in ids {
-        // a legacy stub carries the live status, the archive the full block
+        // a ticket archived before the migration is a stub carrying the live status; DECISIONS.md holds the full block
         let found = queued.iter().find(|b| b.id == *id);
         let Some(full) = archived.iter().find(|b| b.id == *id).or(found) else {
             refusals.push(format!("{id} is in neither the queue nor DECISIONS.md"));
             continue;
         };
-        let status = queue::field(found.unwrap_or(full), "status").unwrap_or_default();
+        let status = block::field(found.unwrap_or(full), "status").unwrap_or_default();
         if status != "done" {
             refusals.push(format!("{id} is {status:?}, not done"));
             continue;
@@ -122,7 +122,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     let mut stacked: Option<usize> = None;
     let mut on: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     for task in &tasks {
-        for blocker in queue::blockers(&task.block) {
+        for blocker in block::blockers(&task.block) {
             if ids.contains(&blocker)
                 || commits(root, &range, std::slice::from_ref(&blocker))?.is_empty()
             {
@@ -435,9 +435,9 @@ pub fn landed(root: &Path) -> Result<Vec<Landed>, PrError> {
     let unstubbed = archived
         .iter()
         .filter(|a| !queued.iter().any(|q| q.id == a.id));
-    let done: Vec<&queue::Block> = unstubbed
+    let done: Vec<&block::Block> = unstubbed
         .chain(&queued)
-        .filter(|b| queue::field(b, "status").as_deref() == Some("done"))
+        .filter(|b| block::field(b, "status").as_deref() == Some("done"))
         .collect();
     let ids: Vec<String> = done.iter().map(|b| b.id.clone()).collect();
     let picked = commits(root, "HEAD", &ids)?;
@@ -521,14 +521,14 @@ fn policy_section(policy: &[Finding], opts: &PrOpts, refused: bool) -> String {
     out
 }
 
-fn tickets(root: &Path, dir: &str) -> Result<Vec<queue::Block>, PrError> {
+fn tickets(root: &Path, dir: &str) -> Result<Vec<block::Block>, PrError> {
     Tracker::open(root, dir)
         .blocks()
         .map_err(|e| PrError::Refused(vec![e.to_string()]))
 }
 
-fn parse(text: &str) -> Result<Vec<queue::Block>, PrError> {
-    queue::parse(text).map_err(|e| PrError::Refused(vec![e.to_string()]))
+fn parse(text: &str) -> Result<Vec<block::Block>, PrError> {
+    block::parse(text).map_err(|e| PrError::Refused(vec![e.to_string()]))
 }
 
 fn io(path: impl std::fmt::Display) -> impl FnOnce(std::io::Error) -> PrError {
@@ -661,7 +661,7 @@ fn describe(
         git::git(&state, &["log", "--reverse", "--format=%h %s"]).unwrap_or_default()
     };
     for task in tasks {
-        let body = queue::block_text(&task.block);
+        let body = block::block_text(&task.block);
         let criteria: Vec<&str> = body
             .lines()
             .skip_while(|l| !l.starts_with("criteria:"))

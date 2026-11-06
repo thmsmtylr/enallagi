@@ -162,7 +162,7 @@ fn parses_tickets(text: &str) -> bool {
 
 #[test]
 fn the_launcher_parses_no_task_blocks_itself() {
-    // only the tracker and queue.rs read the ticket format; a second parser here would drift from them
+    // only the tracker and block.rs read the ticket format; a second parser here would drift from them
     for sample in [
         "## [T-001] a task",
         r#"re(r"^## \[(T-\d+)\]")"#,
@@ -180,7 +180,7 @@ fn the_launcher_parses_no_task_blocks_itself() {
         .collect();
     assert_eq!(
         holders,
-        vec!["queue.rs".to_string(), "tracker.rs".to_string()]
+        vec!["block.rs".to_string(), "tracker.rs".to_string()]
     );
 }
 
@@ -853,21 +853,10 @@ fn main_tracks_no_instance_file() {
     }
     // seeded by init, but its source is in the tree
     instance.remove(".enallagi/evals/README.md");
-    // a root-layout install writes these names at the root, and main tracks none of them either
-    instance.extend(
-        [
-            "TASKS.md",
-            "PROGRESS.md",
-            "PROGRESS.archive.md",
-            "DECISIONS.md",
-            "LEARNINGS.md",
-            "SPEC.md",
-            ".check-baseline",
-            "enallagi.toml",
-        ]
-        .map(String::from),
+    assert!(
+        instance.iter().any(|p| p.starts_with(".enallagi/specs/")),
+        "{instance:?}"
     );
-    assert!(instance.contains(".enallagi/TASKS.md"), "{instance:?}");
 
     let out = Command::new("git")
         .args(["ls-files"])

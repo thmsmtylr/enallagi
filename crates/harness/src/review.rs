@@ -1,7 +1,7 @@
 //! review: a pull request's open review comments, read with gh, become proposed blocks. No model writes them.
 
+use crate::block::{self, QueueError};
 use crate::issue;
-use crate::queue::{self, QueueError};
 use std::path::Path;
 use std::process::Command;
 
@@ -351,7 +351,7 @@ pub fn render(comment: &Anchored, id: &str) -> String {
 }
 
 /// The thread id a block carries from the moment `append` wrote it, or none for a block with no origin thread.
-pub fn thread_of(block: &queue::Block) -> Option<String> {
+pub fn thread_of(block: &block::Block) -> Option<String> {
     block
         .body
         .iter()
@@ -400,12 +400,12 @@ pub fn settle(root: &Path, thread: &str, sha: &str) -> Result<(), ReviewError> {
 
 /// The blocks the anchored comments become, given the queue's tickets; the caller appends them through the tracker.
 pub fn append(
-    blocks: &[queue::Block],
+    blocks: &[block::Block],
     decisions: &str,
     found: &Found,
 ) -> Result<Appended, ReviewError> {
     let expired = issue::expired_at(decisions);
-    let archived = queue::parse(decisions)?;
+    let archived = block::parse(decisions)?;
     let mut blocks = blocks.to_vec();
     let mut out = Appended::default();
     for comment in &found.anchored {
@@ -415,8 +415,8 @@ pub fn append(
             out.carried.push((task, comment.url.clone()));
             continue;
         }
-        let block = render(comment, &queue::next_id(&blocks, &archived));
-        blocks.extend(queue::parse(&block)?);
+        let block = render(comment, &block::next_id(&blocks, &archived));
+        blocks.extend(block::parse(&block)?);
         out.blocks.push(block);
     }
     Ok(out)
@@ -472,38 +472,38 @@ mod tests {
     }
 
     #[test]
-    fn a_body_fence_leaves_the_queue_parseable() {
-        let body = format!("```\n{}", queue::heading("T-9", "x"));
+    fn body_fence_parseable() {
+        let body = format!("```\n{}", block::heading("T-9", "x"));
         let found = anchored("src/a.rs", &body, "https://x/pull/1#discussion_r1");
         let out = append(&[], "", &found).unwrap();
-        let blocks = queue::parse(&out.blocks[0]).unwrap();
+        let blocks = block::parse(&out.blocks[0]).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].id, "T-001");
     }
 
     #[test]
-    fn a_block_carries_its_thread_from_append() {
+    fn block_carries_thread() {
         let json = include_str!("../tests/fixtures/reviews/thread.json");
         let found = collect(serde_json::from_str(json).expect("parse"));
         let out = append(&[], "", &found).unwrap();
-        let blocks = queue::parse(&out.blocks[0]).unwrap();
+        let blocks = block::parse(&out.blocks[0]).unwrap();
         assert_eq!(thread_of(&blocks[0]).as_deref(), Some("PRRT_kwDOA1"));
         let bare = anchored("src/a.rs", "x", "https://x/pull/1#discussion_r1");
         let out = append(&[], "", &bare).unwrap();
-        assert_eq!(thread_of(&queue::parse(&out.blocks[0]).unwrap()[0]), None);
+        assert_eq!(thread_of(&block::parse(&out.blocks[0]).unwrap()[0]), None);
     }
 
     #[test]
-    fn a_comment_already_queued_is_carried() {
+    fn queued_comment_carried() {
         let found = anchored("src/a.rs", "x", "https://x/pull/1#discussion_r12");
         let queued = format!(
             "{}\nnotes: https://x/pull/1#discussion_r123\n",
-            queue::heading("T-001", "a")
+            block::heading("T-001", "a")
         );
-        let mut queued = queue::parse(&queued).unwrap();
+        let mut queued = block::parse(&queued).unwrap();
         let out = append(&queued, "", &found).unwrap();
         assert_eq!(out.blocks.len(), 1, "a longer id read as the same comment");
-        queued.extend(queue::parse(&out.blocks[0]).unwrap());
+        queued.extend(block::parse(&out.blocks[0]).unwrap());
         let out = append(&queued, "", &found).unwrap();
         assert!(out.blocks.is_empty());
         assert_eq!(out.carried[0].0, "T-002");

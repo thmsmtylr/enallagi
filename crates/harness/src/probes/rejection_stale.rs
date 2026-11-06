@@ -1,8 +1,8 @@
-//! A rejection nothing has answered: the last verdict in a block's `notes:` is REJECTED and the status is not `ready`. A block parked at `needs-spec` is reported too.
+//! A rejection nothing has answered: the last verdict in a block's `notes:` is REJECTED and the status is not ready. A block parked at `needs-info` is reported too.
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
-use crate::queue;
+use crate::block;
 
 // every verdict and answer is written into notes: in turn, so only the last one is still open
 const VERDICTS: [&str; 5] = ["REJECTED", "VERIFIED", "VERIFIER", "IMPLEMENTER", "Passed"];
@@ -63,10 +63,10 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let mut found = Vec::new();
     for (tasks, block) in common::tickets(ctx)? {
-        let Some((line, status)) = queue::field_at(&block, "status") else {
+        let Some((line, status)) = block::field_at(&block, "status") else {
             continue;
         };
-        let notes_at = queue::field_at(&block, "notes").map(|(at, _)| at);
+        let notes_at = block::field_at(&block, "notes").map(|(at, _)| at);
         let notes: String = block
             .body
             .iter()
@@ -74,8 +74,8 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             .map(|(_, text)| text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        // the whole value, in either name set: `ready -- a reason` was never an answer
-        let ready = ["ready", "ready-for-agent", "ready-for-human"].contains(&status.as_str());
+        // the whole value: `ready-for-agent -- a reason` was never an answer
+        let ready = crate::tracker::READY.contains(&status.as_str());
         if latest_verdict(&notes) == Some("REJECTED") && !ready {
             found.push(common::finding(
                 &tasks,
@@ -86,7 +86,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
                 ),
             ));
         }
-        if status == "needs-spec" || status == "needs-info" {
+        if status == "needs-info" {
             found.push(common::finding(
                 &tasks,
                 line,

@@ -260,8 +260,8 @@ pub fn state_rev(root: &Path, harness_dir: &str, rev: &str) -> Result<String, St
 
 // the product sha to diff a task against, read off the subject of the commit that queued it
 pub fn task_base(root: &Path, harness_dir: &str, task: &str) -> Result<String, String> {
-    let tasks = crate::config::instance_rel(root, harness_dir, "TASKS.md");
-    let (repo, _, nested) = locate(root, harness_dir, &tasks);
+    let specs = crate::config::instance_rel(root, harness_dir, crate::tracker::SPECS);
+    let (repo, _, nested) = locate(root, harness_dir, &specs);
     let Some(commit) = crate::tracker::queued_commit(root, harness_dir, task)? else {
         return Ok(String::new());
     };
@@ -388,11 +388,11 @@ mod tests {
     }
 
     #[test]
-    fn a_block_in_no_commit_has_no_queued_commit() {
+    fn unqueued_block_has_no_commit() {
         let r = Repo::new();
-        r.write(
-            "TASKS.md",
-            "## [T-001] first\nscope: src/a.ts\nstatus: ready\n",
+        r.queue(
+            ".enallagi",
+            "## [T-001] first\nscope: src/a.ts\nstatus: ready-for-agent\n",
         );
         r.commit_all("queue: T-001");
         assert!(crate::tracker::queued_commit(&r.root, ".enallagi", "T-001")
@@ -405,13 +405,12 @@ mod tests {
         assert_eq!(task_base(&r.root, ".enallagi", "T-002"), Ok(String::new()));
     }
 
-    // the archive moves a done block out of TASKS.md, so one heading can be added, removed and added again
     #[test]
-    fn the_queued_commit_is_the_first_to_add_it() {
+    fn queued_commit_is_the_first_add() {
         let r = Repo::new();
         r.write(".git/info/exclude", ".enallagi/\n");
-        let block = "## [T-001] first\nscope: src/a.ts\nstatus: ready\n";
-        r.write(".enallagi/TASKS.md", block);
+        let block = "## [T-001] first\nscope: src/a.ts\nstatus: ready-for-agent\n";
+        r.queue(".enallagi", block);
         let state = r.root.join(".enallagi");
         for args in [
             &["init", "-q"][..],
@@ -430,9 +429,9 @@ mod tests {
             git(&state, &["rev-parse", "HEAD"]).expect("head")
         };
         let queued = commit("queue at 0000000");
-        r.write(".enallagi/TASKS.md", "# TASKS\n");
+        r.queue(".enallagi", "");
         commit("archive at 1111111");
-        r.write(".enallagi/TASKS.md", block);
+        r.queue(".enallagi", block);
         let readded = commit("queue at 2222222");
 
         assert_ne!(queued, readded);
@@ -443,10 +442,13 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_path_still_commits_the_others() {
+    fn missing_path_commits_others() {
         let r = Repo::new();
-        r.write("TASKS.md", "queue\n");
-        assert!(commit_paths(&r.root, &["TASKS.md", "DECISIONS.md"], "queue").unwrap());
-        assert_eq!(diff_names(&r.root, "HEAD~1"), vec!["TASKS.md".to_string()]);
+        r.write("PROGRESS.md", "queue\n");
+        assert!(commit_paths(&r.root, &["PROGRESS.md", "DECISIONS.md"], "queue").unwrap());
+        assert_eq!(
+            diff_names(&r.root, "HEAD~1"),
+            vec!["PROGRESS.md".to_string()]
+        );
     }
 }

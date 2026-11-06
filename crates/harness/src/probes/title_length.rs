@@ -2,7 +2,7 @@
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
-use crate::{queue, tracker};
+use crate::{block, tracker};
 
 pub const CAP: usize = 72;
 
@@ -17,7 +17,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     for (tasks, b) in common::tickets(ctx)? {
         // an imported issue keeps its author's title until the adjudicator writes the task's at promotion
         if tracker::state(&b).as_deref() == Some("needs-triage")
-            && queue::field(&b, "probe").as_deref() == Some("issue")
+            && block::field(&b, "probe").as_deref() == Some("issue")
         {
             continue;
         }

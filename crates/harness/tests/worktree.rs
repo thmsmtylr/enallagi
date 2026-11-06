@@ -89,7 +89,6 @@ fn lane_repo(tools: &Path) -> Repo {
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
     std::fs::write(r.root.join(".enallagi/enallagi.toml"), stub_config(tools)).expect("config");
-    std::fs::write(r.root.join(".enallagi/TASKS.md"), "# TASKS\n").expect("queue");
     // the rendered files name the configured check, so the install is rebuilt on the stub one or
     // the lane's run refuses before its first stage
     let (code, out) = harness(&r.root, &["init"]);

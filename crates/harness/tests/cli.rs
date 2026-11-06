@@ -359,25 +359,6 @@ fn events_in(dir: &std::path::Path) -> std::process::Output {
 }
 
 #[test]
-fn a_legacy_directory_is_read_with_a_warning() {
-    let dir = tempfile::tempdir().unwrap();
-    let line = r#"{"ts":"2026-09-07T00:00:00Z","run":"r","iter":0,"seq":1,"kind":"halt","halt":"a","reason":"legacy"}"#;
-    std::fs::create_dir_all(dir.path().join(".harness")).unwrap();
-    std::fs::write(
-        dir.path().join(".harness/events.jsonl"),
-        format!("{line}\n"),
-    )
-    .unwrap();
-
-    let out = events_in(dir.path());
-    assert!(out.status.success(), "{out:?}");
-    assert_eq!(String::from_utf8_lossy(&out.stdout).trim_end(), line);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(stderr.lines().count(), 1, "{stderr}");
-    assert!(stderr.contains("enallagi init --move"), "{stderr}");
-}
-
-#[test]
 fn the_new_directory_wins_without_a_warning() {
     let dir = tempfile::tempdir().unwrap();
     let line = r#"{"ts":"2026-09-07T00:00:00Z","run":"r","iter":0,"seq":1,"kind":"halt","halt":"a","reason":"current"}"#;
@@ -397,7 +378,7 @@ fn the_new_directory_wins_without_a_warning() {
 }
 
 #[test]
-fn skills_sync_works_under_a_custom_preset() {
+fn skills_sync_custom_preset() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let mut toml = String::from(
@@ -419,7 +400,8 @@ fn skills_sync_works_under_a_custom_preset() {
         std::fs::create_dir_all(root.join(format!("vendor/{id}"))).unwrap();
         std::fs::write(root.join(format!("vendor/{id}/SKILL.md")), "body\n").unwrap();
     }
-    std::fs::write(root.join("enallagi.toml"), toml).unwrap();
+    std::fs::create_dir_all(root.join(".enallagi")).unwrap();
+    std::fs::write(root.join(".enallagi/enallagi.toml"), toml).unwrap();
 
     let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["skills", "sync"])
@@ -451,7 +433,8 @@ fn cost_in(root: &std::path::Path) -> String {
         std::fs::create_dir_all(root.join(format!("vendor/{id}"))).unwrap();
         std::fs::write(root.join(format!("vendor/{id}/SKILL.md")), "body\n").unwrap();
     }
-    std::fs::write(root.join("enallagi.toml"), toml).unwrap();
+    std::fs::create_dir_all(root.join(".enallagi")).unwrap();
+    std::fs::write(root.join(".enallagi/enallagi.toml"), toml).unwrap();
     let harness = |args: &[&str]| {
         enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
             .args(args)
@@ -556,7 +539,7 @@ fn a_report_flag_refuses_a_flag_it_would_ignore() {
 }
 
 #[test]
-fn skills_check_refuses_what_sync_then_locks() {
+fn skills_check_after_sync() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     // the shipped roles name every one of these, and `skills check` validates the config first
@@ -578,7 +561,8 @@ fn skills_check_refuses_what_sync_then_locks() {
         std::fs::create_dir_all(root.join(format!("vendor/{id}"))).unwrap();
         std::fs::write(root.join(format!("vendor/{id}/SKILL.md")), "body\n").unwrap();
     }
-    std::fs::write(root.join("enallagi.toml"), toml).unwrap();
+    std::fs::create_dir_all(root.join(".enallagi")).unwrap();
+    std::fs::write(root.join(".enallagi/enallagi.toml"), toml).unwrap();
 
     let harness = |args: &[&str]| {
         enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
@@ -877,11 +861,11 @@ fn the_shipped_documents_describe_and_do_not_argue() {
 }
 
 #[test]
-fn tasks_ready_finds_the_queue_config_refused() {
+fn tasks_ready_bad_config() {
     let r = enallagi::fixture::Repo::new();
     r.queue(
         ".enallagi",
-        "# TASKS\n\n## [T-001] open\nscope: src/a.ts\nstatus: ready\n",
+        "## [T-001] open\nscope: src/a.ts\nstatus: ready-for-agent\n",
     );
     r.write(".enallagi/enallagi.toml", "[check]\ncomand = \"x\"\n");
 
@@ -898,11 +882,11 @@ fn tasks_ready_finds_the_queue_config_refused() {
 }
 
 #[test]
-fn tasks_set_status_and_unblock_use_the_tracker() {
+fn tasks_set_status() {
     let r = enallagi::fixture::Repo::new();
     r.queue(
         ".enallagi",
-        "# TASKS\n\n## [T-001] first\nstatus: review\n\n## [T-002] waits\nblockedBy: T-001\nstatus: blocked\n\n## [T-003] a person's\nstatus: ready\nattended: true\n",
+        "## [T-001] first\nstatus: review\n\n## [T-002] waits\nblockedBy: T-001\nstatus: ready-for-agent\n\n## [T-003] a person's\nstatus: ready-for-human\n",
     );
     let tasks = |args: &[&str]| {
         enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
@@ -921,9 +905,8 @@ fn tasks_set_status_and_unblock_use_the_tracker() {
     assert_eq!(stdout(&["ready"]), "");
     let out = tasks(&["set-status", "T-001", "done", "verified"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    assert_eq!(tasks(&["unblock"]).status.code(), Some(0));
     assert_eq!(stdout(&["ready"]), "T-002");
-    assert_eq!(stdout(&["ids-at", "ready"]), "T-002\nT-003");
+    assert_eq!(stdout(&["ids-at", "ready-for-human"]), "T-003");
     assert_eq!(stdout(&["ids-at", "done"]), "T-001");
 
     let out = tasks(&["set-status", "T-009", "done", ""]);
@@ -943,27 +926,27 @@ fn tasks_set_status_and_unblock_use_the_tracker() {
     let gate = t
         .get("T-001")
         .unwrap()
-        .and_then(|b| enallagi::queue::field(&b, "gate"));
+        .and_then(|b| enallagi::block::field(&b, "gate"));
     assert_eq!(gate.as_deref(), Some("verified"));
 }
 
 #[test]
-fn a_task_block_carries_model_and_effort() {
+fn block_model_effort() {
     let r = enallagi::fixture::Repo::new();
     r.queue(
         ".enallagi",
-        "# TASKS\n\n\
+        "\
          ## [T-001] picked per task\n\
          scope: src/a.ts\n\
          blockedBy: none\n\
          model: claude-haiku-4-5\n\
          effort: low\n\
-         status: ready\n\
+         status: ready-for-agent\n\
          \n\
          ## [T-002] picked per role\n\
          scope: src/b.ts\n\
          blockedBy: none\n\
-         status: ready\n",
+         status: ready-for-agent\n",
     );
 
     let field = |id: &str, key: &str| {
@@ -996,228 +979,6 @@ fn a_task_block_carries_model_and_effort() {
     );
 }
 
-#[test]
-fn tasks_archive_moves_a_done_block_and_names_it() {
-    let r = enallagi::fixture::Repo::new();
-    r.write(
-        "TASKS.md",
-        "# TASKS\n\n\
-         ## [T-001] finished work\n\
-         scope: src/schema.ts\n\
-         status: done\n\
-         notes: the verifier's own words\n\
-         \n\
-         ## [T-002] still open\n\
-         scope: src/schema.ts\n\
-         status: ready\n",
-    );
-    r.write("DECISIONS.md", "# DECISIONS\n");
-    r.commit_all("seed the queue");
-
-    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
-        .args(["tasks", "archive"])
-        .current_dir(&r.root)
-        .output()
-        .expect("run enallagi tasks archive");
-    assert_eq!(out.status.code(), Some(0), "{out:?}");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(
-        stdout.lines().collect::<Vec<_>>(),
-        vec!["T-001"],
-        "{stdout}"
-    );
-
-    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    assert!(tasks.contains("archived: DECISIONS.md"), "{tasks}");
-    assert!(!tasks.contains("notes: the verifier"), "{tasks}");
-    assert!(tasks.contains("## [T-002] still open"), "{tasks}");
-    let decisions = std::fs::read_to_string(r.root.join("DECISIONS.md")).expect("DECISIONS.md");
-    assert!(
-        decisions.contains("notes: the verifier's own words"),
-        "{decisions}"
-    );
-
-    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
-        .args(["tasks", "archive"])
-        .current_dir(&r.root)
-        .output()
-        .expect("run enallagi tasks archive twice");
-    assert_eq!(out.status.code(), Some(0), "{out:?}");
-    assert_eq!(
-        String::from_utf8_lossy(&out.stdout).trim(),
-        "nothing to archive"
-    );
-}
-
-const LEGACY_QUEUE: &str = "# TASKS\n\n\
-     ## [T-001] first done\n\
-     scope: src/a.ts\n\
-     blockedBy: none\n\
-     status: done\n\
-     ran: cargo test\n\
-     exit: 0\n\
-     \n\
-     ## [T-002] second, waits on first\n\
-     scope: src/b.ts, src/c.ts\n\
-     blockedBy: T-001\n\
-     status: ready\n\
-     rows: none\n\
-     model: claude-haiku-4-5\n\
-     effort: low\n\
-     criteria:\n\
-     \x20 - `cargo test` passes\n\
-     notes: Operator, 2026-11-06. Look at b.ts.\n\
-     \n\
-     ## [T-003] needs a person\n\
-     scope: src/d.ts\n\
-     status: ready\n\
-     attended: true\n\
-     \n\
-     ## [T-004] proposed by a probe\n\
-     scope: src/e.ts\n\
-     status: proposed\n\
-     probe: title-length\n\
-     labels: probe\n\
-     \n\
-     ## [T-005] parked\n\
-     scope: src/f.ts\n\
-     status: deferred\n\
-     deferred: out of scope\n\
-     widened: src/g.ts\n\
-     \n\
-     ## [T-006] waiting on a spec\n\
-     status: needs-spec\n\
-     thread: https://example.com/1\n\
-     \n\
-     ## [T-007] under review\n\
-     status: review\n\
-     gate: verdict: a criterion is red\n";
-
-const LEGACY_SPEC: &str = "# Spec\n\n## Exit criteria\n\n| Behaviour | Test |\n|---|---|\n";
-
-// the instance as the live one is: its own repository, ignored by the product's
-fn legacy_instance() -> enallagi::fixture::Repo {
-    let r = enallagi::fixture::Repo::new();
-    let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
-    r.write(".git/info/exclude", ".enallagi/\n");
-    r.write(".enallagi/TASKS.md", LEGACY_QUEUE);
-    r.write(".enallagi/SPEC.md", LEGACY_SPEC);
-    let state = r.root.join(".enallagi");
-    git(&state, &["init", "-q"]);
-    git(&state, &["config", "user.name", "t"]);
-    git(&state, &["config", "user.email", "t@t"]);
-    git(&state, &["add", "-A"]);
-    git(&state, &["commit", "-qm", "queue"]);
-    r
-}
-
-fn migrate(root: &std::path::Path) -> std::process::Output {
-    in_harness(root, &["tasks", "migrate"])
-}
-
-fn state_log(r: &enallagi::fixture::Repo) -> Vec<String> {
-    enallagi::git::git(&r.root.join(".enallagi"), &["log", "--format=%s"])
-        .expect("git log")
-        .lines()
-        .map(String::from)
-        .collect()
-}
-
-#[test]
-fn tasks_migrate_converts_every_block() {
-    use enallagi::{queue, tracker};
-    let r = legacy_instance();
-    let out = migrate(&r.root);
-    assert_eq!(out.status.code(), Some(0), "{out:?}");
-
-    let instance = r.root.join(".enallagi");
-    let spec = instance.join("specs").join(tracker::repo_slug(&r.root));
-    assert!(!instance.join("TASKS.md").exists());
-    assert!(!instance.join("SPEC.md").exists());
-    assert_eq!(
-        std::fs::read_to_string(spec.join("spec.md")).expect("spec.md"),
-        LEGACY_SPEC
-    );
-
-    let old = queue::parse(LEGACY_QUEUE).expect("parse");
-    let new = tracker::Tracker::open(&r.root, ".enallagi")
-        .blocks()
-        .expect("read the migrated tickets");
-    assert_eq!(old.len(), new.len());
-    let fields = [
-        "scope", "rows", "model", "effort", "notes", "ran", "exit", "probe", "labels", "deferred",
-        "widened", "thread", "gate",
-    ];
-    for (o, n) in old.iter().zip(&new) {
-        assert_eq!((&o.id, &o.title), (&n.id, &n.title));
-        assert_eq!(tracker::state(o), tracker::state(n), "{}", o.id);
-        assert_eq!(queue::blockers(o), queue::blockers(n), "{}", o.id);
-        for key in fields {
-            assert_eq!(queue::field(o, key), queue::field(n, key), "{} {key}", o.id);
-        }
-    }
-    let states: Vec<Option<String>> = new.iter().map(tracker::state).collect();
-    let want = [
-        "done",
-        "ready-for-agent",
-        "ready-for-human",
-        "needs-triage",
-        "wontfix",
-        "needs-info",
-        "review",
-    ];
-    assert_eq!(states, want.map(|s| Some(s.to_string())));
-    let second = std::fs::read_to_string(spec.join("issues/T-002-second-waits-on-first.md"))
-        .expect("T-002's file");
-    assert!(
-        second.contains("**Status:** ready-for-agent\n**Blocked by:** T-001\n"),
-        "{second}"
-    );
-    assert!(
-        second.contains("## Acceptance criteria\n\n- [ ] `cargo test` passes"),
-        "{second}"
-    );
-
-    let log = state_log(&r);
-    assert_eq!(log.len(), 2, "{log:?}");
-    assert!(log[0].starts_with(tracker::MIGRATE_SUBJECT), "{log:?}");
-    assert!(enallagi::git::porcelain(&instance).is_empty());
-}
-
-#[test]
-fn tasks_migrate_is_idempotent() {
-    let r = legacy_instance();
-    assert_eq!(migrate(&r.root).status.code(), Some(0));
-    let instance = r.root.join(".enallagi");
-    let head = enallagi::git::head(&instance);
-
-    let out = migrate(&r.root);
-    assert_eq!(out.status.code(), Some(0), "{out:?}");
-    assert_eq!(enallagi::git::head(&instance), head);
-    assert!(enallagi::git::porcelain(&instance).is_empty());
-}
-
-#[test]
-fn tasks_migrate_refuses_a_dirty_tree() {
-    let r = legacy_instance();
-    let dirty = format!("{LEGACY_QUEUE}\n## [T-008] half written\n");
-    r.write(".enallagi/TASKS.md", &dirty);
-
-    let out = migrate(&r.root);
-    assert_eq!(out.status.code(), Some(1), "{out:?}");
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("dirty"),
-        "{out:?}"
-    );
-    let instance = r.root.join(".enallagi");
-    assert!(!instance.join("specs").exists());
-    assert_eq!(
-        std::fs::read_to_string(instance.join("TASKS.md")).expect("TASKS.md"),
-        dirty
-    );
-    assert_eq!(state_log(&r), vec!["queue"]);
-}
-
 fn base_of(root: &std::path::Path, task: &str) -> std::process::Output {
     enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["base", task])
@@ -1227,15 +988,15 @@ fn base_of(root: &std::path::Path, task: &str) -> std::process::Output {
 }
 
 #[test]
-fn base_prints_the_state_commits_product_sha() {
+fn base_prints_product_sha() {
     let r = enallagi::fixture::Repo::new();
     let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
     r.write(".git/info/exclude", ".enallagi/\n");
     let queued = git(&r.root, &["rev-parse", "HEAD"]);
     let state = r.root.join(".enallagi");
-    r.write(
-        ".enallagi/TASKS.md",
-        "# TASKS\n\n## [T-001] open\nscope: src/a.ts\nstatus: ready\n",
+    r.queue(
+        ".enallagi",
+        "## [T-001] open\nscope: src/a.ts\nstatus: ready-for-agent\n",
     );
     git(&state, &["init", "-q"]);
     git(&state, &["config", "user.name", "t"]);
@@ -1246,9 +1007,9 @@ fn base_prints_the_state_commits_product_sha() {
     r.write("src/a.ts", "work\n");
     r.commit_all("T-001 work");
     let worked = git(&r.root, &["rev-parse", "HEAD"]);
-    r.write(
-        ".enallagi/TASKS.md",
-        "# TASKS\n\n## [T-001] open\nscope: src/a.ts\nstatus: review\nnotes: `git log -S '## [T-001]'`\n\n## [T-002] by hand\nstatus: ready\n",
+    r.queue(
+        ".enallagi",
+        "## [T-001] open\nscope: src/a.ts\nstatus: review\n\n## [T-002] by hand\nstatus: ready-for-agent\n",
     );
     git(&state, &["add", "-A"]);
     git(
@@ -1260,44 +1021,18 @@ fn base_prints_the_state_commits_product_sha() {
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), queued);
 
-    r.write(
-        ".enallagi/TASKS.md",
-        "# TASKS\n\n## [T-001] open\nstatus: review\n\n## [T-002] by hand\nstatus: ready\n\n## [T-003] by hand\nstatus: ready\n",
+    r.queue(
+        ".enallagi",
+        "## [T-001] open\nstatus: review\n\n## [T-002] by hand\nstatus: ready-for-agent\n\n## [T-003] by hand\nstatus: ready-for-agent\n",
     );
-    git(&state, &["commit", "-qam", "queue: T-003"]);
+    git(&state, &["add", "-A"]);
+    git(&state, &["commit", "-qm", "queue: T-003"]);
     let out = base_of(&r.root, "T-003");
     assert_ne!(out.status.code(), Some(0), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("queue: T-003"),
         "{out:?}"
     );
-}
-
-#[test]
-fn base_in_the_root_layout_matches_the_pickaxe() {
-    let r = enallagi::fixture::Repo::new();
-    r.write("TASKS.md", "# TASKS\n\n## [T-001] open\nstatus: ready\n");
-    r.commit_all("queue: T-001");
-    r.write("src/a.ts", "work\n");
-    r.commit_all("T-001 work");
-
-    let pickaxe = enallagi::git::git(
-        &r.root,
-        &[
-            "log",
-            "-1",
-            "--format=%H",
-            "-S",
-            "## [T-001]",
-            "--",
-            "TASKS.md",
-        ],
-    )
-    .expect("pickaxe");
-    assert!(!pickaxe.is_empty());
-    let out = base_of(&r.root, "T-001");
-    assert_eq!(out.status.code(), Some(0), "{out:?}");
-    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), pickaxe);
 }
 
 fn in_harness(root: &std::path::Path, args: &[&str]) -> std::process::Output {
@@ -1353,7 +1088,7 @@ fn prune_defaults_says_when_nothing_dropped() {
 }
 
 #[test]
-fn gate_scope_refuses_a_grown_nested_baseline() {
+fn gate_scope_grown_baseline() {
     let r = enallagi::fixture::Repo::new();
     let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
     let out = in_harness(&r.root, &["init"]);
@@ -1381,9 +1116,8 @@ fn gate_scope_refuses_a_grown_nested_baseline() {
             &["-c", "commit.gpgsign=false", "commit", "-qm", msg],
         );
     };
-    let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
     let block = "\n## [T-900] grow\nscope: a.txt\nstatus: review\n";
-    r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
+    r.queue(".enallagi", block);
     commit_state(&format!("queue at {queued}"));
 
     r.write("a.txt", "work\n");
@@ -1392,7 +1126,7 @@ fn gate_scope_refuses_a_grown_nested_baseline() {
     let baseline = std::fs::read_to_string(state.join(".check-baseline")).unwrap_or_default();
     r.write(".enallagi/.check-baseline", &format!("{baseline}alpha\n"));
     let done = block.replace("status: review", "status: done");
-    r.write(".enallagi/TASKS.md", &format!("{tasks}{done}"));
+    r.queue(".enallagi", &done);
     commit_state(&format!("verify T-900 at {worked}"));
 
     let base = base_of(&r.root, "T-900");
@@ -1448,9 +1182,8 @@ fn vendored_demo(at_base: bool) -> (enallagi::fixture::Repo, String) {
         );
     };
     let skill = ".enallagi/adapters/claude/skills/demo/SKILL.md";
-    let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
     let block = "\n## [T-900] vendor\nscope: a.txt\nrows: none — harness\nstatus: review\n";
-    r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
+    r.queue(".enallagi", block);
     r.write(
         ".enallagi/harness.lock",
         "version = 1\n\n[[skill]]\nid = \"demo\"\nsource = \"path:vendor/demo\"\nsha256 = \"aaa\"\n",
@@ -1467,7 +1200,7 @@ fn vendored_demo(at_base: bool) -> (enallagi::fixture::Repo, String) {
     r.commit_all("T-900 work");
     let worked = git(&r.root, &["rev-parse", "HEAD"]);
     let done = block.replace("status: review", "status: done");
-    r.write(".enallagi/TASKS.md", &format!("{tasks}{done}"));
+    r.queue(".enallagi", &done);
     commit_state(&format!("verify T-900 at {worked}"));
     (r, queued)
 }
@@ -1544,19 +1277,18 @@ fn verified_install_promoted(
             &["-c", "commit.gpgsign=false", "commit", "-qm", msg],
         );
     };
-    let tasks = std::fs::read_to_string(state_dir.join("TASKS.md")).expect("TASKS.md");
     match promoted {
         Some(scope) => {
-            let block = "\n## [T-900] halt\nscope: src/thing.ts\nstatus: proposed\n";
-            r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
+            let block = "\n## [T-900] halt\nscope: src/thing.ts\nstatus: needs-triage\n";
+            r.queue(".enallagi", block);
             commit_state(&format!("queue at {queued}"));
-            let block = format!("\n## [T-900] halt\nscope: {scope}\nstatus: ready\n");
-            r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
+            let block = format!("\n## [T-900] halt\nscope: {scope}\nstatus: ready-for-agent\n");
+            r.queue(".enallagi", &block);
             commit_state(&format!("promote at {queued}"));
         }
         None => {
             let block = "\n## [T-900] halt\nscope: a.txt\nstatus: review\n";
-            r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
+            r.queue(".enallagi", block);
             commit_state(&format!("queue at {queued}"));
         }
     }
@@ -1571,7 +1303,7 @@ fn verified_install_promoted(
         r.write(f, "");
     }
     let done = format!("\n## [T-900] halt\n{verdict}");
-    r.write(".enallagi/TASKS.md", &format!("{tasks}{done}"));
+    r.queue(".enallagi", &done);
     commit_state(&format!("verify T-900 at {worked}"));
     (r, queued)
 }
@@ -1598,7 +1330,7 @@ fn gate_scope_rejects_a_file_off_the_scope_line() {
 }
 
 #[test]
-fn gate_scope_rejects_a_silent_widening() {
+fn gate_scope_silent_widening() {
     let verdict = "scope: a.txt, b.txt\nstatus: done\n";
     let (r, queued) = verified_install_as(&["b.txt"], &[], verdict);
     let out = in_harness(&r.root, &["gate", "scope", "T-900", "--base", &queued]);
@@ -1606,9 +1338,9 @@ fn gate_scope_rejects_a_silent_widening() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("widened scope: with b.txt"), "{out:?}");
     assert!(stdout.contains("a `widened:` line"), "{out:?}");
-    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
+    let tasks = queue_text(&r.root);
     let block = &tasks[tasks.find("## [T-900]").expect("T-900")..];
-    assert!(block.contains("status: ready"), "{block}");
+    assert!(block.contains("status: ready-for-agent"), "{block}");
     assert!(
         block.contains("gate: ") && block.contains("widened scope: with b.txt"),
         "{block}"
@@ -1650,20 +1382,20 @@ fn gate_scope_names_a_widening_with_a_reason() {
 }
 
 #[test]
-fn tasks_ready_prefers_the_harness_dir_queue() {
+fn tasks_ready_harness_dir() {
     let r = enallagi::fixture::Repo::new();
     r.queue(
         ".enallagi",
-        "# TASKS\n\n## [T-001] parent\nscope: src/a.ts\nstatus: ready\n",
+        "## [T-001] parent\nscope: src/a.ts\nstatus: ready-for-agent\n",
     );
     r.queue(
         "lane/.enallagi",
-        "# TASKS\n\n## [T-002] lane\nscope: src/a.ts\nstatus: ready\n",
+        "## [T-002] lane\nscope: src/a.ts\nstatus: ready-for-agent\n",
     );
     let outside = tempfile::TempDir::new().expect("tempdir");
     r.queue(
         &outside.path().to_string_lossy(),
-        "# TASKS\n\n## [T-003] outside\nscope: src/a.ts\nstatus: ready\n",
+        "## [T-003] outside\nscope: src/a.ts\nstatus: ready-for-agent\n",
     );
 
     let ready = |dir: &std::path::Path| {
@@ -1680,10 +1412,8 @@ fn tasks_ready_prefers_the_harness_dir_queue() {
 }
 
 #[test]
-fn the_immutable_hook_reads_nested_hashes() {
+fn immutable_reads_nested_hashes() {
     let r = enallagi::fixture::Repo::new();
-    r.write(".enallagi/TASKS.md", "# TASKS\n");
-    r.write("lane/.enallagi/TASKS.md", "# TASKS\n");
     r.write(
         "lane/.enallagi/test-hashes.json",
         r#"{"src/schema.ts":"deadbeef"}"#,
@@ -1710,37 +1440,8 @@ fn the_immutable_hook_reads_nested_hashes() {
 }
 
 #[test]
-fn a_legacy_variable_exits_2_naming_the_new_one() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
-        .args(["tasks", "ready"])
-        .env(format!("{}DIR", enallagi::config::LEGACY_ENV), dir.path())
-        .current_dir(dir.path())
-        .output()
-        .expect("run tasks ready");
-    assert_eq!(out.status.code(), Some(2), "{out:?}");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("ENALLAGI_DIR"), "{stderr}");
-    assert_eq!(stderr.lines().count(), 1, "{stderr}");
-}
-
-#[test]
-fn the_new_variable_admits_the_legacy_one() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
-        .args(["tasks", "ready"])
-        .env(format!("{}DIR", enallagi::config::LEGACY_ENV), dir.path())
-        .env("ENALLAGI_DIR", dir.path())
-        .current_dir(dir.path())
-        .output()
-        .expect("run tasks ready");
-    assert_eq!(out.status.code(), Some(0), "{out:?}");
-}
-
-#[test]
-fn a_legacy_config_name_warns_about_the_rename() {
+fn legacy_config_name_warns() {
     let r = enallagi::fixture::Repo::new();
-    r.write(".enallagi/TASKS.md", "# TASKS\n");
     r.write(".enallagi/harness.toml", "[check]\ncommand = \"true\"\n");
     let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["tasks", "list"])
@@ -1927,7 +1628,7 @@ fn every_named_fence_is_in_a_run_doc() {
 }
 
 #[test]
-fn a_failing_fence_of_any_tag_fails_the_readme_run() {
+fn readme_fence_fails() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
     for tag in ["sh", "text", "markdown", "toml", ""] {
@@ -1942,10 +1643,9 @@ fn a_failing_fence_of_any_tag_fails_the_readme_run() {
     }
 }
 
-// a ticket file keeps every line of a block, but in its own order and with the state renamed
+// a ticket file keeps every line of a block, but in its own order
 fn assert_lines(block: &str, want: &str) {
     for line in want.lines() {
-        let line = line.replace("status: proposed", "status: needs-triage");
         assert!(
             block.lines().any(|l| l.trim_end() == line.trim_end()),
             "{line}\n{block}"
@@ -1953,8 +1653,12 @@ fn assert_lines(block: &str, want: &str) {
     }
 }
 
-fn files_layout() -> bool {
-    std::env::var("ENALLAGI_TEST_LAYOUT").as_deref() == Ok("files")
+// every ticket rendered as a block in id order
+fn queue_text(root: &std::path::Path) -> String {
+    let t = enallagi::tracker::Tracker::open(root, ".enallagi");
+    let blocks = t.blocks().expect("the queue");
+    let text: Vec<String> = blocks.iter().map(enallagi::block::block_text).collect();
+    text.join("\n\n")
 }
 
 struct GhRepo {
@@ -1972,23 +1676,15 @@ impl GhRepo {
         let repo = enallagi::fixture::Repo::new();
         repo.init_harness("");
         let state = repo.root.join(".enallagi");
-        // init seeds no block; one standing task gives every appended block the next id
-        let tasks = state.join("TASKS.md");
-        let seeded = std::fs::read_to_string(&tasks).expect("TASKS.md");
-        let mut queue = format!(
-            "{}\n## [T-001] the first task\nscope: src/a.ts\nblockedBy: none\nstatus: ready\nrows: none \u{2014} harness\ncriteria:\n  - it happens\nnotes:\n",
-            seeded.trim_end()
-        );
+        // init seeds no ticket; one standing task gives every appended block the next id
+        let mut queue = "## [T-001] the first task\nscope: src/a.ts\nblockedBy: none\nstatus: ready-for-agent\nrows: none \u{2014} harness\ncriteria:\n  - it happens\nnotes:\n".to_string();
         for (name, text) in files {
             match *name {
-                "TASKS.md" => queue = text.to_string(),
+                "queue" => queue = text.to_string(),
                 _ => std::fs::write(state.join(name), text).expect("write state"),
             }
         }
         repo.queue(".enallagi", &queue);
-        if files_layout() {
-            std::fs::remove_file(&tasks).expect("TASKS.md");
-        }
         for args in [
             &["add", "-A"][..],
             &[
@@ -2048,16 +1744,8 @@ impl GhRepo {
         self.command("review", args)
     }
 
-    // the raw TASKS.md, or every ticket rendered as a block in id order
     fn tasks(&self) -> String {
-        if !files_layout() {
-            return std::fs::read_to_string(self.repo.root.join(".enallagi/TASKS.md"))
-                .expect("TASKS.md");
-        }
-        let t = enallagi::tracker::Tracker::open(&self.repo.root, ".enallagi");
-        let blocks = t.blocks().expect("the queue");
-        let text: Vec<String> = blocks.iter().map(enallagi::queue::block_text).collect();
-        text.join("\n\n")
+        queue_text(&self.repo.root)
     }
 
     fn porcelain(&self) -> String {
@@ -2071,7 +1759,7 @@ impl GhRepo {
 }
 
 #[test]
-fn issue_appends_one_proposed_block() {
+fn issue_appends_block() {
     let f = GhRepo::new(&GhRepo::fixture_gh());
     let before = f.tasks();
 
@@ -2091,25 +1779,22 @@ fn issue_appends_one_proposed_block() {
             "number,title,body,url,labels,state"
         ]
     );
-    match files_layout() {
-        true => assert!(f.porcelain().starts_with("?? specs/"), "{}", f.porcelain()),
-        false => assert_eq!(f.porcelain(), " M TASKS.md\n"),
-    }
+    assert!(f.porcelain().starts_with("?? specs/"), "{}", f.porcelain());
 
     let after = f.tasks();
     assert!(
         after.starts_with(&before),
         "the queue was rewritten, not appended to"
     );
-    let blocks = enallagi::queue::parse(&after).expect("parse");
+    let blocks = enallagi::block::parse(&after).expect("parse");
     let last = blocks.last().expect("a block");
     assert_eq!(last.id, "T-002");
     assert_eq!(last.title, "a file uploaded unzipped cannot be downloaded");
-    let block = enallagi::queue::block_text(last);
+    let block = enallagi::block::block_text(last);
     let want = "\
 scope: <written by the adjudicator at promotion>
 blockedBy:
-status: proposed
+status: needs-triage
 probe: issue
 command: `gh issue view https://github.com/owner/repo/issues/12 --json state,title --jq '.state + \": \" + .title'`
 output: OPEN: a file uploaded unzipped cannot be downloaded
@@ -2132,14 +1817,11 @@ notes: https://github.com/owner/repo/issues/12
   >
   > 1. Upload the file unzipped.
   > 2. Download it.";
-    match files_layout() {
-        true => assert_lines(&block, want),
-        false => assert!(block.contains(want), "{block}"),
-    }
+    assert_lines(&block, want);
 }
 
 #[test]
-fn issue_dry_run_prints_and_writes_nothing() {
+fn issue_dry_run() {
     let f = GhRepo::new(&GhRepo::fixture_gh());
     let before = f.tasks();
 
@@ -2150,7 +1832,7 @@ fn issue_dry_run_prints_and_writes_nothing() {
         stdout.starts_with("## [T-002] a file uploaded unzipped cannot be downloaded\n"),
         "{stdout}"
     );
-    assert!(stdout.contains("status: proposed"), "{stdout}");
+    assert!(stdout.contains("status: needs-triage"), "{stdout}");
     let args = std::fs::read_to_string(f.tools.path().join("gh.log")).expect("gh ran");
     assert_eq!(
         args.lines().collect::<Vec<_>>(),
@@ -2167,7 +1849,7 @@ fn issue_dry_run_prints_and_writes_nothing() {
 }
 
 #[test]
-fn issue_refuses_an_issue_already_queued() {
+fn issue_refuses_queued() {
     let f = GhRepo::new(&GhRepo::fixture_gh());
     assert_eq!(f.issue(&["owner/repo#12"]).status.code(), Some(0));
     let once = f.tasks();
@@ -2183,15 +1865,15 @@ fn issue_refuses_an_issue_already_queued() {
     assert_eq!(f.tasks(), once);
 }
 
-const LANDED_STUB: &str = "# TASKS\n\n## [T-001] landed\nstatus: done\narchived: DECISIONS.md\n";
+const LANDED_STUB: &str = "## [T-001] landed\nstatus: done\narchived: DECISIONS.md\n";
 
 #[test]
-fn issue_refuses_an_issue_already_archived() {
+fn issue_refuses_archived() {
     let decisions = "# DECISIONS\n\n## Rejected findings\n\n## [T-001] landed\nstatus: done\n\
         notes: https://github.com/owner/repo/issues/12\n";
     let f = GhRepo::with_state(
         &GhRepo::fixture_gh(),
-        &[("TASKS.md", LANDED_STUB), ("DECISIONS.md", decisions)],
+        &[("queue", LANDED_STUB), ("DECISIONS.md", decisions)],
     );
     let before = f.tasks();
     for args in [&["owner/repo#12"][..], &["owner/repo#12", "--dry-run"][..]] {
@@ -2209,16 +1891,16 @@ fn issue_refuses_an_issue_already_archived() {
 }
 
 #[test]
-fn issue_requeues_an_expired_finding() {
+fn issue_requeues_expired() {
     let decisions = "# DECISIONS\n\n## Rejected findings\n\n## Expired findings\n\n\
-        ## [T-001] landed\nstatus: proposed\nnotes: https://github.com/owner/repo/issues/12\n";
+        ## [T-001] landed\nstatus: needs-triage\nnotes: https://github.com/owner/repo/issues/12\n";
     let f = GhRepo::with_state(
         &GhRepo::fixture_gh(),
-        &[("TASKS.md", LANDED_STUB), ("DECISIONS.md", decisions)],
+        &[("queue", LANDED_STUB), ("DECISIONS.md", decisions)],
     );
     let out = f.issue(&["owner/repo#12"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    let blocks = enallagi::queue::parse(&f.tasks()).expect("parse");
+    let blocks = enallagi::block::parse(&f.tasks()).expect("parse");
     assert_eq!(blocks.last().expect("a block").id, "T-002");
 }
 
@@ -2293,7 +1975,7 @@ fn scaffold_of(block: &str) -> Vec<&str> {
 }
 
 #[test]
-fn a_short_read_is_kept_and_reported() {
+fn short_read_kept() {
     let f = GhRepo::new(&review_gh(SHORT));
     let out = f.review(&["owner/repo#13"]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
@@ -2302,12 +1984,12 @@ fn a_short_read_is_kept_and_reported() {
         said.contains("only the first 100 of each were read"),
         "{said}"
     );
-    let blocks = enallagi::queue::parse(&f.tasks()).expect("parse");
+    let blocks = enallagi::block::parse(&f.tasks()).expect("parse");
     assert_eq!(blocks.len(), 2, "the comment it did read is queued");
 }
 
 #[test]
-fn review_appends_one_block_per_thread() {
+fn review_block_per_thread() {
     let f = GhRepo::new(&review_gh(SUMMARY));
     let before = f.tasks();
 
@@ -2333,14 +2015,14 @@ fn review_appends_one_block_per_thread() {
 
     let after = f.tasks();
     assert!(after.starts_with(&before), "the queue was rewritten");
-    let blocks = enallagi::queue::parse(&after).expect("parse");
+    let blocks = enallagi::block::parse(&after).expect("parse");
     assert_eq!(blocks.len(), 3, "{after}");
-    let first = enallagi::queue::block_text(&blocks[1]);
+    let first = enallagi::block::block_text(&blocks[1]);
     let want = "\
 ## [T-002] Refactor suggestion
 scope: src/date.rs
 blockedBy:
-status: proposed
+status: needs-triage
 rows: none — harness
 criteria:
   - <objective, and naming the command whose output changes when it is done>
@@ -2352,13 +2034,10 @@ notes: https://github.com/owner/repo/pull/13#discussion_r1000000001
   > ```suggestion
   >     let offset = offset.unwrap_or(UTC);
   > ```";
-    match files_layout() {
-        true => assert_lines(&first, want),
-        false => assert_eq!(first.trim_end(), want, "{first}"),
-    }
+    assert_lines(&first, want);
     assert_eq!(blocks[2].id, "T-003");
     assert_eq!(
-        enallagi::queue::field(&blocks[2], "scope").as_deref(),
+        enallagi::block::field(&blocks[2], "scope").as_deref(),
         Some("src/cli.rs")
     );
 
@@ -2370,21 +2049,21 @@ notes: https://github.com/owner/repo/pull/13#discussion_r1000000001
 }
 
 #[test]
-fn review_folds_a_thread_into_one_block() {
+fn review_folds_thread() {
     let f = GhRepo::new(&review_gh(THREAD));
-    let before = enallagi::queue::parse(&f.tasks()).expect("parse").len();
+    let before = enallagi::block::parse(&f.tasks()).expect("parse").len();
 
     let out = f.review(&["owner/repo#13"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    let blocks = enallagi::queue::parse(&f.tasks()).expect("parse");
+    let blocks = enallagi::block::parse(&f.tasks()).expect("parse");
     assert_eq!(blocks.len(), before + 1, "{}", f.tasks());
-    let block = enallagi::queue::block_text(&blocks[before]);
+    let block = enallagi::block::block_text(&blocks[before]);
     assert!(
         block.starts_with("## [T-002] parse drops the timezone\n"),
         "{block}"
     );
     assert_eq!(
-        enallagi::queue::field(&blocks[before], "notes").as_deref(),
+        enallagi::block::field(&blocks[before], "notes").as_deref(),
         Some("https://github.com/owner/repo/pull/13#discussion_r1000000007")
     );
     assert!(
@@ -2410,15 +2089,15 @@ fn review_folds_a_thread_into_one_block() {
 }
 
 #[test]
-fn the_same_finding_raised_twice_is_one_block() {
+fn repeated_finding_one_block() {
     let f = GhRepo::new(&review_gh(AGREED));
-    let before = enallagi::queue::parse(&f.tasks()).expect("parse").len();
+    let before = enallagi::block::parse(&f.tasks()).expect("parse").len();
 
     let out = f.review(&["owner/repo#13"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    let blocks = enallagi::queue::parse(&f.tasks()).expect("parse");
+    let blocks = enallagi::block::parse(&f.tasks()).expect("parse");
     assert_eq!(blocks.len(), before + 1, "{}", f.tasks());
-    let block = enallagi::queue::block_text(&blocks[before]);
+    let block = enallagi::block::block_text(&blocks[before]);
     assert!(
         block.contains(
             "notes: https://github.com/owner/repo/pull/13#discussion_r1000000009\n  \
@@ -2435,14 +2114,14 @@ fn the_same_finding_raised_twice_is_one_block() {
 }
 
 #[test]
-fn a_different_finding_on_the_same_line_stays() {
+fn different_finding_same_line() {
     let differs = AGREED.replacen("drops the timezone", "drops the offset", 1);
     let f = GhRepo::new(&review_gh(&differs));
-    let before = enallagi::queue::parse(&f.tasks()).expect("parse").len();
+    let before = enallagi::block::parse(&f.tasks()).expect("parse").len();
 
     let out = f.review(&["owner/repo#13"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    let blocks = enallagi::queue::parse(&f.tasks()).expect("parse");
+    let blocks = enallagi::block::parse(&f.tasks()).expect("parse");
     assert_eq!(blocks.len(), before + 2, "{}", f.tasks());
     assert!(
         !f.tasks().contains("  > https://"),
@@ -2452,7 +2131,7 @@ fn a_different_finding_on_the_same_line_stays() {
 }
 
 #[test]
-fn review_skips_a_resolved_or_outdated_thread() {
+fn review_skips_resolved() {
     let f = GhRepo::new(&review_gh(SETTLED));
     let out = f.review(&["https://github.com/owner/repo/pull/13"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
@@ -2460,10 +2139,10 @@ fn review_skips_a_resolved_or_outdated_thread() {
     let args = std::fs::read_to_string(f.tools.path().join("gh.log")).expect("gh ran");
     assert!(args.contains("number=13"), "{args}");
 
-    let blocks = enallagi::queue::parse(&f.tasks()).expect("parse");
+    let blocks = enallagi::block::parse(&f.tasks()).expect("parse");
     assert_eq!(blocks.len(), 2, "{}", f.tasks());
     assert_eq!(
-        enallagi::queue::field(&blocks[1], "scope").as_deref(),
+        enallagi::block::field(&blocks[1], "scope").as_deref(),
         Some("src/cli.rs")
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -2499,7 +2178,7 @@ fn review_run_twice_appends_nothing() {
 }
 
 #[test]
-fn review_dry_run_prints_and_writes_nothing() {
+fn review_dry_run() {
     let f = GhRepo::new(&review_gh(SUMMARY));
     let before = f.tasks();
 
@@ -2511,7 +2190,7 @@ fn review_dry_run_prints_and_writes_nothing() {
         "{stdout}"
     );
     assert!(stdout.contains("\n## [T-003] "), "{stdout}");
-    assert!(stdout.contains("status: proposed"), "{stdout}");
+    assert!(stdout.contains("status: needs-triage"), "{stdout}");
     assert_eq!(f.tasks(), before);
     assert_eq!(f.porcelain(), "");
 }
@@ -2557,16 +2236,15 @@ fn the_review_source_names_no_comment_author() {
 }
 
 #[test]
-fn run_refuses_a_ready_block_left_unfilled() {
+fn run_refuses_unfilled() {
     let r = enallagi::fixture::Repo::new();
     let out = in_harness(&r.root, &["init", "--check", "true", "--fail-name", "(.+)"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md")).expect("TASKS.md");
     let block = format!(
-        "\n## [T-001] a\nscope: {}\nstatus: ready\n",
-        enallagi::queue::SCOPE_PLACEHOLDER
+        "\n## [T-001] a\nscope: {}\nstatus: ready-for-agent\n",
+        enallagi::block::SCOPE_PLACEHOLDER
     );
-    r.write(".enallagi/TASKS.md", &format!("{tasks}{block}"));
+    r.queue(".enallagi", &block);
     for args in [
         &["run", "--iterations", "1", "--no-tui"][..],
         &["worktree", "1"],

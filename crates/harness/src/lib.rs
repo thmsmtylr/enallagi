@@ -3,6 +3,7 @@
 pub mod agent;
 pub mod archive;
 pub mod audit;
+pub mod block;
 pub mod cli;
 pub mod config;
 pub mod eject;
@@ -18,7 +19,6 @@ pub mod pipeline;
 pub mod pr;
 pub mod probes;
 pub mod propose;
-pub mod queue;
 pub mod review;
 pub mod roles;
 pub mod runners;

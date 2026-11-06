@@ -36,7 +36,7 @@ fn sha256(bytes: &[u8]) -> String {
 fn declare(repo: &Repo, source: &str, rev: Option<&str>) -> config::Config {
     let rev = rev.map_or(String::new(), |r| format!("rev = \"{r}\"\n"));
     repo.write(
-        "enallagi.toml",
+        ".enallagi/enallagi.toml",
         &format!(
             "[check]\ncommand = \"true\"\n\n[[role]]\nname = \"implementer\"\nsource = \"{source}\"\npath = \"roles\"\n{rev}"
         ),
@@ -163,13 +163,12 @@ fn pipeline_repo() -> Repo {
         argv.join(", ")
     );
     let skills = repo.local_skills(&toml);
-    repo.write("enallagi.toml", &format!("{toml}{skills}"));
-    repo.write(
-        "TASKS.md",
-        "## [T-001] do the thing\n\nscope: src/a.ts\nrows: none — harness\nstatus: ready\ncriteria:\n  - it happens\n",
+    repo.write(".enallagi/enallagi.toml", &format!("{toml}{skills}"));
+    repo.queue(
+        ".enallagi",
+        "## [T-001] do the thing\n\nscope: src/a.ts\nrows: none — harness\nstatus: ready-for-agent\ncriteria:\n  - it happens\n",
     );
-    repo.write("SPEC.md", "# spec\n");
-    repo.write("PROGRESS.md", "# progress\n");
+    repo.write(".enallagi/PROGRESS.md", "# progress\n");
     repo.commit_all("harness");
     repo
 }
@@ -286,9 +285,9 @@ fn the_verifier_reproduces_each_claim() {
 
 // the `claims` gate parses these two lines, so the rendered prompt must ask for both
 #[test]
-fn the_verifier_ends_with_ran_and_exit_lines() {
+fn verifier_ran_exit_lines() {
     let repo = Repo::new();
-    repo.write("enallagi.toml", "[check]\ncommand = \"true\"\n");
+    repo.write(".enallagi/enallagi.toml", "[check]\ncommand = \"true\"\n");
     let cfg = config::load(&repo.root).expect("load");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/verifier.md");
     let text = config::subst(

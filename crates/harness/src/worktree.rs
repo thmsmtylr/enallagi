@@ -419,7 +419,7 @@ mod tests {
     fn repo_with_harness_dir() -> Repo {
         let r = Repo::new();
         r.write(".gitignore", ".enallagi/worktrees/\n");
-        r.write("enallagi.toml", "");
+        r.write(".enallagi/enallagi.toml", "");
         r.commit_all("gitignore worktrees");
         r
     }
@@ -463,7 +463,7 @@ mod tests {
         crate::init::install(&r.root, &crate::init::InitOpts::default()).expect("install");
         r.queue(
             ".enallagi",
-            "# TASKS\n\n## [T-001] one\nscope: one.txt\nstatus: ready\n\n## [T-002] two\nscope: two.txt\nstatus: ready\n",
+            "## [T-001] one\nscope: one.txt\nstatus: ready-for-agent\n\n## [T-002] two\nscope: two.txt\nstatus: ready-for-agent\n",
         );
         commit_in(&r.root, "install");
         commit_in(&r.root.join(".enallagi"), "queue");
@@ -826,7 +826,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stuck_state_branch_merges_neither() {
+    fn stuck_state_branch() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -835,7 +835,7 @@ mod tests {
         let mut before_the_merge = None;
         let report = lane(&r.root, &cfg, &mut |wt| {
             land(wt, "T-001", "one.txt");
-            decide_in_the_parent(&state, "needs-spec");
+            decide_in_the_parent(&state, "needs-info");
             before_the_merge = git::head(&state);
             Ok(())
         })
@@ -956,7 +956,7 @@ mod tests {
     // the run a lane could not merge is the one its log is most needed for, so the log is not in the
     // worktree the operator is told to remove
     #[test]
-    fn a_stuck_lane_leaves_its_events_in_the_parent() {
+    fn stuck_lane_events() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -968,7 +968,7 @@ mod tests {
                 reason: "y".into(),
             });
             land(wt, "T-001", "one.txt");
-            decide_in_the_parent(&state, "needs-spec");
+            decide_in_the_parent(&state, "needs-info");
             Ok(())
         })
         .expect("lane");
@@ -1056,19 +1056,15 @@ mod tests {
     }
 
     #[test]
-    fn a_dirty_state_parent_is_committed_first() {
+    fn dirty_state_parent_commits_first() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
-        std::fs::write(
-            state.join("TASKS.md"),
-            "# TASKS\n\nan uncommitted queue edit\n",
-        )
-        .expect("write");
+        std::fs::write(state.join("PROGRESS.md"), "an uncommitted queue edit\n").expect("write");
 
         let mut seen = String::new();
         lane(&r.root, &cfg, &mut |wt| {
-            seen = std::fs::read_to_string(wt.join(".enallagi/TASKS.md")).expect("TASKS.md");
+            seen = std::fs::read_to_string(wt.join(".enallagi/PROGRESS.md")).expect("PROGRESS.md");
             Ok(())
         })
         .expect("lane");

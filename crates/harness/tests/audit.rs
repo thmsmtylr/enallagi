@@ -40,7 +40,7 @@ notes: VERIFIER 2026-09-03
 const QUEUED: &str = "
 ## [T-012] the citation test
 scope: src/floor.rs
-status: proposed
+status: needs-triage
 notes: https://github.com/o/r/pull/4#discussion_r12
   > this test selects 0 tests, so it passes with the logic deleted
 ";

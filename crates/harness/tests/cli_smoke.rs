@@ -24,7 +24,7 @@ fn run(repo: &Repo, args: &[&str]) -> Out {
 fn installed() -> Repo {
     let repo = Repo::new();
     repo.write(
-        "enallagi.toml",
+        ".enallagi/enallagi.toml",
         "[check]\ncommand = \"true\"\nfail_name = \"x\"\n",
     );
     let out = run(&repo, &["init"]);

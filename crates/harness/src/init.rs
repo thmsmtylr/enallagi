@@ -29,7 +29,6 @@ const ROLES: &[(&str, &str)] = &[
 
 // ships as dot.check-baseline so the package's own tooling doesn't read it as a baseline
 const DOCS: &[(&str, &str)] = &[
-    ("TASKS.md", include_str!("../../../templates/TASKS.md")),
     (
         "PROGRESS.md",
         include_str!("../../../templates/PROGRESS.md"),
@@ -114,8 +113,6 @@ pub struct InitReport {
     /// Everything else the operator has to read: advice on a kept file, and the
     /// adapters that write nothing.
     pub notes: Vec<String>,
-    /// `(old, new)` for every instance file outside the harness directory.
-    pub moves: Vec<(String, String)>,
     /// Paths outside the harness directory that the product does not track, hidden in its info/exclude.
     pub excluded: Vec<String>,
 }
@@ -139,8 +136,6 @@ pub enum InitError {
     InvalidJson { path: String, message: String },
     #[error("a token survived substitution, so enallagi.toml is missing a key: {}: {}", .0, .1.join(" "))]
     TokenSurvived(String, Vec<String>),
-    #[error("{0} already exists; move it aside, nothing is overwritten")]
-    MoveTarget(String),
     #[error("the leftover-token pattern does not compile ({0}); this is a defect in the binary")]
     BadPattern(String),
 }
@@ -158,7 +153,6 @@ pub fn planned_files(root: &Path, opts: &InitOpts) -> Result<Vec<(String, String
 
 pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
     let (plan, mut report) = prepare(root, opts)?;
-    report.moves = moves(root)?;
 
     // assert before the first write, so a missing token leaves no half-install
     let pattern = regex::Regex::new(TOKEN).map_err(|e| InitError::BadPattern(e.to_string()))?;
@@ -218,17 +212,22 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         None => config::load(root)?,
     };
     let dir = cfg.layout.harness_dir.clone();
-    // config_from resolves an unset context file in a scratch directory, which never has a root-layout queue
-    let unset = |text: &str| {
-        toml::from_str::<Value>(text)
-            .ok()
-            .and_then(|v| v.get("layout")?.get("context_file").cloned())
-            .is_none()
+    // config_from resolves an unset context file and spec in a scratch directory, whose name is not the repository's
+    let unset = |key: &str| {
+        pending.as_deref().is_some_and(|text| {
+            toml::from_str::<Value>(text)
+                .ok()
+                .and_then(|v| v.get("layout")?.get(key).cloned())
+                .is_none()
+        })
     };
-    if pending.as_deref().is_some_and(unset) {
+    if unset("context_file") {
         cfg.layout.context_file = config::instance_rel(root, &dir, "AGENTS.md");
     }
-    config::root_layout_skills(root, &mut cfg);
+    if unset("spec") {
+        cfg.layout.spec = String::new();
+        cfg.layout.spec = crate::tracker::spec_rel(root, &cfg);
+    }
     let missing = config::unset_keys(&cfg);
     if !missing.is_empty() {
         report.notes.push(format!(
@@ -239,14 +238,9 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     }
     let at = |name: &str| config::instance_rel(root, &dir, name);
     let toml = config_rel(root);
-    // before subst, which would put a root-layout queue under the harness directory
     let sub = |text: &str| {
-        let text = text.replace(config::LEGACY_DIR_TOKEN, config::DIR_TOKEN);
-        let text = ROOT_INSTANCE_FILES
-            .iter()
-            .fold(text, |acc, name| {
-                acc.replace(&format!("{}/{name}", config::DIR_TOKEN), &at(name))
-            })
+        let text = text
+            .replace(config::LEGACY_DIR_TOKEN, config::DIR_TOKEN)
             .replace(&format!("{}/{}", config::DIR_TOKEN, config::CONFIG), &toml)
             .replace(
                 &format!("{}/{}", config::DIR_TOKEN, config::LEGACY_CONFIG),
@@ -275,15 +269,8 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         &at("evals/README.md"),
         sub(EVALS_README),
     );
-    // a migrated install keeps its queue and spec under specs/
-    let migrated = matches!(
-        crate::tracker::Tracker::open(root, &dir),
-        crate::tracker::Tracker::Files(_)
-    );
     for (name, text) in DOCS {
-        if !(migrated && *name == "TASKS.md") {
-            seed(root, &mut plan, &mut report, &at(name), sub(text));
-        }
+        seed(root, &mut plan, &mut report, &at(name), sub(text));
     }
     // the shipped rails name test-hashes.json as their enforcement, so the installer produces it
     let config_text = match &pending {
@@ -308,13 +295,13 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     }
     seed_context(root, &mut plan, &mut report, &cfg, &sub);
 
-    let spec = at(&cfg.layout.spec);
-    if !migrated && has_content(&root.join(&spec)) {
+    let spec = cfg.layout.spec.clone();
+    if has_content(&root.join(&spec)) {
         report.notes.push(format!(
             "{spec} was kept — merge the SPEC.section.md template into it by hand"
         ));
         resync_kept(root, &mut plan, &mut report, &cfg, spec);
-    } else if !migrated {
+    } else {
         seed(root, &mut plan, &mut report, &spec, sub(SPEC_SECTION));
     }
 
@@ -370,11 +357,9 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     Ok((plan, report))
 }
 
-// a harness directory the product already tracks, or a root-layout queue, stays in the product's history
+// a harness directory the product already tracks stays in the product's history
 fn own_repository(root: &Path, dir: &str) -> bool {
-    !dir.is_empty()
-        && config::instance_rel(root, dir, "TASKS.md") != "TASKS.md"
-        && git::git(root, &["ls-files", "--", dir]).is_ok_and(|out| out.is_empty())
+    !dir.is_empty() && git::git(root, &["ls-files", "--", dir]).is_ok_and(|out| out.is_empty())
 }
 
 // a tracked file is never excluded: exclude does not hide it, and `git add` on an excluded path exits 1
@@ -691,94 +676,6 @@ fn config_rel(root: &Path) -> String {
     rel(path.strip_prefix(root).unwrap_or(&path))
 }
 
-const ROOT_INSTANCE_FILES: &[&str] = &[
-    "TASKS.md",
-    "PROGRESS.md",
-    "PROGRESS.archive.md",
-    "LEARNINGS.md",
-    "DECISIONS.md",
-    ".check-baseline",
-    "test-hashes.json",
-    "harness.lock",
-    "evals/README.md",
-];
-
-// a legacy directory is the one config::load substitutes when harness_dir is unset, so it differs from the default only then
-pub fn moves(root: &Path) -> Result<Vec<(String, String)>, InitError> {
-    let cfg = config::load(root)?;
-    let configured = fs::read_to_string(config::config_path(root))
-        .ok()
-        .and_then(|text| toml::from_str::<Value>(&text).ok())
-        .and_then(|v| Some(v.get("layout")?.get("harness_dir")?.as_str()?.to_string()));
-    let default = config_from("")?.layout.harness_dir;
-    let legacy = configured.is_none() && cfg.layout.harness_dir != default;
-    let dir = configured.unwrap_or(default);
-
-    let mut out = Vec::new();
-    if legacy {
-        let mut files = Vec::new();
-        files_under(root, &cfg.layout.harness_dir, &mut files);
-        files.sort();
-        for old in files {
-            let name = &old[cfg.layout.harness_dir.len() + 1..];
-            out.push((old.clone(), format!("{dir}/{name}")));
-        }
-    }
-    let root_toml = config::config_path(root) == root.join("enallagi.toml");
-    let names = ROOT_INSTANCE_FILES
-        .iter()
-        .copied()
-        .chain(["enallagi.toml", cfg.layout.spec.as_str()]);
-    for name in names {
-        let at_root = if name == "enallagi.toml" {
-            root_toml
-        } else {
-            config::instance_rel(root, &dir, name) == name
-        };
-        if at_root && root.join(name).is_file() {
-            out.push((name.to_string(), format!("{dir}/{name}")));
-        }
-    }
-    Ok(out)
-}
-
-fn files_under(root: &Path, dir: &str, out: &mut Vec<String>) {
-    let Ok(entries) = fs::read_dir(root.join(dir)) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = format!("{dir}/{}", entry.file_name().to_string_lossy());
-        if entry.file_type().is_ok_and(|t| t.is_dir()) {
-            files_under(root, &path, out);
-        } else {
-            out.push(path);
-        }
-    }
-}
-
-// every destination is checked before the first rename, so a collision leaves the tree as it was
-pub fn relocate(root: &Path, moves: &[(String, String)]) -> Result<(), InitError> {
-    let mut seen = BTreeSet::new();
-    for (_, new) in moves {
-        if !seen.insert(new) || root.join(new).symlink_metadata().is_ok() {
-            return Err(InitError::MoveTarget(new.clone()));
-        }
-    }
-    for (old, new) in moves {
-        let (from, to) = (root.join(old), root.join(new));
-        if let Some(parent) = to.parent() {
-            fs::create_dir_all(parent).map_err(io(parent.display()))?;
-        }
-        fs::rename(&from, &to).map_err(io(from.display()))?;
-        let mut dir = from.parent();
-        while let Some(emptied) = dir.filter(|d| *d != root && fs::remove_dir(d).is_ok()) {
-            dir = emptied.parent();
-        }
-    }
-    Ok(())
-}
-
-// config::load reads a directory, so give the pending text a temporary one
 fn config_from(text: &str) -> Result<Config, InitError> {
     let dir = tempfile::TempDir::new().map_err(io("a temporary directory"))?;
     let path = config::config_path(dir.path());

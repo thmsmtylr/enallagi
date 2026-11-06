@@ -9,11 +9,11 @@ use regex::Regex;
 use sha2::{Digest as _, Sha256};
 
 use crate::agent::{self, Preset, StageSpawn, TurnCap};
+use crate::block;
 use crate::config::{self, Config, ConfigError, Predicate};
 use crate::events::{Kind, Log, Sink, Writer};
 use crate::gates::{self, GateCtx};
 use crate::probes::{self, CheckOutcome, ProbeCtx};
-use crate::queue;
 use crate::roles;
 use crate::skills::{self, ResolveOpts};
 use crate::tracker::{self, Tracker};
@@ -182,13 +182,13 @@ const PREFLIGHT: [&str; 2] = ["check-unnamed", "install-stale"];
 
 /// Refuses a `ready` block whose scope or criteria an import left for the adjudicator to write.
 pub fn refuse_unfilled(root: &Path, cfg: &Config) -> Result<(), Refused> {
-    let unfilled = queue::unfilled_ready(&queue_blocks(root, cfg));
+    let unfilled = block::unfilled_ready(&queue_blocks(root, cfg));
     if unfilled.is_empty() {
         return Ok(());
     }
     Err(Refused(format!(
         "{} is ready but still carries the import's placeholder scope or criteria. \
-         Set it back to `status: proposed` so the adjudicator writes them, or write them yourself.",
+         Set it back to `needs-triage` so the adjudicator writes them, or write them yourself.",
         unfilled.join(", ")
     )))
 }
@@ -242,18 +242,18 @@ pub fn preflight(root: &Path) -> anyhow::Result<()> {
     .into())
 }
 
-fn queue_read(root: &Path, cfg: &Config) -> Result<Vec<queue::Block>, String> {
+fn queue_read(root: &Path, cfg: &Config) -> Result<Vec<block::Block>, String> {
     Tracker::open(root, &cfg.layout.harness_dir)
         .blocks()
         .map_err(|e| e.to_string())
 }
 
-fn queue_blocks(root: &Path, cfg: &Config) -> Vec<queue::Block> {
+fn queue_blocks(root: &Path, cfg: &Config) -> Vec<block::Block> {
     queue_read(root, cfg).unwrap_or_default()
 }
 
 // the same task the round would take, so the plan prices the stage the run will actually spawn
-fn plan_task(blocks: &[queue::Block], when: &Predicate) -> Option<String> {
+fn plan_task(blocks: &[block::Block], when: &Predicate) -> Option<String> {
     if matches!(when, Predicate::QueueReviewing) {
         tracker::ids_in(blocks, &["review"]).into_iter().next()
     } else {
@@ -286,11 +286,11 @@ fn planned_cap(root: &Path, cfg: &Config, stage: &config::Stage) -> u32 {
     turn_cap(cfg, stage, handed_ids(root, cfg, &at_start).len())
 }
 
-fn task_levels(blocks: &[queue::Block], task: Option<&str>) -> agent::Levels {
+fn task_levels(blocks: &[block::Block], task: Option<&str>) -> agent::Levels {
     let Some(b) = task.and_then(|id| blocks.iter().find(|b| b.id == id)) else {
         return agent::Levels::default();
     };
-    let value = |key: &str| queue::field(b, key).filter(|v| !v.is_empty());
+    let value = |key: &str| block::field(b, key).filter(|v| !v.is_empty());
     agent::Levels {
         model: value("model"),
         effort: value("effort"),
@@ -508,8 +508,8 @@ impl<'a> Loop<'a> {
         });
 
         // a backticked mention is prose about the marker; only a bare one halts the run
-        let spec = tracker::spec_rel(self.root, self.cfg);
-        if let Some(lines) = clarifications(&self.root.join(&spec)) {
+        let spec = &self.cfg.layout.spec;
+        if let Some(lines) = clarifications(&self.root.join(spec)) {
             self.halt(
                 "clarification",
                 format!("{spec} carries [NEEDS CLARIFICATION]. The loop does not start."),
@@ -647,7 +647,6 @@ impl<'a> Loop<'a> {
         self.read_reviews();
         // a block a human queued by hand is recorded against the product HEAD it was written at
         self.commit_state("queue");
-        self.unblock();
         self.archive();
 
         let ready_before = self.ids_at(&tracker::READY);
@@ -678,13 +677,13 @@ impl<'a> Loop<'a> {
             self.dry_pipeline = Some(pipeline.name.clone());
         }
 
-        // fires only after a discovery round already found nothing takeable; attended:true blocks alone are the ordinary human-wait state
+        // fires only after a discovery round already found nothing takeable; ready-for-human tickets alone are the ordinary human-wait state
         if takeable.is_none() && self.dry_rounds >= 1 {
             if let Some(id) = self.first_attended_ready() {
                 self.halt(
                     &id,
                     format!(
-                        "{id} is attended: true and it is all that is left. A human has to run it."
+                        "{id} is ready-for-human and it is all that is left. A human has to run it."
                     ),
                 );
                 return false;
@@ -728,13 +727,13 @@ impl<'a> Loop<'a> {
             Some(task) => self.task_outcome(task, &pipeline, progress_before),
             None => {
                 if let Some(reason) = self.proposed_names_contract() {
-                    self.halt("proposed", reason);
+                    self.halt("needs-triage", reason);
                     return false;
                 }
             }
         }
         if let Some(reason) = self.new_needs_spec() {
-            self.halt("needs-spec", reason);
+            self.halt("needs-info", reason);
             return false;
         }
         if self.stopped {
@@ -1223,7 +1222,7 @@ impl<'a> Loop<'a> {
         false
     }
 
-    // order matters: a signal, then the STOP file, then budgets, then a new needs-spec task
+    // order matters: a signal, then the STOP file, then budgets, then a new needs-info task
     fn boundary(&mut self, needs_spec: bool) -> bool {
         if self.stopped {
             return true;
@@ -1237,7 +1236,7 @@ impl<'a> Loop<'a> {
         }
         if needs_spec {
             if let Some(reason) = self.new_needs_spec() {
-                self.halt("needs-spec", reason);
+                self.halt("needs-info", reason);
                 return true;
             }
         }
@@ -1283,18 +1282,15 @@ impl<'a> Loop<'a> {
     fn proposed_names_contract(&self) -> Option<String> {
         let spec = &self.cfg.layout.spec;
         let context = &self.cfg.layout.context_file;
-        let resolved = tracker::spec_rel(self.root, self.cfg);
-        let migrated = resolved
+        let short = spec
             .strip_prefix(&format!("{}/", self.cfg.layout.harness_dir))
-            .unwrap_or(&resolved);
+            .unwrap_or(spec);
         self.blocks()
             .iter()
             .filter(|b| tracker::state(b).as_deref() == Some("needs-triage"))
             .find(|b| {
-                let text = queue::block_text(b);
-                text.contains(spec.as_str())
-                    || text.contains(migrated)
-                    || text.contains(context.as_str())
+                let text = block::block_text(b);
+                text.contains(short) || text.contains(context.as_str())
             })
             .map(|b| {
                 format!(
@@ -1304,14 +1300,14 @@ impl<'a> Loop<'a> {
             })
     }
 
-    // halts only on a NEW needs-spec task; pre-existing ones are the ordinary state of an open contract
+    // halts only on a NEW needs-info task; pre-existing ones are the ordinary state of an open contract
     fn new_needs_spec(&self) -> Option<String> {
         self.ids_at(&["needs-info"])
             .into_iter()
             .find(|id| !self.needs_spec_at_start.contains(id))
             .map(|id| {
                 format!(
-                    "{id} went to needs-spec. The contract does not answer it and no lane may decide it."
+                    "{id} went to needs-info. The contract does not answer it and no lane may decide it."
                 )
             })
     }
@@ -1361,7 +1357,7 @@ impl<'a> Loop<'a> {
 
     fn task_outcome(&mut self, task: &str, pipeline: &config::Pipeline, progress_before: u64) {
         let block = self.blocks().into_iter().find(|b| b.id == task);
-        let status = block.as_ref().and_then(|b| queue::field(b, "status"));
+        let status = block.as_ref().and_then(|b| block::field(b, "status"));
         match block.as_ref().and_then(tracker::state).as_deref() {
             Some("done") => {
                 self.digest.landed.push(task.to_string());
@@ -1369,7 +1365,7 @@ impl<'a> Loop<'a> {
                     .blocks()
                     .iter()
                     .find(|b| b.id == task)
-                    .and_then(|b| queue::field(b, "rows"));
+                    .and_then(|b| block::field(b, "rows"));
                 if let Some(rows) = rows.filter(|r| !r.is_empty()) {
                     self.digest.rows.push(format!("{task}: {rows}"));
                 }
@@ -1501,7 +1497,7 @@ impl<'a> Loop<'a> {
             "\n## {date} — {task} — {name} pipeline, left at {status}\n\
              what happened: no role wrote an entry this iteration {iter}, so the launcher wrote \
              this one. Stages: {stages}. The round's reasoning is in the task's own notes in \
-             TASKS.md.\nfriction: none\n",
+             its ticket.\nfriction: none\n",
             date = jiff::Zoned::now().strftime("%Y-%m-%d"),
             name = pipeline.name,
             status = status.unwrap_or("no status"),
@@ -1528,14 +1524,7 @@ impl<'a> Loop<'a> {
         }
     }
 
-    fn unblock(&mut self) {
-        let t = Tracker::open(self.root, &self.cfg.layout.harness_dir);
-        if let Err(err) = t.unblock() {
-            self.digest.warnings.push(format!("the queue: {err}"));
-        }
-    }
-
-    fn blocks(&self) -> Vec<queue::Block> {
+    fn blocks(&self) -> Vec<block::Block> {
         queue_blocks(self.root, self.cfg)
     }
 
@@ -1621,7 +1610,7 @@ impl<'a> Loop<'a> {
                 let text = blocks
                     .iter()
                     .find(|b| b.id == id)
-                    .map(|b| squash(&queue::block_text(b)))?;
+                    .map(|b| squash(&block::block_text(b)))?;
                 let claim = claims.iter().find(|c| text.contains(&squash(c)))?;
                 Some((id, claim.clone()))
             })
@@ -1649,7 +1638,7 @@ impl<'a> Loop<'a> {
 
     fn rejections(&self) -> Vec<String> {
         std::fs::read_to_string(self.file("DECISIONS.md"))
-            .map(|t| queue::rejections(&t))
+            .map(|t| block::rejections(&t))
             .unwrap_or_default()
     }
 
@@ -1768,12 +1757,12 @@ fn listing(out: &mut String, heading: &str, items: &[String]) {
 
 // the verifier writes its verdict into the block's notes as `REJECTED`; a `gate:` line is written
 // only by set_status, and the newest one sits directly under `status:`
-fn rejection_text(b: &queue::Block) -> Option<String> {
-    let text = queue::block_text(b);
+fn rejection_text(b: &block::Block) -> Option<String> {
+    let text = block::block_text(b);
     if let Some(at) = text.rfind("REJECTED") {
         return Some(text[at..].to_string());
     }
-    queue::field(b, "gate").filter(|v| !v.trim().is_empty())
+    block::field(b, "gate").filter(|v| !v.trim().is_empty())
 }
 
 // a verdict is a paragraph and a promotion copies one claim of it, never the whole thing. A run

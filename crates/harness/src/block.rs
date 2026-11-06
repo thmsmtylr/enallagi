@@ -1,7 +1,6 @@
-//! TASKS.md, parsed once. A heading inside a fenced code block is documentation, not a task; an unterminated fence or duplicate id is refused, not silently resolved.
+//! The `## [T-NNN] title` block: the form DECISIONS.md archives a ticket in, and the `key: value` form the tracker hands a ticket back in. A heading inside a fenced code block is documentation, not a block; an unterminated fence or duplicate id is refused, not silently resolved.
 
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Block {
@@ -131,27 +130,6 @@ pub fn blockers(b: &Block) -> Vec<String> {
         .collect()
 }
 
-pub fn ready_unattended(blocks: &[Block]) -> Option<String> {
-    let status: HashMap<&str, Option<String>> = blocks
-        .iter()
-        .map(|b| (b.id.as_str(), field(b, "status")))
-        .collect();
-    for b in blocks {
-        if field(b, "status").as_deref() != Some("ready")
-            || field(b, "attended").as_deref() == Some("true")
-        {
-            continue;
-        }
-        if blockers(b)
-            .iter()
-            .all(|id| status.get(id.as_str()).and_then(|s| s.as_deref()) == Some("done"))
-        {
-            return Some(b.id.clone());
-        }
-    }
-    None
-}
-
 /// What an import writes where only the adjudicator can decide: the scope a fix touches, and its criteria.
 pub const SCOPE_PLACEHOLDER: &str = "<written by the adjudicator at promotion>";
 pub const CRITERIA_PLACEHOLDER: &str =
@@ -169,14 +147,6 @@ pub fn unfilled_ready(blocks: &[Block]) -> Vec<String> {
                 line.contains(SCOPE_PLACEHOLDER) || line.contains(CRITERIA_PLACEHOLDER)
             })
         })
-        .map(|b| b.id.clone())
-        .collect()
-}
-
-pub fn ids_at(blocks: &[Block], status: &str) -> Vec<String> {
-    blocks
-        .iter()
-        .filter(|b| field(b, "status").as_deref() == Some(status))
         .map(|b| b.id.clone())
         .collect()
 }
@@ -203,90 +173,6 @@ pub fn block_text(b: &Block) -> String {
     lines.join("\n")
 }
 
-pub fn set_status(
-    text: &str,
-    task: &str,
-    status: &str,
-    reason: &str,
-) -> Result<String, QueueError> {
-    let blocks = parse(text)?;
-    for b in &blocks {
-        if b.id != task {
-            continue;
-        }
-        for (at, line) in &b.body {
-            if !line.starts_with("status:") {
-                continue;
-            }
-            let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
-            lines[*at - 1] = format!("status: {status}");
-            if !reason.is_empty() {
-                lines.insert(*at, format!("gate: {reason}"));
-            }
-            return Ok(lines.join("\n"));
-        }
-    }
-    Ok(text.to_string())
-}
-
-/// Each block's raw lines, heading first, handed to `f`; a `Some` replaces them, a `None` keeps them.
-pub fn splice(
-    text: &str,
-    mut f: impl FnMut(&Block, &[&str]) -> Option<Vec<String>>,
-) -> Result<String, QueueError> {
-    let lines: Vec<&str> = text.split('\n').collect();
-    let mut out: Vec<String> = Vec::new();
-    let mut cursor = 0usize;
-    for b in &parse(text)? {
-        let start = b.line - 1;
-        let stop = start + b.body.len() + 1;
-        out.extend(lines[cursor..start].iter().map(|s| s.to_string()));
-        let raw = &lines[start..stop];
-        cursor = stop;
-        match f(b, raw) {
-            Some(new) => out.extend(new),
-            None => out.extend(raw.iter().map(|s| s.to_string())),
-        }
-    }
-    out.extend(lines[cursor..].iter().map(|s| s.to_string()));
-    Ok(out.join("\n"))
-}
-
-pub fn unblock(text: &str) -> Result<String, QueueError> {
-    let blocks = parse(text)?;
-    let status: HashMap<&str, Option<String>> = blocks
-        .iter()
-        .map(|b| (b.id.as_str(), field(b, "status")))
-        .collect();
-    let release: HashSet<&str> = blocks
-        .iter()
-        .filter(|b| {
-            field(b, "status").as_deref() == Some("blocked")
-                && !blockers(b).is_empty()
-                && blockers(b)
-                    .iter()
-                    .all(|id| status.get(id.as_str()).and_then(|s| s.as_deref()) == Some("done"))
-        })
-        .map(|b| b.id.as_str())
-        .collect();
-    if release.is_empty() {
-        return Ok(text.to_string());
-    }
-    let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
-    for b in &blocks {
-        if !release.contains(b.id.as_str()) {
-            continue;
-        }
-        for (at, line) in &b.body {
-            if line.starts_with("status:") {
-                lines[*at - 1] = "status: ready".to_string();
-                break;
-            }
-        }
-    }
-    Ok(lines.join("\n"))
-}
-
 pub fn rejections(decisions: &str) -> Vec<String> {
     let mut inside = false;
     let mut out = Vec::new();
@@ -305,7 +191,7 @@ pub fn rejections(decisions: &str) -> Vec<String> {
     out
 }
 
-// file order is queue priority: ready_unattended takes the first ready block in file order
+// id order is queue priority: takeable takes the first ready-for-agent ticket
 pub fn list(blocks: &[Block]) -> String {
     blocks
         .iter()
@@ -320,41 +206,22 @@ pub fn list(blocks: &[Block]) -> String {
         .join("\n")
 }
 
-pub struct Queue {
-    pub path: PathBuf,
-}
-
-impl Queue {
-    // a missing file reads as an empty queue: a fresh repo with no TASKS.md yet is not an error
-    pub fn read(&self) -> Result<String, QueueError> {
-        match std::fs::read_to_string(&self.path) {
-            Ok(s) => Ok(s),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-            Err(e) => Err(QueueError::Io(e)),
-        }
-    }
-
-    pub fn write(&self, text: &str) -> Result<(), QueueError> {
-        std::fs::write(&self.path, text).map_err(QueueError::Io)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn a_ready_block_with_a_placeholder_is_unfilled() {
+    fn unfilled_placeholder() {
         let text = format!(
-            "## [T-001] a\nscope: {SCOPE_PLACEHOLDER}\nstatus: ready\n\n\
-             ## [T-002] b\nscope: a.rs\nstatus: ready\ncriteria:\n  - {CRITERIA_PLACEHOLDER}\n\n\
-             ## [T-003] c\nscope: {SCOPE_PLACEHOLDER}\nstatus: proposed\n\n\
-             ## [T-004] d\nscope: a.rs\nstatus: ready\ncriteria:\n  - `cargo test` passes\n"
+            "## [T-001] a\nscope: {SCOPE_PLACEHOLDER}\nstatus: ready-for-agent\n\n\
+             ## [T-002] b\nscope: a.rs\nstatus: ready-for-agent\ncriteria:\n  - {CRITERIA_PLACEHOLDER}\n\n\
+             ## [T-003] c\nscope: {SCOPE_PLACEHOLDER}\nstatus: needs-triage\n\n\
+             ## [T-004] d\nscope: a.rs\nstatus: ready-for-agent\ncriteria:\n  - `cargo test` passes\n"
         );
         assert_eq!(unfilled_ready(&parse(&text).unwrap()), ["T-001", "T-002"]);
     }
 
-    const Q: &str = "## [T-001] first\nscope: src/a.ts\nblockedBy: none\nstatus: ready\ncriteria:\n  - x\n\n## [T-002] second\nscope: src/b.ts\nblockedBy: T-001\nstatus: blocked\n\n```\n## [T-999] not a task\nstatus: ready\n```\n\n## [T-003] attended\nscope: src/c.ts\nblockedBy:\nstatus: ready\nattended: true\n";
+    const Q: &str = "## [T-001] first\nscope: src/a.ts\nblockedBy: none\nstatus: ready-for-agent\ncriteria:\n  - x\n\n## [T-002] second\nscope: src/b.ts\nblockedBy: T-001\nstatus: ready-for-agent\n\n```\n## [T-999] not a task\nstatus: ready-for-agent\n```\n\n## [T-003] attended\nscope: src/c.ts\nblockedBy:\nstatus: ready-for-human\n";
 
     #[test]
     fn next_id_follows_the_highest_id() {
@@ -397,44 +264,24 @@ mod tests {
     }
 
     #[test]
-    fn status_is_its_first_word() {
-        let b = parse("## [T-1] a\nstatus: deferred -- later\n").unwrap();
-        assert_eq!(field(&b[0], "status").as_deref(), Some("deferred"));
-    }
-
-    #[test]
-    fn ready_unattended_skips_attended_and_blocked() {
-        let b = parse(Q).unwrap();
-        assert_eq!(ready_unattended(&b).as_deref(), Some("T-001"));
-    }
-
-    #[test]
-    fn unblock_promotes_when_blockers_done() {
-        let t = Q.replace("status: ready\ncriteria", "status: done\ncriteria");
-        let out = unblock(&t).unwrap();
-        let b = parse(&out).unwrap();
-        assert_eq!(field(&b[1], "status").as_deref(), Some("ready"));
-    }
-
-    #[test]
-    fn set_status_writes_reason_and_keeps_rest() {
-        let out = set_status(Q, "T-001", "ready", "gate said so").unwrap();
-        assert!(out.contains("status: ready\ngate: gate said so"));
-        assert!(out.contains("## [T-002] second"));
+    fn status_first_word() {
+        let b = parse("## [T-1] a\nstatus: wontfix -- later\n").unwrap();
+        assert_eq!(field(&b[0], "status").as_deref(), Some("wontfix"));
     }
 
     #[test]
     fn list_cuts_title_at_44() {
-        let b =
-            parse("## [T-1] 0123456789012345678901234567890123456789012345678\nstatus: ready\n")
-                .unwrap();
+        let b = parse(
+            "## [T-1] 0123456789012345678901234567890123456789012345678\nstatus: ready-for-agent\n",
+        )
+        .unwrap();
         let l = list(&b);
         assert!(l.starts_with("T-1  01234567890123456789012345678901234567890123  \u{2192} ready"));
     }
 
     #[test]
-    fn heading_title_trims_both_ends() {
-        let b = parse("## [T-1]   a title   \nstatus: ready\n").unwrap();
+    fn heading_title_trimmed() {
+        let b = parse("## [T-1]   a title   \nstatus: ready-for-agent\n").unwrap();
         assert_eq!(b[0].title, "a title");
     }
 
@@ -445,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn rejections_reads_the_kill_lines() {
+    fn rejections_kill_lines() {
         let d = "# DECISIONS\n\n## Rejected findings\n- [2026-09-01] a claim \u{2014} refuted by `x`: y\n\n## [T-001] done\n";
         assert_eq!(
             rejections(d),
@@ -453,7 +300,7 @@ mod tests {
         );
     }
 
-    const FIXTURE: &str = "# TASKS\n\n## Block format\n\n```\n## [T-042] the example in the documentation, which is not a task\nblockedBy:\nstatus: ready\n```\n\n---\n\n## [T-001] a blocker that is done\nblockedBy:\nstatus: done\n\n## [T-002] ready, and its blocker is not\nblockedBy: T-009\nstatus: ready\n\n## [T-003] ready, attended, not a lane's\nblockedBy: T-001\nstatus: ready\nattended: true\n\n## [T-004] the one a lane may take\nblockedBy: T-001\nstatus: ready\nrows: none \u{2014} harness\n\n## [T-005] blocked, and every blocker is done\nblockedBy: T-001\nstatus: blocked\n\n## [T-006] blockedBy spelled none\nblockedBy: none\nstatus: review\n\n## [T-007] blocked, and its blocker is not done\nblockedBy: T-009\nstatus: blocked\n\n## [T-009] the blocker T-002 waits on\nblockedBy:\nstatus: ready\n";
+    const FIXTURE: &str = "# Blocks\n\n## Block format\n\n```\n## [T-042] the example in the documentation, which is not a task\nblockedBy:\nstatus: ready-for-agent\n```\n\n---\n\n## [T-001] a blocker that is done\nblockedBy:\nstatus: done\n\n## [T-002] ready, and its blocker is not\nblockedBy: T-009\nstatus: ready-for-agent\n\n## [T-003] ready, attended, not a lane's\nblockedBy: T-001\nstatus: ready-for-human\n\n## [T-004] the one a lane may take\nblockedBy: T-001\nstatus: ready-for-agent\nrows: none \u{2014} harness\n\n## [T-005] blocked, and every blocker is done\nblockedBy: T-001\nstatus: ready-for-agent\n\n## [T-006] blockedBy spelled none\nblockedBy: none\nstatus: review\n\n## [T-007] blocked, and its blocker is not done\nblockedBy: T-009\nstatus: ready-for-agent\n\n## [T-009] the blocker T-002 waits on\nblockedBy:\nstatus: ready-for-agent\n";
 
     #[test]
     fn a_title_is_read_off_the_heading() {
@@ -469,27 +316,9 @@ mod tests {
     }
 
     #[test]
-    fn every_real_block_is_parsed() {
+    fn real_blocks_parsed() {
         let blocks = parse(FIXTURE).unwrap();
         assert_eq!(blocks.len(), 8);
-    }
-
-    #[test]
-    fn a_task_with_an_open_blocker_is_skipped() {
-        let blocks = parse(FIXTURE).unwrap();
-        assert_ne!(ready_unattended(&blocks).as_deref(), Some("T-002"));
-    }
-
-    #[test]
-    fn an_attended_ready_task_is_skipped() {
-        let blocks = parse(FIXTURE).unwrap();
-        assert_ne!(ready_unattended(&blocks).as_deref(), Some("T-003"));
-    }
-
-    #[test]
-    fn the_first_takeable_task_is_selected() {
-        let blocks = parse(FIXTURE).unwrap();
-        assert_eq!(ready_unattended(&blocks).as_deref(), Some("T-004"));
     }
 
     #[test]
@@ -510,62 +339,9 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_field_is_none() {
+    fn missing_field_none() {
         let blocks = parse(FIXTURE).unwrap();
         assert_eq!(field(&blocks[0], "rows"), None);
-    }
-
-    #[test]
-    fn a_blocked_task_whose_blockers_are_done_is_released() {
-        let released = unblock(FIXTURE).unwrap();
-        assert!(released.contains(
-            "## [T-005] blocked, and every blocker is done\nblockedBy: T-001\nstatus: ready"
-        ));
-    }
-
-    #[test]
-    fn unblock_leaves_every_other_status_alone() {
-        let released = unblock(FIXTURE).unwrap();
-        assert_eq!(
-            FIXTURE.matches("status:").count(),
-            released.matches("status:").count()
-        );
-    }
-
-    #[test]
-    fn unblock_keeps_an_open_blocker_blocked() {
-        let released = unblock(FIXTURE).unwrap();
-        let blocks = parse(&released).unwrap();
-        let t007 = blocks.iter().find(|b| b.id == "T-007").unwrap();
-        assert_eq!(field(t007, "status").as_deref(), Some("blocked"));
-    }
-
-    #[test]
-    fn set_status_rewrites_the_named_block() {
-        let changed = set_status(FIXTURE, "T-004", "ready", "the gate was red").unwrap();
-        assert!(changed.contains(
-            "## [T-004] the one a lane may take\nblockedBy: T-001\nstatus: ready\ngate: the gate was red"
-        ));
-    }
-
-    #[test]
-    fn set_status_rewrites_exactly_one_status_line() {
-        let changed = set_status(FIXTURE, "T-004", "ready", "the gate was red").unwrap();
-        assert_eq!(changed.matches("gate: ").count(), 1);
-    }
-
-    #[test]
-    fn set_status_leaves_the_file_otherwise_intact() {
-        let changed = set_status(FIXTURE, "T-004", "ready", "the gate was red").unwrap();
-        assert!(changed.contains("## [T-009]"));
-    }
-
-    #[test]
-    fn set_status_on_an_unknown_id_changes_nothing() {
-        assert_eq!(
-            set_status(FIXTURE, "T-999", "done", "").unwrap(),
-            FIXTURE.to_string()
-        );
     }
 
     #[test]
@@ -593,11 +369,11 @@ mod tests {
     }
 
     #[test]
-    fn an_unterminated_fence_is_refused() {
+    fn fixture_unterminated_fence() {
         let text = FIXTURE.replace("## [T-004]", "```\n## [T-004]");
         assert!(matches!(
             parse(&text),
-            Err(QueueError::UnterminatedFence { opened: 26 })
+            Err(QueueError::UnterminatedFence { opened: 25 })
         ));
     }
 }
