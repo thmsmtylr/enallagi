@@ -223,6 +223,8 @@ fn six_findings_of_two_classes_are_two_learnings() {
         written.contains(&format!("- [proposed] `vacuous test`: {VACUOUS}")),
         "{written}"
     );
+    // the proposals sit above the archived blocks, so their cites move with them
+    let (lost, vacuous) = two_classes(&repo);
     for cite in lost.iter().chain(&vacuous) {
         assert!(written.contains(&format!("`{cite}`")), "{cite}: {written}");
     }
@@ -290,17 +292,17 @@ fn a_learning_whose_citations_fail_is_refused() {
 fn an_overlapping_learning_merges_into_its_entry() {
     let (repo, cfg) = seeded();
     with_signal(&repo);
-    let (lost, vacuous) = two_classes(&repo);
     let rel = ".enallagi/DECISIONS.md";
-    let standing = format!(
-        "- [proposed] `dropped result`: a result is dropped before the caller sees it → assert on what the caller receives\n  instances: `{}`, `{}`",
-        lost[0], lost[1]
-    );
+    let standing = "- [proposed] `dropped result`: a result is dropped before the caller sees it → assert on what the caller receives\n  instances: CITES";
     let text = decisions(&repo).replacen(
         "\n## Rejected findings\n",
         &format!("\n## Proposed learnings\n\n{standing}\n\n## Rejected findings\n"),
         1,
     );
+    fs::write(repo.root.join(rel), text).expect("write");
+    let (lost, vacuous) = two_classes(&repo);
+    let cites = format!("`{}`, `{}`", lost[0], lost[1]);
+    let text = decisions(&repo).replacen("CITES", &cites, 1);
     fs::write(repo.root.join(rel), text).expect("write");
     answering(
         &repo,
@@ -315,6 +317,7 @@ fn an_overlapping_learning_merges_into_its_entry() {
     assert_eq!(classes, ["vacuous test"], "{report:?}");
     assert_eq!(report.merged.len(), 1, "{report:?}");
     let written = decisions(&repo);
+    let (lost, _) = two_classes(&repo);
     assert_eq!(written.matches("- [proposed] ").count(), 2, "{written}");
     assert!(!written.contains("`lost result`"), "{written}");
     assert!(
@@ -330,7 +333,6 @@ fn an_overlapping_learning_merges_into_its_entry() {
 fn an_earned_rule_takes_the_instances_of_its_class() {
     let (repo, cfg) = seeded();
     with_signal(&repo);
-    let (lost, _) = two_classes(&repo);
     let rel = ".enallagi/DECISIONS.md";
     let rule = "- [2026-09-29] a result dropped before its caller: assert on what the caller receives in `src/agent.rs`";
     let text = decisions(&repo).replacen(
@@ -339,10 +341,12 @@ fn an_earned_rule_takes_the_instances_of_its_class() {
         1,
     );
     fs::write(repo.root.join(rel), text).expect("write");
+    let (lost, _) = two_classes(&repo);
     answering(&repo, &learning("lost result", LOST, &refs(&lost)));
     let report = audited(&repo, &cfg).expect("audit");
     assert!(report.proposed.is_empty(), "{report:?}");
     let written = decisions(&repo);
+    let (lost, _) = two_classes(&repo);
     let cites: Vec<String> = lost.iter().map(|c| format!("`{c}`")).collect();
     assert!(
         written.contains(&format!("{rule}\n  instances: {}\n", cites.join(", "))),
@@ -355,17 +359,17 @@ fn an_earned_rule_takes_the_instances_of_its_class() {
 fn a_killed_learning_is_not_proposed_again() {
     let (repo, _) = seeded();
     with_signal(&repo);
-    let (lost, vacuous) = two_classes(&repo);
     let rel = ".enallagi/DECISIONS.md";
-    let killed = format!(
-        "- [proposed] `dropped result`: a result is dropped before the caller sees it → assert on what the caller receives\n  instances: `{}`, `{}`\n  killed: 2026-09-29 the fetch was a fixture",
-        lost[0], lost[1]
-    );
+    let killed = "- [proposed] `dropped result`: a result is dropped before the caller sees it → assert on what the caller receives\n  instances: CITES\n  killed: 2026-09-29 the fetch was a fixture";
     let text = decisions(&repo).replacen(
         "\n## Rejected findings\n",
         &format!("\n## Proposed learnings\n\n{killed}\n\n## Rejected findings\n"),
         1,
     );
+    fs::write(repo.root.join(rel), text).expect("write");
+    let (lost, vacuous) = two_classes(&repo);
+    let cites = format!("`{}`, `{}`", lost[0], lost[1]);
+    let text = decisions(&repo).replacen("CITES", &cites, 1);
     fs::write(repo.root.join(rel), text).expect("write");
     answering(
         &repo,
@@ -381,6 +385,8 @@ fn a_killed_learning_is_not_proposed_again() {
     assert!(!out.contains("proposed `lost result`"), "{out}");
     assert!(out.contains("proposed `vacuous test`"), "{out}");
     let written = decisions(&repo);
+    let (moved, _) = two_classes(&repo);
+    let killed = killed.replacen("CITES", &format!("`{}`, `{}`", moved[0], moved[1]), 1);
     assert!(written.contains(&killed), "{written}");
     assert!(!written.contains("`lost result`"), "{written}");
 }
@@ -469,6 +475,15 @@ fn a_second_audit_repeats_no_proposal() {
     );
     assert_eq!(audited(&repo, &cfg).expect("audit").proposed.len(), 2);
     let once = decisions(&repo);
+    let (lost, vacuous) = two_classes(&repo);
+    answering(
+        &repo,
+        &format!(
+            "{}{}",
+            learning("lost result", LOST, &refs(&lost)),
+            learning("vacuous test", VACUOUS, &refs(&vacuous))
+        ),
+    );
     let again = audited(&repo, &cfg).expect("audit");
     assert!(again.proposed.is_empty(), "{again:?}");
     assert_eq!(again.merged.len(), 2, "{again:?}");
@@ -501,4 +516,476 @@ fn a_failed_auditor_writes_nothing() {
     let err = audited(&repo, &cfg).expect_err("a failed auditor");
     assert!(err.to_string().contains("exited 1"), "{err}");
     assert_eq!(decisions(&repo), before);
+}
+
+fn commit_state(repo: &Repo, subject: &str) -> String {
+    let state = repo.root.join(".enallagi");
+    for (key, value) in [("user.email", "t@t"), ("user.name", "t")] {
+        enallagi::git::git(&state, &["config", key, value]).expect("identity");
+    }
+    enallagi::git::git(&state, &["add", "-A"]).expect("add");
+    enallagi::git::git(
+        &state,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            subject,
+        ],
+    )
+    .expect("commit");
+    enallagi::git::git(&state, &["rev-parse", "--short", "HEAD"]).expect("head")
+}
+
+const RULE: &str =
+    "- [2026-10-01] `lost result`: a result dropped before its caller → assert on what the caller receives";
+const LATER: &str = "friction: spawn dropped the stage result again before the caller saw it\n";
+
+fn earned(repo: &Repo, entry: &str) {
+    let text = decisions(repo).replacen(
+        "## Earned rules\n",
+        &format!("## Earned rules\n\n{entry}\n"),
+        1,
+    );
+    fs::write(repo.root.join(".enallagi/DECISIONS.md"), text).expect("write");
+}
+
+// a rule promoted over the fixture's signal, whose class then recurs in one later friction
+fn recurred(repo: &Repo, extra: &[&str]) -> (String, String) {
+    with_signal(repo);
+    earned(repo, RULE);
+    let sha = commit_state(repo, "a promoted rule");
+    append(repo, ".enallagi/PROGRESS.md", LATER);
+    let (lost, _) = two_classes(repo);
+    let new = at(
+        repo,
+        ".enallagi/PROGRESS.md",
+        "spawn dropped the stage result",
+    );
+    let mut lines = vec![
+        format!("  promoted: {sha}"),
+        format!("  instances: `{}`, `{}`, `{new}`", lost[0], lost[1]),
+    ];
+    lines.extend(extra.iter().map(|r| format!("  {r}")));
+    let text = decisions(repo).replacen(
+        &format!("{RULE}\n"),
+        &format!("{RULE}\n{}\n", lines.join("\n")),
+        1,
+    );
+    fs::write(repo.root.join(".enallagi/DECISIONS.md"), text).expect("write");
+    (sha, new)
+}
+
+fn revision(handle: &str, cites: &[&str]) -> String {
+    learning("lost result", LOST, cites).replacen(
+        "END ENALLAGI LEARNING",
+        &format!("revises: `{handle}`\nEND ENALLAGI LEARNING"),
+        1,
+    )
+}
+
+#[test]
+fn an_audit_stamps_each_rule_with_its_promotion() {
+    let (repo, cfg) = seeded();
+    earned(&repo, RULE);
+    let sha = commit_state(&repo, "a promoted rule");
+    commit_state(&repo, "a later round");
+    audited(&repo, &cfg).expect("audit");
+    assert!(
+        decisions(&repo).contains(&format!("{RULE}\n  promoted: {sha}\n")),
+        "{}",
+        decisions(&repo)
+    );
+}
+
+#[test]
+fn an_ineffective_rule_goes_back_for_revision() {
+    let (repo, cfg) = seeded();
+    let (sha, new) = recurred(&repo, &[]);
+    let handle = at(&repo, ".enallagi/DECISIONS.md", "`lost result`");
+    let (lost, _) = two_classes(&repo);
+    answering(&repo, &revision(&handle, &[&lost[2], &new]));
+    let report = audited(&repo, &cfg).expect("audit");
+    let asked = prompts(&repo);
+    assert_eq!(asked.len(), 1, "{asked:#?}");
+    assert!(asked[0].contains(&format!("- `{handle}`")), "{}", asked[0]);
+    assert!(asked[0].contains(&format!("`{new}`")), "{}", asked[0]);
+    assert!(asked[0].contains(&sha), "{}", asked[0]);
+    let classes: Vec<&str> = report.proposed.iter().map(|p| p.class.as_str()).collect();
+    assert_eq!(classes, ["lost result"], "{report:?}");
+    let written = decisions(&repo);
+    assert!(
+        written.contains(&format!("- [proposed] `lost result`: {LOST}")),
+        "{written}"
+    );
+    let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
+    assert!(
+        written.contains(&format!("  revised: {today} `lost result`\n")),
+        "{written}"
+    );
+
+    fs::remove_file(repo.root.join("src/.prompts")).expect("clear");
+    let again = audited(&repo, &cfg).expect("audit");
+    assert!(again.proposed.is_empty(), "{again:?}");
+    assert!(
+        prompts(&repo)
+            .iter()
+            .all(|p| !p.contains(&format!("- `{handle}`"))),
+        "{:#?}",
+        prompts(&repo)
+    );
+}
+
+#[test]
+fn a_promoted_revision_replaces_its_rule() {
+    let (repo, cfg) = seeded();
+    let revised = "- [2026-10-05] `lost result v2`: spawn drops the result → return it whole";
+    earned(
+        &repo,
+        &format!("{RULE}\n  revised: 2026-10-02 `lost result v2`\n{revised}"),
+    );
+    audited(&repo, &cfg).expect("audit");
+    let written = decisions(&repo);
+    assert!(!written.contains(RULE), "{written}");
+    assert!(
+        written.contains(&format!(
+            "{revised}\n  adopted: 2026-10-02 `lost result v2`\n"
+        )),
+        "{written}"
+    );
+}
+
+#[test]
+fn a_rule_whose_revisions_died_is_handed_back() {
+    let (repo, cfg) = seeded();
+    recurred(
+        &repo,
+        &[
+            "revised: 2026-10-02 `lost result`",
+            "revised: 2026-10-04 `lost result`",
+        ],
+    );
+    let handle = at(&repo, ".enallagi/DECISIONS.md", "`lost result`");
+    let report = audited(&repo, &cfg).expect("audit");
+    assert!(report.removed.is_empty(), "{report:?}");
+    assert!(decisions(&repo).contains(RULE), "{}", decisions(&repo));
+    let asked = prompts(&repo);
+    assert!(asked[0].contains(&format!("- `{handle}`")), "{}", asked[0]);
+}
+
+#[test]
+fn a_stamp_moves_the_cites_below_it() {
+    let (repo, cfg) = seeded();
+    with_signal(&repo);
+    let rel = ".enallagi/DECISIONS.md";
+    let (rejected, verdict) = ("a mutant survived", "REJECTED: the probe returns ok");
+    earned(&repo, &format!("{RULE}\n  instances: CITES"));
+    let cites = format!(
+        "`{}`, `{}`",
+        at(&repo, rel, rejected),
+        at(&repo, rel, verdict)
+    );
+    let text = decisions(&repo).replacen("CITES", &cites, 1);
+    fs::write(repo.root.join(rel), text).expect("write");
+    commit_state(&repo, "a promoted rule");
+    audited(&repo, &cfg).expect("audit");
+    let written = decisions(&repo);
+    assert!(written.contains("  promoted: "), "{written}");
+    let moved = format!(
+        "`{}`, `{}`",
+        at(&repo, rel, rejected),
+        at(&repo, rel, verdict)
+    );
+    assert!(
+        written.contains(&format!("  instances: {moved}\n")),
+        "{written}"
+    );
+}
+
+#[test]
+fn a_rule_recurring_after_two_revisions_is_removed() {
+    let (repo, cfg) = seeded();
+    let (_, new) = recurred(
+        &repo,
+        &[
+            "adopted: 2026-10-02 `lost result`",
+            "adopted: 2026-10-04 `lost result`",
+        ],
+    );
+    let handle = at(&repo, ".enallagi/DECISIONS.md", "`lost result`");
+    audited(&repo, &cfg).expect("audit");
+    let written = decisions(&repo);
+    assert!(!written.contains(RULE), "{written}");
+    let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
+    let expired = written
+        .split("## Expired findings")
+        .nth(1)
+        .unwrap_or_else(|| panic!("{written}"));
+    assert!(
+        expired
+            .lines()
+            .any(|l| l.starts_with(&format!("- [{today}] "))
+                && l.contains("`lost result`")
+                && l.contains("2 revisions")
+                && l.contains(&format!("`{new}`"))),
+        "{written}"
+    );
+    assert!(
+        prompts(&repo)
+            .iter()
+            .all(|p| !p.contains(&format!("- `{handle}`"))),
+        "{:#?}",
+        prompts(&repo)
+    );
+}
+
+#[test]
+fn a_rule_not_recurring_is_not_handed_back() {
+    let (repo, cfg) = seeded();
+    with_signal(&repo);
+    let (lost, _) = two_classes(&repo);
+    earned(
+        &repo,
+        &format!("{RULE}\n  instances: `{}`, `{}`", lost[0], lost[1]),
+    );
+    let sha = commit_state(&repo, "a promoted rule");
+    let handle = at(&repo, ".enallagi/DECISIONS.md", "`lost result`");
+    audited(&repo, &cfg).expect("audit");
+    let written = decisions(&repo);
+    assert!(
+        written.contains(&format!("  promoted: {sha}\n")),
+        "{written}"
+    );
+    assert!(!written.contains("  revised: "), "{written}");
+    assert!(
+        prompts(&repo)
+            .iter()
+            .all(|p| !p.contains(&format!("- `{handle}`"))),
+        "{:#?}",
+        prompts(&repo)
+    );
+}
+
+#[test]
+fn a_friction_repeated_after_promotion_recurs() {
+    let (repo, cfg) = seeded();
+    append(&repo, ".enallagi/PROGRESS.md", LATER);
+    let (_, first) = recurred(&repo, &[]);
+    let progress = fs::read_to_string(repo.root.join(".enallagi/PROGRESS.md")).expect("read");
+    let copy = progress
+        .lines()
+        .collect::<Vec<_>>()
+        .iter()
+        .rposition(|l| *l == LATER.trim_end())
+        .expect("the copy");
+    let second = format!(".enallagi/PROGRESS.md:{}", copy + 1);
+    assert_ne!(first, second);
+    let text =
+        decisions(&repo).replacen(&format!("`{first}`"), &format!("`{first}`, `{second}`"), 1);
+    fs::write(repo.root.join(".enallagi/DECISIONS.md"), text).expect("write");
+    let found = audit::ineffective(&repo.root, &cfg).expect("ineffective");
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].recurred, [second], "{found:?}");
+}
+
+#[test]
+fn a_removal_above_leaves_a_revised_rule_its_line() {
+    let (repo, cfg) = seeded();
+    let (sha, new) = recurred(&repo, &[]);
+    let upper = format!(
+        "- [2026-09-30] `stale rule`: a stale rule → drop it\n  promoted: {sha}\n  instances: `{new}`\n  adopted: 2026-10-02 `stale rule`\n  adopted: 2026-10-04 `stale rule`"
+    );
+    earned(&repo, &upper);
+    let before = at(&repo, ".enallagi/DECISIONS.md", "`lost result`");
+    let (rel, line) = before.rsplit_once(':').expect("cite");
+    let handle = format!("{rel}:{}", line.parse::<usize>().expect("line") - 5);
+    // a DECISIONS.md cite would move with the removal, so both are PROGRESS.md lines
+    let (lost, _) = two_classes(&repo);
+    answering(&repo, &revision(&handle, &[&lost[0], &new]));
+    let report = audited(&repo, &cfg).expect("audit");
+    assert_eq!(report.removed, ["stale rule"], "{report:?}");
+    assert_eq!(at(&repo, ".enallagi/DECISIONS.md", "`lost result`"), handle);
+    let asked = prompts(&repo);
+    assert!(asked[0].contains(&format!("- `{handle}`")), "{}", asked[0]);
+    let written = decisions(&repo);
+    let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
+    let rule = written.split(RULE).nth(1).expect("the rule stays");
+    let rule = rule.split("\n- ").next().unwrap_or_default();
+    assert!(
+        rule.contains(&format!("  revised: {today} `lost result`")),
+        "{report:?}\n{written}"
+    );
+}
+
+#[test]
+fn a_removal_alone_is_reported() {
+    let (repo, _) = seeded();
+    recurred(
+        &repo,
+        &[
+            "adopted: 2026-10-02 `lost result`",
+            "adopted: 2026-10-04 `lost result`",
+        ],
+    );
+    let (code, out) = audit_bin(&repo);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("audit: removed `lost result`"), "{out}");
+    assert!(!out.contains("nothing written"), "{out}");
+}
+
+const INSTALL_A: &str = "# D\n\n## Earned rules\n\n- [2026-09-20] `lost result`: a result dropped before its caller → assert on what the caller receives\n  instances: `a:1`, `a:2`, `a:3`\n- [2026-09-21] `vacuous test`: a test that selects nothing passes → assert the filter ran a test\n- [2026-09-22] `slow disk`: a lane waits on a slow disk → raise the wait ceiling\n- [2026-09-23] a scope line written from readers halts the run → write scope from the declaring file\n\n## Rejected findings\n";
+const INSTALL_B: &str = "# D\n\n## Earned rules\n\n- [2026-09-25] `Lost result`: a stage result is dropped before the caller sees it\n  → assert on what the caller receives\n  promoted: abc1234\n- [2026-09-26] `vacuous test`: a filter that matches no test is green → count the tests run\n- [2026-09-27] the run halts when a scope line is written from readers → scope the declaring file\n\n## Rejected findings\n";
+const INSTALL_C: &str = "# D\n\n## Earned rules\n\n## Rejected findings\n\n## Proposed learnings\n\n- [proposed] `vacuous test`: a green filter ran nothing → assert a test ran\n  instances: `c:1`, `c:2`\n  killed: 2026-09-28 the filter was a fixture\n";
+
+fn installs() -> Vec<Repo> {
+    [INSTALL_A, INSTALL_B, INSTALL_C]
+        .iter()
+        .map(|text| {
+            let repo = Repo::new();
+            repo.write("DECISIONS.md", text);
+            repo
+        })
+        .collect()
+}
+
+fn shared_bin(cwd: &Repo, dirs: &[&Repo]) -> (i32, String) {
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .arg("audit")
+        .arg("--harness")
+        .args(dirs.iter().map(|d| &d.root))
+        .current_dir(&cwd.root)
+        .output()
+        .expect("spawn");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.code().unwrap_or(-1), text)
+}
+
+#[test]
+fn a_rule_two_installs_earned_is_a_seed() {
+    let all = installs();
+    let dirs: Vec<std::path::PathBuf> = all.iter().map(|r| r.root.clone()).collect();
+    let shared = audit::shared(&dirs).expect("shared");
+    let classes: Vec<&str> = shared.iter().map(|s| s.class.as_str()).collect();
+    assert_eq!(
+        classes,
+        [
+            "lost result",
+            "a scope line written from readers halts the run → write scope from the declaring file"
+        ],
+        "{shared:?}"
+    );
+    let lost = &shared[0];
+    assert_eq!(lost.earned.len(), 2, "{lost:?}");
+    assert_eq!(lost.earned[0].0, all[0].root.join("DECISIONS.md"));
+    assert_eq!(lost.earned[0].1, 5);
+    assert!(lost.earned[0].2.starts_with("- [2026-09-20] `lost result`"));
+    assert_eq!(lost.earned[1].0, all[1].root.join("DECISIONS.md"));
+    assert!(lost.earned[1].2.starts_with("- [2026-09-25] `Lost result`"));
+    assert_eq!(
+        lost.seed,
+        "- [seed] a result dropped before its caller → assert on what the caller receives"
+    );
+}
+
+#[test]
+fn one_install_or_a_kill_is_no_seed() {
+    let all = installs();
+    let dirs: Vec<std::path::PathBuf> = all.iter().map(|r| r.root.clone()).collect();
+    let shared = audit::shared(&dirs).expect("shared");
+    assert!(!shared.iter().any(|s| s.class == "slow disk"), "{shared:?}");
+    assert!(
+        !shared.iter().any(|s| s.class == "vacuous test"),
+        "{shared:?}"
+    );
+    let without_c = audit::shared(&dirs[..2]).expect("shared");
+    assert!(
+        without_c.iter().any(|s| s.class == "vacuous test"),
+        "{without_c:?}"
+    );
+}
+
+#[test]
+fn a_kill_of_any_group_member_is_no_seed() {
+    let texts = [
+        "# D\n\n## Earned rules\n\n- [2026-09-23] a scope line written from readers halts the run → write scope from the declaring file\n",
+        "# D\n\n## Earned rules\n\n- [2026-09-27] `scope readers`: the run halts when a scope line is written from readers → scope the declaring file\n",
+        "# D\n\n## Proposed learnings\n\n- [proposed] `scope readers`: a lane edits a file nobody owns\n  killed: 2026-09-28 one instance\n",
+    ];
+    let all: Vec<Repo> = texts
+        .iter()
+        .map(|text| {
+            let repo = Repo::new();
+            repo.write("DECISIONS.md", text);
+            repo
+        })
+        .collect();
+    let dirs: Vec<std::path::PathBuf> = all.iter().map(|r| r.root.clone()).collect();
+    assert_eq!(audit::shared(&dirs[..2]).expect("shared").len(), 1);
+    let shared = audit::shared(&dirs).expect("shared");
+    assert!(shared.is_empty(), "{shared:?}");
+}
+
+#[test]
+fn audit_harness_prints_seeds_and_writes_nothing() {
+    let all = installs();
+    let cwd = Repo::new();
+    let (code, out) = shared_bin(&cwd, &all.iter().collect::<Vec<_>>());
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("audit: `lost result` earned in 2 installs"),
+        "{out}"
+    );
+    let a = all[0].root.join("DECISIONS.md");
+    assert!(
+        out.contains(&format!("  {}:5 - [2026-09-20] `lost result`", a.display())),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "\n- [seed] a result dropped before its caller → assert on what the caller receives\n"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("slow disk"), "{out}");
+    assert!(!out.contains("vacuous test"), "{out}");
+    for (repo, text) in all.iter().zip([INSTALL_A, INSTALL_B, INSTALL_C]) {
+        assert_eq!(
+            fs::read_to_string(repo.root.join("DECISIONS.md")).unwrap(),
+            text
+        );
+    }
+    let status = enallagi::git::git(&cwd.root, &["status", "--porcelain"]).expect("status");
+    assert_eq!(status, "", "{status}");
+}
+
+#[test]
+fn audit_harness_counts_an_install_named_twice_once() {
+    let all = installs();
+    let cwd = Repo::new();
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .arg("audit")
+        .arg("--harness")
+        .arg(&all[0].root)
+        .arg(all[0].root.join("."))
+        .current_dir(&cwd.root)
+        .output()
+        .expect("spawn");
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("two or more"), "{text}");
+}
+
+#[test]
+fn audit_harness_refuses_one_install() {
+    let all = installs();
+    let cwd = Repo::new();
+    let (code, out) = shared_bin(&cwd, &[&all[0]]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("two or more"), "{out}");
 }

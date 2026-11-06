@@ -4164,6 +4164,20 @@ fn a_learning_killed_on_a_red_gate_is_named() {
 }
 
 #[test]
+fn a_killed_revision_of_a_rule_is_not_promoted() {
+    let rule = "- [2026-09-01] `vacuous-test`: a test passed with its logic deleted → delete it\n  revised: 2026-09-28 `vacuous-test`\n";
+    let killed = format!("{LEARNING}  killed: 2026-09-29 two instances\n");
+    let r = deciding_learning(&decisions(rule, &killed), "");
+    r.write("DECISIONS.md", &decisions(rule, LEARNING));
+    r.commit_all("a revision proposed");
+    let text = pipeline::digest_text(&go(&r, &opts(1)).0);
+    assert!(
+        text.contains("learnings: 0 proposed, 0 promoted, 1 killed, 0 expired"),
+        "{text}"
+    );
+}
+
+#[test]
 fn a_learning_past_its_rounds_expires() {
     let r = deciding_learning(&decisions("", LEARNING), "\n[queue]\nproposed_rounds = 1\n");
     let archived = format!(

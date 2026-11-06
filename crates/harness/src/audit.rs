@@ -8,13 +8,19 @@ use crate::queue::{self, QueueError};
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub const PROPOSED: &str = "## Proposed learnings";
 const EARNED: &str = "## Earned rules";
 const REJECTED: &str = "## Rejected findings";
 const EXPIRED: &str = "## Expired findings";
+const PROMOTED: &str = "promoted:";
+const REVISED: &str = "revised:";
+// a revision the adjudicator promoted; `revised:` only says one was proposed
+const ADOPTED: &str = "adopted:";
+// a rule revised this many times that recurs again is removed, never handed back
+const REVISIONS: usize = 2;
 // a class with fewer instances than this is one occurrence, which PROGRESS.md keeps as evidence
 const RECURS: usize = 2;
 const BEGIN: &str = "BEGIN ENALLAGI LEARNING";
@@ -70,6 +76,9 @@ pub struct Report {
     pub proposed: Vec<Proposal>,
     pub merged: Vec<String>,
     pub refused: Vec<String>,
+    pub revised: Vec<String>,
+    // the class each removed rule was last revised under
+    pub removed: Vec<String>,
     pub decisions: String,
     // the auditor's call, when one ran: its seconds and cost
     pub spent: Option<(u64, Option<f64>)>,
@@ -141,10 +150,13 @@ fn frictions(root: &Path, cfg: &Config, rel: &str) -> Result<Vec<Signal>, AuditE
     };
     for (name, result) in probes::run_all(&ctx, &["friction-repeat".to_string()]) {
         match result {
-            ProbeResult::Count(found) => out.extend(found.into_iter().map(|f| Signal {
-                at: format!("{}:{}", f.path, f.line),
-                text: f.message,
-            })),
+            // an ineffective rule is handed back on its own, with the instances that recurred
+            ProbeResult::Count(found) => {
+                out.extend(found.into_iter().filter(|f| f.path == rel).map(|f| Signal {
+                    at: format!("{}:{}", f.path, f.line),
+                    text: f.message,
+                }))
+            }
             ProbeResult::Error(e) => return Err(AuditError::Read(format!("{name}: {e}"))),
             ProbeResult::Off(_) => {}
         }
@@ -196,6 +208,7 @@ struct Learning {
     class: String,
     text: String,
     instances: Vec<String>,
+    revises: Option<String>,
 }
 
 // a JSON event line is read for the strings it carries, so a preset that streams events still answers
@@ -238,11 +251,14 @@ fn parse(body: &str) -> Learning {
         class: String::new(),
         text: String::new(),
         instances: Vec::new(),
+        revises: None,
     };
     let mut text: Vec<&str> = Vec::new();
     for line in body.lines().map(str::trim).filter(|l| !l.is_empty()) {
         if let Some(class) = line.strip_prefix("class:") {
             learning.class = class.trim().trim_matches('`').to_string();
+        } else if let Some(rule) = line.strip_prefix("revises:") {
+            learning.revises = Some(rule.trim().trim_matches('`').to_string());
         } else if let Some(cites) = line.strip_prefix("instances:") {
             for c in cite.captures_iter(cites) {
                 if !learning.instances.contains(&c[1].to_string()) {
@@ -306,11 +322,11 @@ fn said(entry: &str) -> String {
         None => first,
     };
     std::iter::once(first)
-        .chain(
-            lines
-                .map(str::trim)
-                .filter(|l| !l.starts_with("instances:") && !l.starts_with("killed:")),
-        )
+        .chain(lines.map(str::trim).filter(|l| {
+            !["instances:", "killed:", PROMOTED, REVISED, ADOPTED]
+                .iter()
+                .any(|k| l.starts_with(k))
+        }))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -349,15 +365,19 @@ fn standing(learnings: &str, decisions: &str) -> Vec<Entry> {
     out
 }
 
-// adds each cite the entry lacks to its `instances:` line, or opens one; returns how many were new
-fn merge(text: &str, line: usize, cites: &[String]) -> (String, usize) {
-    let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
-    let end = line
-        + 1
+// the line after the entry opening at 0-based `line`
+fn end(lines: &[String], line: usize) -> usize {
+    line + 1
         + lines[line + 1..]
             .iter()
             .take_while(|l| l.starts_with("  ") && !l.trim().is_empty())
-            .count();
+            .count()
+}
+
+// adds each cite the entry lacks to its `instances:` line, or opens one; returns how many were new
+fn merge(text: &str, line: usize, cites: &[String]) -> (String, usize) {
+    let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
+    let end = end(&lines, line);
     let at = (line + 1..end).find(|&i| lines[i].trim_start().starts_with("instances:"));
     let held = at.map(|i| lines[i].clone()).unwrap_or_default();
     let new: Vec<String> = cites
@@ -389,7 +409,7 @@ pub fn render(proposal: &Proposal) -> String {
     )
 }
 
-fn prompt(role: &str, signal: &[Signal]) -> String {
+fn prompt(role: &str, signal: &[Signal], rel: &str, handed: &[Ineffective]) -> String {
     let cited: Vec<String> = signal
         .iter()
         .map(|s| {
@@ -401,11 +421,32 @@ fn prompt(role: &str, signal: &[Signal]) -> String {
             format!("- `{}`\n{}", s.at, text.join("\n"))
         })
         .collect();
-    format!(
+    let mut out = format!(
         "{role}\n\nThe {} findings, each with the text read at its citation:\n\n{}\n",
         signal.len(),
         cited.join("\n")
-    )
+    );
+    if !handed.is_empty() {
+        let rules: Vec<String> = handed
+            .iter()
+            .map(|r| {
+                let new: Vec<String> = r.recurred.iter().map(|c| format!("`{c}`")).collect();
+                format!(
+                    "- `{rel}:{}` promoted at {}: {}\n    recurred: {}",
+                    r.line,
+                    r.promoted,
+                    r.rule,
+                    new.join(", ")
+                )
+            })
+            .collect();
+        out.push_str(&format!(
+            "\nThe {} earned rules below recurred after their promotion, so each did not work. Revise each one: write one learning for it, cite the instances that recurred, and add the line `revises: <its citation>` above `END ENALLAGI LEARNING`.\n\n{}\n",
+            handed.len(),
+            rules.join("\n")
+        ));
+    }
+    out
 }
 
 // an installed role file overrides the shipped one, so an empty one leaves the agent no role
@@ -552,24 +593,21 @@ fn class_of(entry: &str) -> Option<String> {
     rest.split_once('`').map(|(class, _)| class.to_string())
 }
 
-// an entry no commit carries is one just written, which is as new as an entry gets
+// a class can be proposed again after its last proposal left, so count from the newest commit that added it;
+// if that commit removed it instead, this entry is uncommitted and as new as an entry gets
 fn age(root: &Path, cfg: &Config, rel: &str, needle: &str) -> usize {
     let (repo, inner, _) = git::locate(root, &cfg.layout.harness_dir, rel);
     let commits = git::git(&repo, &["log", "--format=%H"]).unwrap_or_default();
     git::git(
         &repo,
-        &[
-            "log",
-            "--reverse",
-            "--format=%H",
-            "-S",
-            needle,
-            "--",
-            &inner,
-        ],
+        &["log", "-1", "--format=%H", "-S", needle, "--", &inner],
     )
     .ok()
-    .and_then(|found| found.lines().next().map(String::from))
+    .map(|found| found.trim().to_string())
+    .filter(|sha| {
+        git::git(&repo, &["show", &format!("{sha}:{inner}")])
+            .is_ok_and(|then| then.contains(needle))
+    })
     .and_then(|sha| commits.lines().position(|c| c == sha))
     .unwrap_or(0)
 }
@@ -589,8 +627,13 @@ pub fn waiting(root: &Path, cfg: &Config) -> Result<Vec<Waiting>, AuditError> {
         .collect())
 }
 
-/// Of the classes that were waiting, those since moved under `## Earned rules`, and those since killed.
-pub fn decided(root: &Path, cfg: &Config, before: &[String]) -> (Vec<String>, Vec<String>) {
+/// Of the classes that were waiting, those with an `## Earned rules` entry `was` lacked, and those with a kill it lacked.
+pub fn decided(
+    root: &Path,
+    cfg: &Config,
+    before: &[String],
+    was: &str,
+) -> (Vec<String>, Vec<String>) {
     let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
     let text = read(root, &rel).unwrap_or_default();
     let still: Vec<String> = waiting(root, cfg)
@@ -598,19 +641,25 @@ pub fn decided(root: &Path, cfg: &Config, before: &[String]) -> (Vec<String>, Ve
         .into_iter()
         .map(|w| w.class)
         .collect();
-    let earned: Vec<String> = section(&text, EARNED)
-        .into_iter()
-        .map(|(_, l)| l.to_string())
-        .collect();
+    // a revision can reuse its rule's class, so an earned entry or a kill counts only when it is new
+    let earned = |text: &str, named: &str| {
+        entries(&section(text, EARNED))
+            .iter()
+            .filter(|(_, e)| e.lines().next().is_some_and(|l| l.contains(named)))
+            .count()
+    };
+    let kills = |text: &str, class: &String| {
+        entries(&section(text, PROPOSED))
+            .iter()
+            .filter(|(_, e)| class_of(e).as_ref() == Some(class) && e.contains("killed:"))
+            .count()
+    };
     let (mut promoted, mut killed) = (Vec::new(), Vec::new());
     for class in before.iter().filter(|c| !still.contains(c)) {
         let named = format!("`{class}`");
-        if earned.iter().any(|l| l.contains(&named)) {
+        if earned(&text, &named) > earned(was, &named) {
             promoted.push(class.clone());
-        } else if entries(&section(&text, PROPOSED))
-            .iter()
-            .any(|(_, e)| class_of(e).as_ref() == Some(class) && e.contains("killed:"))
-        {
+        } else if kills(&text, class) > kills(was, class) {
             killed.push(class.clone());
         }
     }
@@ -633,12 +682,7 @@ pub fn expire(root: &Path, cfg: &Config, today: &str) -> Result<Vec<String>, Aud
     // from the bottom, so removing an entry leaves every earlier line number true
     for w in stale.iter().rev() {
         let at = w.line - 1;
-        let end = at
-            + 1
-            + lines[at + 1..]
-                .iter()
-                .take_while(|l| l.starts_with("  ") && !l.trim().is_empty())
-                .count();
+        let end = end(&lines, at);
         let entry: Vec<String> = lines.drain(at..end).collect();
         dated.push(format!(
             "- [{today}] `{}` expired after {} rounds undecided: {}",
@@ -648,35 +692,228 @@ pub fn expire(root: &Path, cfg: &Config, today: &str) -> Result<Vec<String>, Aud
         ));
     }
     dated.reverse();
-    let out = match lines.iter().position(|l| l.trim_end() == EXPIRED) {
-        // archived task blocks sit under the section, so the lines go before its first heading
-        Some(at) => {
-            let end = lines[at + 1..]
-                .iter()
-                .position(|l| l.starts_with("## "))
-                .map_or(lines.len(), |i| at + 1 + i);
-            let last = at
-                + lines[at..end]
-                    .iter()
-                    .rposition(|l| !l.trim().is_empty())
-                    .unwrap_or(0);
-            let mut out = lines[..=last].to_vec();
-            if !lines[last].starts_with("- ") {
-                out.push(String::new());
-            }
-            out.extend(dated);
-            out.push(String::new());
-            out.extend(lines[end..].iter().cloned());
-            out.join("\n")
-        }
-        None => format!(
-            "{}\n\n{EXPIRED}\n\n{}\n",
-            lines.join("\n").trim_end(),
-            dated.join("\n")
-        ),
-    };
-    fs::write(root.join(&rel), out)?;
+    let out = with_expired(&lines.join("\n"), &dated);
+    fs::write(root.join(&rel), rehome(&text, &out, &rel))?;
     Ok(stale.into_iter().map(|w| w.class).collect())
+}
+
+fn with_expired(text: &str, dated: &[String]) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let Some(at) = lines.iter().position(|l| l.trim_end() == EXPIRED) else {
+        return format!("{}\n\n{EXPIRED}\n\n{}\n", text.trim_end(), dated.join("\n"));
+    };
+    // archived task blocks sit under the section, so the lines go before its first heading
+    let next = lines[at + 1..]
+        .iter()
+        .position(|l| l.starts_with("## "))
+        .map_or(lines.len(), |i| at + 1 + i);
+    let last = at
+        + lines[at..next]
+            .iter()
+            .rposition(|l| !l.trim().is_empty())
+            .unwrap_or(0);
+    let mut out: Vec<String> = lines[..=last].iter().map(|l| l.to_string()).collect();
+    if !lines[last].starts_with("- ") {
+        out.push(String::new());
+    }
+    out.extend(dated.iter().cloned());
+    out.push(String::new());
+    out.extend(lines[next..].iter().map(|l| l.to_string()));
+    out.join("\n")
+}
+
+// the trimmed value of each indented `key` line under an entry
+fn values<'a>(entry: &'a str, key: &str) -> Vec<&'a str> {
+    entry
+        .lines()
+        .skip(1)
+        .filter_map(|l| l.trim_start().strip_prefix(key))
+        .map(str::trim)
+        .collect()
+}
+
+fn cites(value: &str) -> Vec<String> {
+    let cite = Regex::new(r"`([^`]+)`").expect("pattern");
+    cite.captures_iter(value)
+        .map(|c| c[1].to_string())
+        .collect()
+}
+
+#[derive(Debug)]
+pub struct Ineffective {
+    // 1-based line in DECISIONS.md
+    pub line: usize,
+    pub rule: String,
+    pub promoted: String,
+    // the instances whose cited line the promotion commit did not hold
+    pub recurred: Vec<String>,
+    // the class each revision was proposed under
+    pub revised: Vec<String>,
+    // the class of each revision promoted, the last being this rule
+    pub adopted: Vec<String>,
+}
+
+// ponytail: a sha cite never reads as recurred; judging one needs commit order across both repositories
+fn recurred(root: &Path, cfg: &Config, sha: &str, cite: &str) -> bool {
+    let Some((file, line)) = cite.rsplit_once(':') else {
+        return false;
+    };
+    let Ok(line) = line.parse::<usize>() else {
+        return false;
+    };
+    let text = fs::read_to_string(root.join(file)).unwrap_or_default();
+    let upto: Vec<&str> = text.lines().take(line).map(str::trim).collect();
+    let Some(&now) = line.checked_sub(1).and_then(|i| upto.get(i)) else {
+        return false;
+    };
+    let (repo, inner, _) = git::locate(root, &cfg.layout.harness_dir, file);
+    if now.is_empty() || !git::git_ok(&repo, &["cat-file", "-e", &format!("{sha}^{{commit}}")]) {
+        return false;
+    }
+    let then = git::git(&repo, &["show", &format!("{sha}:{inner}")]).unwrap_or_default();
+    // a friction appended again word for word is a new occurrence, so count copies, not presence
+    let nth = upto.iter().filter(|l| **l == now).count();
+    then.lines().filter(|l| l.trim() == now).count() < nth
+}
+
+fn recurring(root: &Path, cfg: &Config, text: &str) -> Vec<Ineffective> {
+    entries(&section(text, EARNED))
+        .into_iter()
+        .filter_map(|(line, entry)| {
+            let promoted = values(&entry, PROMOTED).first()?.to_string();
+            let recurred: Vec<String> = values(&entry, "instances:")
+                .iter()
+                .flat_map(|v| cites(v))
+                .filter(|c| recurred(root, cfg, &promoted, c))
+                .collect();
+            (!recurred.is_empty()).then(|| Ineffective {
+                line,
+                rule: said(&entry),
+                promoted,
+                recurred,
+                revised: values(&entry, REVISED)
+                    .iter()
+                    .filter_map(|v| cites(v).pop())
+                    .collect(),
+                adopted: values(&entry, ADOPTED)
+                    .iter()
+                    .filter_map(|v| cites(v).pop())
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
+/// Each earned rule an instance recurred against after the commit its `promoted:` line names.
+pub fn ineffective(root: &Path, cfg: &Config) -> Result<Vec<Ineffective>, AuditError> {
+    let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
+    Ok(recurring(root, cfg, &read(root, &rel)?))
+}
+
+// `old` and `new` are one file before and after an edit: each `instances:` cite into it moves to its line's same copy in `new`
+fn rehome(old: &str, new: &str, rel: &str) -> String {
+    let old: Vec<&str> = old.split('\n').collect();
+    let now: Vec<&str> = new.split('\n').collect();
+    let cite = Regex::new(&format!(r"`{}:(\d+)`", regex::escape(rel))).expect("pattern");
+    let moved = |c: &regex::Captures| {
+        let at = c[1].parse::<usize>().unwrap_or(0);
+        let Some(line) = at.checked_sub(1).and_then(|i| old.get(i)) else {
+            return c[0].to_string();
+        };
+        let nth = old[..at].iter().filter(|l| *l == line).count();
+        now.iter()
+            .enumerate()
+            .filter(|(_, l)| *l == line)
+            .nth(nth - 1)
+            .map_or(c[0].to_string(), |(i, _)| format!("`{rel}:{}`", i + 1))
+    };
+    now.iter()
+        .map(|l| {
+            if l.trim_start().starts_with("instances:") {
+                cite.replace_all(l, |c: &regex::Captures| moved(c))
+                    .into_owned()
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+// the commit that first carried the rule's opening line, or HEAD while it is uncommitted
+fn stamp(root: &Path, cfg: &Config, rel: &str, text: &str) -> String {
+    let (repo, inner, _) = git::locate(root, &cfg.layout.harness_dir, rel);
+    let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
+    for (at, entry) in entries(&section(text, EARNED)).into_iter().rev() {
+        if !values(&entry, PROMOTED).is_empty() {
+            continue;
+        }
+        let first = entry.lines().next().unwrap_or_default();
+        let sha = git::git(
+            &repo,
+            &["log", "--reverse", "--format=%h", "-S", first, "--", &inner],
+        )
+        .ok()
+        .and_then(|found| found.lines().next().map(String::from))
+        .or_else(|| git::git(&repo, &["rev-parse", "--short", "HEAD"]).ok());
+        if let Some(sha) = sha {
+            let end = end(&lines, at - 1);
+            lines.insert(end, format!("  {PROMOTED} {sha}"));
+        }
+    }
+    lines.join("\n")
+}
+
+// a rule whose last revision was promoted under `## Earned rules` gives way to it, which carries its adoptions on
+fn supersede(text: &str) -> String {
+    let mut text = text.to_string();
+    'again: loop {
+        let earned = entries(&section(&text, EARNED));
+        for (i, (at, entry)) in earned.iter().enumerate() {
+            let revised = values(entry, REVISED);
+            let Some(class) = revised.last().and_then(|v| cites(v).pop()) else {
+                continue;
+            };
+            let named = format!("`{class}`");
+            let Some((later, _)) = earned[i + 1..]
+                .iter()
+                .find(|(_, e)| e.lines().next().is_some_and(|l| l.contains(&named)))
+            else {
+                continue;
+            };
+            let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
+            let to = end(&lines, later - 1);
+            let carried: Vec<String> = values(entry, ADOPTED)
+                .into_iter()
+                .chain(revised.last().copied())
+                .map(|v| format!("  {ADOPTED} {v}"))
+                .collect();
+            lines.splice(to..to, carried);
+            let to = end(&lines, at - 1);
+            lines.drain(at - 1..to);
+            text = lines.join("\n");
+            continue 'again;
+        }
+        return text;
+    }
+}
+
+fn refusal(root: &Path, body: &str, learning: &Learning) -> Option<String> {
+    let class = format!("`{}`", learning.class);
+    if learning.class.is_empty() {
+        return Some(format!(
+            "a learning refused: it names no `class:` line: {body}"
+        ));
+    }
+    if let Some(cite) = learning.instances.iter().find(|c| !resolves(root, c)) {
+        return Some(format!("{class} refused: `{cite}` does not resolve"));
+    }
+    (learning.instances.len() < RECURS).then(|| {
+        format!(
+            "{class} refused: {} instance, a learning needs {RECURS}",
+            learning.instances.len()
+        )
+    })
 }
 
 /// Hands the signal to the auditor role, and writes each learning whose citations resolve, merged into an entry it overlaps.
@@ -685,7 +922,57 @@ pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, Aud
     let decisions_rel = config::instance_rel(root, dir, "DECISIONS.md");
     let learnings_rel = config::instance_rel(root, dir, "LEARNINGS.md");
     let tasks_rel = config::instance_rel(root, dir, "TASKS.md");
-    let decisions = read(root, &decisions_rel)?;
+    let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
+    let mut report = Report {
+        decisions: decisions_rel.clone(),
+        ..Report::default()
+    };
+
+    let held = read(root, &decisions_rel)?;
+    let mut lines: Vec<String> = stamp(root, cfg, &decisions_rel, &supersede(&held))
+        .split('\n')
+        .map(String::from)
+        .collect();
+    let waiting: Vec<String> = waiting(root, cfg)?.into_iter().map(|w| w.class).collect();
+    let mut handed = Vec::new();
+    let mut removed = Vec::new();
+    // from the bottom, so removing a rule leaves every earlier line number true
+    for rule in recurring(root, cfg, &lines.join("\n")).into_iter().rev() {
+        if rule.revised.last().is_some_and(|c| waiting.contains(c)) {
+            continue;
+        }
+        if rule.adopted.len() < REVISIONS {
+            handed.push(rule);
+            continue;
+        }
+        let to = end(&lines, rule.line - 1);
+        lines.drain(rule.line - 1..to);
+        // every rule handed so far sits below this one
+        for below in &mut handed {
+            below.line -= to - (rule.line - 1);
+        }
+        let class = rule.adopted.last().cloned().unwrap_or_default();
+        let cited: Vec<String> = rule.recurred.iter().map(|c| format!("`{c}`")).collect();
+        removed.push(format!(
+            "- [{today}] `{class}` removed: {} recurred after {} revisions since {}: {}",
+            cited.join(", "),
+            rule.adopted.len(),
+            rule.promoted,
+            rule.rule
+        ));
+        report.removed.push(class);
+    }
+    handed.reverse();
+    removed.reverse();
+    let mut kept = lines.join("\n");
+    if !removed.is_empty() {
+        kept = with_expired(&kept, &removed);
+    }
+    let kept = rehome(&held, &kept, &decisions_rel);
+    if kept != held {
+        fs::write(root.join(&decisions_rel), &kept)?;
+    }
+    let decisions = kept;
 
     let mut signal = frictions(root, cfg, &config::instance_rel(root, dir, "PROGRESS.md"))?;
     signal.extend(reviewed(&read(root, &tasks_rel)?, &tasks_rel)?);
@@ -694,16 +981,17 @@ pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, Aud
     let mut seen = BTreeSet::new();
     signal.retain(|s| seen.insert(s.at.clone()));
 
-    let mut report = Report {
-        decisions: decisions_rel.clone(),
-        ..Report::default()
-    };
-    if signal.len() < RECURS {
+    if signal.len() < RECURS && handed.is_empty() {
         return Ok(report);
     }
-    let rels = [learnings_rel, decisions_rel];
+    let rels = [learnings_rel, decisions_rel.clone()];
     let original = [read(root, &rels[0])?, decisions];
-    let result = ask(root, cfg, prompt(&role(root, cfg), &signal), events)?;
+    let result = ask(
+        root,
+        cfg,
+        prompt(&role(root, cfg), &signal, &decisions_rel, &handed),
+        events,
+    )?;
     let spent = (result.seconds, result.usage.cost);
     report.spent = Some(spent);
     let bodies = answers(&result.output);
@@ -714,26 +1002,48 @@ pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, Aud
     }
 
     let mut texts = original.clone();
-    for body in &bodies {
-        let learning = parse(body);
+    let parsed: Vec<(&String, Learning)> = bodies.iter().map(|b| (b, parse(b))).collect();
+    let target = |l: &Learning| {
+        handed
+            .iter()
+            .map(|h| h.line)
+            .find(|line| l.revises.as_deref() == Some(format!("{decisions_rel}:{line}").as_str()))
+    };
+    let mut revisions: Vec<(usize, &String, &Learning)> = parsed
+        .iter()
+        .filter_map(|(b, l)| Some((target(l)?, *b, l)))
+        .collect();
+    // from the bottom, so a `revised:` line leaves every earlier rule's line true
+    revisions.sort_by_key(|(line, _, _)| std::cmp::Reverse(*line));
+    let mut rendered = Vec::new();
+    for (line, body, learning) in revisions {
+        if let Some(refused) = refusal(root, body, learning) {
+            report.refused.push(refused);
+            continue;
+        }
+        let mut lines: Vec<String> = texts[1].split('\n').map(String::from).collect();
+        let to = end(&lines, line - 1);
+        lines.insert(to, format!("  {REVISED} {today} `{}`", learning.class));
+        texts[1] = lines.join("\n");
+        report.revised.push(format!(
+            "`{}` revises {decisions_rel}:{line}",
+            learning.class
+        ));
+        let proposal = Proposal {
+            class: learning.class.clone(),
+            instances: learning.instances.clone(),
+            learning: learning.text.clone(),
+        };
+        rendered.push(render(&proposal));
+        report.proposed.push(proposal);
+    }
+    if !rendered.is_empty() {
+        texts[1] = with_proposed(&texts[1], &rendered);
+    }
+    for (body, learning) in parsed.into_iter().filter(|(_, l)| target(l).is_none()) {
         let class = format!("`{}`", learning.class);
-        if learning.class.is_empty() {
-            report.refused.push(format!(
-                "a learning refused: it names no `class:` line: {body}"
-            ));
-            continue;
-        }
-        if let Some(cite) = learning.instances.iter().find(|c| !resolves(root, c)) {
-            report
-                .refused
-                .push(format!("{class} refused: `{cite}` does not resolve"));
-            continue;
-        }
-        if learning.instances.len() < RECURS {
-            report.refused.push(format!(
-                "{class} refused: {} instance, a learning needs {RECURS}",
-                learning.instances.len()
-            ));
+        if let Some(refused) = refusal(root, body, &learning) {
+            report.refused.push(refused);
             continue;
         }
         let said = format!("{} {}", learning.class, learning.text);
@@ -762,6 +1072,7 @@ pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, Aud
             }
         }
     }
+    texts[1] = rehome(&original[1], &texts[1], &decisions_rel);
     for i in 0..2 {
         if texts[i] != original[i] {
             fs::write(root.join(&rels[i]), &texts[i]).map_err(|e| AuditError::Spent {
@@ -771,6 +1082,122 @@ pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, Aud
         }
     }
     Ok(report)
+}
+
+/// A class two or more installs earned and none killed, with each install's dated line.
+#[derive(Debug)]
+pub struct Shared {
+    pub class: String,
+    // the install's DECISIONS.md, the 1-based line the rule opens on, and that line
+    pub earned: Vec<(PathBuf, usize, String)>,
+    pub seed: String,
+}
+
+struct Ruled {
+    install: usize,
+    path: PathBuf,
+    line: usize,
+    first: String,
+    class: Option<String>,
+    text: String,
+    killed: bool,
+}
+
+// "`class`: rest" names its class, and a rule without one is matched on its words
+fn handle(said: &str) -> (Option<String>, String) {
+    said.strip_prefix('`')
+        .and_then(|r| r.split_once("`: "))
+        .map_or((None, said.to_string()), |(c, r)| {
+            (Some(c.to_lowercase()), r.to_string())
+        })
+}
+
+fn same(a: &Ruled, b: &Ruled) -> bool {
+    match (&a.class, &b.class) {
+        (Some(x), Some(y)) => x == y,
+        _ => overlaps(&a.text, &b.text),
+    }
+}
+
+// the line form templates/LEARNINGS.md uses: wrapped near 100 columns, continued two spaces in
+fn seed(text: &str) -> String {
+    let mut lines = vec![String::from("- [seed]")];
+    for word in text.split_whitespace() {
+        let last = lines.last_mut().expect("one line");
+        if last.chars().count() + 1 + word.chars().count() > 100 {
+            lines.push(format!("  {word}"));
+        } else {
+            last.push(' ');
+            last.push_str(word);
+        }
+    }
+    lines.join("\n")
+}
+
+/// Each class earned under `## Earned rules` in two or more of the installs' DECISIONS.md and killed in none. Reads only.
+pub fn shared(dirs: &[PathBuf]) -> Result<Vec<Shared>, AuditError> {
+    let mut rules = Vec::new();
+    for (install, dir) in dirs.iter().enumerate() {
+        let path = dir.join("DECISIONS.md");
+        let text = fs::read_to_string(&path)
+            .map_err(|e| AuditError::Read(format!("{}: {e}", path.display())))?;
+        for heading in [EARNED, PROPOSED] {
+            for (at, entry) in entries(&section(&text, heading)) {
+                let killed = entry.lines().any(|l| l.trim_start().starts_with("killed:"));
+                if heading == PROPOSED && !killed {
+                    continue;
+                }
+                let (class, text) = handle(&said(&entry));
+                rules.push(Ruled {
+                    install,
+                    path: path.clone(),
+                    line: at,
+                    first: entry.lines().next().unwrap_or_default().to_string(),
+                    class,
+                    text,
+                    killed,
+                });
+            }
+        }
+    }
+    let mut taken = vec![false; rules.len()];
+    let mut out = Vec::new();
+    for i in 0..rules.len() {
+        if taken[i] || rules[i].killed {
+            continue;
+        }
+        let mut group = vec![i];
+        for j in i + 1..rules.len() {
+            let installs: BTreeSet<usize> = group.iter().map(|&g| rules[g].install).collect();
+            if !taken[j]
+                && !rules[j].killed
+                && !installs.contains(&rules[j].install)
+                && same(&rules[i], &rules[j])
+            {
+                group.push(j);
+            }
+        }
+        if group.len() < 2
+            || rules
+                .iter()
+                .any(|r| r.killed && group.iter().any(|&g| same(&rules[g], r)))
+        {
+            continue;
+        }
+        for &g in &group {
+            taken[g] = true;
+        }
+        let rule = &rules[i];
+        out.push(Shared {
+            class: rule.class.clone().unwrap_or_else(|| rule.text.clone()),
+            earned: group
+                .iter()
+                .map(|&g| (rules[g].path.clone(), rules[g].line, rules[g].first.clone()))
+                .collect(),
+            seed: seed(&rule.text),
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

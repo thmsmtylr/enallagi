@@ -1,4 +1,4 @@
-//! A friction recorded twice in PROGRESS.md that no LEARNINGS.md rule, earned rule or dated kill line covers: matched by token overlap, not exact text.
+//! A friction recorded twice in PROGRESS.md that no LEARNINGS.md rule, earned rule or dated kill line covers, matched by token overlap, not exact text; and an earned rule whose class recurred after its promotion.
 
 use super::common::{self, Res};
 use super::ponytail_ceiling;
@@ -179,6 +179,24 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         })
     };
 
+    let decisions = common::instance(ctx, "DECISIONS.md");
+    let ineffective = crate::audit::ineffective(ctx.root, ctx.cfg)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|rule| {
+            let cited: Vec<String> = rule.recurred.iter().map(|c| format!("`{c}`")).collect();
+            common::finding(
+                &decisions,
+                rule.line,
+                format!(
+                    "the earned rule is ineffective: {} recurred after its promotion at {}: {}",
+                    cited.join(", "),
+                    rule.promoted,
+                    common::cut(&rule.rule, 90)
+                ),
+            )
+        });
+
     Ok(groups
         .iter()
         .filter(|group| group.hits.len() > 1 && !covered(&group.first))
@@ -194,6 +212,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
                 ),
             ))
         })
+        .chain(ineffective)
         .collect())
 }
 

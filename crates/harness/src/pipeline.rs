@@ -159,6 +159,7 @@ pub struct Learnings {
     pub promoted: Vec<String>,
     pub killed: Vec<String>,
     pub expired: Vec<String>,
+    pub removed: Vec<String>,
 }
 
 // an empty promoted/killed pair means nothing to decide only if the stage both spawned and ended
@@ -431,6 +432,7 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         needs_spec_at_start: Vec::new(),
         proposed_at_start: Vec::new(),
         learnings_at_start: Vec::new(),
+        decisions_at_start: String::new(),
         dry_rounds: 0,
         dry_pipeline: None,
         spent: Vec::new(),
@@ -465,6 +467,7 @@ struct Loop<'a> {
     needs_spec_at_start: Vec<String>,
     proposed_at_start: Vec<String>,
     learnings_at_start: Vec<String>,
+    decisions_at_start: String,
     dry_rounds: u32,
     dry_pipeline: Option<String>,
     // pipelines whose end_after_dry_rounds this run has spent; `choose` passes over them until a
@@ -495,6 +498,8 @@ impl<'a> Loop<'a> {
     fn go(&mut self) -> anyhow::Result<Digest> {
         self.needs_spec_at_start = self.ids_at("needs-spec");
         self.learnings_at_start = waiting_classes(self.root, self.cfg);
+        self.decisions_at_start =
+            std::fs::read_to_string(self.file("DECISIONS.md")).unwrap_or_default();
         self.emit(Kind::RunStart {
             config_sha256: config_sha256(self.root),
             pipeline: None,
@@ -554,7 +559,12 @@ impl<'a> Loop<'a> {
 
     // once per run and never between stages: the audit reads what every iteration recorded
     fn learnings(&mut self) {
-        let (promoted, killed) = audit::decided(self.root, self.cfg, &self.learnings_at_start);
+        let (promoted, killed) = audit::decided(
+            self.root,
+            self.cfg,
+            &self.learnings_at_start,
+            &self.decisions_at_start,
+        );
         self.digest.learnings.promoted = promoted;
         self.digest.learnings.killed = killed;
         let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
@@ -587,6 +597,7 @@ impl<'a> Loop<'a> {
             Some(Ok(report)) => {
                 self.digest.learnings.proposed =
                     report.proposed.into_iter().map(|p| p.class).collect();
+                self.digest.learnings.removed = report.removed;
             }
             Some(Err(err)) => self.digest.warnings.push(err.to_string()),
             None => {}
@@ -1729,17 +1740,19 @@ pub fn digest_text(digest: &Digest) -> String {
     let l = &digest.learnings;
     let _ = writeln!(
         out,
-        "learnings: {} proposed, {} promoted, {} killed, {} expired",
+        "learnings: {} proposed, {} promoted, {} killed, {} expired, {} removed",
         l.proposed.len(),
         l.promoted.len(),
         l.killed.len(),
-        l.expired.len()
+        l.expired.len(),
+        l.removed.len()
     );
     for (word, classes) in [
         ("proposed", &l.proposed),
         ("promoted", &l.promoted),
         ("killed", &l.killed),
         ("expired", &l.expired),
+        ("removed", &l.removed),
     ] {
         for class in classes {
             let _ = writeln!(out, "  {word} `{class}`");

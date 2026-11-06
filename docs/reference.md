@@ -36,7 +36,23 @@ The adjudicator decides each proposed learning.
 It promotes one under `## Earned rules` only with three or more instances and a passing `enallagi eval --gate`.
 Otherwise it writes a dated `killed: YYYY-MM-DD` line under the entry, which keeps its class from being proposed again.
 A learning undecided for `queue.proposed_rounds` rounds moves to `## Expired findings` as a dated line.
-The run digest counts and names the learnings proposed, promoted, killed and expired.
+The run digest counts and names the learnings proposed, promoted, killed and expired, and the rules removed.
+
+The audit stamps each earned rule with a `promoted:` line naming the commit that added it.
+An instance merged into the rule whose line that commit did not hold makes the rule ineffective.
+A line appended again word for word counts as a new one.
+The next audit hands an ineffective rule back to the auditor, which proposes a revision like any learning.
+The rule gains a dated `revised:` line, and a promoted revision replaces it with an `adopted:` line for it and for each adoption before.
+A rule that recurs after two adopted revisions moves to `## Expired findings` as a dated line.
+The audit moves each citation into `DECISIONS.md` with the line it names when it edits the file.
+
+`enallagi audit --harness <dir>...` reads `DECISIONS.md` in each install directory given.
+A directory named twice, by any path, counts as one install.
+It reports each rule that two or more installs earned under `## Earned rules`.
+A rule killed in any install is left out.
+Each report names every install's dated line and prints the rule as a `[seed]` line.
+It only reports: it writes to no install and to no file in this repository.
+A person adds the line to `templates/LEARNINGS.md` in a pull request.
 
 `enallagi events --prefix` prints one row per role stage in `events.jsonl`.
 Each row carries the stage's three input token lanes.
@@ -96,7 +112,7 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `rejection-stale` | a block whose last verdict is REJECTED and whose status is not `ready` |
 | `title-length` | a block title past 72 characters, from `queue.title_cap_from` on, except an imported issue still `proposed`; the id and the count |
 | `queue-hygiene` | a repeated id, a missing status, an undefined blocker, or a scope entry matching nothing |
-| `friction-repeat` | a friction recorded twice that no LEARNINGS.md rule, `## Earned rules` line or kill line covers |
+| `friction-repeat` | a friction recorded twice that no LEARNINGS.md rule, `## Earned rules` line or kill line covers, and an earned rule whose class recurred after its `promoted:` commit |
 | `check-red` | a check that exits non-zero, with its first failing test |
 | `litter` | a tracked path the repository treats as disposable, or an untracked path on no allowlist |
 | `plain-record` | a commit subject, note or printed line that comments instead of recording |
