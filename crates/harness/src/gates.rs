@@ -65,6 +65,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "implementer-not-done" => implementer_not_done(ctx),
         "commit-verdict" => commit_verdict(ctx),
         "verdict" => verdict(ctx),
+        "claims" => claims(ctx),
         "scope" => scope(ctx),
         "queue-intact" => queue_intact(ctx),
         "commit-identity" => commit_identity(ctx),
@@ -453,6 +454,118 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         ),
     );
     GateOutcome { tally, ..outcome }
+}
+
+// the `ran:`/`exit:` pairs after the block's last verdict header; a recorded command may itself name VERIFIER
+fn claimed_runs(ctx: &GateCtx, task: &str) -> Vec<(String, i32)> {
+    let text = tasks_file(ctx.root, ctx.cfg).read().unwrap_or_default();
+    let blocks = queue::parse(&text).unwrap_or_default();
+    let Some(block) = blocks.iter().find(|b| b.id == task) else {
+        return Vec::new();
+    };
+    let lines: Vec<&str> = block.body.iter().map(|(_, l)| l.trim()).collect();
+    let marker = regex::Regex::new(r"^(notes:\s*)?VERIFIER\b").expect("pattern");
+    let Some(start) = lines.iter().rposition(|l| marker.is_match(l)) else {
+        return Vec::new();
+    };
+    let mut runs = Vec::new();
+    for pair in lines[start..].windows(2) {
+        let (Some(cmd), Some(exit)) = (pair[0].strip_prefix("ran:"), pair[1].strip_prefix("exit:"))
+        else {
+            continue;
+        };
+        if let Ok(exit) = exit.trim().trim_matches('`').parse() {
+            runs.push((cmd.trim().trim_matches('`').to_string(), exit));
+        }
+    }
+    runs
+}
+
+// a verdict's pasted exit is otherwise its word alone; the allowlist bounds what a lane's text may run here
+fn claims(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(task) = ctx.task.clone() else {
+        return pass("no task");
+    };
+    match status_of(ctx, &task) {
+        Err(_) => return unreadable(ctx, &task),
+        Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
+        Ok(_) => {}
+    }
+    let allow = &ctx.cfg.check.claims_allow;
+    if allow.is_empty() {
+        return pass("claims_allow is empty");
+    }
+    let runs = claimed_runs(ctx, &task);
+    if runs.is_empty() {
+        return pass("the latest VERIFIER entry claims no ran:/exit: pair");
+    }
+    let timeout = ctx
+        .cfg
+        .check
+        .timeout_duration()
+        .unwrap_or(crate::config::DEFAULT_CHECK_TIMEOUT);
+    let (mut refuted, mut flaky, mut held, mut skipped) = (vec![], vec![], vec![], vec![]);
+    for (cmd, claimed) in runs {
+        // the command goes to `sh -c`, so a prefix match alone would let `<prefix>; <anything>` run
+        if cmd.contains([';', '&', '|', '`', '$', '<', '>', '\n'])
+            || !allow.iter().any(|p| cmd.starts_with(p.as_str()))
+        {
+            skipped.push(format!("`{cmd}`"));
+            continue;
+        }
+        let mut exits = [-1; 2];
+        for exit in &mut exits {
+            let Ok(run) = run_bounded(ctx.root, &cmd, timeout) else {
+                continue;
+            };
+            let report = CheckReport {
+                timed_out: hang_reason("the claim", &cmd, timeout, &run),
+                ..CheckReport::default()
+            };
+            if let Some(halt) = hung(ctx, &report) {
+                return halt;
+            }
+            *exit = run.exit;
+        }
+        let [a, b] = exits;
+        let line = format!("`{cmd}` claimed exit {claimed}, re-ran exit {a} and {b}");
+        if a != claimed && b != claimed {
+            refuted.push(line);
+        } else if a != b {
+            flaky.push(line);
+        } else {
+            held.push(line);
+        }
+    }
+    if !refuted.is_empty() {
+        let reason = format!(
+            "the verifier returned done and a claimed exit did not reproduce: {}",
+            refuted.join("; ")
+        );
+        return force_back(
+            ctx,
+            "claims",
+            &task,
+            "ready",
+            &reason,
+            &format!("chore({task}): enallagi gate rejected a claimed exit"),
+            &format!("{task} was forced back to ready: {}", refuted.join("; ")),
+        );
+    }
+    let mut parts = Vec::new();
+    if !flaky.is_empty() {
+        parts.push(format!("flaky: {}", flaky.join("; ")));
+    }
+    if !held.is_empty() {
+        parts.push(format!("reproduced: {}", held.join("; ")));
+    }
+    if !skipped.is_empty() {
+        parts.push(format!(
+            "not re-run, outside claims_allow or carrying a shell operator: {}",
+            skipped.join(", ")
+        ));
+    }
+    pass(parts.join(". "))
 }
 
 // word boundaries, so one id never matches a longer id it prefixes
@@ -1272,25 +1385,12 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
             };
         }
     };
-    let Run {
-        exit,
-        output,
-        timed_out,
-        stopped,
-    } = run;
+    let hang = hang_reason("the check", command, timeout, &run);
+    let Run { exit, output, .. } = run;
     // a runner forced into colour would otherwise need every fail_name to spell out its escape codes
     let output = strip_ansi(&output);
     let tally = tally(&output, &cfg.check.tally);
-    if timed_out || stopped.is_some() {
-        let reason = match stopped {
-            Some(signal) => {
-                format!("the check was stopped by {signal} and its process group was killed: `{command}`")
-            }
-            None => format!(
-                "the check ran past {}s and its process group was killed: `{command}`",
-                timeout.as_secs()
-            ),
-        };
+    if let Some(reason) = hang {
         return CheckReport {
             output: format!("{reason}\n{output}"),
             exit,
@@ -1377,6 +1477,19 @@ fn baseline(path: &Path) -> Vec<String> {
         .map(|l| l.split('#').next().unwrap_or("").trim().to_string())
         .filter(|l| !l.is_empty())
         .collect()
+}
+
+fn hang_reason(what: &str, command: &str, timeout: Duration, run: &Run) -> Option<String> {
+    match run.stopped {
+        Some(signal) => Some(format!(
+            "{what} was stopped by {signal} and its process group was killed: `{command}`"
+        )),
+        None if run.timed_out => Some(format!(
+            "{what} ran past {}s and its process group was killed: `{command}`",
+            timeout.as_secs()
+        )),
+        None => None,
+    }
 }
 
 // a hang is not a failing test: a red would send the task back to ready and buy the same hang again
@@ -2178,6 +2291,137 @@ mod tests {
         assert!(out.pass, "{}", out.reason);
         assert!(env.tasks_text().contains("status: done"));
         assert!(env.warnings.is_empty());
+    }
+
+    impl Env {
+        fn claimed(&mut self, allow: &[&str], verdicts: &str) {
+            let path = self.repo.root.join("enallagi.toml");
+            let toml = std::fs::read_to_string(&path).expect("read enallagi.toml");
+            let allow: Vec<String> = allow.iter().map(|p| format!("'{p}'")).collect();
+            self.repo.write(
+                "enallagi.toml",
+                &format!("{toml}claims_allow = [{}]\n", allow.join(", ")),
+            );
+            self.cfg = crate::config::load(&self.repo.root).expect("load enallagi.toml");
+            self.repo.write(
+                "TASKS.md",
+                &format!(
+                    "## [T-001] first\nscope: src/a.ts\nrows: none — harness\nblockedBy: none\nstatus: done\nnotes: IMPLEMENTER: did it.\n{verdicts}"
+                ),
+            );
+            self.repo.commit_all("verdict");
+        }
+    }
+
+    #[test]
+    fn a_claimed_pass_that_fails_is_forced_back() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(
+            &["true", "false"],
+            "VERIFIER: VERIFIED.\nran: false\nexit: 0\n",
+        );
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(!out.pass, "{}", out.reason);
+        assert!(out.reason.contains("`false`"), "{}", out.reason);
+        assert!(out.reason.contains("claimed exit 0"), "{}", out.reason);
+        assert!(out.reason.contains("1 and 1"), "{}", out.reason);
+        assert!(
+            env.tasks_text().contains("status: ready"),
+            "{}",
+            env.tasks_text()
+        );
+        assert!(env.events().iter().any(|e| matches!(&e.kind,
+            Kind::TaskStatus { to, by, .. } if to == "ready" && by == "claims")));
+    }
+
+    #[test]
+    fn a_claim_that_reproduces_passes() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(
+            &["true", "false"],
+            "VERIFIER: REJECTED.\nran: false\nexit: 0\nVERIFIER: VERIFIED.\nran: true\nexit: 0\n",
+        );
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert!(env.tasks_text().contains("status: done"));
+    }
+
+    #[test]
+    fn a_claim_that_flips_between_runs_is_flaky() {
+        let mut env = Env::new("exit 0\n");
+        env.repo.write(
+            "flaky.sh",
+            "test -e flaky.mark && exit 1; touch flaky.mark\n",
+        );
+        env.claimed(&["sh "], "VERIFIER: VERIFIED.\nran: sh flaky.sh\nexit: 0\n");
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert!(out.reason.starts_with("flaky:"), "{}", out.reason);
+        assert!(out.reason.contains("sh flaky.sh"), "{}", out.reason);
+        assert!(out.reason.contains("0 and 1"), "{}", out.reason);
+    }
+
+    #[test]
+    fn a_claim_outside_the_allowlist_never_runs() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(
+            &["true"],
+            "VERIFIER: VERIFIED.\nran: touch outside.mark\nexit: 0\n",
+        );
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert!(!env.repo.root.join("outside.mark").exists());
+        assert!(out.reason.contains("not re-run"), "{}", out.reason);
+        assert!(out.reason.contains("touch outside.mark"), "{}", out.reason);
+    }
+
+    #[test]
+    fn a_chained_claim_never_runs() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(
+            &["true"],
+            "VERIFIER: VERIFIED.\nran: true; touch a.mark\nexit: 0\nran: true && touch b.mark\nexit: 0\nran: true | touch c.mark\nexit: 0\nran: true $(touch d.mark)\nexit: 0\nran: true `touch e.mark`\nexit: 0\nran: true > f.mark\nexit: 0\n",
+        );
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        for mark in ["a", "b", "c", "d", "e", "f"] {
+            let path = env.repo.root.join(format!("{mark}.mark"));
+            assert!(!path.exists(), "{mark}.mark: {}", out.reason);
+        }
+    }
+
+    #[test]
+    fn a_command_naming_verifier_does_not_start_a_verdict() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(
+            &["false", "grep "],
+            "VERIFIER: VERIFIED.\nran: false\nexit: 0\nran: grep -c VERIFIER TASKS.md\nexit: 0\n",
+        );
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(!out.pass, "{}", out.reason);
+        assert!(out.reason.contains("`false`"), "{}", out.reason);
+    }
+
+    #[test]
+    fn a_hung_claim_halts_after_one_run() {
+        let mut env = Env::timed("exit 0\n", "2s");
+        env.repo.write("hang.sh", "echo run >>runs.log\nsleep 10\n");
+        env.claimed(&["sh "], "VERIFIER: VERIFIED.\nran: sh hang.sh\nexit: 0\n");
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(out.halt && !out.pass, "{out:?}");
+        assert!(out.reason.contains("2s"), "{}", out.reason);
+        let runs = std::fs::read_to_string(env.repo.root.join("runs.log")).unwrap_or_default();
+        assert_eq!(runs.lines().count(), 1, "{runs}");
+        assert!(env.tasks_text().contains("status: done"));
+    }
+
+    #[test]
+    fn an_empty_claims_allow_passes() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(&[], "VERIFIER: VERIFIED.\nran: false\nexit: 0\n");
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert_eq!(out.reason, "claims_allow is empty");
     }
 
     #[test]

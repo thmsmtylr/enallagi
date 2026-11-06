@@ -60,6 +60,7 @@ halts the run. The names are matched in `crates/harness/src/gates.rs`.
 | `implementer-not-done` | a `done` from anyone but the verifier, or an implementer that stopped short of `review` | implement |
 | `commit-verdict` | a verdict whose `deferred:` line or new prose defers a finding and adds no `proposed` block, or a failed commit of TASKS.md | verify |
 | `verdict` | a `done` whose work is uncommitted, or whose check is red on delta | verify |
+| `claims` | a `done` whose latest verdict claims an exit on a `ran:` line that two re-runs both contradict, for commands `[check] claims_allow` names | verify |
 | `scope` | a file outside the task's `scope:` globs, or a product task editing the harness | verify |
 | `queue-intact` | a task id at the iteration's base commit that is in neither TASKS.md nor DECISIONS.md | implement, verify, adjudicate |
 | `commit-identity` | a commit in the iteration's range whose author is not the repository's configured `user.email` | implement, verify |
