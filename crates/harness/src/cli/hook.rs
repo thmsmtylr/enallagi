@@ -28,7 +28,11 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     std::io::stdin().read_to_string(&mut input)?;
 
     let (code, message) = match args.name.as_str() {
-        "immutable" => hooks::immutable(&root, &input),
+        "immutable" => hooks::immutable(
+            &root,
+            &input,
+            std::env::var("ENALLAGI_TASK").ok().as_deref(),
+        ),
         "one-writer" => hooks::one_writer(&root, &input),
         "verify-done" => hooks::verify_done(&root, &input),
         "skills" => hooks::skills_contract(&root),

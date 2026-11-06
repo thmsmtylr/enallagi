@@ -8,14 +8,17 @@ use crate::gates::{self, CheckReport};
 use crate::skills;
 
 // this can be bypassed via Bash sed -i or a heredoc: the real authority is the verifier reading the diff
-pub fn immutable(root: &Path, input: &str) -> (i32, String) {
+// task is ENALLAGI_TASK, which only a lane sets: an interactive session gets no scope exemption
+pub fn immutable(root: &Path, input: &str, task: Option<&str>) -> (i32, String) {
     let Some(target) = tool_input_path(root, input) else {
         return (0, String::new());
     };
 
     let cfg = config::load(root).ok();
     let dir = config::harness_dir(root);
-    if let Some(hit) = hashed_hit(root, &dir, &target) {
+    if let Some(hit) =
+        hashed_hit(root, &dir, &target).filter(|_| !own_scope(root, &dir, &target, task))
+    {
         return (
             2,
             format!(
@@ -35,6 +38,22 @@ pub fn immutable(root: &Path, input: &str) -> (i32, String) {
         );
     }
     (0, String::new())
+}
+
+// RAILS.md `harness-lane`: a hashed file on the ticket's own scope: line is the lane's to edit and re-cut
+fn own_scope(root: &Path, dir: &str, target: &Path, task: Option<&str>) -> bool {
+    if normalize(root, &config::instance_rel(root, dir, "test-hashes.json")) == *target {
+        return false;
+    }
+    let Some(scope) = task
+        .filter(|id| !id.is_empty())
+        .and_then(|id| crate::tracker::Tracker::open(root, dir).get(id).ok()?)
+        .and_then(|b| crate::block::field(&b, "scope"))
+    else {
+        return false;
+    };
+    let rel = target.strip_prefix(realpath_like(root)).unwrap_or(target);
+    gates::in_scope(&rel.to_string_lossy(), &gates::scope_globs(&scope))
 }
 
 fn tool_input_path(root: &Path, input: &str) -> Option<PathBuf> {
@@ -386,9 +405,25 @@ mod tests {
         let r = Repo::new();
         r.write("src/a.ts", "export const a = 1\n");
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
-        let (code, msg) = immutable(&r.root, &input("src/a.ts"));
+        let (code, msg) = immutable(&r.root, &input("src/a.ts"), None);
         assert_eq!(code, 2);
         assert!(msg.contains("covered by test-hashes.json"), "{msg}");
+    }
+
+    #[test]
+    fn immutable_scope_exempt() {
+        let r = Repo::new();
+        let hashes = r#"{".enallagi/enallagi.toml":"deadbeef"}"#;
+        r.write(".enallagi/test-hashes.json", hashes);
+        r.queue(
+            ".enallagi",
+            "## [T-001] x\nstatus: ready-for-agent\nscope: .enallagi/enallagi.toml, .enallagi/test-hashes.json\n",
+        );
+        let edit = |file: &str, task: Option<&str>| immutable(&r.root, &input(file), task).0;
+        assert_eq!(edit(".enallagi/enallagi.toml", Some("T-001")), 0);
+        assert_eq!(edit(".enallagi/test-hashes.json", Some("T-001")), 2);
+        assert_eq!(edit(".enallagi/enallagi.toml", None), 2);
+        assert_eq!(edit(".enallagi/test-hashes.json", None), 2);
     }
 
     #[test]
@@ -398,7 +433,7 @@ mod tests {
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         r.write(".enallagi/enallagi.toml", "[check]\ncomand = \"x\"\n");
         assert!(config::load(&r.root).is_err());
-        let (code, msg) = immutable(&r.root, &input("src/a.ts"));
+        let (code, msg) = immutable(&r.root, &input("src/a.ts"), None);
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("covered by test-hashes.json"), "{msg}");
     }
@@ -407,7 +442,7 @@ mod tests {
     fn immutable_refuses_the_reference_itself() {
         let r = Repo::new();
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
-        let (code, msg) = immutable(&r.root, &input(".enallagi/test-hashes.json"));
+        let (code, msg) = immutable(&r.root, &input(".enallagi/test-hashes.json"), None);
         assert_eq!(code, 2);
         assert!(msg.contains("the reference itself"), "{msg}");
     }
@@ -422,6 +457,7 @@ mod tests {
         let (code, msg) = immutable(
             &r.root,
             &input(".enallagi/adapters/claude/skills/tdd/SKILL.md"),
+            None,
         );
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("harness.lock"), "{msg}");
@@ -431,7 +467,7 @@ mod tests {
     fn immutable_allows_an_uncovered_file() {
         let r = Repo::new();
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
-        let (code, msg) = immutable(&r.root, &input("src/b.ts"));
+        let (code, msg) = immutable(&r.root, &input("src/b.ts"), None);
         assert_eq!(code, 0, "{msg}");
     }
 
@@ -443,7 +479,7 @@ mod tests {
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         std::os::unix::fs::symlink(r.root.join("src/a.ts"), r.root.join("src/b.ts"))
             .expect("symlink");
-        let (code, msg) = immutable(&r.root, &input("src/b.ts"));
+        let (code, msg) = immutable(&r.root, &input("src/b.ts"), None);
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("covered by test-hashes.json"), "{msg}");
     }
@@ -462,7 +498,7 @@ mod tests {
             r.root.join("alias"),
         )
         .expect("symlink");
-        let (code, msg) = immutable(&r.root, &input("alias/SKILL.md"));
+        let (code, msg) = immutable(&r.root, &input("alias/SKILL.md"), None);
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("harness.lock"), "{msg}");
     }
@@ -471,7 +507,7 @@ mod tests {
     fn immutable_normalizes_a_missing_target() {
         let r = Repo::new();
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
-        let (code, msg) = immutable(&r.root, &input("src/does-not-exist-yet.ts"));
+        let (code, msg) = immutable(&r.root, &input("src/does-not-exist-yet.ts"), None);
         assert_eq!(code, 0, "{msg}");
     }
 
@@ -487,15 +523,15 @@ mod tests {
             ".enallagi/test-hashes.json",
             r#"{"package.json#scripts":"deadbeef"}"#,
         );
-        let (code, msg) = immutable(&r.root, &input("packages/foo/package.json"));
+        let (code, msg) = immutable(&r.root, &input("packages/foo/package.json"), None);
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("package.json#scripts"), "{msg}");
 
-        let (code, _) = immutable(&r.root, &input("package.json"));
+        let (code, _) = immutable(&r.root, &input("package.json"), None);
         assert_eq!(code, 2);
 
         r.write("packages/bar/package.json", r#"{"name":"bar"}"#);
-        let (code, _) = immutable(&r.root, &input("packages/bar/other.ts"));
+        let (code, _) = immutable(&r.root, &input("packages/bar/other.ts"), None);
         assert_eq!(code, 0);
     }
 

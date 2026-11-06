@@ -217,12 +217,12 @@ fn immutable_refuses_an_edit_to_a_role() {
         "version = 1\n\n[[role]]\nid = \"implementer\"\nsource = \"path:vendor\"\nsha256 = \"ab\"\n",
     );
     let input = |path: &str| format!(r#"{{"tool_input":{{"file_path":"{path}"}}}}"#);
-    let (code, msg) = hooks::immutable(&repo.root, &input(".enallagi/roles/implementer.md"));
+    let (code, msg) = hooks::immutable(&repo.root, &input(".enallagi/roles/implementer.md"), None);
     assert_eq!(code, 2, "{msg}");
     assert!(msg.contains("harness.lock"), "{msg}");
     assert!(msg.contains("locked role `implementer`"), "{msg}");
 
-    let (code, msg) = hooks::immutable(&repo.root, &input(".enallagi/roles/verifier.md"));
+    let (code, msg) = hooks::immutable(&repo.root, &input(".enallagi/roles/verifier.md"), None);
     assert_eq!(code, 0, "{msg}");
 }
 

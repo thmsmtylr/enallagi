@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- the `immutable` hook lets a lane edit a hashed file its own ticket's `scope:` line names, as the scope gate does; `test-hashes.json` and sessions outside a lane stay refused
 - a new `skip-added` gate forces a `done` back when its commits add a skip with no stated reason; init writes `layout.skip_patterns` for the detected runner
 - a new `red-first` gate forces a `done` back when its test-only files pass with the rest of the change reverted; init writes `layout.test_only_glob` for the detected runner
 - `queue-intact` halts on any ticket file deleted since the base, whatever DECISIONS.md holds; a kill is `wontfix`

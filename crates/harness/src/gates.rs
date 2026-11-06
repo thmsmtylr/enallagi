@@ -1251,7 +1251,7 @@ pub(crate) fn role_file(cfg: &Config, id: &str) -> String {
     format!("{}/roles/{id}.md", cfg.layout.harness_dir)
 }
 
-fn scope_globs(line: &str) -> Vec<String> {
+pub(crate) fn scope_globs(line: &str) -> Vec<String> {
     line.replace(['`', ' '], "")
         .replace(',', " ")
         .split_whitespace()
