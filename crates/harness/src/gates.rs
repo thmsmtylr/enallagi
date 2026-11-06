@@ -68,6 +68,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "verdict" => verdict(ctx),
         "claims" => claims(ctx),
         "scope" => scope(ctx),
+        "red-first" => red_first(ctx),
         "queue-intact" => queue_intact(ctx),
         "commit-identity" => commit_identity(ctx),
         "commit-task" => commit_task(ctx),
@@ -914,6 +915,102 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
             "{task} was forced back to ready by the scope gate: {why}. The iteration's commits for {task} are on the branch; the next implement stage confirms them and answers the gate."
         ),
     )
+}
+
+// a detached worktree in the temp dir, removed on drop so a hang or a panic leaves the lane clean
+struct Scratch {
+    root: PathBuf,
+    dir: tempfile::TempDir,
+}
+
+impl Scratch {
+    fn add(root: &Path) -> Result<Scratch, String> {
+        let dir = tempfile::Builder::new()
+            .prefix("enallagi-red-first-")
+            .tempdir()
+            .map_err(|e| e.to_string())?;
+        let path = dir.path().to_string_lossy().into_owned();
+        git(root, &["worktree", "add", "--detach", &path, "HEAD"]).map_err(|e| e.to_string())?;
+        Ok(Scratch {
+            root: root.to_path_buf(),
+            dir,
+        })
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let path = self.dir.path().to_string_lossy().into_owned();
+        let _ = git(&self.root, &["worktree", "remove", "--force", &path]);
+        let _ = git(&self.root, &["worktree", "prune"]);
+    }
+}
+
+// a test that passes with the task's other files back at base proves nothing (T-485)
+fn red_first(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(task) = ctx.task.clone() else {
+        return pass("no task");
+    };
+    match status_of(ctx, &task) {
+        Err(_) => return unreadable(ctx, &task),
+        Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
+        Ok(_) => {}
+    }
+    let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
+        return pass("no base");
+    };
+    let globs = &ctx.cfg.layout.test_only_glob;
+    if globs.is_empty() {
+        return pass("test_only_glob is empty");
+    }
+    let (tests, source): (Vec<String>, Vec<String>) = match task_files(ctx, &base, &task, "") {
+        Ok(files) => files.into_iter().partition(|f| in_scope(f, globs)),
+        Err(e) => return fail(e.to_string()),
+    };
+    if tests.is_empty() {
+        return pass("no test-only file changed");
+    }
+    let tree = match Scratch::add(ctx.root) {
+        Ok(tree) => tree,
+        Err(e) => return fail(format!("red-first could not add a worktree: {e}")),
+    };
+    let at = tree.dir.path();
+    for f in &source {
+        // a file the task added is absent at base, so restoring it is deleting it
+        if git(at, &["cat-file", "-e", &format!("{base}:{f}")]).is_ok() {
+            let _ = git(at, &["checkout", &base, "--", f]);
+        } else {
+            let _ = std::fs::remove_file(at.join(f));
+        }
+    }
+    let timeout = ctx
+        .cfg
+        .check
+        .timeout_duration()
+        .unwrap_or(crate::config::DEFAULT_CHECK_TIMEOUT);
+    let run = run_bounded(at, &ctx.cfg.check.command, timeout);
+    drop(tree);
+    let named = tests.join(" ");
+    match run {
+        Err(e) => fail(format!("red-first could not run the check: {e}")),
+        Ok(run) if run.exit != 0 || run.timed_out || run.stopped.is_some() => {
+            pass(format!("{named} red on base {base} (exit {})", run.exit))
+        }
+        Ok(_) => {
+            let why = format!(
+                "the check passes with {named} and every other changed file at base {base}, so the tests prove nothing"
+            );
+            force_back(
+                ctx,
+                "red-first",
+                &task,
+                "ready-for-agent",
+                &format!("the verifier returned done and the red-first gate rejected it: {why}"),
+                &format!("chore({task}): harness red-first gate rejected a done verdict"),
+                &format!("{task} was forced back to ready by the red-first gate: {why}."),
+            )
+        }
+    }
 }
 
 // a heading an agent deletes mid-edit leaves a block nothing counts: its body merges into its
@@ -1977,6 +2074,72 @@ mod tests {
         let out = run("scope", &mut env.ctx(Some("T-001"), Some("deadbeef")));
         assert!(
             !out.pass && out.reason.contains("deadbeef"),
+            "{}",
+            out.reason
+        );
+    }
+
+    // src/lib.txt changes and tests/t.sh is the lane's test; the check runs it
+    fn red_first_env(test: &str, check: &str, timeout: &str) -> (Env, String) {
+        let mut env = Env::timed(check, timeout);
+        env.cfg.layout.test_only_glob = globs(&["**/tests/**"]);
+        env.repo.write("src/lib.txt", "old\n");
+        env.queue("done", "src/* tests/*", "§11 row 1");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write("src/lib.txt", "new\n");
+        env.repo.write("tests/t.sh", test);
+        env.repo.commit_all("T-001 change");
+        (env, base)
+    }
+
+    const RUN_TEST: &str = "[ -f tests/t.sh ] && sh tests/t.sh\n";
+
+    #[test]
+    fn red_first_rejects_a_test_green_on_base() {
+        let (mut env, base) = red_first_env("true\n", RUN_TEST, "30m");
+        let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass, "{}", out.reason);
+        assert!(
+            out.reason.contains("tests/t.sh") && out.reason.contains(&base),
+            "{}",
+            out.reason
+        );
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
+    }
+
+    #[test]
+    fn red_first_passes_a_test_red_on_base() {
+        let (mut env, base) = red_first_env("grep -q new src/lib.txt\n", RUN_TEST, "30m");
+        let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        assert!(env.tasks_text().contains("status: done"));
+    }
+
+    #[test]
+    fn red_first_leaves_the_lane_clean() {
+        let (mut env, base) = red_first_env("true\n", "sleep 30\n", "1s");
+        let trees = |env: &Env| git(&env.repo.root, &["worktree", "list"]).expect("list");
+        let (status, before) = (porcelain(&env.repo.root), trees(&env));
+        run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert_eq!(porcelain(&env.repo.root), status);
+        assert_eq!(trees(&env), before);
+    }
+
+    #[test]
+    fn red_first_without_tests() {
+        let (mut env, base) = red_first_env("true\n", RUN_TEST, "30m");
+        env.cfg.layout.test_only_glob = globs(&["**/spec/**"]);
+        let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(
+            out.pass && out.reason == "no test-only file changed",
+            "{}",
+            out.reason
+        );
+        env.cfg.layout.test_only_glob.clear();
+        let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(
+            out.pass && out.reason == "test_only_glob is empty",
             "{}",
             out.reason
         );

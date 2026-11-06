@@ -50,6 +50,8 @@ contract_file = "src/schema.ts"
 test_file_suffix_re = ""
 test_decl_patterns = []
 test_glob = []
+# test_only_glob names the files red-first keeps when it reverts the rest of a task to its base; empty skips the gate.
+test_only_glob = []
 source_ext = [".ts", ".tsx", ".js", ".mjs", ".cjs", ".sh", ".py"]
 
 harness_files = [
@@ -163,7 +165,7 @@ post = ["queue-intact", "commit-identity", "commit-task", "implementer-not-done"
 name = "verify"
 role = "verifier"
 turns = 100
-post = ["commit-verdict", "queue-intact", "commit-identity", "verdict", "claims", "scope", "install-stale"]
+post = ["commit-verdict", "queue-intact", "commit-identity", "verdict", "claims", "red-first", "scope", "install-stale"]
 
 [[stage]]
 name = "scout"

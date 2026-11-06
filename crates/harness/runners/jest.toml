@@ -9,3 +9,4 @@ test_file_suffix_re = '\.(test|spec)\.[cm]?[jt]sx?$'
 test_decl_patterns = ["test('{name}'", 'test("{name}"', "it('{name}'", 'it("{name}"']
 source_ext = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]
 source_roots = ["src", "lib", "app"]
+test_only_glob = ["**/*.test.*", "**/*.spec.*"]

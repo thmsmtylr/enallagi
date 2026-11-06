@@ -28,6 +28,7 @@ pub struct Runner {
     pub test_decl_patterns: Vec<String>,
     pub source_ext: Vec<String>,
     pub source_roots: Vec<String>,
+    pub test_only_glob: Vec<String>,
 }
 
 pub fn presets() -> Vec<Runner> {
@@ -154,6 +155,11 @@ fn keys(root: &Path, runner: &Runner, origin: &str) -> Vec<Detected> {
         at(
             "layout.test_decl_patterns",
             runner.test_decl_patterns.clone(),
+            origin,
+        ),
+        at(
+            "layout.test_only_glob",
+            runner.test_only_glob.clone(),
             origin,
         ),
     ];
