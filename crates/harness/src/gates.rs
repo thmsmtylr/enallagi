@@ -657,6 +657,22 @@ fn promoted_at(ctx: &GateCtx, task: &str, queued: &str) -> Option<String> {
         .find(|rev| field_at(ctx, task, "status", Some(rev)).is_some_and(|s| !proposed(&s)))
 }
 
+fn filed_untriaged(ctx: &GateCtx, path: &str) -> bool {
+    let name = Path::new(path).file_name().and_then(|n| n.to_str());
+    let Some(number) = name.and_then(|n| n.strip_prefix("T-")?.split('-').next()) else {
+        return false;
+    };
+    tracker::get_at(
+        ctx.root,
+        &ctx.cfg.layout.harness_dir,
+        &format!("T-{number}"),
+        "HEAD",
+    )
+    .and_then(|b| tracker::state(&b))
+    .as_deref()
+        == Some("needs-triage")
+}
+
 // diffs the iteration's own commits against the task's scope: globs; also routes the three loops via rows: none — harness
 fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
@@ -735,8 +751,8 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         if bookkeeping.contains(&f) || f == lock || f == stop || own.as_ref() == Some(&f) {
             continue;
         }
-        // a ticket the range adds is a filed finding, as appending a block was
-        if added.contains(&f) && f.starts_with(&tickets) {
+        // a ticket the range adds is a filed finding, as appending a block was, so only untriaged
+        if added.contains(&f) && f.starts_with(&tickets) && filed_untriaged(ctx, &f) {
             continue;
         }
         if added_skills
@@ -2536,6 +2552,30 @@ mod tests {
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
         assert!(out.reason.contains("T-002-second.md"), "{}", out.reason);
+    }
+
+    #[test]
+    fn scope_rejects_an_added_ticket_past_triage() {
+        let mut env = Env::new("exit 0\n");
+        let specs = crate::config::instance_path(&env.repo.root, ".enallagi", QUEUE[1]);
+        let first = "## [T-001] first\nscope: src/a.ts\nrows: §11 row 1\nstatus: review\n";
+        tracker::write_converted(&specs, "repo", first).expect("write the ticket");
+        env.repo.commit_all("queue");
+        let base = env.head();
+        env.repo.write("src/a.ts", "a");
+        env.repo.commit_all("feat: T-001 a");
+        env.tracker().set_status("T-001", "done", "").expect("done");
+        let filed = "## [T-002] filed ready\nstatus: ready\n";
+        tracker::write_converted(&specs, "repo", filed).expect("file a ticket");
+        env.repo.commit_all("verify: T-001 verdict");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(
+            out.reason.contains("T-002-filed-ready.md"),
+            "{}",
+            out.reason
+        );
     }
 
     #[test]

@@ -1942,6 +1942,21 @@ fn a_failing_fence_of_any_tag_fails_the_readme_run() {
     }
 }
 
+// a ticket file keeps every line of a block, but in its own order and with the state renamed
+fn assert_lines(block: &str, want: &str) {
+    for line in want.lines() {
+        let line = line.replace("status: proposed", "status: needs-triage");
+        assert!(
+            block.lines().any(|l| l.trim_end() == line.trim_end()),
+            "{line}\n{block}"
+        );
+    }
+}
+
+fn files_layout() -> bool {
+    std::env::var("ENALLAGI_TEST_LAYOUT").as_deref() == Ok("files")
+}
+
 struct GhRepo {
     repo: enallagi::fixture::Repo,
     tools: tempfile::TempDir,
@@ -1960,16 +1975,19 @@ impl GhRepo {
         // init seeds no block; one standing task gives every appended block the next id
         let tasks = state.join("TASKS.md");
         let seeded = std::fs::read_to_string(&tasks).expect("TASKS.md");
-        std::fs::write(
-            &tasks,
-            format!(
-                "{}\n## [T-001] the first task\nscope: src/a.ts\nblockedBy: none\nstatus: ready\nrows: none \u{2014} harness\ncriteria:\n  - it happens\nnotes:\n",
-                seeded.trim_end()
-            ),
-        )
-        .expect("TASKS.md");
+        let mut queue = format!(
+            "{}\n## [T-001] the first task\nscope: src/a.ts\nblockedBy: none\nstatus: ready\nrows: none \u{2014} harness\ncriteria:\n  - it happens\nnotes:\n",
+            seeded.trim_end()
+        );
         for (name, text) in files {
-            std::fs::write(state.join(name), text).expect("write state");
+            match *name {
+                "TASKS.md" => queue = text.to_string(),
+                _ => std::fs::write(state.join(name), text).expect("write state"),
+            }
+        }
+        repo.queue(".enallagi", &queue);
+        if files_layout() {
+            std::fs::remove_file(&tasks).expect("TASKS.md");
         }
         for args in [
             &["add", "-A"][..],
@@ -2030,8 +2048,16 @@ impl GhRepo {
         self.command("review", args)
     }
 
+    // the raw TASKS.md, or every ticket rendered as a block in id order
     fn tasks(&self) -> String {
-        std::fs::read_to_string(self.repo.root.join(".enallagi/TASKS.md")).expect("TASKS.md")
+        if !files_layout() {
+            return std::fs::read_to_string(self.repo.root.join(".enallagi/TASKS.md"))
+                .expect("TASKS.md");
+        }
+        let t = enallagi::tracker::Tracker::open(&self.repo.root, ".enallagi");
+        let blocks = t.blocks().expect("the queue");
+        let text: Vec<String> = blocks.iter().map(enallagi::queue::block_text).collect();
+        text.join("\n\n")
     }
 
     fn porcelain(&self) -> String {
@@ -2065,7 +2091,10 @@ fn issue_appends_one_proposed_block() {
             "number,title,body,url,labels,state"
         ]
     );
-    assert_eq!(f.porcelain(), " M TASKS.md\n");
+    match files_layout() {
+        true => assert!(f.porcelain().starts_with("?? specs/"), "{}", f.porcelain()),
+        false => assert_eq!(f.porcelain(), " M TASKS.md\n"),
+    }
 
     let after = f.tasks();
     assert!(
@@ -2103,7 +2132,10 @@ notes: https://github.com/owner/repo/issues/12
   >
   > 1. Upload the file unzipped.
   > 2. Download it.";
-    assert!(block.contains(want), "{block}");
+    match files_layout() {
+        true => assert_lines(&block, want),
+        false => assert!(block.contains(want), "{block}"),
+    }
 }
 
 #[test]
@@ -2161,6 +2193,7 @@ fn issue_refuses_an_issue_already_archived() {
         &GhRepo::fixture_gh(),
         &[("TASKS.md", LANDED_STUB), ("DECISIONS.md", decisions)],
     );
+    let before = f.tasks();
     for args in [&["owner/repo#12"][..], &["owner/repo#12", "--dry-run"][..]] {
         let out = f.issue(args);
         assert_ne!(out.status.code(), Some(0), "{args:?}: {out:?}");
@@ -2170,7 +2203,7 @@ fn issue_refuses_an_issue_already_archived() {
             stderr.contains("https://github.com/owner/repo/issues/12"),
             "{args:?}: {stderr}"
         );
-        assert_eq!(f.tasks(), LANDED_STUB, "{args:?}");
+        assert_eq!(f.tasks(), before, "{args:?}");
         assert_eq!(f.porcelain(), "", "{args:?}");
     }
 }
@@ -2303,9 +2336,7 @@ fn review_appends_one_block_per_thread() {
     let blocks = enallagi::queue::parse(&after).expect("parse");
     assert_eq!(blocks.len(), 3, "{after}");
     let first = enallagi::queue::block_text(&blocks[1]);
-    assert_eq!(
-        first.trim_end(),
-        "\
+    let want = "\
 ## [T-002] Refactor suggestion
 scope: src/date.rs
 blockedBy:
@@ -2320,9 +2351,11 @@ notes: https://github.com/owner/repo/pull/13#discussion_r1000000001
   >
   > ```suggestion
   >     let offset = offset.unwrap_or(UTC);
-  > ```",
-        "{first}"
-    );
+  > ```";
+    match files_layout() {
+        true => assert_lines(&first, want),
+        false => assert_eq!(first.trim_end(), want, "{first}"),
+    }
     assert_eq!(blocks[2].id, "T-003");
     assert_eq!(
         enallagi::queue::field(&blocks[2], "scope").as_deref(),

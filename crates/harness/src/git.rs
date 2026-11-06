@@ -258,58 +258,6 @@ pub fn state_rev(root: &Path, harness_dir: &str, rev: &str) -> Result<String, St
         .ok_or_else(|| format!("no commit in {harness_dir} records product revision {rev} ({sha})"))
 }
 
-// the commit that queued a task, in the repository TASKS.md is in; None when the pickaxe finds none,
-// which a caller may never pass to `git show` as a revision: an empty one reads the index instead
-pub fn task_queued_commit(
-    root: &Path,
-    harness_dir: &str,
-    task: &str,
-) -> Result<Option<String>, String> {
-    task_queued_commit_until(root, harness_dir, task, None)
-}
-
-// `until` bounds the search at a revision: past the migration TASKS.md is gone, and its deletion is
-// the newest commit that changed the heading's count
-pub fn task_queued_commit_until(
-    root: &Path,
-    harness_dir: &str,
-    task: &str,
-    until: Option<&str>,
-) -> Result<Option<String>, String> {
-    let tasks = crate::config::instance_rel(root, harness_dir, "TASKS.md");
-    let (repo, inner, nested) = locate(root, harness_dir, &tasks);
-    let block = crate::queue::Block {
-        id: task.to_string(),
-        title: String::new(),
-        line: 0,
-        body: Vec::new(),
-    };
-    let heading = crate::queue::block_text(&block).trim_end().to_string();
-    // the nested layout anchors the pickaxe, because a notes: line quoting the heading is not the
-    // commit that added the block; the root layout keeps the pickaxe the verifier ran before
-    let found = if nested {
-        let anchored = format!("^{}", regex::escape(&heading));
-        let mut args = vec![
-            "log",
-            "--reverse",
-            "--format=%H",
-            "--pickaxe-regex",
-            "-S",
-            &anchored,
-        ];
-        args.extend(until);
-        args.extend(["--", &inner]);
-        git(&repo, &args)
-    } else {
-        let mut args = vec!["log", "-1", "--format=%H", "-S", &heading];
-        args.extend(until);
-        args.extend(["--", &inner]);
-        git(&repo, &args)
-    }
-    .map_err(|e| e.to_string())?;
-    Ok(found.lines().next().map(String::from))
-}
-
 // the product sha to diff a task against, read off the subject of the commit that queued it
 pub fn task_base(root: &Path, harness_dir: &str, task: &str) -> Result<String, String> {
     let tasks = crate::config::instance_rel(root, harness_dir, "TASKS.md");
@@ -447,10 +395,13 @@ mod tests {
             "## [T-001] first\nscope: src/a.ts\nstatus: ready\n",
         );
         r.commit_all("queue: T-001");
-        assert!(task_queued_commit(&r.root, ".enallagi", "T-001")
-            .expect("pickaxe")
+        assert!(crate::tracker::queued_commit(&r.root, ".enallagi", "T-001")
+            .expect("the queued commit")
             .is_some());
-        assert_eq!(task_queued_commit(&r.root, ".enallagi", "T-002"), Ok(None));
+        assert_eq!(
+            crate::tracker::queued_commit(&r.root, ".enallagi", "T-002"),
+            Ok(None)
+        );
         assert_eq!(task_base(&r.root, ".enallagi", "T-002"), Ok(String::new()));
     }
 
@@ -486,7 +437,7 @@ mod tests {
 
         assert_ne!(queued, readded);
         assert_eq!(
-            task_queued_commit(&r.root, ".enallagi", "T-001"),
+            crate::tracker::queued_commit(&r.root, ".enallagi", "T-001"),
             Ok(Some(queued))
         );
     }

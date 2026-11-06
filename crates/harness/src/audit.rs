@@ -5,6 +5,7 @@ use crate::events::{Kind, Writer};
 use crate::git;
 use crate::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
 use crate::queue::{self, QueueError};
+use crate::tracker::Tracker;
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -164,20 +165,20 @@ fn frictions(root: &Path, cfg: &Config, rel: &str) -> Result<Vec<Signal>, AuditE
     Ok(out)
 }
 
-// a block `enallagi review` queued carries its comment's permalink
-fn reviewed(text: &str, rel: &str) -> Result<Vec<Signal>, AuditError> {
+// a block `enallagi review` queued carries its comment's permalink; `rel` names the file each block is in
+fn reviewed(blocks: Vec<queue::Block>, rel: impl Fn(&str) -> String) -> Vec<Signal> {
     let permalink = Regex::new(r"/pull/\d+#(discussion_r|pullrequestreview)").expect("pattern");
-    Ok(queue::parse(text)?
+    blocks
         .into_iter()
         .filter(|b| b.body.iter().any(|(_, l)| permalink.is_match(l)))
         .map(|b| Signal {
-            at: format!("{rel}:{}", b.line),
+            at: format!("{}:{}", rel(&b.id), b.line),
             text: std::iter::once(b.title)
                 .chain(b.body.into_iter().map(|(_, l)| l))
                 .collect::<Vec<_>>()
                 .join("\n"),
         })
-        .collect())
+        .collect()
 }
 
 fn rejections(text: &str, rel: &str) -> Result<Vec<Signal>, AuditError> {
@@ -921,7 +922,6 @@ pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, Aud
     let dir = &cfg.layout.harness_dir;
     let decisions_rel = config::instance_rel(root, dir, "DECISIONS.md");
     let learnings_rel = config::instance_rel(root, dir, "LEARNINGS.md");
-    let tasks_rel = config::instance_rel(root, dir, "TASKS.md");
     let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
     let mut report = Report {
         decisions: decisions_rel.clone(),
@@ -975,8 +975,18 @@ pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, Aud
     let decisions = kept;
 
     let mut signal = frictions(root, cfg, &config::instance_rel(root, dir, "PROGRESS.md"))?;
-    signal.extend(reviewed(&read(root, &tasks_rel)?, &tasks_rel)?);
-    signal.extend(reviewed(&decisions, &decisions_rel)?);
+    let t = Tracker::open(root, dir);
+    let rel = |id: &str| {
+        let path = t.path_of(id).unwrap_or_default();
+        path.strip_prefix(root)
+            .unwrap_or(&path)
+            .display()
+            .to_string()
+    };
+    signal.extend(reviewed(t.blocks()?, rel));
+    signal.extend(reviewed(queue::parse(&decisions)?, |_| {
+        decisions_rel.clone()
+    }));
     signal.extend(rejections(&decisions, &decisions_rel)?);
     let mut seen = BTreeSet::new();
     signal.retain(|s| seen.insert(s.at.clone()));

@@ -1,24 +1,25 @@
-//! Moves `done` and expired task blocks out of TASKS.md into DECISIONS.md, and rolls PROGRESS.md over past a size cap.
+//! Expires untriaged tickets, moves a legacy queue's `done` blocks into DECISIONS.md, and rolls PROGRESS.md over past a size cap.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::config::{self, Config};
 use crate::git;
 use crate::queue;
+use crate::tracker::{self, Tracker};
 
 const PROGRESS_MAX_DEFAULT: usize = 2000;
 const PROGRESS_KEEP_DEFAULT: usize = 200;
 const EXPIRED: &str = "## Expired findings";
 const DECISIONS_HEADER: &str = "# DECISIONS\n\nCompleted task blocks, verbatim, moved out of \
-     TASKS.md once `done`.\nThe queue stays small; the audit trail stays whole. Each block is \
+     the queue once `done`.\nThe queue stays small; the audit trail stays whole. Each block is \
      the implementer's and\nthe verifier's own words, never summarised on the way in.\n";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ArchiveError {
-    #[error("archive: TASKS.md has uncommitted changes — commit the verdict first")]
+    #[error("archive: the queue has uncommitted changes — commit the verdict first")]
     UncommittedTasks,
     #[error(transparent)]
     Queue(#[from] queue::QueueError),
@@ -35,63 +36,44 @@ pub struct ArchiveReport {
     pub refused: Option<String>,
 }
 
-// a block's age in state commits, counted from the one that first carried its heading
-pub(crate) fn ages(root: &Path, cfg: &Config, ids: &[String]) -> BTreeMap<String, usize> {
-    let dir = &cfg.layout.harness_dir;
-    let tasks = config::instance_rel(root, dir, "TASKS.md");
-    let (repo, inner, _) = git::locate(root, dir, &tasks);
-    let commits: Vec<String> = git::git(&repo, &["log", "--format=%H"])
+fn state_commits(root: &Path, dir: &str) -> (PathBuf, Vec<String>) {
+    let rel = config::instance_rel(root, dir, tracker::QUEUE[1]);
+    let (repo, _, _) = git::locate(root, dir, &rel);
+    let commits = git::git(&repo, &["log", "--format=%H"])
         .map(|out| out.lines().map(String::from).collect())
         .unwrap_or_default();
+    (repo, commits)
+}
+
+// a ticket's age in state commits, counted from the one that queued it; an id no commit carries is one a hand edit just wrote
+pub(crate) fn ages(root: &Path, cfg: &Config, ids: &[String]) -> BTreeMap<String, usize> {
+    let dir = &cfg.layout.harness_dir;
+    let (_, commits) = state_commits(root, dir);
     ids.iter()
-        .map(|id| (id.clone(), age_of(&repo, &inner, &commits, id)))
+        .map(|id| {
+            let age = tracker::queued_commit(root, dir, id)
+                .ok()
+                .flatten()
+                .and_then(|sha| commits.iter().position(|c| *c == sha))
+                .unwrap_or(0);
+            (id.clone(), age)
+        })
         .collect()
 }
 
-// a root commit installed TASKS.md whole, so a heading it carries records no round it was filed in
+// a root commit installed the queue whole, so a ticket it carries records no round it was filed in
 fn root_ages(root: &Path, cfg: &Config) -> HashSet<usize> {
-    let dir = &cfg.layout.harness_dir;
-    let tasks = config::instance_rel(root, dir, "TASKS.md");
-    let (repo, _, _) = git::locate(root, dir, &tasks);
-    let commits = git::git(&repo, &["log", "--format=%H"]).unwrap_or_default();
+    let (repo, commits) = state_commits(root, &cfg.layout.harness_dir);
     let roots = git::git(&repo, &["rev-list", "--max-parents=0", "HEAD"]).unwrap_or_default();
     commits
-        .lines()
+        .iter()
         .enumerate()
         .filter(|(_, c)| roots.lines().any(|r| r == *c))
         .map(|(i, _)| i)
         .collect()
 }
 
-// an id no commit carries is one a hand edit just wrote, which is as new as a block gets
-fn age_of(repo: &Path, inner: &str, commits: &[String], id: &str) -> usize {
-    let block = queue::Block {
-        id: id.to_string(),
-        title: String::new(),
-        line: 0,
-        body: Vec::new(),
-    };
-    let heading = format!("^{}", regex::escape(queue::block_text(&block).trim_end()));
-    git::git(
-        repo,
-        &[
-            "log",
-            "--reverse",
-            "--format=%H",
-            "--pickaxe-regex",
-            "-S",
-            &heading,
-            "--",
-            inner,
-        ],
-    )
-    .ok()
-    .and_then(|found| found.lines().next().map(String::from))
-    .and_then(|sha| commits.iter().position(|c| *c == sha))
-    .unwrap_or(0)
-}
-
-// rewriting TASKS.md from outside a running loop's own lane races it: one checkout, one writer
+// rewriting the queue from outside a running loop's own lane races it: one checkout, one writer
 pub fn loop_live(root: &Path, harness_dir: &str) -> Option<u32> {
     let pidfile = root.join(harness_dir).join("loop.pid");
     let content = fs::read_to_string(pidfile).ok()?;
@@ -165,17 +147,18 @@ pub fn archive_done_with(
             expired: Vec::new(),
             progress_rolled: 0,
             refused: Some(
-                "archive: an agent is running — TASKS.md is its bus, not touching it".to_string(),
+                "archive: an agent is running — the queue is its bus, not touching it".to_string(),
             ),
         });
     }
 
     // An uncommitted verdict folded into an archive commit loses its author and its message.
     let dir = &cfg.layout.harness_dir;
-    let tasks = config::instance_rel(root, dir, "TASKS.md");
-    let (repo, inner, _) = git::locate(root, dir, &tasks);
-    if !dry_run && !git::git_ok(&repo, &["diff", "--quiet", "--", &inner]) {
-        return Err(ArchiveError::UncommittedTasks);
+    for name in tracker::QUEUE {
+        let (repo, inner, _) = git::locate(root, dir, &config::instance_rel(root, dir, name));
+        if !dry_run && !git::git_ok(&repo, &["diff", "--quiet", "--", &inner]) {
+            return Err(ArchiveError::UncommittedTasks);
+        }
     }
 
     let moved = archive_tasks(root, dir, dry_run)?;
@@ -195,7 +178,8 @@ pub fn archive_done_with(
         root,
         dir,
         &[
-            "TASKS.md",
+            tracker::QUEUE[0],
+            tracker::QUEUE[1],
             "DECISIONS.md",
             "PROGRESS.md",
             "PROGRESS.archive.md",
@@ -211,79 +195,55 @@ pub fn archive_done_with(
     })
 }
 
+// the files layout keeps a done ticket where it is; only the legacy queue moves it to DECISIONS.md
 fn archive_tasks(root: &Path, dir: &str, dry_run: bool) -> Result<Vec<String>, ArchiveError> {
-    let tasks = config::instance_rel(root, dir, "TASKS.md");
-    let tasks_path = root.join(&tasks);
+    let Tracker::Legacy(tasks_path) = Tracker::open(root, dir) else {
+        return Ok(Vec::new());
+    };
+    let tasks = config::instance_rel(root, dir, tracker::QUEUE[0]);
     let src = fs::read_to_string(&tasks_path)?;
-    let blocks = queue::parse(&src)?;
-
+    let (repo, inner, nested) = git::locate(root, dir, &tasks);
+    let sha = git::git(&repo, &["rev-parse", "--short", "HEAD"])?;
+    let show = if nested {
+        format!("git -C {dir} show {sha}:{inner}")
+    } else {
+        format!("git show {sha}:{tasks}")
+    };
     let mut archived: Vec<(String, String)> = Vec::new();
-    let moved: Vec<String>;
-
-    {
-        let (repo, inner, nested) = git::locate(root, dir, &tasks);
-        let sha = git::git(&repo, &["rev-parse", "--short", "HEAD"])?;
-        let show = if nested {
-            format!("git -C {dir} show {sha}:{inner}")
-        } else {
-            format!("git show {sha}:{tasks}")
-        };
-        let lines: Vec<&str> = src.split('\n').collect();
-        let mut out: Vec<String> = Vec::new();
-        let mut cursor = 0usize;
-
-        for b in &blocks {
-            let start = b.line - 1;
-            let stop = start + b.body.len() + 1;
-            out.extend(lines[cursor..start].iter().map(|s| s.to_string()));
-            let body = &lines[start..stop];
-            cursor = stop;
-
-            let is_done = queue::field(b, "status").as_deref() == Some("done");
-            let already_archived = queue::field(b, "archived").is_some();
-            if !is_done || already_archived {
-                out.extend(body.iter().map(|s| s.to_string()));
-                continue;
-            }
-
-            // keep the FIRST of each key, the one field() reads
-            let mut keep: Vec<String> = Vec::new();
-            let mut seen: HashSet<String> = HashSet::new();
-            for l in &body[1..] {
-                let key = l.split(':').next().unwrap_or("");
-                if matches!(key, "blockedBy" | "scope" | "attended") && seen.insert(key.to_string())
-                {
-                    keep.push((*l).to_string());
-                }
-            }
-            out.push(body[0].to_string());
-            out.extend(keep);
-            out.push("status: done".to_string());
-            out.push(format!("archived: DECISIONS.md — full block at `{show}`"));
-            out.push(String::new());
-
-            let block_text = body.join("\n");
-            archived.push((b.id.clone(), format!("{}\n", block_text.trim_end())));
+    let out = queue::splice(&src, |b, body| {
+        let is_done = queue::field(b, "status").as_deref() == Some("done");
+        if !is_done || queue::field(b, "archived").is_some() {
+            return None;
         }
-        out.extend(lines[cursor..].iter().map(|s| s.to_string()));
-
-        moved = archived.iter().map(|(id, _)| id.clone()).collect();
-
-        if !dry_run && !archived.is_empty() {
-            let decisions_path = config::instance_path(root, dir, "DECISIONS.md");
-            let dec = fs::read_to_string(&decisions_path)
-                .unwrap_or_else(|_| DECISIONS_HEADER.to_string());
-            let joined = archived
-                .iter()
-                .map(|(_, b)| b.as_str())
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            fs::write(&decisions_path, with_archived(&dec, &joined))?;
-            fs::write(&tasks_path, out.join("\n"))?;
+        // keep the FIRST of each key, the one field() reads
+        let mut stub = vec![body[0].to_string()];
+        let mut seen: HashSet<&str> = HashSet::new();
+        for l in &body[1..] {
+            let key = l.split(':').next().unwrap_or("");
+            if matches!(key, "blockedBy" | "scope" | "attended") && seen.insert(key) {
+                stub.push((*l).to_string());
+            }
         }
+        stub.push("status: done".to_string());
+        stub.push(format!("archived: DECISIONS.md — full block at `{show}`"));
+        stub.push(String::new());
+        archived.push((b.id.clone(), format!("{}\n", body.join("\n").trim_end())));
+        Some(stub)
+    })?;
+
+    if !dry_run && !archived.is_empty() {
+        let decisions_path = config::instance_path(root, dir, "DECISIONS.md");
+        let dec =
+            fs::read_to_string(&decisions_path).unwrap_or_else(|_| DECISIONS_HEADER.to_string());
+        let joined = archived
+            .iter()
+            .map(|(_, b)| b.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        fs::write(&decisions_path, with_archived(&dec, &joined))?;
+        fs::write(&tasks_path, out)?;
     }
-
-    Ok(moved)
+    Ok(archived.into_iter().map(|(id, _)| id).collect())
 }
 
 // the expired section is the file's last, so a `done` block always has somewhere above it to land
@@ -318,7 +278,7 @@ fn with_expired(decisions: &str, blocks: &[String]) -> String {
     }
     format!(
         "{dec}\n\n{EXPIRED}\n\nProposals no adjudicator decided in time, verbatim, moved out \
-         of TASKS.md.\n\n{}\n",
+         of the queue.\n\n{}\n",
         joined.trim_end()
     )
 }
@@ -326,50 +286,44 @@ fn with_expired(decisions: &str, blocks: &[String]) -> String {
 // a proposal nobody decided stands in the way of every later one, so the queue drops the head
 fn expire_proposed(root: &Path, cfg: &Config, dry_run: bool) -> Result<Vec<String>, ArchiveError> {
     let dir = &cfg.layout.harness_dir;
-    let tasks = config::instance_rel(root, dir, "TASKS.md");
-    let tasks_path = root.join(&tasks);
-    let src = fs::read_to_string(&tasks_path)?;
-    let blocks = queue::parse(&src)?;
-    let proposed = queue::ids_at(&blocks, "proposed");
+    let t = Tracker::open(root, dir);
+    let proposed = tracker::ids_in(&t.blocks()?, &["needs-triage"]);
     if proposed.is_empty() {
         return Ok(Vec::new());
     }
     let ages = ages(root, cfg, &proposed);
     let roots = root_ages(root, cfg);
-    let stale: Vec<String> = proposed
+    let age = |id: &String| ages.get(id).copied().unwrap_or(0);
+    let mut stale: Vec<String> = proposed
         .into_iter()
-        .filter(|id| {
-            let age = ages.get(id).copied().unwrap_or(0);
-            age >= cfg.queue.proposed_rounds && !roots.contains(&age)
-        })
+        .filter(|id| age(id) >= cfg.queue.proposed_rounds && !roots.contains(&age(id)))
         .collect();
-    if stale.is_empty() {
-        return Ok(Vec::new());
+    stale.sort_by_key(|id| std::cmp::Reverse(age(id)));
+    if stale.is_empty() || dry_run {
+        return Ok(stale);
     }
 
-    let lines: Vec<&str> = src.split('\n').collect();
-    let mut out: Vec<String> = Vec::new();
-    let mut moved: Vec<String> = Vec::new();
-    let mut cursor = 0usize;
-    for b in &blocks {
-        let start = b.line - 1;
-        let stop = start + b.body.len() + 1;
-        out.extend(lines[cursor..start].iter().map(|s| s.to_string()));
-        let body = &lines[start..stop];
-        cursor = stop;
-        if stale.contains(&b.id) {
-            moved.push(format!("{}\n", body.join("\n").trim_end()));
-        } else {
-            out.extend(body.iter().map(|s| s.to_string()));
+    match &t {
+        Tracker::Files(_) => {
+            let reason = format!("expired after {} rounds", cfg.queue.proposed_rounds);
+            for id in &stale {
+                t.set_status(id, "wontfix", &reason)?;
+            }
         }
-    }
-    out.extend(lines[cursor..].iter().map(|s| s.to_string()));
-
-    if !dry_run {
-        let decisions_path = config::instance_path(root, dir, "DECISIONS.md");
-        let dec = fs::read_to_string(&decisions_path).unwrap_or_default();
-        fs::write(&decisions_path, with_expired(&dec, &moved))?;
-        fs::write(&tasks_path, out.join("\n"))?;
+        Tracker::Legacy(tasks_path) => {
+            let src = fs::read_to_string(tasks_path)?;
+            let mut moved: Vec<String> = Vec::new();
+            let out = queue::splice(&src, |b, body| {
+                stale.contains(&b.id).then(|| {
+                    moved.push(format!("{}\n", body.join("\n").trim_end()));
+                    Vec::new()
+                })
+            })?;
+            let decisions_path = config::instance_path(root, dir, "DECISIONS.md");
+            let dec = fs::read_to_string(&decisions_path).unwrap_or_default();
+            fs::write(&decisions_path, with_expired(&dec, &moved))?;
+            fs::write(tasks_path, out)?;
+        }
     }
     Ok(stale)
 }
@@ -627,6 +581,44 @@ mod tests {
             decisions[at..].contains("notes: the whole block"),
             "{decisions}"
         );
+    }
+
+    #[test]
+    fn a_standing_ticket_expires_to_wontfix() {
+        let r = Repo::new();
+        let specs = config::instance_path(&r.root, ".enallagi", "specs");
+        let first = "## [T-001] a finding no one triaged\nstatus: proposed\n";
+        tracker::write_converted(&specs, "repo", first).unwrap();
+        r.commit_all("file the finding");
+        let t = Tracker::open(&r.root, ".enallagi");
+        for n in 1..=6 {
+            if n == 2 {
+                t.append(
+                    "repo",
+                    "## [T-002] a finding filed later\nstatus: proposed\n",
+                )
+                .unwrap();
+            }
+            r.write(".enallagi/PROGRESS.md", &format!("round {n}\n"));
+            r.commit_all(&format!("round {n}"));
+        }
+
+        let cfg = cfg(&r.root);
+        let report = archive_done(&r.root, &cfg, false).expect("archive_done");
+
+        assert_eq!(report.expired, vec!["T-001".to_string()]);
+        let expired = t.get("T-001").unwrap().unwrap();
+        assert_eq!(tracker::state(&expired).as_deref(), Some("wontfix"));
+        assert_eq!(
+            queue::field(&expired, "gate"),
+            Some(format!(
+                "expired after {} rounds",
+                cfg.queue.proposed_rounds
+            ))
+        );
+        let standing = t.get("T-002").unwrap().unwrap();
+        assert_eq!(tracker::state(&standing).as_deref(), Some("needs-triage"));
+        assert!(!config::instance_path(&r.root, ".enallagi", "DECISIONS.md").exists());
     }
 
     #[test]

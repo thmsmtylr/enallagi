@@ -109,7 +109,16 @@ fn with_signal(repo: &Repo) {
         1,
     );
     fs::write(repo.root.join(rel), format!("{decisions}{ARCHIVED}")).expect("write");
-    append(repo, ".enallagi/TASKS.md", QUEUED);
+    repo.queue(".enallagi", QUEUED);
+}
+
+// the queued block's heading, in TASKS.md or its own ticket file
+fn queued_at(repo: &Repo) -> String {
+    let t = enallagi::tracker::Tracker::open(&repo.root, ".enallagi");
+    let path = t.path_of("T-012").expect("the queue");
+    let rel = path.strip_prefix(&repo.root).expect("under the root");
+    let line = t.get("T-012").expect("the queue").expect("T-012").line;
+    format!("{}:{line}", rel.display())
 }
 
 fn at(repo: &Repo, rel: &str, needle: &str) -> String {
@@ -168,7 +177,7 @@ fn two_classes(repo: &Repo) -> (Vec<String>, Vec<String>) {
     let vacuous = vec![
         at(repo, progress, "passed with the filter deleted"),
         at(repo, decisions_rel, "a mutant survived"),
-        at(repo, ".enallagi/TASKS.md", "## [T-012]"),
+        queued_at(repo),
     ];
     (lost, vacuous)
 }

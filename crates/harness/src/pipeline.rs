@@ -13,7 +13,7 @@ use crate::config::{self, Config, ConfigError, Predicate};
 use crate::events::{Kind, Log, Sink, Writer};
 use crate::gates::{self, GateCtx};
 use crate::probes::{self, CheckOutcome, ProbeCtx};
-use crate::queue::{self, Queue};
+use crate::queue;
 use crate::roles;
 use crate::skills::{self, ResolveOpts};
 use crate::tracker::{self, Tracker};
@@ -1428,9 +1428,8 @@ impl<'a> Loop<'a> {
                 return;
             }
         };
-        let queue = Queue {
-            path: self.file("TASKS.md"),
-        };
+        let t = Tracker::open(self.root, &self.cfg.layout.harness_dir);
+        let spec = tracker::repo_slug(self.root);
         let decisions = std::fs::read_to_string(self.file("DECISIONS.md")).unwrap_or_default();
         for pull in &pulls {
             let found = match review::read(&pull.url) {
@@ -1446,23 +1445,22 @@ impl<'a> Loop<'a> {
                     pull.url
                 ));
             }
-            let appended = queue
-                .read()
+            let appended = t
+                .blocks()
                 .map_err(|e| e.to_string())
-                .and_then(|text| {
-                    review::append(&text, &decisions, &found).map_err(|e| e.to_string())
+                .and_then(|blocks| {
+                    review::append(&blocks, &decisions, &found).map_err(|e| e.to_string())
                 })
-                .and_then(|a| match a.blocks.len() {
-                    0 => Ok(0),
-                    n => queue.write(&a.queue).map(|()| n).map_err(|e| e.to_string()),
+                .and_then(|a| {
+                    for block in &a.blocks {
+                        t.append(&spec, block).map_err(|e| e.to_string())?;
+                    }
+                    Ok(a.blocks.len())
                 });
             match appended {
                 Ok(0) => {}
                 Ok(n) => println!("  proposed: {n} from {}", pull.url),
-                Err(err) => self
-                    .digest
-                    .warnings
-                    .push(format!("{}: {err}", queue.path.display())),
+                Err(err) => self.digest.warnings.push(format!("the queue: {err}")),
             }
         }
     }

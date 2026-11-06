@@ -165,11 +165,11 @@ jobs:
       - name: the migrated tests under the files layout
         env:
           ENALLAGI_TEST_LAYOUT: files
-        run: cargo test --workspace --no-fail-fast -- tracker:: fixture:: gates:: tasks_migrate worktree:: a_write_from_another_session tasks_ready_ tasks_set_status_ a_task_block_carries_model a_dry_ the_dry_plan_ a_new_needs_spec_halts the_implement_prompt_ a_task_with_no_attempt a_longer_id_is_not_read a_proposed_fix_naming_the_contract only_a_named_pipeline a_filtered_round_with_nothing a_bare_clarification a_stranded_review review_wins_over_ready queue_empty_fails_closed
-      - name: the loop tests under the files layout, less those waiting on archive, pr, audit, layout or prompts
+        run: cargo test --workspace --no-fail-fast -- tracker:: fixture:: gates:: tasks_migrate worktree:: a_write_from_another_session tasks_ready_ tasks_set_status_ a_task_block_carries_model a_dry_ the_dry_plan_ a_new_needs_spec_halts the_implement_prompt_ a_task_with_no_attempt a_longer_id_is_not_read a_proposed_fix_naming_the_contract only_a_named_pipeline a_filtered_round_with_nothing a_bare_clarification a_stranded_review review_wins_over_ready queue_empty_fails_closed archive:: issue:: review:: audit:: issue_ review_ a_short_read_is_kept a_different_finding_on_the_same_line the_same_finding_raised_twice a_generated_and_a_plain_comment
+      - name: the loop, pr and audit tests under the files layout, less those waiting on layout detection
         env:
           ENALLAGI_TEST_LAYOUT: files
-        run: cargo test -p enallagi --test loop --no-fail-fast -- --skip a_failed_audit_still_counts_its_spend --skip a_killed_revision_of_a_rule_is_not_promoted --skip a_learning_killed_on_a_red_gate_is_named --skip a_learning_past_its_rounds_expires --skip a_promoted_learning_is_named_in_the_digest --skip a_promotion_repeating_a_noted_verdict_is_refused --skip a_promotion_repeating_a_rejection_is_refused --skip a_proposed_block_is_adjudicated_before_scouting --skip a_red_task_branch_opens_no_pr --skip a_root_layout_lands_a_stub_task --skip a_standing_pile_drains_oldest_first --skip a_stop_skips_the_audit --skip a_verify_only_iteration_leaves_one_entry --skip adjudicate_follows_a_rejection_in_one_round --skip an_undecided_block_hands_the_round_to_discover --skip pr_per_task_config_opens_one --skip pr_per_task_opens_one_from_the_launcher --skip stopping_short_of_review_skips_verify --skip the_audit_runs_once_after_the_last_iteration --skip the_digest_counts_standing_and_expired --skip the_run_archives_the_task_it_landed
+        run: cargo test -p enallagi --test loop --test pr --test audit --no-fail-fast -- --skip a_root_layout_lands_a_stub_task --skip a_verify_only_iteration_leaves_one_entry
 
   # Proves the four binaries the release job ships actually compile, cross-compiled from a single
   # ubuntu-latest runner with zig as the linker (cargo-zigbuild) rather than four separate runners.

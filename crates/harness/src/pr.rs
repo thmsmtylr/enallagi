@@ -1,6 +1,7 @@
 //! Builds a pull-request branch off the upstream default branch from the product commits whose subject names a landed task.
 
 use crate::probes::{contribution_policy, Finding};
+use crate::tracker::Tracker;
 use crate::{config, gates, git, queue};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -59,18 +60,16 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     let cfg = config::load(root).map_err(|e| PrError::Refused(vec![e.to_string()]))?;
     let dir = cfg.layout.harness_dir.clone();
     let read = |name: &str| fs::read_to_string(config::instance_path(root, &dir, name));
-    let tasks_md = read("TASKS.md").unwrap_or_default();
-    let decisions = read("DECISIONS.md").unwrap_or_default();
-    let queued = parse(&tasks_md)?;
-    let archived = parse(&decisions)?;
+    let queued = tickets(root, &dir)?;
+    let archived = parse(&read("DECISIONS.md").unwrap_or_default())?;
 
     let mut refusals = Vec::new();
     let mut tasks = Vec::new();
     for id in ids {
-        // the stub in TASKS.md carries the live status, the archive the full block
+        // a legacy stub carries the live status, the archive the full block
         let found = queued.iter().find(|b| b.id == *id);
         let Some(full) = archived.iter().find(|b| b.id == *id).or(found) else {
-            refusals.push(format!("{id} is in neither TASKS.md nor DECISIONS.md"));
+            refusals.push(format!("{id} is in neither the queue nor DECISIONS.md"));
             continue;
         };
         let status = queue::field(found.unwrap_or(full), "status").unwrap_or_default();
@@ -431,7 +430,7 @@ pub fn landed(root: &Path) -> Result<Vec<Landed>, PrError> {
     let cfg = config::load(root).map_err(|e| PrError::Refused(vec![e.to_string()]))?;
     let dir = cfg.layout.harness_dir.clone();
     let read = |name: &str| fs::read_to_string(config::instance_path(root, &dir, name));
-    let queued = parse(&read("TASKS.md").unwrap_or_default())?;
+    let queued = tickets(root, &dir)?;
     let archived = parse(&read("DECISIONS.md").unwrap_or_default())?;
     let unstubbed = archived
         .iter()
@@ -520,6 +519,12 @@ fn policy_section(policy: &[Finding], opts: &PrOpts, refused: bool) -> String {
         "\nnot pushed: `enallagi pr` ran without `--push`.\n"
     });
     out
+}
+
+fn tickets(root: &Path, dir: &str) -> Result<Vec<queue::Block>, PrError> {
+    Tracker::open(root, dir)
+        .blocks()
+        .map_err(|e| PrError::Refused(vec![e.to_string()]))
 }
 
 fn parse(text: &str) -> Result<Vec<queue::Block>, PrError> {

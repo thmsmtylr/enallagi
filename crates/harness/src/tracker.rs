@@ -117,6 +117,8 @@ pub fn parse_ticket(text: &str) -> Result<Block, String> {
         })
         .ok_or("the first line is not `# T-NNN: title`")?;
     let mut body: Vec<(usize, String)> = Vec::new();
+    // comments go last, so a reader slicing `notes:` to the block's end stops at the ticket's end
+    let mut comments: Vec<(usize, String)> = Vec::new();
     let mut section = "";
     let mut criteria = false;
     let mut notes = false;
@@ -124,8 +126,10 @@ pub fn parse_ticket(text: &str) -> Result<Block, String> {
     for (i, line) in lines {
         let at = i + 1;
         if line.starts_with("## ") {
-            while body.last().is_some_and(|(_, l)| l.trim().is_empty()) {
-                body.pop();
+            for v in [&mut body, &mut comments] {
+                while v.last().is_some_and(|(_, l)| l.trim().is_empty()) {
+                    v.pop();
+                }
             }
             fresh = true;
             section = match line.trim_end() {
@@ -173,16 +177,17 @@ pub fn parse_ticket(text: &str) -> Result<Block, String> {
             COMMENTS => {
                 if !notes {
                     if !line.trim().is_empty() {
-                        body.push((at, format!("notes: {line}")));
+                        comments.push((at, format!("notes: {line}")));
                         notes = true;
                     }
                 } else {
-                    body.push((at, line.to_string()));
+                    comments.push((at, line.to_string()));
                 }
             }
             _ => body.push((at, line.to_string())),
         }
     }
+    body.extend(comments);
     while body.last().is_some_and(|(_, l)| l.trim().is_empty()) {
         body.pop();
     }
@@ -436,19 +441,22 @@ impl Tracker {
                     .position(|l| l.starts_with(STATUS))
                     .ok_or_else(|| bad(&path, "no **Status:** line"))?;
                 lines[at] = format!("{STATUS} {}", canonical(status));
+                // the newest gate goes first, as the legacy insert under `status:` put it, because field() reads the first
                 if !reason.is_empty() {
-                    if !lines.iter().any(|l| l.trim_end() == HARNESS) {
-                        while lines.last().is_some_and(|l| l.is_empty()) {
-                            lines.pop();
+                    let gate = format!("gate: {reason}");
+                    match lines.iter().position(|l| l.trim_end() == HARNESS) {
+                        Some(h) => {
+                            let blank = lines.get(h + 1).is_some_and(|l| l.is_empty());
+                            lines.insert(h + 1 + usize::from(blank), gate)
                         }
-                        lines.extend([String::new(), HARNESS.to_string(), String::new()]);
-                    } else {
-                        while lines.last().is_some_and(|l| l.is_empty()) {
-                            lines.pop();
+                        None => {
+                            while lines.last().is_some_and(|l| l.is_empty()) {
+                                lines.pop();
+                            }
+                            lines.extend([String::new(), HARNESS.to_string(), String::new(), gate]);
+                            lines.push(String::new());
                         }
                     }
-                    lines.push(format!("gate: {reason}"));
-                    lines.push(String::new());
                 }
                 std::fs::write(&path, lines.join("\n"))?;
                 Ok(())
@@ -594,11 +602,43 @@ pub fn queued_commit(root: &Path, harness_dir: &str, id: &str) -> Result<Option<
     .map_err(|e| e.to_string())?;
     match added.lines().last().and_then(|l| l.split_once(' ')) {
         Some((sha, subject)) if subject.starts_with(MIGRATE_SUBJECT) => {
-            git::task_queued_commit_until(root, harness_dir, id, Some(&format!("{sha}^")))
+            legacy_queued(root, harness_dir, id, Some(&format!("{sha}^")))
         }
         Some((sha, _)) => Ok(Some(sha.to_string())),
-        None => git::task_queued_commit(root, harness_dir, id),
+        None => legacy_queued(root, harness_dir, id, None),
     }
+}
+
+// None when the pickaxe finds none, which a caller may never pass to `git show` as a revision: an
+// empty one reads the index instead. `until` bounds the search: past the migration TASKS.md is
+// gone, and its deletion is the newest commit that changed the heading's count
+fn legacy_queued(
+    root: &Path,
+    harness_dir: &str,
+    id: &str,
+    until: Option<&str>,
+) -> Result<Option<String>, String> {
+    let tasks = crate::config::instance_rel(root, harness_dir, QUEUE[0]);
+    let (repo, inner, nested) = git::locate(root, harness_dir, &tasks);
+    let heading = queue::heading(id, "").trim_end().to_string();
+    // the nested layout anchors the pickaxe, because a notes: line quoting the heading is not the
+    // commit that added the block; the root layout keeps the pickaxe the verifier ran before
+    let anchored = format!("^{}", regex::escape(&heading));
+    let mut args = match nested {
+        true => vec![
+            "log",
+            "--reverse",
+            "--format=%H",
+            "--pickaxe-regex",
+            "-S",
+            &anchored,
+        ],
+        false => vec!["log", "-1", "--format=%H", "-S", &heading],
+    };
+    args.extend(until);
+    args.extend(["--", &inner]);
+    let found = git::git(&repo, &args).map_err(|e| e.to_string())?;
+    Ok(found.lines().next().map(String::from))
 }
 
 #[cfg(test)]
@@ -674,7 +714,7 @@ mod tests {
             "{second}"
         );
         assert!(
-            second.contains("notes: Operator, 2026-11-06. Look at b.rs.\n  second line of notes"),
+            second.ends_with("notes: Operator, 2026-11-06. Look at b.rs.\n  second line of notes"),
             "{second}"
         );
         assert_eq!(queue::field(&new[4], "status").as_deref(), Some("wontfix"));

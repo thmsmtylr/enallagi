@@ -226,6 +226,29 @@ pub fn set_status(
     Ok(text.to_string())
 }
 
+/// Each block's raw lines, heading first, handed to `f`; a `Some` replaces them, a `None` keeps them.
+pub fn splice(
+    text: &str,
+    mut f: impl FnMut(&Block, &[&str]) -> Option<Vec<String>>,
+) -> Result<String, QueueError> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut cursor = 0usize;
+    for b in &parse(text)? {
+        let start = b.line - 1;
+        let stop = start + b.body.len() + 1;
+        out.extend(lines[cursor..start].iter().map(|s| s.to_string()));
+        let raw = &lines[start..stop];
+        cursor = stop;
+        match f(b, raw) {
+            Some(new) => out.extend(new),
+            None => out.extend(raw.iter().map(|s| s.to_string())),
+        }
+    }
+    out.extend(lines[cursor..].iter().map(|s| s.to_string()));
+    Ok(out.join("\n"))
+}
+
 pub fn unblock(text: &str) -> Result<String, QueueError> {
     let blocks = parse(text)?;
     let status: HashMap<&str, Option<String>> = blocks

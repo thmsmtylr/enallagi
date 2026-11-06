@@ -1,8 +1,8 @@
 //! `enallagi review <ref>` -- appends one block per open review thread, and exits 1 when more than a page went unread.
 
 use crate::config;
-use crate::queue::Queue;
 use crate::review::{self, ReviewError};
+use crate::tracker::{self, Tracker};
 
 pub struct Args {
     pub reference: String,
@@ -12,8 +12,7 @@ pub struct Args {
 pub fn run(args: &Args) -> anyhow::Result<i32> {
     let root = std::env::current_dir()?;
     let dir = config::harness_dir(&root);
-    let path = config::instance_path(&root, &dir, "TASKS.md");
-    let queue = Queue { path };
+    let t = Tracker::open(&root, &dir);
     let decisions = std::fs::read_to_string(config::instance_path(&root, &dir, "DECISIONS.md"))
         .unwrap_or_default();
     let found = match review::read(&args.reference) {
@@ -24,7 +23,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         }
         Err(err) => return Err(err.into()),
     };
-    let appended = review::append(&queue.read()?, &decisions, &found)?;
+    let appended = review::append(&t.blocks()?, &decisions, &found)?;
     for block in &appended.blocks {
         if args.dry_run {
             println!("{block}\n");
@@ -40,8 +39,14 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     println!("  folded: {} later in a thread", found.folded);
     // what was read is kept; the exit code is what says the rest was never read
     if !args.dry_run {
-        queue.write(&appended.queue)?;
-        println!("  queue: {}", queue.path.display());
+        let spec = tracker::repo_slug(&root);
+        let mut path = None;
+        for block in &appended.blocks {
+            path = Some(t.append(&spec, block)?);
+        }
+        if let Some(path) = path {
+            println!("  queue: {}", path.display());
+        }
     }
     if found.short {
         eprintln!(

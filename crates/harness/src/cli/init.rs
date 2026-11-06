@@ -274,15 +274,13 @@ fn vendor(root: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Vec<St
 
 // the same append `enallagi issue` makes, then the state commit that carries it
 fn queue_issue(root: &std::path::Path, dir: &str, reference: &str) -> anyhow::Result<String> {
-    let queue = crate::queue::Queue {
-        path: config::instance_path(root, dir, "TASKS.md"),
-    };
+    let t = crate::tracker::Tracker::open(root, dir);
     let decisions = std::fs::read_to_string(config::instance_path(root, dir, "DECISIONS.md"))
         .unwrap_or_default();
     let found = crate::issue::read(reference)?;
-    let (block, next) = crate::issue::append(&queue.read()?, &decisions, &found)?;
-    queue.write(&next)?;
+    let block = crate::issue::append(&t.blocks()?, &decisions, &found)?;
+    t.append(&crate::tracker::repo_slug(root), &block)?;
     let id = block.lines().next().unwrap_or_default().to_string();
-    crate::git::commit_instance(root, dir, &["TASKS.md"], &format!("queue: {id}"))?;
+    crate::git::commit_instance(root, dir, &crate::tracker::QUEUE, &format!("queue: {id}"))?;
     Ok(id)
 }

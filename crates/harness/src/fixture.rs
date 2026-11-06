@@ -2,7 +2,7 @@
 
 use crate::git;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 // a lane exports its own variables, and a spawned binary must read the fixture's tree, not the lane's
@@ -17,6 +17,21 @@ pub fn command(bin: &str) -> Command {
         }
     }
     cmd
+}
+
+/// `Repo::queue` for a fixture that builds its own repository.
+pub fn queue(root: &Path, dir: &str, text: &str) {
+    if std::env::var("ENALLAGI_TEST_LAYOUT").as_deref() != Ok("files") {
+        let path = root.join(format!("{dir}/TASKS.md").trim_start_matches('/'));
+        fs::create_dir_all(path.parent().expect("parent")).expect("create parent dirs");
+        fs::write(path, text).expect("write fixture file");
+        return;
+    }
+    let specs = crate::config::instance_path(root, dir, "specs");
+    let spec = crate::tracker::repo_slug(root);
+    // a rewrite replaces the queue, so a block it dropped must not linger as a file
+    let _ = fs::remove_dir_all(specs.join(&spec).join("issues"));
+    crate::tracker::write_converted(&specs, &spec, text).expect("convert the fixture queue");
 }
 
 pub struct Repo {
@@ -69,15 +84,7 @@ impl Repo {
 
     /// Writes legacy queue text as `dir/TASKS.md`, or, under `ENALLAGI_TEST_LAYOUT=files`, as the ticket files `tasks migrate` makes of it.
     pub fn queue(&self, dir: &str, text: &str) {
-        if std::env::var("ENALLAGI_TEST_LAYOUT").as_deref() != Ok("files") {
-            self.write(format!("{dir}/TASKS.md").trim_start_matches('/'), text);
-            return;
-        }
-        let specs = crate::config::instance_path(&self.root, dir, "specs");
-        let spec = crate::tracker::repo_slug(&self.root);
-        // a rewrite replaces the queue, so a block it dropped must not linger as a file
-        let _ = fs::remove_dir_all(specs.join(&spec).join("issues"));
-        crate::tracker::write_converted(&specs, &spec, text).expect("convert the fixture queue");
+        queue(&self.root, dir, text);
     }
 
     pub fn commit_all(&self, msg: &str) {

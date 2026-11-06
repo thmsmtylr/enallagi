@@ -1397,14 +1397,14 @@ fn stopping_short_of_review_skips_verify() {
         "{events:#?}"
     );
     assert!(!r.root.join("verify-ran").exists());
-    assert!(
-        digest
-            .warnings
-            .iter()
-            .any(|w| w == "T-001 ended the iteration at blocked, not done."),
-        "{:?}",
-        digest.warnings
-    );
+    // `blocked` is no state of its own under files, so the CLI writes ready-for-agent
+    let at = if files_layout() {
+        "ready-for-agent"
+    } else {
+        "blocked"
+    };
+    let warning = format!("T-001 ended the iteration at {at}, not done.");
+    assert!(digest.warnings.contains(&warning), "{:?}", digest.warnings);
 }
 
 fn with_verifier(r: &Repo, verify: &str) {
@@ -1538,20 +1538,29 @@ fn the_run_archives_the_task_it_landed() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = verifier(&r);
     with_verifier(&r, &verify);
-    r.write("DECISIONS.md", "# DECISIONS\n");
+    r.write(&instance("DECISIONS.md"), "# DECISIONS\n");
     r.commit_all("stubs");
 
     let (digest, _) = go(&r, &opts(1));
     assert_eq!(digest.landed, vec!["T-001".to_string()]);
 
-    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    assert!(tasks.contains("archived: DECISIONS.md"), "{tasks}");
-    assert!(
-        !tasks.contains("criteria:"),
-        "the body went with it: {tasks}"
-    );
-    let decisions = std::fs::read_to_string(r.root.join("DECISIONS.md")).expect("DECISIONS.md");
-    assert!(decisions.contains("## [T-001] do the thing"), "{decisions}");
+    let tasks = std::fs::read_to_string(r.root.join(ticket(&r, "T-001", "do the thing")))
+        .expect("the queue");
+    let decisions =
+        std::fs::read_to_string(r.root.join(instance("DECISIONS.md"))).expect("DECISIONS.md");
+    // the files layout retired archiving: a done ticket stays whole where it is
+    if files_layout() {
+        assert!(tasks.contains("**Status:** done"), "{tasks}");
+        assert!(tasks.contains("- [ ] it happens"), "{tasks}");
+        assert!(!decisions.contains("T-001"), "{decisions}");
+    } else {
+        assert!(tasks.contains("archived: DECISIONS.md"), "{tasks}");
+        assert!(
+            !tasks.contains("criteria:"),
+            "the body went with it: {tasks}"
+        );
+        assert!(decisions.contains("## [T-001] do the thing"), "{decisions}");
+    }
     // loop.pid still names this process on the way out, so the live-loop refusal must not fire
     assert!(
         !digest
@@ -2210,9 +2219,10 @@ fn rejecting_verifier(r: &Repo) -> String {
         "src/fakeverify.sh",
         &format!(
             "{bin} tasks set-status T-001 ready '{REJECTION}'\n\
-             cat src/filed.md >>TASKS.md\n\
+             {filing}\
              {QUIET}",
             bin = env!("CARGO_BIN_EXE_enallagi"),
+            filing = filing(r),
         ),
     )
 }
@@ -2222,14 +2232,50 @@ fn verifier_rejecting_in_notes(r: &Repo) -> String {
     script(
         r,
         "src/fakeverify.sh",
-        &format!(
-            "sed -i.bak 's/^status: review$/status: ready/' TASKS.md\n\
-             rm -f TASKS.md.bak\n\
-             printf 'notes: Verifier: REJECTED on criterion 1. {NOTED_REJECTION}. Re-run it.\\n' >>TASKS.md\n\
-             cat src/filed.md >>TASKS.md\n\
-             {QUIET}"
-        ),
+        &if files_layout() {
+            format!(
+                "sed -i.bak 's/^\\*\\*Status:\\*\\* review$/**Status:** ready-for-agent/' {t}\n\
+                 rm -f {t}.bak\n\
+                 printf '\\n## Comments\\n\\nVerifier: REJECTED on criterion 1. {NOTED_REJECTION}. Re-run it.\\n' >>{t}\n\
+                 {filing}\
+                 {QUIET}",
+                t = ticket(r, "T-001", "do the thing"),
+                filing = filing(r),
+            )
+        } else {
+            format!(
+                "sed -i.bak 's/^status: review$/status: ready/' TASKS.md\n\
+                 rm -f TASKS.md.bak\n\
+                 printf 'notes: Verifier: REJECTED on criterion 1. {NOTED_REJECTION}. Re-run it.\\n' >>TASKS.md\n\
+                 {filing}\
+                 {QUIET}",
+                filing = filing(r),
+            )
+        },
     )
+}
+
+// files what `draining_with` wrote to src/filed.md, a block or its ticket file; empty files nothing
+fn filing(r: &Repo) -> String {
+    let to = match files_layout() {
+        true => ticket(r, "T-009", "filed"),
+        false => "TASKS.md".to_string(),
+    };
+    let op = if files_layout() { ">" } else { ">>" };
+    format!("if [ -s src/filed.md ]; then cat src/filed.md {op}{to}; fi\n")
+}
+
+fn write_filed(r: &Repo, filed: &str) {
+    let filed = match files_layout() && !filed.is_empty() {
+        true => {
+            enallagi::tracker::convert(filed)
+                .expect("convert")
+                .remove(0)
+                .1
+        }
+        false => filed.to_string(),
+    };
+    r.write("src/filed.md", &filed);
 }
 
 fn adjudicator(r: &Repo, body: &str) -> String {
@@ -2259,7 +2305,7 @@ fn draining_with(r: &Repo, verify: &str, filed: &str, body: &str) {
     );
     write_toml(r, &base_toml(&roles));
     queue(r, TASKS);
-    r.write("src/filed.md", filed);
+    write_filed(r, filed);
     r.commit_all("stubs");
 }
 
@@ -2273,15 +2319,6 @@ fn stages_started(events: &[Event]) -> Vec<String> {
         .collect()
 }
 
-fn status_of(r: &Repo, id: &str) -> Option<String> {
-    let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    let blocks = enallagi::queue::parse(&text).expect("parse");
-    blocks
-        .iter()
-        .find(|b| b.id == id)
-        .and_then(|b| enallagi::queue::field(b, "status"))
-}
-
 #[test]
 fn adjudicate_follows_a_rejection_in_one_round() {
     let r = repo("", "");
@@ -2293,7 +2330,7 @@ fn adjudicate_follows_a_rejection_in_one_round() {
         vec!["implement", "verify", "adjudicate"],
         "{events:#?}"
     );
-    assert_eq!(status_of(&r, "T-001").as_deref(), Some("ready"));
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("ready-for-agent"));
     assert!(
         digest.promoted.contains(&"T-009".to_string()),
         "{:?}",
@@ -2465,7 +2502,7 @@ fn adjudicating_at_turns(reported: u64) -> Repo {
         );
     write_toml(&r, &toml);
     queue(&r, TASKS);
-    r.write("src/filed.md", FILED);
+    write_filed(&r, FILED);
     r.commit_all("stubs");
     r
 }
@@ -2574,7 +2611,7 @@ fn a_promotion_repeating_a_rejection_is_refused() {
     draining(&r, RESTATED, &promotes("T-009"));
 
     let (digest, _) = go(&r, &opts(1));
-    assert_eq!(status_of(&r, "T-009").as_deref(), Some("proposed"));
+    assert_eq!(state_of(&r, "T-009").as_deref(), Some("needs-triage"));
     assert!(
         !digest.promoted.contains(&"T-009".to_string()),
         "{:?}",
@@ -2824,7 +2861,7 @@ fn a_promotion_repeating_a_noted_verdict_is_refused() {
     draining_with(&r, &verify, NOTED_RESTATED, &promotes("T-009"));
 
     let (digest, _) = go(&r, &opts(1));
-    assert_eq!(status_of(&r, "T-009").as_deref(), Some("proposed"));
+    assert_eq!(state_of(&r, "T-009").as_deref(), Some("needs-triage"));
     assert!(
         !digest.promoted.contains(&"T-009".to_string()),
         "{:?}",
@@ -2860,12 +2897,12 @@ fn a_standing_pile_drains_oldest_first() {
         &base_toml(&format!("{roles}\n[queue]\nproposed_rounds = 100\n")),
     );
     queue(&r, TASKS);
-    r.write("src/filed.md", FILED);
+    write_filed(&r, FILED);
     r.commit_all("stubs");
 
     // one commit each, oldest first: the state commit that added a heading is what orders the pile
+    let mut tasks = TASKS.to_string();
     for n in 101..=110 {
-        let mut tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
         tasks.push_str(&standing(n));
         queue(&r, &tasks);
         r.commit_all(&format!("file T-{n}"));
@@ -2914,7 +2951,8 @@ fn the_digest_counts_standing_and_expired() {
             "{roles}\n[queue]\ndrain = 0\nproposed_rounds = 20\n"
         )),
     );
-    queue(&r, &format!("{TASKS}{}", standing(100)));
+    let tasks = format!("{TASKS}{}", standing(100));
+    queue(&r, &tasks);
     r.commit_all("stubs");
 
     // far more commits than proposed_rounds, so only T-100 is past the bound whatever the round commits
@@ -2922,11 +2960,7 @@ fn the_digest_counts_standing_and_expired() {
         r.write("filler.txt", &n.to_string());
         r.commit_all(&format!("filler {n}"));
     }
-    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    r.write(
-        "TASKS.md",
-        &format!("{tasks}{}{}", standing(101), standing(102)),
-    );
+    queue(&r, &format!("{tasks}{}{}", standing(101), standing(102)));
     r.commit_all("two fresh proposals");
 
     let (digest, _) = go(&r, &opts(1));
@@ -3033,13 +3067,13 @@ fn a_proposed_block_is_adjudicated_before_scouting() {
     queue(&r, DONE_TASK);
     r.commit_all("stubs");
     queued_issue(&r);
-    assert_eq!(status_of(&r, "T-002").as_deref(), Some("proposed"));
+    assert_eq!(state_of(&r, "T-002").as_deref(), Some("needs-triage"));
 
     let (_, events) = go(&r, &opts(1));
     let stages = stages_started(&events);
     assert!(!stages.contains(&"scout".to_string()), "{stages:?}");
     assert!(stages.contains(&"adjudicate".to_string()), "{stages:?}");
-    assert_ne!(status_of(&r, "T-002").as_deref(), Some("proposed"));
+    assert_ne!(state_of(&r, "T-002").as_deref(), Some("needs-triage"));
 }
 
 // the shipped pipelines, not base_toml's copy: the ceiling under test is the default's own
@@ -3069,7 +3103,7 @@ fn an_undecided_block_hands_the_round_to_discover() {
     r.commit_all("stubs");
     queued_issue(&r);
     installed(&r);
-    assert_eq!(status_of(&r, "T-002").as_deref(), Some("proposed"));
+    assert_eq!(state_of(&r, "T-002").as_deref(), Some("needs-triage"));
 
     let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["run", "--no-tui", "--iterations", "3"])
@@ -3093,7 +3127,7 @@ fn an_undecided_block_hands_the_round_to_discover() {
     assert_eq!(started.first(), Some(&"other"), "{stdout}");
     assert!(stdout.contains("stage=scout"), "{stdout}");
     assert!(stdout.contains("triage spent its 1 dry round"), "{stdout}");
-    assert_eq!(status_of(&r, "T-002").as_deref(), Some("proposed"));
+    assert_eq!(state_of(&r, "T-002").as_deref(), Some("needs-triage"));
 }
 
 #[test]
@@ -4184,13 +4218,16 @@ fn decisions(earned: &str, proposed: &str) -> String {
 // the adjudicator's stub replaces DECISIONS.md with `after`, which is how it decides the learning
 fn deciding_learning(after: &str, extra: &str) -> Repo {
     let r = repo("", "");
-    let adj = adjudicator(&r, "cp src/decided.md DECISIONS.md\n");
+    let adj = adjudicator(
+        &r,
+        &format!("cp src/decided.md {}\n", instance("DECISIONS.md")),
+    );
     write_toml(
         &r,
         &base_toml(&format!("{}{extra}", role_command("adjudicator", &adj))),
     );
     queue(&r, DONE_TASK);
-    r.write("DECISIONS.md", &decisions("", LEARNING));
+    r.write(&instance("DECISIONS.md"), &decisions("", LEARNING));
     r.write("src/decided.md", after);
     r.commit_all("a proposed learning");
     r
@@ -4233,7 +4270,7 @@ fn a_killed_revision_of_a_rule_is_not_promoted() {
     let rule = "- [2026-09-01] `vacuous-test`: a test passed with its logic deleted → delete it\n  revised: 2026-09-28 `vacuous-test`\n";
     let killed = format!("{LEARNING}  killed: 2026-09-29 two instances\n");
     let r = deciding_learning(&decisions(rule, &killed), "");
-    r.write("DECISIONS.md", &decisions(rule, LEARNING));
+    r.write(&instance("DECISIONS.md"), &decisions(rule, LEARNING));
     r.commit_all("a revision proposed");
     let text = pipeline::digest_text(&go(&r, &opts(1)).0);
     assert!(
@@ -4249,7 +4286,7 @@ fn a_learning_past_its_rounds_expires() {
         "{}\n## Expired findings\n\n## [T-009] expired earlier\nstatus: proposed\n",
         decisions("", LEARNING)
     );
-    r.write("DECISIONS.md", &archived);
+    r.write(&instance("DECISIONS.md"), &archived);
     r.write("src/decided.md", &archived);
     r.write("src/later.md", "later\n");
     r.commit_all("a later round");
@@ -4259,7 +4296,8 @@ fn a_learning_past_its_rounds_expires() {
         "{text}"
     );
     assert!(text.contains("expired `vacuous-test`"), "{text}");
-    let after = std::fs::read_to_string(r.root.join("DECISIONS.md")).expect("DECISIONS.md");
+    let after =
+        std::fs::read_to_string(r.root.join(instance("DECISIONS.md"))).expect("DECISIONS.md");
     assert!(!after.contains("- [proposed] `vacuous-test`"), "{after}");
     let expired = after
         .split("## Expired findings")
@@ -4287,14 +4325,15 @@ fn the_audit_runs_once_after_the_last_iteration() {
         &format!(
             "case \"$1\" in *'BEGIN ENALLAGI LEARNING'*)\n\
              echo ran >>auditor-ran\n\
-             printf 'BEGIN ENALLAGI LEARNING\\nclass: `slow-check`\\nthe check ran past its timeout → run it alone\\ninstances: `PROGRESS.md:2`, `PROGRESS.md:3`\\nEND ENALLAGI LEARNING\\n' ;;\n\
-             esac\n{QUIET}"
+             printf 'BEGIN ENALLAGI LEARNING\\nclass: `slow-check`\\nthe check ran past its timeout → run it alone\\ninstances: `{p}:2`, `{p}:3`\\nEND ENALLAGI LEARNING\\n' ;;\n\
+             esac\n{QUIET}",
+            p = instance("PROGRESS.md"),
         ),
     );
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
     queue(&r, TASKS);
     r.write(
-        "PROGRESS.md",
+        &instance("PROGRESS.md"),
         "# progress\nfriction: the check ran past its timeout\nfriction: the check timed out again\n",
     );
     r.commit_all("stubs");
@@ -4336,7 +4375,7 @@ fn a_failed_audit_still_counts_its_spend() {
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
     queue(&r, TASKS);
     r.write(
-        "PROGRESS.md",
+        &instance("PROGRESS.md"),
         "# progress\nfriction: the check ran past its timeout\nfriction: the check timed out again\n",
     );
     r.commit_all("stubs");
@@ -4367,11 +4406,11 @@ fn a_stop_skips_the_audit() {
     write_toml(&r, &base_toml(""));
     queue(&r, TASKS);
     r.write(
-        "PROGRESS.md",
+        &instance("PROGRESS.md"),
         "# progress\nfriction: the check ran past its timeout\nfriction: the check timed out again\n",
     );
     r.commit_all("stubs");
-    r.write("STOP", "");
+    r.write(&instance("STOP"), "");
 
     let (digest, _) = go(&r, &opts(1));
     assert!(

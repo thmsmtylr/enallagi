@@ -78,7 +78,7 @@ impl Fixture {
             "enallagi.toml",
             &format!("[check]\ncommand = \"{check}\"\n"),
         );
-        write(&state, "TASKS.md", tasks);
+        enallagi::fixture::queue(&root, ".enallagi", tasks);
         git(&state, &["add", "-A"]);
         git(
             &state,
@@ -282,7 +282,7 @@ fn pr_refuses_a_blocker_not_yet_upstream() {
     let tasks = format!(
         "{DONE_AND_REJECTED}\n## [T-003] the thing says twelve at the end\nscope: src/other.txt\nblockedBy: T-001\nstatus: done\n"
     );
-    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    enallagi::fixture::queue(&f.root, ".enallagi", &tasks);
     commit(
         &f.root,
         "src/other.txt",
@@ -461,7 +461,7 @@ fn push_pushes_the_branch_and_opens_the_pr() {
 fn pr_refuses_a_done_task_no_round_commit_names() {
     let (f, _) = landed("exit 0\n");
     let tasks = format!("{DONE_AND_REJECTED}\n## [T-004] only the queue moved\nscope: TASKS.md\nblockedBy: none\nstatus: done\n");
-    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    enallagi::fixture::queue(&f.root, ".enallagi", &tasks);
     let (code, out) = f.harness(&["pr", "T-004"]);
     assert_ne!(code, 0, "{out}");
     assert!(out.contains("T-004") && out.contains("no commit"), "{out}");
@@ -537,7 +537,7 @@ fn a_blocker_built_this_run_is_the_base() {
         "blockedBy: none\nstatus: ready\nnotes: verifier: rejected, it shouts\n",
         "blockedBy: T-001\nstatus: done\n",
     );
-    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    enallagi::fixture::queue(&f.root, ".enallagi", &tasks);
     let first = enallagi::pr::build(
         &f.root,
         &["T-001".to_string()],
@@ -578,7 +578,7 @@ fn two_sibling_blockers_are_refused() {
         "blockedBy: none\nstatus: done\n",
     );
     tasks.push_str("\n## [T-003] the thing carries both\nscope: src/thing.txt\nblockedBy: T-001, T-002\nstatus: done\n");
-    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    enallagi::fixture::queue(&f.root, ".enallagi", &tasks);
     commit(
         &f.root,
         "src/thing.txt",
@@ -853,7 +853,7 @@ fn landed_names_each_state_and_filters_built() {
     let tasks = format!(
         "{DONE_AND_REJECTED}\n## [T-003] pushed already\nscope: src/thing.txt\nblockedBy: none\nstatus: done\n\n## [T-004] never built\nscope: src/thing.txt\nblockedBy: none\nstatus: done\n"
     );
-    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    enallagi::fixture::queue(&f.root, ".enallagi", &tasks);
     let pushed = commit(
         &f.root,
         "src/thing.txt",
