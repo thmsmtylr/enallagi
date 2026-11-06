@@ -179,6 +179,26 @@ fn the_row_parser_reads_the_seeded_criteria_table() {
     assert_eq!(count(&run(&repo, &cfg), "spec-untested"), Some(1));
 }
 
+#[test]
+fn migrated_spec_rows() {
+    let (repo, cfg) = seeded();
+    seeded_row(&repo, &cfg);
+    let instance = repo.root.join(".enallagi");
+    enallagi::git::git(&instance, &["add", "-A"]).expect("add");
+    enallagi::git::git(&instance, &["commit", "-qm", "instance"]).expect("commit");
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["tasks", "migrate"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("run migrate");
+    assert!(out.status.success(), "{out:?}");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "spec-untested");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    let slug = enallagi::tracker::repo_slug(&repo.root);
+    assert_eq!(found[0].path, format!(".enallagi/specs/{slug}/spec.md"));
+}
+
 // one row under the seeded table's header, naming a test the tree lacks
 fn seeded_row(repo: &Repo, cfg: &Config) {
     let path = config::instance_path(&repo.root, &cfg.layout.harness_dir, &cfg.layout.spec);
@@ -315,6 +335,26 @@ fn no_driver_command_is_not_a_zero() {
     let (repo, cfg) = seeded();
     let out = render(&run(&repo, &cfg));
     assert!(out.contains("PROBE driver OFF -- "), "{out}");
+}
+
+#[test]
+fn no_queue_errors() {
+    let (repo, cfg) = seeded();
+    match tracker(&repo) {
+        Tracker::Legacy(path) => fs::remove_file(path).expect("remove TASKS.md"),
+        Tracker::Files(path) => fs::remove_dir_all(path).expect("remove specs/"),
+    }
+    let results = run(&repo, &cfg);
+    let errored = errors(&results);
+    for name in [
+        "queue-hygiene",
+        "queue-uncovered",
+        "title-length",
+        "rejection-stale",
+        "plain-record",
+    ] {
+        assert!(errored.contains(&name), "{name}: {}", render(&results));
+    }
 }
 
 #[test]

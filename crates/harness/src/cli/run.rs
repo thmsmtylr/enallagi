@@ -76,11 +76,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 }),
             )
         });
-        let drawn = tui::run_live(
-            rx,
-            &crate::config::instance_path(&root, &dir, "TASKS.md"),
-            &stop,
-        );
+        let drawn = tui::run_live(rx, &crate::tracker::Tracker::open(&root, &dir), &stop);
         if drawn.is_err() {
             let _ = std::fs::write(&stop, b"");
         }

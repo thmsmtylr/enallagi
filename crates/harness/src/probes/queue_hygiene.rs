@@ -11,7 +11,7 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 }
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
-    let tracker = common::tracker(ctx);
+    let tracker = common::tracker(ctx)?;
     // the tracker refuses a repeated id, so the repeat is the only finding a queue holding one gets
     let blocks = match tracker.blocks() {
         Ok(blocks) => blocks,

@@ -146,8 +146,8 @@ jobs:
       - name: cargo test --workspace
         run: cargo test --workspace --no-fail-fast
 
-  # The tests already moved onto the tracker, run with the fixture queue helper writing ticket
-  # files under specs/ instead of TASKS.md. The filter widens as each batch migrates its tests.
+  # The whole suite again, with the fixture queue helper writing ticket files under specs/
+  # instead of TASKS.md. The two skips are root-layout tests, which have no files form.
   test-files-layout:
     name: test-files-layout
     runs-on: ubuntu-latest
@@ -162,14 +162,10 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: the migrated tests under the files layout
+      - name: cargo test --workspace under the files layout
         env:
           ENALLAGI_TEST_LAYOUT: files
-        run: cargo test --workspace --no-fail-fast -- tracker:: fixture:: gates:: tasks_migrate worktree:: a_write_from_another_session tasks_ready_ tasks_set_status_ a_task_block_carries_model a_dry_ the_dry_plan_ a_new_needs_spec_halts the_implement_prompt_ a_task_with_no_attempt a_longer_id_is_not_read a_proposed_fix_naming_the_contract only_a_named_pipeline a_filtered_round_with_nothing a_bare_clarification a_stranded_review review_wins_over_ready queue_empty_fails_closed archive:: issue:: review:: audit:: issue_ review_ a_short_read_is_kept a_different_finding_on_the_same_line the_same_finding_raised_twice a_generated_and_a_plain_comment probes::
-      - name: the loop, pr, audit and probe tests under the files layout, less those waiting on layout detection
-        env:
-          ENALLAGI_TEST_LAYOUT: files
-        run: cargo test -p enallagi --test loop --test pr --test audit --test probes --no-fail-fast -- --skip a_root_layout_lands_a_stub_task --skip a_verify_only_iteration_leaves_one_entry
+        run: cargo test --workspace --no-fail-fast -- --skip a_root_layout_lands_a_stub_task --skip a_verify_only_iteration_leaves_one_entry
 
   # Proves the four binaries the release job ships actually compile, cross-compiled from a single
   # ubuntu-latest runner with zig as the linker (cargo-zigbuild) rather than four separate runners.

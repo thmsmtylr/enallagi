@@ -327,6 +327,32 @@ pub fn repo_slug(root: &Path) -> String {
     }
 }
 
+/// The spec the exit criteria are read from: `layout.spec`, or under the files layout the first `specs/<slug>/spec.md` holding `layout.rows_heading`.
+pub fn spec_rel(root: &Path, cfg: &crate::config::Config) -> String {
+    let dir = &cfg.layout.harness_dir;
+    let legacy = crate::config::instance_rel(root, dir, &cfg.layout.spec);
+    let Tracker::Files(specs) = Tracker::open(root, dir) else {
+        return legacy;
+    };
+    let mut found: Vec<PathBuf> = std::fs::read_dir(&specs)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path().join("spec.md"))
+        .filter(|p| p.is_file())
+        .collect();
+    found.sort();
+    let heading = format!("\n{}", cfg.layout.rows_heading);
+    // ponytail: one spec's table is read; read every spec's when decompose queues more than one
+    found
+        .iter()
+        .find(|p| std::fs::read_to_string(p).is_ok_and(|t| t.contains(&heading)))
+        .or(found.first())
+        .and_then(|p| p.strip_prefix(root).ok())
+        .map(|p| p.display().to_string())
+        .unwrap_or(legacy)
+}
+
 /// Writes a legacy queue's blocks as ticket files under `specs/<spec>/issues/`.
 pub fn write_converted(specs: &Path, spec: &str, text: &str) -> Result<usize, QueueError> {
     let dir = specs.join(spec).join("issues");

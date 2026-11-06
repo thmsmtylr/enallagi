@@ -166,7 +166,7 @@ const SEPARATOR: &str = r"^\|[\s:|-]+\|\s*$";
 // must slice and read cells the same way the floor's own row parser does, or the two disagree
 pub fn spec_rows(ctx: &ProbeCtx) -> Res<Vec<SpecRow>> {
     let cfg: &Config = ctx.cfg;
-    let spec = &instance(ctx, &cfg.layout.spec);
+    let spec = &crate::tracker::spec_rel(ctx.root, cfg);
     let text = read(ctx.root, spec)?;
     let heading = &cfg.layout.rows_heading;
     let start = text
@@ -317,8 +317,14 @@ fn entries_of<'a>(lines: impl Iterator<Item = (usize, &'a String)>) -> Vec<(usiz
     entries
 }
 
-pub fn tracker(ctx: &ProbeCtx) -> Tracker {
-    Tracker::open(ctx.root, &ctx.cfg.layout.harness_dir)
+// a missing queue reads as empty to the tracker, which a probe would report as a count of zero
+pub fn tracker(ctx: &ProbeCtx) -> Res<Tracker> {
+    match Tracker::open(ctx.root, &ctx.cfg.layout.harness_dir) {
+        Tracker::Legacy(path) if !path.is_file() => {
+            Err("no queue: neither TASKS.md nor specs/ exists".to_string())
+        }
+        t => Ok(t),
+    }
 }
 
 pub fn rel(ctx: &ProbeCtx, path: &Path) -> String {
@@ -338,7 +344,7 @@ pub fn cite(ctx: &ProbeCtx, tracker: &Tracker, id: &str) -> String {
 
 /// Every ticket, with the file a finding about it cites.
 pub fn tickets(ctx: &ProbeCtx) -> Res<Vec<(String, Block)>> {
-    let tracker = tracker(ctx);
+    let tracker = tracker(ctx)?;
     let blocks = tracker.blocks().map_err(|e| e.to_string())?;
     Ok(blocks
         .into_iter()

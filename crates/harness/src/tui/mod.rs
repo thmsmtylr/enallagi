@@ -18,7 +18,8 @@ use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::Terminal;
 
 use crate::events::{Event, Kind, Log};
-use crate::queue::{self, Block};
+use crate::queue::Block;
+use crate::tracker::Tracker;
 
 pub use view::view;
 
@@ -122,11 +123,8 @@ impl Default for Model {
     }
 }
 
-fn read_queue(tasks: &Path) -> Vec<Block> {
-    std::fs::read_to_string(tasks)
-        .ok()
-        .and_then(|text| queue::parse(&text).ok())
-        .unwrap_or_default()
+fn read_queue(tracker: &Tracker) -> Vec<Block> {
+    tracker.blocks().unwrap_or_default()
 }
 
 fn loop_running(pid_path: &Path) -> bool {
@@ -205,11 +203,11 @@ fn restore_hook(prev: Arc<PanicHook>) {
 }
 
 // `q` writes the STOP file and keeps drawing until rx disconnects -- the loop decides when to end, the TUI just asks
-pub fn run_live(rx: Receiver<Event>, tasks: &Path, stop: &Path) -> anyhow::Result<()> {
+pub fn run_live(rx: Receiver<Event>, tracker: &Tracker, stop: &Path) -> anyhow::Result<()> {
     let (mut terminal, guard) = enter_terminal()?;
     let prev_hook = install_restore_hook();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_live_loop(&mut terminal, &rx, tasks, stop)
+        run_live_loop(&mut terminal, &rx, tracker, stop)
     }));
     restore_hook(prev_hook);
     drop(guard);
@@ -229,11 +227,11 @@ fn is_leave_key(finished: bool, key: &KeyEvent) -> bool {
 fn run_live_loop<B: Backend>(
     terminal: &mut Terminal<B>,
     rx: &Receiver<Event>,
-    tasks: &Path,
+    tracker: &Tracker,
     stop: &Path,
 ) -> anyhow::Result<()> {
     let mut model = Model::new();
-    model.queue = read_queue(tasks);
+    model.queue = read_queue(tracker);
     let mut stop_written = false;
     let mut leave = false;
     loop {
@@ -248,7 +246,7 @@ fn run_live_loop<B: Backend>(
                     }
                 }
             }
-            model.queue = read_queue(tasks);
+            model.queue = read_queue(tracker);
         }
         if event::poll(Duration::from_millis(500))? {
             if let CEvent::Key(key) = event::read()? {
@@ -272,14 +270,14 @@ fn run_live_loop<B: Backend>(
     Ok(())
 }
 
-// read-only: tails the log and TASKS.md rather than owning a channel; `q` never touches STOP since watch doesn't own the run
-pub fn run_attached(harness_dir: &Path, tasks: &Path) -> anyhow::Result<()> {
+// read-only: tails the log and the queue rather than owning a channel; `q` never touches STOP since watch doesn't own the run
+pub fn run_attached(harness_dir: &Path, tracker: &Tracker) -> anyhow::Result<()> {
     let (mut terminal, guard) = enter_terminal()?;
     let prev_hook = install_restore_hook();
     let log = Log::open(harness_dir);
     let pid_path = harness_dir.join("loop.pid");
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_attached_loop(&mut terminal, &log, tasks, &pid_path)
+        run_attached_loop(&mut terminal, &log, tracker, &pid_path)
     }));
     restore_hook(prev_hook);
     drop(guard);
@@ -292,11 +290,11 @@ pub fn run_attached(harness_dir: &Path, tasks: &Path) -> anyhow::Result<()> {
 fn run_attached_loop<B: Backend>(
     terminal: &mut Terminal<B>,
     log: &Log,
-    tasks: &Path,
+    tracker: &Tracker,
     pid_path: &Path,
 ) -> anyhow::Result<()> {
     let mut model = Model::new();
-    model.queue = read_queue(tasks);
+    model.queue = read_queue(tracker);
     let mut last_seq = 0u64;
     loop {
         if let Ok(events) = log.read_since(last_seq) {
@@ -305,7 +303,7 @@ fn run_attached_loop<B: Backend>(
                 model.apply(e);
             }
         }
-        model.queue = read_queue(tasks);
+        model.queue = read_queue(tracker);
         model.loop_running = loop_running(pid_path);
         terminal
             .draw(|f| view(&model, f))
@@ -374,11 +372,12 @@ mod tests {
             }),
         ];
 
-        let tasks_md =
-            "## [T-001] Do the thing\nstatus: review\n\n## [T-002] Another thing\nstatus: ready\n";
+        let tasks_md = "## [T-001] Do the thing\nstatus: review\n\n## [T-002] Another thing\nstatus: ready\n\n## [T-003] Then this\nstatus: blocked\nblockedBy: T-001, T-002\n";
+        let repo = crate::fixture::Repo::new();
+        repo.queue(".enallagi", tasks_md);
 
         let mut model = Model::new();
-        model.queue = queue::parse(tasks_md).expect("parse queue");
+        model.queue = read_queue(&Tracker::open(&repo.root, ".enallagi"));
         for e in &events {
             model.apply(e);
         }
@@ -404,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn the_view_renders_a_fixture_run_headless() {
+    fn view_headless() {
         let model = fixture_model();
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).expect("terminal");
@@ -415,7 +414,8 @@ mod tests {
             "T-001",
             "4m36s",
             "verdict \u{2713}",
-            "T-002  ready",
+            "T-002  ready-for-agent",
+            "T-003  ready-for-agent  T-001, T-0",
             "running",
         ] {
             assert!(text.contains(needle), "missing {needle:?} in:\n{text}");

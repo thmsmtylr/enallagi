@@ -877,7 +877,7 @@ fn main_tracks_no_instance_file() {
     assert!(out.status.success(), "{:?}", out);
     let tracked: Vec<String> = String::from_utf8_lossy(&out.stdout)
         .lines()
-        .filter(|l| instance.contains(*l))
+        .filter(|l| instance.contains(*l) || l.starts_with(".enallagi/specs/"))
         .map(String::from)
         .collect();
     assert_eq!(tracked, Vec::<String>::new());

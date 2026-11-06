@@ -1279,12 +1279,15 @@ fn a_check_past_its_timeout_halts_the_run() {
 }
 
 #[test]
-fn a_proposed_fix_naming_the_contract_halts() {
+fn proposed_contract_halt() {
     let r = repo("", "");
     let scout = script(
         &r,
         "src/fakescout.sh",
-        "printf '\\n## [T-002] the schema is wrong\\nstatus: proposed\\nprobe: spec-untested\\noutput: SPEC.md does not say which store\\n' >>TASKS.md\n",
+        &queues(
+            &r,
+            "\n## [T-002] the schema is wrong\nstatus: proposed\nprobe: spec-untested\noutput: SPEC.md does not say which store\n",
+        ),
     );
     write_toml(&r, &base_toml(&role_command("scout", &scout)));
     queue(&r, "# queue\n");

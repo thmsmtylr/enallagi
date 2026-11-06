@@ -275,8 +275,15 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         &at("evals/README.md"),
         sub(EVALS_README),
     );
+    // a migrated install keeps its queue and spec under specs/
+    let migrated = matches!(
+        crate::tracker::Tracker::open(root, &dir),
+        crate::tracker::Tracker::Files(_)
+    );
     for (name, text) in DOCS {
-        seed(root, &mut plan, &mut report, &at(name), sub(text));
+        if !(migrated && *name == "TASKS.md") {
+            seed(root, &mut plan, &mut report, &at(name), sub(text));
+        }
     }
     // the shipped rails name test-hashes.json as their enforcement, so the installer produces it
     let config_text = match &pending {
@@ -302,12 +309,12 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     seed_context(root, &mut plan, &mut report, &cfg, &sub);
 
     let spec = at(&cfg.layout.spec);
-    if has_content(&root.join(&spec)) {
+    if !migrated && has_content(&root.join(&spec)) {
         report.notes.push(format!(
             "{spec} was kept — merge the SPEC.section.md template into it by hand"
         ));
         resync_kept(root, &mut plan, &mut report, &cfg, spec);
-    } else {
+    } else if !migrated {
         seed(root, &mut plan, &mut report, &spec, sub(SPEC_SECTION));
     }
 

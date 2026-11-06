@@ -372,10 +372,12 @@ pub fn parse_when(s: &str) -> Result<Predicate, ConfigError> {
     }
 }
 
-// the one place an instance file's path is decided; a root TASKS.md with none in the harness directory keeps the root layout
+// the one place an instance file's path is decided; a root TASKS.md with no queue in the harness directory keeps the root layout
 pub fn instance_rel(root: &Path, harness_dir: &str, name: &str) -> String {
-    let legacy =
-        !root.join(harness_dir).join("TASKS.md").is_file() && root.join("TASKS.md").is_file();
+    let nested = root.join(harness_dir);
+    let legacy = !nested.join("TASKS.md").is_file()
+        && !nested.join("specs").is_dir()
+        && root.join("TASKS.md").is_file();
     if harness_dir.is_empty() || legacy {
         name.to_string()
     } else {
@@ -1269,6 +1271,20 @@ mod tests {
             ".enallagi/PROGRESS.md",
             "a queue in the harness directory wins over a root one"
         );
+    }
+
+    #[test]
+    fn nested_specs_layout() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        std::fs::write(root.join("TASKS.md"), "# a product's own TASKS\n").unwrap();
+        std::fs::create_dir_all(root.join(".enallagi/specs/repo/issues")).unwrap();
+        for name in ["specs", "PROGRESS.md", "SPEC.md"] {
+            assert_eq!(
+                instance_rel(root, ".enallagi", name),
+                format!(".enallagi/{name}")
+            );
+        }
     }
 
     #[test]

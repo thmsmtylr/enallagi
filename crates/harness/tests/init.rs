@@ -1324,6 +1324,27 @@ fn init_move_puts_files_at_their_new_paths() {
     assert!(!repo.root.join(".harness").exists());
 }
 
+#[test]
+fn migrated_init_no_tasks() {
+    let repo = Repo::new();
+    harness_init(&repo, &[]);
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["tasks", "migrate"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("run migrate");
+    assert!(out.status.success(), "{out:?}");
+    let spec = format!(
+        ".enallagi/specs/{}/spec.md",
+        enallagi::tracker::repo_slug(&repo.root)
+    );
+    let before = read(&repo, &spec);
+    harness_init(&repo, &[]);
+    assert!(!repo.root.join(".enallagi/TASKS.md").exists());
+    assert!(!repo.root.join(".enallagi/SPEC.md").exists());
+    assert_eq!(read(&repo, &spec), before);
+}
+
 // the failing-test line each preset's fail_name is written against, captured from the runner itself
 const CAPTURED: &[(&str, &str)] = &[
     ("bun", "a sum is wrong"),

@@ -87,7 +87,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         }
     }
 
-    let spec = &common::instance(ctx, &ctx.cfg.layout.spec);
+    let spec = &crate::tracker::spec_rel(ctx.root, ctx.cfg);
     for row in untested_rows(ctx)? {
         if !claimed.contains(&(row.name.clone(), row.test.clone())) {
             found.push(common::finding(

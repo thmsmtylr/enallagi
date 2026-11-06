@@ -10,7 +10,7 @@ use ratatui::Frame;
 
 use super::{stream, Model};
 use crate::events::Kind;
-use crate::queue;
+use crate::{queue, tracker};
 
 pub fn view(model: &Model, frame: &mut Frame) {
     let area = frame.area();
@@ -71,14 +71,18 @@ fn render_header(model: &Model, frame: &mut Frame, area: Rect) {
 }
 
 fn render_queue(model: &Model, frame: &mut Frame, area: Rect) {
+    let done: Vec<String> = tracker::ids_in(&model.queue, &["done"]);
     let lines: Vec<Line> = model
         .queue
         .iter()
         .map(|b| {
-            let status = queue::field(b, "status").unwrap_or_else(|| "?".to_string());
-            let blockers = queue::blockers(b);
+            let status = tracker::state(b).unwrap_or_else(|| "?".to_string());
+            let blockers: Vec<String> = queue::blockers(b)
+                .into_iter()
+                .filter(|id| !done.contains(id))
+                .collect();
             let mut text = format!("{}  {}", b.id, status);
-            if status == "blocked" && !blockers.is_empty() {
+            if status != "done" && !blockers.is_empty() {
                 text.push_str("  ");
                 text.push_str(&blockers.join(", "));
             }

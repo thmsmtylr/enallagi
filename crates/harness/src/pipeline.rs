@@ -508,13 +508,11 @@ impl<'a> Loop<'a> {
         });
 
         // a backticked mention is prose about the marker; only a bare one halts the run
-        if let Some(lines) = clarifications(&self.file(&self.cfg.layout.spec)) {
+        let spec = tracker::spec_rel(self.root, self.cfg);
+        if let Some(lines) = clarifications(&self.root.join(&spec)) {
             self.halt(
                 "clarification",
-                format!(
-                    "{} carries [NEEDS CLARIFICATION]. The loop does not start.",
-                    self.cfg.layout.spec
-                ),
+                format!("{spec} carries [NEEDS CLARIFICATION]. The loop does not start."),
             );
             for line in &lines {
                 println!("  {line}");
@@ -1285,12 +1283,18 @@ impl<'a> Loop<'a> {
     fn proposed_names_contract(&self) -> Option<String> {
         let spec = &self.cfg.layout.spec;
         let context = &self.cfg.layout.context_file;
+        let resolved = tracker::spec_rel(self.root, self.cfg);
+        let migrated = resolved
+            .strip_prefix(&format!("{}/", self.cfg.layout.harness_dir))
+            .unwrap_or(&resolved);
         self.blocks()
             .iter()
             .filter(|b| tracker::state(b).as_deref() == Some("needs-triage"))
             .find(|b| {
                 let text = queue::block_text(b);
-                text.contains(spec.as_str()) || text.contains(context.as_str())
+                text.contains(spec.as_str())
+                    || text.contains(migrated)
+                    || text.contains(context.as_str())
             })
             .map(|b| {
                 format!(

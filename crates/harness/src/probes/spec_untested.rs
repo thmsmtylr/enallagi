@@ -48,7 +48,7 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 }
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
-    let spec = &common::instance(ctx, &ctx.cfg.layout.spec);
+    let spec = &crate::tracker::spec_rel(ctx.root, ctx.cfg);
     Ok(untested_rows(ctx)?
         .into_iter()
         .map(|row| common::finding(spec, row.line, row.message))
