@@ -67,6 +67,19 @@ impl Repo {
         fs::write(path, content)
     }
 
+    /// Writes legacy queue text as `dir/TASKS.md`, or, under `ENALLAGI_TEST_LAYOUT=files`, as the ticket files `tasks migrate` makes of it.
+    pub fn queue(&self, dir: &str, text: &str) {
+        if std::env::var("ENALLAGI_TEST_LAYOUT").as_deref() != Ok("files") {
+            self.write(format!("{dir}/TASKS.md").trim_start_matches('/'), text);
+            return;
+        }
+        let specs = crate::config::instance_path(&self.root, dir, "specs");
+        let spec = crate::tracker::repo_slug(&self.root);
+        // a rewrite replaces the queue, so a block it dropped must not linger as a file
+        let _ = fs::remove_dir_all(specs.join(&spec).join("issues"));
+        crate::tracker::write_converted(&specs, &spec, text).expect("convert the fixture queue");
+    }
+
     pub fn commit_all(&self, msg: &str) {
         run(&self.root, &["add", "-A"]);
         run(
@@ -141,4 +154,27 @@ impl Default for Repo {
 // through git::git, so a fixture's own commits drop the ambient identity the way the harness's do
 fn run(root: &std::path::Path, args: &[&str]) {
     git::git(root, args).unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tracker::{state, Tracker};
+
+    #[test]
+    fn queue_reads_back_under_either_layout() {
+        let r = Repo::new();
+        r.queue(
+            ".enallagi",
+            "# TASKS\n\n## [T-001] one\nstatus: ready\n\n## [T-002] two\nstatus: done\n",
+        );
+        r.queue(".enallagi", "# TASKS\n\n## [T-001] one\nstatus: done\n");
+        let blocks = Tracker::open(&r.root, ".enallagi").blocks().unwrap();
+        let ids: Vec<(&str, Option<String>)> =
+            blocks.iter().map(|b| (b.id.as_str(), state(b))).collect();
+        assert_eq!(ids, vec![("T-001", Some("done".to_string()))]);
+        let files = std::env::var("ENALLAGI_TEST_LAYOUT").as_deref() == Ok("files");
+        assert_eq!(r.root.join(".enallagi/specs").is_dir(), files);
+        assert_eq!(r.root.join(".enallagi/TASKS.md").is_file(), !files);
+    }
 }

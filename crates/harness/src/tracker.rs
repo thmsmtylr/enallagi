@@ -295,6 +295,29 @@ pub fn convert(text: &str) -> Result<Vec<(String, String)>, QueueError> {
         .collect())
 }
 
+/// The spec a migrated queue lands in: the product repository's directory name.
+pub fn repo_slug(root: &Path) -> String {
+    let name = root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    match slug(name) {
+        s if s.is_empty() => "repo".to_string(),
+        s => s,
+    }
+}
+
+/// Writes a legacy queue's blocks as ticket files under `specs/<spec>/issues/`.
+pub fn write_converted(specs: &Path, spec: &str, text: &str) -> Result<usize, QueueError> {
+    let dir = specs.join(spec).join("issues");
+    std::fs::create_dir_all(&dir)?;
+    let tickets = convert(text)?;
+    for (name, ticket) in &tickets {
+        std::fs::write(dir.join(name), ticket)?;
+    }
+    Ok(tickets.len())
+}
+
 fn ticket_files(specs: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let Ok(dirs) = std::fs::read_dir(specs) else {

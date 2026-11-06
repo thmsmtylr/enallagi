@@ -998,6 +998,175 @@ fn tasks_archive_moves_a_done_block_and_names_it() {
     );
 }
 
+const LEGACY_QUEUE: &str = "# TASKS\n\n\
+     ## [T-001] first done\n\
+     scope: src/a.ts\n\
+     blockedBy: none\n\
+     status: done\n\
+     ran: cargo test\n\
+     exit: 0\n\
+     \n\
+     ## [T-002] second, waits on first\n\
+     scope: src/b.ts, src/c.ts\n\
+     blockedBy: T-001\n\
+     status: ready\n\
+     rows: none\n\
+     model: claude-haiku-4-5\n\
+     effort: low\n\
+     criteria:\n\
+     \x20 - `cargo test` passes\n\
+     notes: Operator, 2026-11-06. Look at b.ts.\n\
+     \n\
+     ## [T-003] needs a person\n\
+     scope: src/d.ts\n\
+     status: ready\n\
+     attended: true\n\
+     \n\
+     ## [T-004] proposed by a probe\n\
+     scope: src/e.ts\n\
+     status: proposed\n\
+     probe: title-length\n\
+     labels: probe\n\
+     \n\
+     ## [T-005] parked\n\
+     scope: src/f.ts\n\
+     status: deferred\n\
+     deferred: out of scope\n\
+     widened: src/g.ts\n\
+     \n\
+     ## [T-006] waiting on a spec\n\
+     status: needs-spec\n\
+     thread: https://example.com/1\n\
+     \n\
+     ## [T-007] under review\n\
+     status: review\n\
+     gate: verdict: a criterion is red\n";
+
+const LEGACY_SPEC: &str = "# Spec\n\n## Exit criteria\n\n| Behaviour | Test |\n|---|---|\n";
+
+// the instance as the live one is: its own repository, ignored by the product's
+fn legacy_instance() -> enallagi::fixture::Repo {
+    let r = enallagi::fixture::Repo::new();
+    let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
+    r.write(".git/info/exclude", ".enallagi/\n");
+    r.write(".enallagi/TASKS.md", LEGACY_QUEUE);
+    r.write(".enallagi/SPEC.md", LEGACY_SPEC);
+    let state = r.root.join(".enallagi");
+    git(&state, &["init", "-q"]);
+    git(&state, &["config", "user.name", "t"]);
+    git(&state, &["config", "user.email", "t@t"]);
+    git(&state, &["add", "-A"]);
+    git(&state, &["commit", "-qm", "queue"]);
+    r
+}
+
+fn migrate(root: &std::path::Path) -> std::process::Output {
+    in_harness(root, &["tasks", "migrate"])
+}
+
+fn state_log(r: &enallagi::fixture::Repo) -> Vec<String> {
+    enallagi::git::git(&r.root.join(".enallagi"), &["log", "--format=%s"])
+        .expect("git log")
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
+#[test]
+fn tasks_migrate_converts_every_block() {
+    use enallagi::{queue, tracker};
+    let r = legacy_instance();
+    let out = migrate(&r.root);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+
+    let instance = r.root.join(".enallagi");
+    let spec = instance.join("specs").join(tracker::repo_slug(&r.root));
+    assert!(!instance.join("TASKS.md").exists());
+    assert!(!instance.join("SPEC.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(spec.join("spec.md")).expect("spec.md"),
+        LEGACY_SPEC
+    );
+
+    let old = queue::parse(LEGACY_QUEUE).expect("parse");
+    let new = tracker::Tracker::open(&r.root, ".enallagi")
+        .blocks()
+        .expect("read the migrated tickets");
+    assert_eq!(old.len(), new.len());
+    let fields = [
+        "scope", "rows", "model", "effort", "notes", "ran", "exit", "probe", "labels", "deferred",
+        "widened", "thread", "gate",
+    ];
+    for (o, n) in old.iter().zip(&new) {
+        assert_eq!((&o.id, &o.title), (&n.id, &n.title));
+        assert_eq!(tracker::state(o), tracker::state(n), "{}", o.id);
+        assert_eq!(queue::blockers(o), queue::blockers(n), "{}", o.id);
+        for key in fields {
+            assert_eq!(queue::field(o, key), queue::field(n, key), "{} {key}", o.id);
+        }
+    }
+    let states: Vec<Option<String>> = new.iter().map(tracker::state).collect();
+    let want = [
+        "done",
+        "ready-for-agent",
+        "ready-for-human",
+        "needs-triage",
+        "wontfix",
+        "needs-info",
+        "review",
+    ];
+    assert_eq!(states, want.map(|s| Some(s.to_string())));
+    let second = std::fs::read_to_string(spec.join("issues/T-002-second-waits-on-first.md"))
+        .expect("T-002's file");
+    assert!(
+        second.contains("**Status:** ready-for-agent\n**Blocked by:** T-001\n"),
+        "{second}"
+    );
+    assert!(
+        second.contains("## Acceptance criteria\n\n- [ ] `cargo test` passes"),
+        "{second}"
+    );
+
+    let log = state_log(&r);
+    assert_eq!(log.len(), 2, "{log:?}");
+    assert!(log[0].starts_with(tracker::MIGRATE_SUBJECT), "{log:?}");
+    assert!(enallagi::git::porcelain(&instance).is_empty());
+}
+
+#[test]
+fn tasks_migrate_is_idempotent() {
+    let r = legacy_instance();
+    assert_eq!(migrate(&r.root).status.code(), Some(0));
+    let instance = r.root.join(".enallagi");
+    let head = enallagi::git::head(&instance);
+
+    let out = migrate(&r.root);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(enallagi::git::head(&instance), head);
+    assert!(enallagi::git::porcelain(&instance).is_empty());
+}
+
+#[test]
+fn tasks_migrate_refuses_a_dirty_tree() {
+    let r = legacy_instance();
+    let dirty = format!("{LEGACY_QUEUE}\n## [T-008] half written\n");
+    r.write(".enallagi/TASKS.md", &dirty);
+
+    let out = migrate(&r.root);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("dirty"),
+        "{out:?}"
+    );
+    let instance = r.root.join(".enallagi");
+    assert!(!instance.join("specs").exists());
+    assert_eq!(
+        std::fs::read_to_string(instance.join("TASKS.md")).expect("TASKS.md"),
+        dirty
+    );
+    assert_eq!(state_log(&r), vec!["queue"]);
+}
+
 fn base_of(root: &std::path::Path, task: &str) -> std::process::Output {
     enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["base", task])

@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `tasks migrate` converts TASKS.md and SPEC.md into one file per ticket under `specs/`, in one commit
 - an adopted rule is retested, and one that stops working is revised or removed
 - `audit --harness` prints, as seed lines, the rules two installs earned
 - a proposed learning is decided by the adjudicator, expires after `queue.proposed_rounds` rounds, and `learning-standing` reports it until then

@@ -3,7 +3,8 @@
 # `driver` runs the ignored test that drives the release binary through a real install. `package`
 # refuses a dogfood instance on main or in a pull request into it. `skills`
 # fetches every pinned skill from harness.lock and checks it against its pin. `rust` runs
-# fmt, clippy at -D warnings and the workspace test suite on both userlands. `cross-build` proves the
+# fmt, clippy at -D warnings and the workspace test suite on both userlands. `test-files-layout` runs
+# the tests already on the tracker with the fixture queue as ticket files. `cross-build` proves the
 # four release targets compile. Every `uses:` is pinned to a 40-character commit SHA with its tag in
 # a trailing comment (`every_github_action_is_pinned_to_a_commit_sha`, crates/harness/tests/floor.rs).
 # ENALLAGI_EVALS is deliberately never set: the evals spawn a real agent, and a CI job holding a model
@@ -144,6 +145,27 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: cargo test --workspace
         run: cargo test --workspace --no-fail-fast
+
+  # The tests already moved onto the tracker, run with the fixture queue helper writing ticket
+  # files under specs/ instead of TASKS.md. The filter widens as each batch migrates its tests.
+  test-files-layout:
+    name: test-files-layout
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: the migrated tests under the files layout
+        env:
+          ENALLAGI_TEST_LAYOUT: files
+        run: cargo test --workspace --no-fail-fast -- tracker:: fixture:: tasks_migrate
 
   # Proves the four binaries the release job ships actually compile, cross-compiled from a single
   # ubuntu-latest runner with zig as the linker (cargo-zigbuild) rather than four separate runners.

@@ -9,7 +9,7 @@ pub struct Args {
     pub args: Vec<String>,
 }
 
-const USAGE: &str = "enallagi tasks: usage: enallagi tasks <list|ready|ready-unattended|ids-at|block|field|set-status|unblock|rejections|archive|landed [--built]> [args] [file]";
+const USAGE: &str = "enallagi tasks: usage: enallagi tasks <list|ready|ready-unattended|ids-at|block|field|set-status|unblock|rejections|archive|migrate|landed [--built]> [args] [file]";
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
     let a = &args.args;
@@ -123,11 +123,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             Ok(0)
         }
         "archive" => {
-            let cwd = std::env::current_dir()?;
-            let root = match crate::git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
-                Ok(top) => PathBuf::from(top),
-                Err(_) => cwd,
-            };
+            let root = toplevel()?;
             let cfg = crate::config::load(&root)?;
             let report = crate::archive::archive_done(&root, &cfg, false)?;
             if let Some(refused) = report.refused {
@@ -141,6 +137,10 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 println!("{id}");
             }
             Ok(0)
+        }
+        "migrate" => {
+            let root = toplevel()?;
+            migrate(&root, &crate::config::harness_dir(&root))
         }
         "landed" => {
             let built = a.iter().any(|x| x == "--built");
@@ -176,6 +176,56 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             Ok(2)
         }
     }
+}
+
+fn toplevel() -> anyhow::Result<PathBuf> {
+    let cwd = std::env::current_dir()?;
+    Ok(
+        match crate::git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
+            Ok(top) => PathBuf::from(top),
+            Err(_) => cwd,
+        },
+    )
+}
+
+fn migrate(root: &Path, dir: &str) -> anyhow::Result<i32> {
+    let tasks = crate::config::instance_path(root, dir, "TASKS.md");
+    if !tasks.is_file() {
+        println!("nothing to migrate");
+        return Ok(0);
+    }
+    let rel = crate::config::instance_rel(root, dir, "TASKS.md");
+    let (repo, inner, _) = crate::git::locate(root, dir, &rel);
+    let home = match Path::new(&inner).parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_string_lossy().to_string(),
+        _ => ".".to_string(),
+    };
+    // a staged path outside the instance would ride along in a shared repository's commit
+    let dirty = crate::git::git(&repo, &["status", "--porcelain", "--", &home])?;
+    if !dirty.is_empty() || !crate::git::git_ok(&repo, &["diff", "--cached", "--quiet"]) {
+        eprintln!("enallagi tasks: the instance tree is dirty, commit or stash it first:\n{dirty}");
+        return Ok(1);
+    }
+    let text = match read_text(&tasks) {
+        Ok(t) => t,
+        Err(code) => return Ok(code),
+    };
+    let base = tasks.parent().unwrap_or(root);
+    let spec = crate::tracker::repo_slug(root);
+    let specs = base.join("specs");
+    let n = match crate::tracker::write_converted(&specs, &spec, &text) {
+        Ok(n) => n,
+        Err(e) => return Ok(fail(&e)),
+    };
+    if base.join("SPEC.md").is_file() {
+        std::fs::rename(base.join("SPEC.md"), specs.join(&spec).join("spec.md"))?;
+    }
+    std::fs::remove_file(&tasks)?;
+    // commit_instance adds only paths that exist, so the deletions are staged here
+    crate::git::git(&repo, &["add", "-A", "--", &home])?;
+    crate::git::commit_instance(root, dir, &["specs"], crate::tracker::MIGRATE_SUBJECT)?;
+    println!("{n} tickets moved to {}", specs.join(&spec).display());
+    Ok(0)
 }
 
 fn fail(e: &QueueError) -> i32 {
