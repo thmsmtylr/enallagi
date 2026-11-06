@@ -92,7 +92,7 @@ pub enum Outcome {
 pub fn run(root: &Path, cfg: &Config) -> anyhow::Result<Outcome> {
     crate::agent::catch_stop_signals();
     let mut refused: Vec<(Vec<Detected>, String)> = Vec::new();
-    let first = ask(root, cfg, &prompt())?;
+    let first: Proposal = ask_as(root, cfg, &prompt())?;
     let (step, green) = match verify(root, cfg, &first, None) {
         Ok(()) => return written(root, first.keys()),
         Err(refusal) => refusal,
@@ -110,7 +110,7 @@ pub fn run(root: &Path, cfg: &Config) -> anyhow::Result<Outcome> {
     );
     // a command already green on the clean tree is not run clean a second time
     let green = green.then_some(first.command.as_str());
-    match ask(root, cfg, &again) {
+    match ask_as::<Proposal>(root, cfg, &again) {
         Ok(second) => match verify(root, cfg, &second, green) {
             Ok(()) => return written(root, second.keys()),
             Err((step, _)) => refused.push((second.keys(), step)),
@@ -172,13 +172,18 @@ pub fn run_tally(root: &Path, cfg: &Config) -> anyhow::Result<Outcome> {
     Ok(Outcome::Refused(refused))
 }
 
-// the output is the clean run's, so a pattern is judged against lines the check really printed
-fn counts(pattern: &str, output: &str) -> Result<(), String> {
+fn tally_re(pattern: &str) -> Result<regex::Regex, String> {
     let re = regex::Regex::new(pattern).map_err(|e| format!("tally: {e}"))?;
     let names: Vec<&str> = re.capture_names().flatten().collect();
     if !names.contains(&"passed") || !names.contains(&"failed") {
         return Err("tally needs both named groups, passed and failed".to_string());
     }
+    Ok(re)
+}
+
+// the output is the clean run's, so a pattern is judged against lines the check really printed
+fn counts(pattern: &str, output: &str) -> Result<(), String> {
+    let re = tally_re(pattern)?;
     let t = crate::gates::tally(output, pattern);
     if t.passed == 0 || t.failed != 0 {
         let matched: Vec<&str> = output.lines().filter(|l| re.is_match(l)).collect();
@@ -262,10 +267,6 @@ test_decl_patterns = \"file:line\"
 {END}
 "
     )
-}
-
-fn ask(root: &Path, cfg: &Config, prompt: &str) -> anyhow::Result<Proposal> {
-    ask_as(root, cfg, prompt)
 }
 
 fn ask_as<T: serde::de::DeserializeOwned>(
@@ -410,11 +411,7 @@ fn steps(
         return Err("fail_name has no capture group to name a test".to_string());
     }
     if !p.tally.is_empty() {
-        let tally = regex::Regex::new(&p.tally).map_err(|e| format!("tally: {e}"))?;
-        let names: Vec<&str> = tally.capture_names().flatten().collect();
-        if !names.contains(&"passed") || !names.contains(&"failed") {
-            return Err("tally needs both named groups, passed and failed".to_string());
-        }
+        tally_re(&p.tally)?;
     }
     let suffix = regex::Regex::new(&p.test_file_suffix_re)
         .map_err(|e| format!("test_file_suffix_re: {e}"))?;
@@ -478,13 +475,8 @@ fn steps(
                 clean.tail(20).join("\n")
             ));
         }
-        if !p.tally.is_empty() && (clean.tally.passed == 0 || clean.tally.failed != 0) {
-            return Err(format!(
-                "on the clean tree tally counts {} passed and {} failed, and a green suite counts some passed and none failed.\nThe output's last lines:\n{}",
-                clean.tally.passed,
-                clean.tally.failed,
-                clean.tail(20).join("\n")
-            ));
+        if !p.tally.is_empty() {
+            counts(&p.tally, &clean.output)?;
         }
     }
     *clean_passed = true;
