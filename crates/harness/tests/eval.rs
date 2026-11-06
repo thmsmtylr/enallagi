@@ -137,6 +137,63 @@ fn an_eval_script_calls_the_installing_binary() {
 }
 
 #[test]
+fn agent_path_first() {
+    let pkg = package();
+    let bin = env!("CARGO_BIN_EXE_enallagi");
+    write_eval(
+        pkg.path(),
+        "case",
+        "do the thing",
+        "true",
+        &format!(r#"[ "$(cat bin.txt)" -ef "{bin}" ]"#),
+        None,
+    );
+    let stub = pkg.path().join("which.sh");
+    write_exec(&stub, "command -v enallagi >bin.txt\n");
+    let r = run_eval(pkg.path(), &stub.display().to_string(), &["case"]);
+    assert_eq!(last_line(&r.stdout), "EVAL case PASS", "{}", r.stderr);
+}
+
+#[test]
+fn agent_task_env() {
+    let pkg = package();
+    write_eval(
+        pkg.path(),
+        "case",
+        "do the thing",
+        "issues=\"$(ls -d .enallagi/specs/*/)issues\"; mkdir -p \"$issues\"\n\
+         printf '# T-007: x\\n\\n**Status:** ready-for-agent\\n' >\"$issues/T-007-x.md\"\n",
+        r#"[ "$(cat task.txt)" = T-007 ]"#,
+        None,
+    );
+    let stub = pkg.path().join("task.sh");
+    write_exec(&stub, "echo \"$ENALLAGI_TASK\" >task.txt\n");
+    let r = run_eval(pkg.path(), &stub.display().to_string(), &["case"]);
+    assert_eq!(last_line(&r.stdout), "EVAL case PASS", "{}", r.stderr);
+}
+
+#[test]
+fn agent_argv_quoted() {
+    let pkg = package();
+    write_eval(
+        pkg.path(),
+        "case",
+        "do the thing",
+        "true",
+        r#"[ "$(cat args.txt)" = "$(printf '%s\n' --settings '{"x": 1}')" ]"#,
+        None,
+    );
+    let stub = pkg.path().join("args.sh");
+    write_exec(&stub, "printf '%s\\n' \"$@\" >args.txt\n");
+    let r = run_eval(
+        pkg.path(),
+        &format!(r#"{} --settings "{{\"x\": 1}}""#, stub.display()),
+        &["case"],
+    );
+    assert_eq!(last_line(&r.stdout), "EVAL case PASS", "{}", r.stderr);
+}
+
+#[test]
 fn the_eval_runner_fails_a_role_that_breaks_its_rule() {
     let pkg = package();
     write_eval(

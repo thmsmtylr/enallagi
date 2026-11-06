@@ -66,7 +66,7 @@ fn list_evals(pkg: &Path) -> Vec<String> {
 
 fn resolve_agent(pkg: &Path) -> Option<Vec<String>> {
     if let Ok(env) = std::env::var("EVAL_AGENT") {
-        let words: Vec<String> = env.split_whitespace().map(String::from).collect();
+        let words = shell_words(&env);
         if !words.is_empty() {
             return Some(words);
         }
@@ -78,10 +78,42 @@ fn resolve_agent(pkg: &Path) -> Option<Vec<String>> {
         .map(|r| r.argv)
 }
 
-fn run_script(script: &Path, cwd: &Path, pkg: Option<&Path>) -> bool {
-    let mut cmd = Command::new("bash");
-    cmd.arg(script).current_dir(cwd);
-    // the fixture was installed by this binary, so a script's `enallagi` must be this binary too, not an older one on PATH
+// quotes group and a backslash escapes, as sh reads a word, with no expansion; an unclosed quote runs to the end
+fn shell_words(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut word: Option<String> = None;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c.is_whitespace() {
+            out.extend(word.take());
+            continue;
+        }
+        let w = word.get_or_insert_with(String::new);
+        match c {
+            '\'' => w.extend(chars.by_ref().take_while(|&c| c != '\'')),
+            '"' => {
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => match chars.next() {
+                            Some(n @ ('"' | '\\' | '$' | '`')) => w.push(n),
+                            Some(n) => w.extend(['\\', n]),
+                            None => w.push('\\'),
+                        },
+                        c => w.push(c),
+                    }
+                }
+            }
+            '\\' => w.extend(chars.next()),
+            c => w.push(c),
+        }
+    }
+    out.extend(word);
+    out
+}
+
+// the fixture was installed by this binary, so a script's or an agent's `enallagi` must be this binary too, not an older one on PATH
+fn bin_first(cmd: &mut Command) {
     if let Some(bin) = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf))
@@ -92,6 +124,12 @@ fn run_script(script: &Path, cwd: &Path, pkg: Option<&Path>) -> bool {
             cmd.env("PATH", joined);
         }
     }
+}
+
+fn run_script(script: &Path, cwd: &Path, pkg: Option<&Path>) -> bool {
+    let mut cmd = Command::new("bash");
+    cmd.arg(script).current_dir(cwd);
+    bin_first(&mut cmd);
     if let Some(pkg) = pkg {
         cmd.env("EVAL_PKG", pkg);
     }
@@ -99,10 +137,11 @@ fn run_script(script: &Path, cwd: &Path, pkg: Option<&Path>) -> bool {
 }
 
 fn run_agent(argv: &[String], prompt: &str, cwd: &Path) -> bool {
-    let argv = match config::load(cwd) {
-        Ok(cfg) => agent::fill_layout(argv, &cfg.layout),
+    let cfg = match config::load(cwd) {
+        Ok(cfg) => cfg,
         Err(_) => return false,
     };
+    let argv = agent::fill_layout(argv, &cfg.layout);
     let words: Vec<String> = argv
         .iter()
         .map(|w| w.replace("{prompt}", prompt).replace("{turns}", "40"))
@@ -110,8 +149,17 @@ fn run_agent(argv: &[String], prompt: &str, cwd: &Path) -> bool {
     let Some((program, rest)) = words.split_first() else {
         return false;
     };
-    Command::new(program)
-        .args(rest)
+    let mut cmd = Command::new(program);
+    bin_first(&mut cmd);
+    // the ticket the launcher would hand this lane, so the hooks see the lane's ENALLAGI_TASK
+    let task = crate::tracker::Tracker::open(cwd, &cfg.layout.harness_dir)
+        .blocks()
+        .ok()
+        .and_then(|b| crate::tracker::takeable(&b));
+    if let Some(task) = task {
+        cmd.env("ENALLAGI_TASK", task);
+    }
+    cmd.args(rest)
         .current_dir(cwd)
         .stdout(Stdio::null())
         .stderr(Stdio::null())

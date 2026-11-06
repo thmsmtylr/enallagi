@@ -6,8 +6,8 @@ set -u
 # the agent under test is the one `enallagi eval` names, so `enallagi audit` spawns it as the auditor
 if [ -n "${EVAL_AGENT:-}" ]; then
   python3 - <<'PY'
-import json, os
-words = os.environ['EVAL_AGENT'].split()
+import json, os, shlex
+words = shlex.split(os.environ['EVAL_AGENT'])
 path = '.enallagi/enallagi.toml'
 text = open(path).read()
 assert '[agent]' not in text, 'the seeded config already holds an [agent] table'
