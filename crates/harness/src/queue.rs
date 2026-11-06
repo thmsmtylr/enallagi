@@ -102,19 +102,22 @@ pub fn parse(text: &str) -> Result<Vec<Block>, QueueError> {
     Ok(blocks)
 }
 
+/// A field's whole first line and the line it sits on.
+pub fn field_at(b: &Block, key: &str) -> Option<(usize, String)> {
+    let prefix = format!("{key}:");
+    b.body.iter().find_map(|(at, line)| {
+        line.strip_prefix(&prefix)
+            .map(|rest| (*at, rest.trim().to_string()))
+    })
+}
+
 // status is its first word: everything after it is the reason (`deferred -- out of scope`)
 pub fn field(b: &Block, key: &str) -> Option<String> {
-    let prefix = format!("{key}:");
-    for (_, line) in &b.body {
-        if let Some(rest) = line.strip_prefix(&prefix) {
-            let value = rest.trim().to_string();
-            if key == "status" && !value.is_empty() {
-                return value.split_whitespace().next().map(str::to_string);
-            }
-            return Some(value);
-        }
+    let (_, value) = field_at(b, key)?;
+    if key == "status" && !value.is_empty() {
+        return value.split_whitespace().next().map(str::to_string);
     }
-    None
+    Some(value)
 }
 
 pub fn blockers(b: &Block) -> Vec<String> {

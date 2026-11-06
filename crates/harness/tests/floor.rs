@@ -152,21 +152,36 @@ fn no_script_hardcodes_a_vendor_path() {
     }
 }
 
+// a regex escapes the brackets and stars, so the scan reads each source with its backslashes dropped
+fn parses_tickets(text: &str) -> bool {
+    let bare = text.replace('\\', "");
+    ["## [", "**Status:**", "**Blocked by:**", "## Harness"]
+        .iter()
+        .any(|marker| bare.contains(marker))
+}
+
 #[test]
 fn the_launcher_parses_no_task_blocks_itself() {
-    // only queue::match_heading may parse `## [` headings; a second parser here would drift from it
-    let heading = re(r"## \[");
-    assert!(
-        heading.is_match("## [T-001] a task"),
-        "the scan cannot report"
-    );
+    // only the tracker and queue.rs read the ticket format; a second parser here would drift from them
+    for sample in [
+        "## [T-001] a task",
+        r#"re(r"^## \[(T-\d+)\]")"#,
+        r#"strip_prefix("\*\*Status:\*\*")"#,
+        "**Blocked by:** T-001",
+        "## Harness",
+    ] {
+        assert!(parses_tickets(sample), "the scan cannot report {sample}");
+    }
 
     let holders: Vec<String> = crate_sources()
         .into_iter()
-        .filter(|(_, text)| heading.is_match(text))
+        .filter(|(_, text)| parses_tickets(text))
         .map(|(rel, _)| rel.display().to_string())
         .collect();
-    assert_eq!(holders, vec!["queue.rs".to_string()]);
+    assert_eq!(
+        holders,
+        vec!["queue.rs".to_string(), "tracker.rs".to_string()]
+    );
 }
 
 #[test]

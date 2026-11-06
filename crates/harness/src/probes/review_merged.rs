@@ -3,6 +3,7 @@
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
 use crate::git;
+use crate::queue;
 
 const HEAD: &str = "refs/remotes/origin/HEAD";
 
@@ -17,10 +18,9 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 fn find(ctx: &ProbeCtx, default: &str) -> Res<Vec<Finding>> {
     let log = git::git(ctx.root, &["log", "--format=%h %s", default]).map_err(|e| e.to_string())?;
     let commits: Vec<(&str, &str)> = log.lines().filter_map(|l| l.split_once(' ')).collect();
-    let tasks = common::instance(ctx, "TASKS.md");
     let mut found = Vec::new();
-    for block in common::task_blocks(ctx)? {
-        if common::field(&block, "status").is_none_or(|(_, status)| status != "review") {
+    for (tasks, block) in common::tickets(ctx)? {
+        if queue::field_at(&block, "status").is_none_or(|(_, status)| status != "review") {
             continue;
         }
         let Some((sha, _)) = commits.iter().find(|(_, subject)| {

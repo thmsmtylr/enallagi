@@ -109,14 +109,13 @@ fn subjects(ctx: &ProbeCtx, rules: &Rules, found: &mut Vec<Finding>) -> Res<()> 
 }
 
 fn notes(ctx: &ProbeCtx, rules: &Rules, found: &mut Vec<Finding>) -> Res<()> {
-    let tasks = common::instance(ctx, "TASKS.md");
     let fence = common::re(r"^\s*```")?;
     let quoted = common::re("`[^`]*`")?;
     let verdict = common::re(r"^\s*REJECTED\b")?;
     // a notes: field carries no blank line, so the verifier's paragraph ends where the next author signs
     let author = common::re(r"^\s*(IMPLEMENTER|VERIFIED|VERIFIER|OPERATOR)\b")?;
-    for block in common::task_blocks(ctx)? {
-        let Some((start, _)) = common::field(&block, "notes") else {
+    for (tasks, block) in common::tickets(ctx)? {
+        let Some((start, _)) = crate::queue::field_at(&block, "notes") else {
             continue;
         };
         let mut fenced = false;

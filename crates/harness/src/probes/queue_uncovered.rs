@@ -4,9 +4,17 @@ use super::common::{self, Res};
 use super::spec_untested::untested_rows;
 use super::{Finding, ProbeCtx, ProbeResult};
 use crate::git;
+use crate::queue::{self, Block};
+use crate::tracker;
 use std::collections::BTreeSet;
 
-const OPEN_STATUS: &[&str] = &["proposed", "ready", "blocked", "review"];
+// in Pocock's names: the legacy proposed, ready (attended or not), blocked and review
+const OPEN_STATUS: &[&str] = &[
+    "needs-triage",
+    "ready-for-agent",
+    "ready-for-human",
+    "review",
+];
 
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
     common::result(find(ctx))
@@ -24,15 +32,15 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let mut claimed: BTreeSet<(String, String)> = BTreeSet::new();
     let mut found = Vec::new();
 
-    let tasks = common::instance(ctx, "TASKS.md");
     let mut tree: Option<Vec<String>> = None;
-    for block in common::task_blocks(ctx)? {
-        let status = common::field(&block, "status").map(|(_, v)| v);
-        if !status.is_some_and(|s| OPEN_STATUS.contains(&s.as_str())) {
+    for (tasks, block) in common::tickets(ctx)? {
+        // the whole value, so `ready -- a reason` stays closed as it always read
+        let status = queue::field_at(&block, "status").map(|(_, v)| v);
+        if !status.is_some_and(|s| OPEN_STATUS.contains(&tracker::canonical(&s))) {
             continue;
         }
         found.extend(stale_criteria(ctx, &block, &tasks, &mut tree)?);
-        let Some((rows_at, rows)) = common::field(&block, "rows") else {
+        let Some((rows_at, rows)) = queue::field_at(&block, "rows") else {
             continue;
         };
         let refs: Vec<_> = row_ref.captures_iter(&rows).collect();
@@ -98,7 +106,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
 // a name absent from the tree is quiet unless the history once held it, so a test its own task has yet to write is not reported
 fn stale_criteria(
     ctx: &ProbeCtx,
-    block: &common::TaskBlock,
+    block: &Block,
     tasks: &str,
     tree: &mut Option<Vec<String>>,
 ) -> Res<Vec<Finding>> {

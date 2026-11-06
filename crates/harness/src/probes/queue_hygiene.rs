@@ -3,6 +3,7 @@
 use super::common::{self, Res};
 use super::ponytail_ceiling::kill_lines;
 use super::{Finding, ProbeCtx, ProbeResult};
+use crate::queue::{self, QueueError};
 use std::collections::BTreeSet;
 
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
@@ -10,8 +11,20 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 }
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
-    let blocks = common::task_blocks(ctx)?;
-    let tasks = common::instance(ctx, "TASKS.md");
+    let tracker = common::tracker(ctx);
+    // the tracker refuses a repeated id, so the repeat is the only finding a queue holding one gets
+    let blocks = match tracker.blocks() {
+        Ok(blocks) => blocks,
+        Err(QueueError::DuplicateId { id, second, .. }) => {
+            let tasks = common::cite(ctx, &tracker, &id);
+            return Ok(vec![repeated(&tasks, second, &id)]);
+        }
+        Err(QueueError::DuplicateTicket { id, second, .. }) => {
+            let path = common::rel(ctx, std::path::Path::new(&second));
+            return Ok(vec![repeated(&path, 1, &id)]);
+        }
+        Err(e) => return Err(e.to_string()),
+    };
     let ids: BTreeSet<&str> = blocks.iter().map(|b| b.id.as_str()).collect();
     let task_id = common::re(r"T-\d+")?;
     // the id opening a kill line, never one it cites: a duplicate kill names the live block it duplicates
@@ -20,21 +33,12 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         .iter()
         .filter_map(|l| opening.captures(l).map(|m| m[1].to_string()))
         .collect();
-    let mut seen: BTreeSet<&str> = BTreeSet::new();
     let mut tree: Option<Vec<String>> = None;
     let mut found = Vec::new();
 
     for block in &blocks {
-        if seen.contains(block.id.as_str()) {
-            found.push(common::finding(
-                &tasks,
-                block.line,
-                format!("a second block is numbered {}", block.id),
-            ));
-        }
-        seen.insert(block.id.as_str());
-
-        let status = common::field(block, "status").map(|(_, v)| v);
+        let tasks = common::cite(ctx, &tracker, &block.id);
+        let status = queue::field_at(block, "status").map(|(_, v)| v);
         if status.is_none() {
             found.push(common::finding(
                 &tasks,
@@ -43,7 +47,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             ));
         }
 
-        if let Some((blocked_at, blocked)) = common::field(block, "blockedBy") {
+        if let Some((blocked_at, blocked)) = queue::field_at(block, "blockedBy") {
             for m in task_id.find_iter(&blocked) {
                 if !ids.contains(m.as_str()) {
                     found.push(common::finding(
@@ -69,7 +73,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
                 format!("{} reuses the id of a killed finding", block.id),
             ));
         }
-        let Some((scope_at, scope)) = common::field(block, "scope") else {
+        let Some((scope_at, scope)) = queue::field_at(block, "scope") else {
             continue;
         };
         for pattern in scope.split(',') {
@@ -108,4 +112,8 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         }
     }
     Ok(found)
+}
+
+fn repeated(path: &str, line: usize, id: &str) -> Finding {
+    common::finding(path, line, format!("a second block is numbered {id}"))
 }

@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- the probes read ticket files once a queue is migrated, and a finding cites the ticket's own file
 - once a queue is migrated, `pr`, `audit`, `issue` and `review` read and write ticket files, a done ticket stays in its file, an untriaged one expires to `wontfix`, and a lane may add a ticket only at `needs-triage`
 - the gates read ticket files once a queue is migrated, and the scope gate lets a lane edit only its own ticket
 - `tasks list`, `ready`, `set-status` and `unblock`, and the loop's own pick, read and write ticket files once a queue is migrated

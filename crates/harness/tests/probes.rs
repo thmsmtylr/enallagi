@@ -3,6 +3,8 @@
 use enallagi::config::{self, Config};
 use enallagi::fixture::Repo;
 use enallagi::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
+use enallagi::queue::{self, Block};
+use enallagi::tracker::Tracker;
 use std::fs;
 
 // install is the seed: docs, rails and roles all come from the binary, so a probe reads the tree an operator would get
@@ -89,6 +91,33 @@ fn append(repo: &Repo, name: &str, text: &str) {
     let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), name);
     let existing = fs::read_to_string(&path).unwrap_or_default();
     fs::write(&path, format!("{existing}{text}")).expect("append");
+}
+
+fn tracker(repo: &Repo) -> Tracker {
+    Tracker::open(&repo.root, &config::harness_dir(&repo.root))
+}
+
+// the queue as held, read back through the tracker, so either layout is rewritten from the same blocks
+fn held(repo: &Repo, keep: impl Fn(&Block) -> bool) -> String {
+    let blocks = tracker(repo).blocks().expect("the queue");
+    let kept: Vec<String> = blocks
+        .iter()
+        .filter(|b| keep(b))
+        .map(queue::block_text)
+        .collect();
+    kept.join("\n\n")
+}
+
+fn queue(repo: &Repo, text: &str) {
+    let held = held(repo, |_| true);
+    repo.queue(&config::harness_dir(&repo.root), &format!("{held}\n{text}"));
+}
+
+// the file a finding about `id` cites: TASKS.md, or the ticket's own file
+fn cited(repo: &Repo, id: &str) -> String {
+    let path = tracker(repo).path_of(id).expect("the ticket's file");
+    let rel = path.strip_prefix(&repo.root).expect("under the repo");
+    rel.display().to_string()
 }
 
 #[test]
@@ -184,10 +213,7 @@ const COMMA_ROWS: &str = "# SPEC\n\n## 11. Exit criteria\n\n| Behaviour | Test |
 
 fn claiming(repo: &Repo, rows: &str) {
     repo.write(".enallagi/SPEC.md", COMMA_ROWS);
-    append(
-        repo,
-        "TASKS.md",
-        &format!("\n## [T-002] the block that claims them\nscope: src/tests/x.test.ts\nblockedBy: none\nstatus: ready\nrows: {rows}\n"),
+    queue(repo, &format!("\n## [T-002] the block that claims them\nscope: src/tests/x.test.ts\nblockedBy: none\nstatus: ready\nrows: {rows}\n"),
     );
 }
 
@@ -1037,9 +1063,8 @@ fn the_queue_is_not_read_as_product_source() {
         &format!("fn a() {{\n    let x = f(); // {m} a trailing comment marker\n}}\n"),
     );
     repo.commit_all("trailing marker");
-    append(
+    queue(
         &repo,
-        "TASKS.md",
         &format!("\n# {m} a marker in the queue\nprintln!(\"fix: four failures, four causes\");\n"),
     );
     let results = run(&repo, &cfg);
@@ -1080,10 +1105,7 @@ fn a_slashed_row_resolves_under_source_root() {
 #[test]
 fn only_a_review_block_needs_a_scope_file() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the finished one, whose files a later cleanup deleted\nscope: src/gone.rs\nblockedBy: none\nstatus: done\n\n## [T-003] the reviewed one whose file never landed\nscope: src/missing.rs\nblockedBy: none\nstatus: review\n",
+    queue(&repo, "\n## [T-002] the finished one, whose files a later cleanup deleted\nscope: src/gone.rs\nblockedBy: none\nstatus: done\n\n## [T-003] the reviewed one whose file never landed\nscope: src/missing.rs\nblockedBy: none\nstatus: review\n",
     );
     repo.write("src/other.rs", "");
     repo.commit_all("feat: T-003 touches another file");
@@ -1100,10 +1122,7 @@ fn only_a_review_block_needs_a_scope_file() {
 #[test]
 fn a_ready_block_may_name_a_file_it_creates() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the one that adds two files\nscope: src/packs/core.ts, tests/cli.test.ts\nblockedBy: none\nstatus: ready\n",
+    queue(&repo, "\n## [T-002] the one that adds two files\nscope: src/packs/core.ts, tests/cli.test.ts\nblockedBy: none\nstatus: ready\n",
     );
     let results = run(&repo, &cfg);
     assert_eq!(
@@ -1118,10 +1137,7 @@ fn a_ready_block_may_name_a_file_it_creates() {
 fn a_scope_directory_is_reported_as_matching_none() {
     let (repo, cfg) = seeded();
     repo.write("evals/verifier/setup.sh", "");
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the eval that adds files under a directory\nscope: evals/verifier, evals/other/new.sh\nblockedBy: none\nstatus: ready\n",
+    queue(&repo, "\n## [T-002] the eval that adds files under a directory\nscope: evals/verifier, evals/other/new.sh\nblockedBy: none\nstatus: ready\n",
     );
     let results = run(&repo, &cfg);
     let found = findings(&results, "queue-hygiene");
@@ -1136,6 +1152,25 @@ fn a_scope_directory_is_reported_as_matching_none() {
     );
 }
 
+// the tracker refuses a repeat, so it is written by hand: a second block, or a copied ticket file
+#[test]
+fn a_repeated_id_is_one_finding() {
+    let (repo, cfg) = seeded();
+    let block = "\n## [T-002] the block\nscope: src/a.rs\nblockedBy: none\nstatus: ready\n";
+    queue(&repo, block);
+    match tracker(&repo) {
+        Tracker::Legacy(_) => append(&repo, "TASKS.md", block),
+        Tracker::Files(_) => {
+            let path = tracker(&repo).path_of("T-002").expect("the ticket");
+            fs::copy(&path, path.with_file_name("T-002-a-copy.md")).expect("copy");
+        }
+    }
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "queue-hygiene");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].message, "a second block is numbered T-002");
+}
+
 #[test]
 fn a_killed_id_reused_is_reported() {
     let (repo, cfg) = seeded();
@@ -1144,10 +1179,7 @@ fn a_killed_id_reused_is_reported() {
         "DECISIONS.md",
         "\n- [2026-09-01] T-002 claimed a thing — refuted by `x`: y, and T-004 already carries it\n",
     );
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] a later finding under the killed number\nscope: src/a.rs\nblockedBy: none\nstatus: ready\n\n## [T-003] done under a killed number before the rule\nscope: src/b.rs\nblockedBy: none\nstatus: done\n\n## [T-004] the block the kill line names as the duplicate\nscope: src/c.rs\nblockedBy: none\nstatus: ready\n",
+    queue(&repo, "\n## [T-002] a later finding under the killed number\nscope: src/a.rs\nblockedBy: none\nstatus: ready\n\n## [T-003] done under a killed number before the rule\nscope: src/b.rs\nblockedBy: none\nstatus: done\n\n## [T-004] the block the kill line names as the duplicate\nscope: src/c.rs\nblockedBy: none\nstatus: ready\n",
     );
     append(
         &repo,
@@ -1266,23 +1298,18 @@ fn the_state_repository_log_is_read_too() {
 #[test]
 fn a_note_saying_what_the_work_meant_fails() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the fixture was moved, which is why the run went green.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the fixture was moved, which is why the run went green.\n",
     );
     let found = plain_record(&repo, &cfg);
     assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains(".enallagi/TASKS.md:"), "{}", found[0]);
+    let cite = format!("{}:", cited(&repo, "T-002"));
+    assert!(found[0].contains(&cite), "{}", found[0]);
 }
 
 #[test]
 fn a_fenced_note_is_never_reported() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the run is below.\n\n```\nfour failures, four causes, none of them the same, which is why the check was red \u{2014} and it is green now.\n```\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the run is below.\n\n```\nfour failures, four causes, none of them the same, which is why the check was red \u{2014} and it is green now.\n```\n",
     );
     assert_eq!(plain_record(&repo, &cfg), Vec::<String>::new());
 }
@@ -1290,10 +1317,7 @@ fn a_fenced_note_is_never_reported() {
 #[test]
 fn a_pasted_command_in_a_note_is_exempt() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: `cargo test` prints `four failures, four causes, none of them the same`.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: `cargo test` prints `four failures, four causes, none of them the same`.\n",
     );
     assert_eq!(plain_record(&repo, &cfg), Vec::<String>::new());
 }
@@ -1315,10 +1339,7 @@ fn a_printed_em_dash_aside_is_reported() {
 #[test]
 fn a_rejection_verdict_in_a_note_is_exempt() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  the heading list was rewritten, three numbers, and the fences are stripped.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  the heading list was rewritten, three numbers, and the fences are stripped.\n",
     );
     assert_eq!(plain_record(&repo, &cfg), Vec::<String>::new());
 }
@@ -1326,10 +1347,7 @@ fn a_rejection_verdict_in_a_note_is_exempt() {
 #[test]
 fn a_note_counting_outside_a_verdict_is_reported() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  IMPLEMENTER 2026-09-17: the heading list was rewritten, three numbers, and the fences are stripped.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  IMPLEMENTER 2026-09-17: the heading list was rewritten, three numbers, and the fences are stripped.\n",
     );
     let found = plain_record(&repo, &cfg);
     assert_eq!(found.len(), 1, "{found:?}");
@@ -1339,10 +1357,7 @@ fn a_note_counting_outside_a_verdict_is_reported() {
 #[test]
 fn a_verified_note_after_a_rejection_is_read() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  VERIFIED (verifier, 2026-09-17). the heading list was rewritten, three numbers, and the fences are stripped.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  VERIFIED (verifier, 2026-09-17). the heading list was rewritten, three numbers, and the fences are stripped.\n",
     );
     let found = plain_record(&repo, &cfg);
     assert_eq!(found.len(), 1, "{found:?}");
@@ -1370,9 +1385,8 @@ const QUOTED: &str = "  Named and not a rejection point: two citations sit insid
 #[test]
 fn an_unanswered_rejection_is_reported() {
     let (repo, cfg) = seeded();
-    append(
+    queue(
         &repo,
-        "TASKS.md",
         &reviewed_block(
             "T-002",
             "review",
@@ -1392,9 +1406,8 @@ fn an_answered_rejection_is_quiet_at_review() {
         ("T-003", "Passed"),
         ("T-004", "IMPLEMENTER"),
     ] {
-        append(
+        queue(
             &repo,
-            "TASKS.md",
             &reviewed_block(
                 id,
                 "review",
@@ -1415,9 +1428,8 @@ fn an_answered_rejection_is_quiet_at_done() {
         ("T-003", "Passed"),
         ("T-004", "IMPLEMENTER"),
     ] {
-        append(
+        queue(
             &repo,
-            "TASKS.md",
             &reviewed_block(
                 id,
                 "done",
@@ -1443,7 +1455,7 @@ fn a_verdict_word_inside_a_rejection_is_not_read() {
             "  REJECTED: the IMPLEMENTER left the tree dirty (verifier, 2026-09-17).\n",
         ),
     ] {
-        append(&repo, "TASKS.md", &reviewed_block(id, "review", rejection));
+        queue(&repo, &reviewed_block(id, "review", rejection));
     }
     let found = rejection_stale(&repo, &cfg);
     assert_eq!(found.len(), 2, "{found:?}");
@@ -1456,11 +1468,7 @@ fn a_verdict_word_later_in_a_rejection_is_not_read() {
     let (repo, cfg) = seeded();
     let rejection =
         "  REJECTED: the diff is out of scope. Only three criteria Passed (verifier, 2026-09-18).\n";
-    append(
-        &repo,
-        "TASKS.md",
-        &reviewed_block("T-002", "review", rejection),
-    );
+    queue(&repo, &reviewed_block("T-002", "review", rejection));
     let found = rejection_stale(&repo, &cfg);
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(found[0].contains("T-002"), "{}", found[0]);
@@ -1469,9 +1477,8 @@ fn a_verdict_word_later_in_a_rejection_is_not_read() {
 #[test]
 fn a_verdict_first_in_a_rejection_is_not_read() {
     let (repo, cfg) = seeded();
-    append(
+    queue(
         &repo,
-        "TASKS.md",
         &reviewed_block(
             "T-002",
             "review",
@@ -1486,9 +1493,8 @@ fn a_verdict_first_in_a_rejection_is_not_read() {
 #[test]
 fn a_dated_verdict_first_rejection_is_reported() {
     let (repo, cfg) = seeded();
-    append(
+    queue(
         &repo,
-        "TASKS.md",
         &reviewed_block(
             "T-002",
             "review",
@@ -1507,16 +1513,15 @@ fn a_mid_line_answer_silences_a_rejection() {
         "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: review\nnotes: {}\n",
         "Adjudicated 2026-09-17. REJECTED: the quoted figure does not reproduce (verifier, 2026-09-17). IMPLEMENTER 2026-09-17: the figure is re-run and stamped. VERIFIER 2026-09-17: VERIFIED."
     );
-    append(&repo, "TASKS.md", &block);
+    queue(&repo, &block);
     assert_eq!(rejection_stale(&repo, &cfg), Vec::<String>::new());
 }
 
 #[test]
 fn a_rejection_behind_a_role_label_is_reported() {
     let (repo, cfg) = seeded();
-    append(
+    queue(
         &repo,
-        "TASKS.md",
         &reviewed_block(
             "T-002",
             "review",
@@ -1535,9 +1540,8 @@ fn a_prose_colon_prefix_is_not_a_rejection_label() {
         ("T-004", "the rejection point stands"),
         ("T-005", "Reproduced at 2026-09-20"),
     ] {
-        append(
+        queue(
             &repo,
-            "TASKS.md",
             &reviewed_block(
                 id,
                 "review",
@@ -1554,9 +1558,8 @@ fn a_prose_colon_prefix_is_not_a_rejection_label() {
 #[test]
 fn a_rejection_behind_a_dated_label_is_reported() {
     let (repo, cfg) = seeded();
-    append(
+    queue(
         &repo,
-        "TASKS.md",
         &reviewed_block(
             "T-003",
             "review",
@@ -1573,15 +1576,12 @@ const LONG_TITLE: &str = "a task/ branch that outlives its merged pull request c
 #[test]
 fn a_title_past_the_cap_is_reported_with_its_count() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        &format!("\n## [T-002] merged task/ branch still polls gh pr list every iteration\nscope: src/a.rs\nstatus: ready\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n"),
+    queue(&repo, &format!("\n## [T-002] merged task/ branch still polls gh pr list every iteration\nscope: src/a.rs\nstatus: ready\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n"),
     );
     let results = run(&repo, &cfg);
     let found = findings(&results, "title-length");
     assert_eq!(found.len(), 1, "{}", render(&results));
-    assert_eq!(found[0].path, ".enallagi/TASKS.md");
+    assert_eq!(found[0].path, cited(&repo, "T-003"));
     assert_eq!(
         found[0].message,
         format!(
@@ -1595,10 +1595,7 @@ fn a_title_past_the_cap_is_reported_with_its_count() {
 #[test]
 fn an_imported_issue_keeps_its_title_until_promotion() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: proposed\nprobe: issue\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\nprobe: issue\n"),
+    queue(&repo, &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: proposed\nprobe: issue\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\nprobe: issue\n"),
     );
     let results = run(&repo, &cfg);
     let found = findings(&results, "title-length");
@@ -1613,10 +1610,7 @@ fn an_imported_issue_keeps_its_title_until_promotion() {
 #[test]
 fn a_title_written_before_the_cap_is_left_alone() {
     let (repo, mut cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n"),
+    queue(&repo, &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n"),
     );
     cfg.queue.title_cap_from = 3;
     let results = run(&repo, &cfg);
@@ -1633,9 +1627,8 @@ fn a_title_written_before_the_cap_is_left_alone() {
 #[test]
 fn a_rejection_dated_in_its_own_label_is_reported() {
     let (repo, cfg) = seeded();
-    append(
+    queue(
         &repo,
-        "TASKS.md",
         &reviewed_block(
             "T-003",
             "review",
@@ -1846,10 +1839,7 @@ fn a_check_not_on_path_could_not_be_run() {
 }
 
 fn criterion(repo: &Repo, status: &str, tokens: &str) {
-    append(
-        repo,
-        "TASKS.md",
-        &format!("\n## [T-002] the block whose criteria name tests\nscope: src/a.rs\nblockedBy: none\nstatus: {status}\nrows: none — harness\ncriteria:\n  - `{tokens}` passes\n  - the check exits 0\nnotes: none\n"),
+    queue(repo, &format!("\n## [T-002] the block whose criteria name tests\nscope: src/a.rs\nblockedBy: none\nstatus: {status}\nrows: none — harness\ncriteria:\n  - `{tokens}` passes\n  - the check exits 0\nnotes: none\n"),
     );
 }
 
@@ -1876,19 +1866,16 @@ fn a_criterion_naming_a_removed_test_is_found() {
         "{}",
         found[0].message
     );
-    assert_eq!(found[0].path, ".enallagi/TASKS.md");
+    assert_eq!(found[0].path, cited(&repo, "T-002"));
 }
 
 // rewrites T-002 in place, so one fixture is read under each filter
 fn filtered_criterion(repo: &Repo, filter: &str, names: &str) {
-    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "TASKS.md");
-    let text = fs::read_to_string(&path).expect("TASKS.md");
-    let kept = text.split("\n## [T-002]").next().expect("the seeded queue");
-    fs::write(&path, kept).expect("rewrite");
-    append(
-        repo,
-        "TASKS.md",
-        &format!("\n## [T-002] the block whose criteria run a filter\nscope: src/a.rs\nblockedBy: none\nstatus: ready\nrows: none — harness\ncriteria:\n  - `cargo test -q -p enallagi --test probes {filter}` passes, with {names} in its run\n  - the check exits 0\nnotes: none\n"),
+    let kept = held(repo, |b| b.id != "T-002");
+    let block = format!("## [T-002] the block whose criteria run a filter\nscope: src/a.rs\nblockedBy: none\nstatus: ready\nrows: none — harness\ncriteria:\n  - `cargo test -q -p enallagi --test probes {filter}` passes, with {names} in its run\n  - the check exits 0\nnotes: none\n");
+    repo.queue(
+        &config::harness_dir(&repo.root),
+        &format!("{kept}\n\n{block}"),
     );
 }
 
@@ -2286,7 +2273,7 @@ const REVIEW_AND_DONE: &str = "\n## [T-901] a block still at review\nscope: a.tx
 
 // the default branch gains commits naming T-901, T-902 and T-9030, and only T-901 is at review
 fn merged_origin(repo: &Repo) -> (tempfile::TempDir, String) {
-    append(repo, "TASKS.md", REVIEW_AND_DONE);
+    queue(repo, REVIEW_AND_DONE);
     let (dir, branch) = tracked_clone(repo);
     git(&repo.root, &["remote", "set-head", "origin", &branch]);
     let base = git(&repo.root, &["rev-parse", "HEAD"]);
@@ -2313,16 +2300,13 @@ fn a_merged_review_block_is_reported() {
         panic!("{:?}", merged(&repo, &cfg));
     };
     assert_eq!(found.len(), 1, "{found:?}");
-    let tasks = config::instance_rel(&repo.root, &config::harness_dir(&repo.root), "TASKS.md");
-    let text = fs::read_to_string(repo.root.join(&tasks)).expect("tasks");
-    let heading = text
-        .lines()
-        .position(|l| l.starts_with("## [T-901]"))
-        .expect("heading")
-        + 1;
+    let block = tracker(&repo)
+        .get("T-901")
+        .expect("the queue")
+        .expect("T-901");
     assert_eq!(
-        (found[0].path.as_str(), found[0].line),
-        (tasks.as_str(), heading)
+        (found[0].path.clone(), found[0].line),
+        (cited(&repo, "T-901"), block.line)
     );
     assert!(found[0].message.contains("T-901"), "{}", found[0].message);
     assert!(found[0].message.contains(&sha), "{}", found[0].message);
@@ -2368,7 +2352,7 @@ fn an_in_tree_state_commit_is_not_a_merge() {
 #[test]
 fn an_unmerged_or_done_block_reports_nothing() {
     let (repo, cfg) = seeded();
-    append(&repo, "TASKS.md", REVIEW_AND_DONE);
+    queue(&repo, REVIEW_AND_DONE);
     let (_origin, branch) = tracked_clone(&repo);
     git(&repo.root, &["remote", "set-head", "origin", &branch]);
     let result = merged(&repo, &cfg);

@@ -2,6 +2,7 @@
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
+use crate::queue;
 
 // every verdict and answer is written into notes: in turn, so only the last one is still open
 const VERDICTS: [&str; 5] = ["REJECTED", "VERIFIED", "VERIFIER", "IMPLEMENTER", "Passed"];
@@ -61,12 +62,11 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let mut found = Vec::new();
-    let tasks = common::instance(ctx, "TASKS.md");
-    for block in common::task_blocks(ctx)? {
-        let Some((line, status)) = common::field(&block, "status") else {
+    for (tasks, block) in common::tickets(ctx)? {
+        let Some((line, status)) = queue::field_at(&block, "status") else {
             continue;
         };
-        let notes_at = common::field(&block, "notes").map(|(at, _)| at);
+        let notes_at = queue::field_at(&block, "notes").map(|(at, _)| at);
         let notes: String = block
             .body
             .iter()
@@ -74,7 +74,9 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
             .map(|(_, text)| text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        if latest_verdict(&notes) == Some("REJECTED") && status != "ready" {
+        // the whole value, in either name set: `ready -- a reason` was never an answer
+        let ready = ["ready", "ready-for-agent", "ready-for-human"].contains(&status.as_str());
+        if latest_verdict(&notes) == Some("REJECTED") && !ready {
             found.push(common::finding(
                 &tasks,
                 line,
@@ -84,11 +86,11 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
                 ),
             ));
         }
-        if status == "needs-spec" {
+        if status == "needs-spec" || status == "needs-info" {
             found.push(common::finding(
                 &tasks,
                 line,
-                format!("{} is parked at needs-spec", block.id),
+                format!("{} is parked at {status}", block.id),
             ));
         }
     }

@@ -3,6 +3,8 @@
 use super::{Finding, ProbeCtx, ProbeResult};
 use crate::config::Config;
 use crate::git;
+use crate::queue::Block;
+use crate::tracker::Tracker;
 use globset::GlobBuilder;
 use regex::Regex;
 use std::path::Path;
@@ -315,49 +317,33 @@ fn entries_of<'a>(lines: impl Iterator<Item = (usize, &'a String)>) -> Vec<(usiz
     entries
 }
 
-pub struct TaskBlock {
-    pub id: String,
-    pub line: usize,
-    pub body: Vec<(usize, String)>,
+pub fn tracker(ctx: &ProbeCtx) -> Tracker {
+    Tracker::open(ctx.root, &ctx.cfg.layout.harness_dir)
 }
 
-pub fn task_blocks(ctx: &ProbeCtx) -> Res<Vec<TaskBlock>> {
-    let heading = re(r"^## \[(T-\d+)\]")?;
-    let mut blocks: Vec<TaskBlock> = Vec::new();
-    let mut open = false;
-    for (index, line) in lines_of(ctx.root, &instance(ctx, "TASKS.md"))?
-        .iter()
-        .enumerate()
-    {
-        if let Some(m) = heading.captures(line) {
-            let id = m.get(1).map(|g| g.as_str()).unwrap_or_default().to_string();
-            blocks.push(TaskBlock {
-                id,
-                line: index + 1,
-                body: Vec::new(),
-            });
-            open = true;
-            continue;
-        }
-        if line.starts_with("## ") {
-            open = false;
-            continue;
-        }
-        if open {
-            if let Some(block) = blocks.last_mut() {
-                block.body.push((index + 1, line.clone()));
-            }
-        }
-    }
-    Ok(blocks)
+pub fn rel(ctx: &ProbeCtx, path: &Path) -> String {
+    path.strip_prefix(ctx.root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
 }
 
-pub fn field(block: &TaskBlock, key: &str) -> Option<(usize, String)> {
-    let prefix = format!("{key}:");
-    block.body.iter().find_map(|(line, text)| {
-        text.strip_prefix(&prefix)
-            .map(|value| (*line, value.trim().to_string()))
-    })
+/// The file a finding about ticket `id` cites: TASKS.md, or the ticket's own file.
+pub fn cite(ctx: &ProbeCtx, tracker: &Tracker, id: &str) -> String {
+    tracker
+        .path_of(id)
+        .map(|p| rel(ctx, &p))
+        .unwrap_or_default()
+}
+
+/// Every ticket, with the file a finding about it cites.
+pub fn tickets(ctx: &ProbeCtx) -> Res<Vec<(String, Block)>> {
+    let tracker = tracker(ctx);
+    let blocks = tracker.blocks().map_err(|e| e.to_string())?;
+    Ok(blocks
+        .into_iter()
+        .map(|b| (cite(ctx, &tracker, &b.id), b))
+        .collect())
 }
 
 pub fn normal(text: &str) -> String {
