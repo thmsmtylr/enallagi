@@ -72,7 +72,7 @@ pub enum Command {
         /// Vendor nothing, as CI does
         #[arg(long)]
         frozen: bool,
-        /// Append this GitHub issue as a proposed block once installed
+        /// Queue this GitHub issue as a needs-triage ticket once installed
         #[arg(long, value_name = "URL")]
         issue: Option<String>,
         /// Ask the agent for an unset check even when stdin is not a terminal or --yes is given
@@ -164,10 +164,10 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Append a proposed block for each open comment on a pull request review
+    /// Queue a needs-triage ticket for each open comment on a pull request review
     ///
     /// Reads the comments with gh. A comment with no file anchor is skipped, and so is a resolved
-    /// or outdated one. Each block takes its scope from the comment's path.
+    /// or outdated one. Each ticket takes its scope from the comment's path.
     Review {
         /// Pull request URL, or owner/repo#n
         reference: String,
@@ -177,7 +177,7 @@ pub enum Command {
     },
     /// Propose a learning for each class of finding that recurs
     ///
-    /// Reads review blocks, frictions and rejections, and writes proposed entries to DECISIONS.md.
+    /// Reads review tickets, frictions and rejections, and writes proposed entries to DECISIONS.md.
     /// The `auditor` role names each class, and it sits in no pipeline.
     Audit {
         /// Print each rule two or more of these installs earned as a `[seed]` line, and write nothing

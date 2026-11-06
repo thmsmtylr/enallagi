@@ -1500,8 +1500,8 @@ const DOC_UNRUNNABLE: [(&str, &str); 10] = [
 // A fence that is not commands, named by its first line, never by its tag.
 const DOC_DATA_FENCES: [(&str, &str); 3] = [
     (
-        "## [T-001] the date parser drops a timezone",
-        "a task block the reader pastes into TASKS.md",
+        "# T-001: the date parser drops a timezone",
+        "a ticket file the reader writes under .enallagi/specs/",
     ),
     (
         r#"  "test": "node --import tsx --test src/*.test.ts""#,

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A proposed block whose scope names one file the fix writes and one it only reads. The rule decides
+# A needs-triage ticket whose scope names one file the fix writes and one it only reads. The rule decides
 # which of the two survives promotion; nothing else in the fixture distinguishes them.
 set -u
 grep -q 'evals/scope-noise' .enallagi/LEARNINGS.md && {
@@ -24,22 +24,31 @@ RULE
   }
 fi
 
-# the block quotes a run, never a remembered line number: the adjudicator kills a figure it cannot re-derive
+# the ticket quotes a run, never a remembered line number: the adjudicator kills a figure it cannot re-derive
 finding=$(enallagi probe | grep '^FINDING hash-uncovered ')
 [ -n "$finding" ] || {
   echo "  setup.sh: enallagi probe emitted no hash-uncovered FINDING, so the proposal would be killed as unreproducible" >&2
   exit 1
 }
+title="${finding#FINDING hash-uncovered }"
+issues="$(ls -d .enallagi/specs/*/)issues"
+mkdir -p "$issues"
 {
-  printf '\n## [T-901] %s\n' "${finding#FINDING hash-uncovered }"
+  printf '# T-901: %s\n\n' "$title"
+  printf '**Status:** needs-triage\n'
+  printf '**Blocked by:** None\n\n'
+  printf '## Comments\n\n'
+  printf 'Proposed from the output below.\n\n'
+  printf '## Harness\n\n'
   printf 'scope: .enallagi/test-hashes.json, .enallagi/enallagi.toml\n'
-  printf 'blockedBy: none\n'
-  printf 'status: proposed\n'
   printf 'probe: hash-uncovered\n'
   printf 'rows: none — harness\n'
-  # shellcheck disable=SC2016  # the backticks are markdown in the task block, not a command
+  # shellcheck disable=SC2016  # the backticks are markdown in the ticket, not a command
   printf 'command: `enallagi probe`\n'
   printf 'output: |\n  %s\n' "$finding"
-  printf 'notes: proposed from the output above.\n'
-} >>.enallagi/TASKS.md
-git add -A && git commit -qm 'eval: one proposal with a read-only file on its scope line' >/dev/null
+} >"$issues/T-901-hash-uncovered.md"
+[ "$(enallagi tasks field T-901 status)" = "needs-triage" ] || {
+  echo "  setup.sh: the tracker does not read T-901 at needs-triage" >&2
+  exit 1
+}
+git -C .enallagi add -A && git -C .enallagi commit -qm 'eval: one proposal with a read-only file on its scope line' >/dev/null

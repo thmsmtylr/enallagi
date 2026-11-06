@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sixty seconds: one task, ready -> done, in a repository this script creates and deletes.
+# Sixty seconds: one ticket, ready-for-agent -> done, in a repository this script creates and deletes.
 #
 #   docs/demo.sh    no arguments, no credential, no network
 #
@@ -38,7 +38,7 @@ mkdir -p src && echo 'export const x = 1' >src/schema.ts
 git add -A && git commit -qm 'chore: init' >/dev/null
 
 cat <<'INTRO'
-enallagi demo — one task goes ready -> done in a repository this script creates and then deletes.
+enallagi demo — one ticket goes ready-for-agent -> done in a repository this script creates and then deletes.
 Nothing is installed on your machine and no credential is read. Takes about fifteen seconds.
 INTRO
 
@@ -97,7 +97,7 @@ INSTALL=$("$ENALLAGI_BIN" init 2>&1) || {
 # the count, not the 30-line file list: the reader learns nothing from the list
 printf 'installed %s files\n' "$(printf '%s\n' "$INSTALL" | grep -c '^  wrote: ')"
 
-# init seeds no task. The demo queues one with a scope: line, so the scope gate below has
+# init seeds no ticket. The demo queues one with a scope: line, so the scope gate below has
 # something to judge the lane's diff against.
 issues="$(ls -d .enallagi/specs/*/)issues"
 mkdir -p "$issues"

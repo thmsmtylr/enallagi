@@ -14,17 +14,17 @@ The defaults are in `crates/harness/harness.default.toml`.
 | `triage` | `queue.proposed` | **adjudicate** |
 | `discover` | `!queue.takeable` | **scout** → **adjudicate** |
 
-A queue holding a `proposed` block and nothing takeable takes `triage`, so a block the operator
+A queue holding a `needs-triage` ticket and nothing takeable takes `triage`, so a ticket the operator
 queued is decided before the scout files more.
 `discover` ends the run after two dry rounds.
-`triage` has one: a round that leaves its proposed block undecided hands the next round to
+`triage` has one: a round that leaves its `needs-triage` ticket undecided hands the next round to
 `discover`, and a round that leaves takeable work reopens it.
 
 Before selecting a task, an iteration reads the review comments on open pull requests
 from its own `task/` branches.
-Each unresolved thread lands as one `proposed` block carrying its thread id, and the same
-finding raised twice on the same lines is one block.
-When that block lands, the launcher replies on the thread with the sha and resolves it.
+Each unresolved thread lands as one `needs-triage` ticket carrying its thread id, and the same
+finding raised twice on the same lines is one ticket.
+When that ticket lands, the launcher replies on the thread with the sha and resolves it.
 No host tool, no such branch, or a failed host call is a warning, never a halt.
 
 `enallagi audit` reads review findings, frictions and rejections, and writes proposed learnings to DECISIONS.md: a model names each class, and code checks each citation.
@@ -72,29 +72,30 @@ A skill that no stage loading it ever used is named as unproven in this log.
 
 ## Gates
 
-`[[stage]].post` names the gates run after a stage. A failed gate sends the task back to `ready` or
-halts the run. The names are matched in `crates/harness/src/gates.rs`.
+`[[stage]].post` names the gates run after a stage. A failed gate sends the ticket back to `ready-for-agent`
+or halts the run. The names are matched in `crates/harness/src/gates.rs`.
 
 | Gate | Refuses | Runs after |
 | --- | --- | --- |
 | `implementer-not-done` | a `done` from anyone but the verifier, or an implementer that stopped short of `review` | implement |
-| `commit-verdict` | a verdict whose `deferred:` line or new prose defers a finding and adds no `proposed` block, or a failed commit of TASKS.md | verify |
+| `commit-verdict` | a verdict whose `deferred:` line or new prose defers a finding and adds no `needs-triage` ticket, or a failed commit of the queue | verify |
 | `verdict` | a `done` whose work is uncommitted, or whose check is red on delta | verify |
 | `claims` | a `done` whose latest verdict claims an exit on a `ran:` line that two re-runs both contradict, for commands `[check] claims_allow` names | verify |
 | `scope` | a file outside the task's `scope:` globs, or a product task editing the harness | verify |
-| `queue-intact` | a task id at the iteration's base commit that is in neither TASKS.md nor DECISIONS.md | implement, verify, adjudicate |
+| `queue-intact` | a ticket id at the iteration's base commit whose file is gone and that DECISIONS.md does not hold | implement, verify, adjudicate |
 | `commit-identity` | a commit in the iteration's range whose author is not the repository's configured `user.email` | implement, verify |
 | `commit-task` | a commit in the iteration's range whose subject names no task id, unless it touches only the loop's own state | implement |
 | `check-delta` | a check failure that is not already in `.check-baseline` | wherever a stage's `post` names it |
-| `commit-round` | a failed commit of TASKS.md and DECISIONS.md | adjudicate |
+| `commit-round` | a failed commit of the queue and DECISIONS.md | adjudicate |
 | `adjudicator-halt` | an adjudicator output line opening with `halt` and naming a task id, and halts the run | adjudicate |
-| `dry-round` | a round that leaves no ready unattended task, counted toward `end_after_dry_rounds` | adjudicate |
+| `dry-round` | a round that leaves no `ready-for-agent` ticket, counted toward `end_after_dry_rounds` | adjudicate |
 | `install-stale` | an installed file that drifted from what `enallagi init` writes now, read by spawning the binary | verify |
 
 ## Probes
 
 `enallagi probe` prints one `PROBE <name> <count>` line per probe and a `FINDING` line per shortfall.
 A probe that cannot run prints `PROBE <name> ERROR`, never a count of zero.
+The queue probes print it when there is no `specs/` directory to read (`no queue: no specs/`).
 The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 
 | Probe | Reports |
@@ -109,8 +110,8 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `learning-standing` | a proposed learning still undecided, with its age and the rounds left before it expires |
 | `skill-ungated` | a `[[skill]]` whose `gate` is `none` |
 | `ponytail-ceiling` | a `ponytail:` marker no kill line names |
-| `rejection-stale` | a block whose last verdict is REJECTED and whose status is not `ready` |
-| `title-length` | a block title past 72 characters, from `queue.title_cap_from` on, except an imported issue still `proposed`; the id and the count |
+| `rejection-stale` | a ticket whose last verdict is REJECTED and whose status is not `ready-for-agent`, or a ticket at `needs-info` |
+| `title-length` | a ticket title past 72 characters, from `queue.title_cap_from` on, except an imported issue still `needs-triage`; the id and the count |
 | `queue-hygiene` | a repeated id, a missing status, an undefined blocker, or a scope entry matching nothing |
 | `friction-repeat` | a friction recorded twice that no LEARNINGS.md rule, `## Earned rules` line or kill line covers, and an earned rule whose class recurred after its `promoted:` commit |
 | `check-red` | a check that exits non-zero, with its first failing test |
@@ -161,9 +162,9 @@ A task's own `model:` and `effort:` lines win over `[agent]` and `[agent.<role>]
 
 - `queue.takeable`
 - `queue.reviewing`
-- `queue.proposed`
+- `queue.proposed` (a `needs-triage` ticket stands)
 - `queue.empty`
-- `task.attended`
+- `task.attended` (the first ready ticket is `ready-for-human`)
 - `check.red`
 - `probe.<name>`
 
@@ -186,6 +187,7 @@ Those two commits are what an install leaves in the product's history.
 | `.enallagi/roles/{scout,adjudicator,implementer,verifier,researcher}.md` | the five role prompts, always resubstituted |
 | `.enallagi/RAILS.md`, `.enallagi/.gitignore` | the rails, each naming its enforcement, and the ignore file for scratch state |
 | `<skills_dir>/running-the-loop/` | the loop's own usage skill, in the preset's skill directory |
-| `.enallagi/{enallagi.toml,TASKS.md,PROGRESS.md,LEARNINGS.md,DECISIONS.md,.check-baseline,SPEC.md,evals/README.md}` | seeded once and never overwritten |
+| `.enallagi/{enallagi.toml,PROGRESS.md,LEARNINGS.md,DECISIONS.md,.check-baseline,evals/README.md}` | seeded once and never overwritten |
+| `.enallagi/specs/<repo>/spec.md` | the spec, seeded once; its tickets go in `issues/` beside it, one file each |
 | `.enallagi/AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | seeded once: the context file, and one-line pointers to it |
 | `.gitignore` | `/.enallagi/` appended and committed, so the product's linters skip the harness directory |

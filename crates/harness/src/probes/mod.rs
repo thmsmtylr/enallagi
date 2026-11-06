@@ -22,7 +22,7 @@ mod prompt_unsubstituted;
 mod queue_hygiene;
 mod queue_uncovered;
 mod rail_unenforced;
-mod rejection_stale;
+pub mod rejection_stale;
 mod review_merged;
 mod skill_ungated;
 mod spec_untested;

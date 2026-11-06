@@ -247,10 +247,10 @@ fn commit_verdict(ctx: &mut GateCtx) -> GateOutcome {
         let phrase = &deferred.phrase;
         let reason = match deferred.source {
             DeferredIn::Field => format!(
-                "the verdict's `deferred:` line says \"{phrase}\" and it added no status: proposed block; write that finding as a proposed block with the command that shows it"
+                "the verdict's `deferred:` line says \"{phrase}\" and it added no needs-triage ticket; file that finding as a needs-triage ticket with the command that shows it"
             ),
             DeferredIn::Notes => format!(
-                "the verdict's notes say \"{phrase}\" and it added no status: proposed block; write that finding as a proposed block with the command that shows it, and name it on a `deferred:` line"
+                "the verdict's notes say \"{phrase}\" and it added no needs-triage ticket; file that finding as a needs-triage ticket with the command that shows it, and name it on a `deferred:` line"
             ),
         };
         let mut out = force_back(

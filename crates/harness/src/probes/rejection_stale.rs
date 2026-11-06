@@ -5,7 +5,7 @@ use super::{Finding, ProbeCtx, ProbeResult};
 use crate::block;
 
 // every verdict and answer is written into notes: in turn, so only the last one is still open
-const VERDICTS: [&str; 5] = ["REJECTED", "VERIFIED", "VERIFIER", "IMPLEMENTER", "Passed"];
+pub const VERDICTS: [&str; 5] = ["REJECTED", "VERIFIED", "VERIFIER", "IMPLEMENTER", "Passed"];
 
 // only a role names who wrote a note; a verdict before the date is that note's own verdict
 const ROLES: [&str; 2] = ["VERIFIER", "IMPLEMENTER"];

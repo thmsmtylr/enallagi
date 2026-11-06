@@ -228,7 +228,7 @@ fn immutable_refuses_an_edit_to_a_role() {
 
 // the arm lives on step 7 itself, so the assertion reads that line and not the whole prompt
 #[test]
-fn the_commit_step_names_both_arms() {
+fn commit_step_arms() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/implementer.md");
     let text = fs::read_to_string(&source).expect("read roles/implementer.md");
     let step = text
@@ -240,7 +240,7 @@ fn the_commit_step_names_both_arms() {
         "git status --porcelain",
         "already committed at",
         "no commit",
-        "status: review",
+        "**Status:** review",
     ] {
         assert!(step.contains(want), "step 7 wants {want}: {step}");
     }
@@ -314,5 +314,23 @@ fn the_adjudicator_gates_each_proposed_learning() {
         "`  killed: YYYY-MM-DD <the --gate output, or the instance count>`",
     ] {
         assert!(text.contains(want), "roles/adjudicator.md wants {want:?}");
+    }
+}
+
+// stopgap until spec 2's `verdict:` line: the words a role is told to open with are the words the probe reads
+#[test]
+fn verdict_words() {
+    let mut want = enallagi::probes::rejection_stale::VERDICTS.to_vec();
+    want.sort();
+    for role in ["verifier", "implementer"] {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../roles/{role}.md"));
+        let text = fs::read_to_string(&source).expect("read role");
+        let line = text
+            .lines()
+            .find(|l| l.starts_with("Verdict words:"))
+            .unwrap_or_else(|| panic!("roles/{role}.md names no verdict words"));
+        let mut named: Vec<&str> = line.split('`').skip(1).step_by(2).collect();
+        named.sort();
+        assert_eq!(named, want, "roles/{role}.md");
     }
 }

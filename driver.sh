@@ -103,9 +103,12 @@ TOML
     "$ENALLAGI_BIN" init >/dev/null 2>&1 || exit 3
     "$ENALLAGI_BIN" skills sync >/dev/null 2>&1 || exit 3
 
-    # The seeded T-001 ships with an empty scope: line. Give it one, so the scope gate has
-    # something to judge the lane's diff against.
-    sed -i.bak 's|^scope:$|scope: src/allowed.ts|' .enallagi/TASKS.md && rm -f .enallagi/TASKS.md.bak
+    # init seeds no ticket. Queue one with a scope: line, so the scope gate has something to
+    # judge the lane's diff against.
+    issues="$(ls -d .enallagi/specs/*/)issues"
+    mkdir -p "$issues"
+    printf '# T-001: the driver task\n\n**Status:** ready-for-agent\n**Blocked by:** None\n\n## Harness\n\nscope: src/allowed.ts\nrows: none — harness\n' \
+      >"$issues/T-001-the-driver-task.md"
     git add -A && git commit -qm 'chore: T-001 setup' >/dev/null
 
     MODE="$mode" "$ENALLAGI_BIN" run --iterations 1 --no-tui 2>&1

@@ -286,7 +286,7 @@ fn the_project_skill_is_valid_agentskills_frontmatter() {
     );
     assert!(repo
         .root
-        .join(".enallagi/adapters/claude/skills/running-the-loop/references/task-block.md")
+        .join(".enallagi/adapters/claude/skills/running-the-loop/references/ticket.md")
         .is_file());
 }
 

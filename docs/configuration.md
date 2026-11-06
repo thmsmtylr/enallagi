@@ -93,10 +93,10 @@ go test, from go1.26.2:
 
 ## `[queue]`
 
-- `queue.drain`: how many standing `proposed` blocks one adjudicate stage takes, oldest first. Default `3`.
-- `queue.turns_per_block`: turns added to that stage for each block. Default `25`.
-- `queue.proposed_rounds`: how many state commits a `proposed` block stands before it expires. Default `6`.
-- `queue.title_cap_from`: the first block id `title-length` holds to the 72-character cap; titles below it are the record as written. Default `1`.
+- `queue.drain`: how many standing `needs-triage` tickets one adjudicate stage takes, oldest first. Default `3`.
+- `queue.turns_per_block`: turns added to that stage for each ticket. Default `25`.
+- `queue.proposed_rounds`: how many state commits a `needs-triage` ticket stands before it expires to `wontfix`. Default `6`.
+- `queue.title_cap_from`: the first ticket id `title-length` holds to the 72-character cap; titles below it are the record as written. Default `1`.
 
 ## `[pr]`
 
@@ -116,7 +116,7 @@ Where the documents live:
 
 The spec and its exit criteria:
 
-- `layout.spec`: the spec file. Default `"SPEC.md"`.
+- `layout.spec`: the spec file, relative to the harness directory. Default `""`: the first `specs/*/spec.md` holding `layout.rows_heading`, else `specs/<repo>/spec.md`, which init seeds.
 - `layout.rows_heading`: the heading that opens the exit-criteria rows. Default `"## 11. Exit criteria"`.
 - `layout.rows_end_heading`: the heading that closes them. Default `"## 12."`.
 - `layout.contract_file`: the file the roles name as the one home of every shared shape. Default `"src/schema.ts"`.

@@ -19,9 +19,9 @@ pub fn immutable(root: &Path, input: &str) -> (i32, String) {
         return (
             2,
             format!(
-                "immutable: {hit} is covered by test-hashes.json (SPEC.md §0.2, tests-immutable \
+                "immutable: {hit} is covered by test-hashes.json (the spec §0.2, tests-immutable \
                  and harness-immutable). This edit is refused. If the change is genuinely \
-                 needed, stop the task and write it into the task notes."
+                 needed, stop the task and write it under the ticket's ## Comments."
             ),
         );
     }

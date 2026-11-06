@@ -11,9 +11,7 @@ command that showed what it cost, and names a file, a command or a hook.
 that refutes it. Read it with `sed -n '/^## Rejected findings/,/^## \[T-/p' __ENALLAGI_DIR__/DECISIONS.md` and
 never read past that range.
 
-Below it, completed task blocks, verbatim, moved out of __ENALLAGI_DIR__/TASKS.md once `done` by
-`enallagi run`. Each block is the implementer's and the verifier's own words, never summarised on
-the way in.
+Below it, task blocks an older install archived, verbatim. Nothing is added there now.
 
 ## Earned rules
 

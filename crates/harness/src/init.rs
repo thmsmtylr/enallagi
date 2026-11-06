@@ -53,8 +53,8 @@ const SKILL: &[(&str, &str)] = &[
         include_str!("../../../skills/running-the-loop/SKILL.md"),
     ),
     (
-        "references/task-block.md",
-        include_str!("../../../skills/running-the-loop/references/task-block.md"),
+        "references/ticket.md",
+        include_str!("../../../skills/running-the-loop/references/ticket.md"),
     ),
 ];
 

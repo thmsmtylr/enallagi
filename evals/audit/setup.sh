@@ -52,16 +52,25 @@ notes: VERIFIER 2026-09-03
 open(path, 'w').write(text)
 PY
 
-cat >>.enallagi/TASKS.md <<'BLOCK'
+issues="$(ls -d .enallagi/specs/*/)issues"
+mkdir -p "$issues"
+cat >"$issues/T-012-the-citation-test.md" <<'TICKET'
+# T-012: the citation test
 
-## [T-012] the citation test
-scope: src/floor.rs
-status: proposed
-notes: https://github.com/o/r/pull/4#discussion_r12
+**Status:** needs-triage
+**Blocked by:** None
+
+## Comments
+
+https://github.com/o/r/pull/4#discussion_r12
   > this test selects 0 tests, so it passes with the logic deleted
-BLOCK
 
-if ! { grep -q 'merged true on a failed fetch' .enallagi/PROGRESS.md && grep -q '^## \[T-012\]' .enallagi/TASKS.md && grep -q 'a mutant survived' .enallagi/DECISIONS.md; }; then
+## Harness
+
+scope: src/floor.rs
+TICKET
+
+if ! { grep -q 'merged true on a failed fetch' .enallagi/PROGRESS.md && [ "$(enallagi tasks field T-012 status)" = needs-triage ] && grep -q 'a mutant survived' .enallagi/DECISIONS.md; }; then
   echo "  setup.sh: the six findings did not all land in the fixture" >&2
   exit 1
 fi
