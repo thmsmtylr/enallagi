@@ -29,6 +29,12 @@ pub enum QueueError {
     UnterminatedFence { opened: usize },
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error("enallagi tasks: {id} is in both {first} and {second} -- the queue is ambiguous")]
+    DuplicateTicket {
+        id: String,
+        first: String,
+        second: String,
+    },
     #[error("enallagi tasks: no such task {0}")]
     NoSuchTask(String),
 }

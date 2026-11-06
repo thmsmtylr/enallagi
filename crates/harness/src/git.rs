@@ -265,6 +265,17 @@ pub fn task_queued_commit(
     harness_dir: &str,
     task: &str,
 ) -> Result<Option<String>, String> {
+    task_queued_commit_until(root, harness_dir, task, None)
+}
+
+// `until` bounds the search at a revision: past the migration TASKS.md is gone, and its deletion is
+// the newest commit that changed the heading's count
+pub fn task_queued_commit_until(
+    root: &Path,
+    harness_dir: &str,
+    task: &str,
+    until: Option<&str>,
+) -> Result<Option<String>, String> {
     let tasks = crate::config::instance_rel(root, harness_dir, "TASKS.md");
     let (repo, inner, nested) = locate(root, harness_dir, &tasks);
     let block = crate::queue::Block {
@@ -278,24 +289,22 @@ pub fn task_queued_commit(
     // commit that added the block; the root layout keeps the pickaxe the verifier ran before
     let found = if nested {
         let anchored = format!("^{}", regex::escape(&heading));
-        git(
-            &repo,
-            &[
-                "log",
-                "--reverse",
-                "--format=%H",
-                "--pickaxe-regex",
-                "-S",
-                &anchored,
-                "--",
-                &inner,
-            ],
-        )
+        let mut args = vec![
+            "log",
+            "--reverse",
+            "--format=%H",
+            "--pickaxe-regex",
+            "-S",
+            &anchored,
+        ];
+        args.extend(until);
+        args.extend(["--", &inner]);
+        git(&repo, &args)
     } else {
-        git(
-            &repo,
-            &["log", "-1", "--format=%H", "-S", &heading, "--", &inner],
-        )
+        let mut args = vec!["log", "-1", "--format=%H", "-S", &heading];
+        args.extend(until);
+        args.extend(["--", &inner]);
+        git(&repo, &args)
     }
     .map_err(|e| e.to_string())?;
     Ok(found.lines().next().map(String::from))

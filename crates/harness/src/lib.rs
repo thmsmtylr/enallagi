@@ -23,5 +23,6 @@ pub mod review;
 pub mod roles;
 pub mod runners;
 pub mod skills;
+pub mod tracker;
 pub mod tui;
 pub mod worktree;
