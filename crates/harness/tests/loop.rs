@@ -4237,6 +4237,11 @@ fn the_audit_runs_once_after_the_last_iteration() {
         "{digest:#?}"
     );
     assert!(digest.role_seconds.contains_key("auditor"), "{digest:#?}");
+    let events = enallagi::events::Log::open(&r.root.join(".enallagi"))
+        .read()
+        .expect("events.jsonl");
+    let report = enallagi::events::prefix_report(&events, true);
+    assert!(report.contains(r#""role":"auditor""#), "{report}");
 }
 
 #[test]

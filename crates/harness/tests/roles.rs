@@ -303,3 +303,17 @@ fn the_verifier_ends_with_ran_and_exit_lines() {
         assert!(text.contains(want), "the rendered verifier wants {want:?}");
     }
 }
+
+// the loop tests seed the decision the adjudicator writes, so only this pins the rule it follows
+#[test]
+fn the_adjudicator_gates_each_proposed_learning() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/adjudicator.md");
+    let text = fs::read_to_string(&source).expect("read roles/adjudicator.md");
+    for want in [
+        "three or more citations",
+        "`enallagi eval --gate <name>` passes",
+        "`  killed: YYYY-MM-DD <the --gate output, or the instance count>`",
+    ] {
+        assert!(text.contains(want), "roles/adjudicator.md wants {want:?}");
+    }
+}

@@ -1,6 +1,7 @@
 //! audit: review findings, frictions and rejections the repository already holds, handed to the `auditor` role, which names each class that recurs. The binary writes a learning only when every citation it carries resolves.
 
 use crate::config::{self, Config};
+use crate::events::{Kind, Writer};
 use crate::git;
 use crate::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
 use crate::queue::{self, QueueError};
@@ -467,7 +468,12 @@ fn body(role: &str) -> &str {
         .trim_start()
 }
 
-fn ask(root: &Path, cfg: &Config, prompt: String) -> Result<crate::agent::StageResult, AuditError> {
+fn ask(
+    root: &Path,
+    cfg: &Config,
+    prompt: String,
+    events: &mut Writer,
+) -> Result<crate::agent::StageResult, AuditError> {
     let presets = crate::agent::presets();
     let resolved = crate::agent::resolve(&cfg.agent, "auditor", &presets)
         .map_err(|e| AuditError::Agent(e.to_string()))?;
@@ -485,10 +491,28 @@ fn ask(root: &Path, cfg: &Config, prompt: String) -> Result<crate::agent::StageR
     };
     let rate_limit = Regex::new(&format!("(?i){}", cfg.agent.rate_limit_pattern))
         .map_err(|e| AuditError::Agent(e.to_string()))?;
-    let mut events = crate::events::Writer::new(crate::events::Log::open(&root.join(dir)));
     let stop_file = config::instance_path(root, dir, "STOP");
-    let result = crate::agent::spawn(&spawn, &mut events, &stop_file, &rate_limit)
+    events.emit(Kind::StageStart {
+        stage: spawn.stage.clone(),
+        role: Some("auditor".to_string()),
+        command: Some(spawn.preset.name.clone()),
+        task: None,
+    });
+    let result = crate::agent::spawn(&spawn, events, &stop_file, &rate_limit)
         .map_err(|e| AuditError::Agent(e.to_string()))?;
+    events.emit(Kind::StageEnd {
+        stage: spawn.stage.clone(),
+        task: None,
+        seconds: result.seconds,
+        exit: result.exit,
+        cost: result.usage.cost,
+        input_tokens: result.usage.input_tokens,
+        output_tokens: result.usage.output_tokens,
+        cache_creation_input_tokens: result.usage.cache_creation_input_tokens,
+        cache_read_input_tokens: result.usage.cache_read_input_tokens,
+        turns: result.usage.turns,
+        turn_cap: Some(TURNS),
+    });
     // a failed agent's output can quote the role's own template, which parses as a learning
     if result.exit != 0 {
         let first = result.output.lines().next().unwrap_or_default();
@@ -882,7 +906,7 @@ fn refusal(root: &Path, body: &str, learning: &Learning) -> Option<String> {
 }
 
 /// Hands the signal to the auditor role, and writes each learning whose citations resolve, merged into an entry it overlaps.
-pub fn run(root: &Path, cfg: &Config) -> Result<Report, AuditError> {
+pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, AuditError> {
     let dir = &cfg.layout.harness_dir;
     let decisions_rel = config::instance_rel(root, dir, "DECISIONS.md");
     let learnings_rel = config::instance_rel(root, dir, "LEARNINGS.md");
@@ -955,6 +979,7 @@ pub fn run(root: &Path, cfg: &Config) -> Result<Report, AuditError> {
         root,
         cfg,
         prompt(&role(root, cfg), &signal, &decisions_rel, &handed),
+        events,
     )?;
     let spent = (result.seconds, result.usage.cost);
     report.spent = Some(spent);
