@@ -569,24 +569,21 @@ fn class_of(entry: &str) -> Option<String> {
     rest.split_once('`').map(|(class, _)| class.to_string())
 }
 
-// an entry no commit carries is one just written, which is as new as an entry gets
+// a class can be proposed again after its last proposal left, so count from the newest commit that added it;
+// if that commit removed it instead, this entry is uncommitted and as new as an entry gets
 fn age(root: &Path, cfg: &Config, rel: &str, needle: &str) -> usize {
     let (repo, inner, _) = git::locate(root, &cfg.layout.harness_dir, rel);
     let commits = git::git(&repo, &["log", "--format=%H"]).unwrap_or_default();
     git::git(
         &repo,
-        &[
-            "log",
-            "--reverse",
-            "--format=%H",
-            "-S",
-            needle,
-            "--",
-            &inner,
-        ],
+        &["log", "-1", "--format=%H", "-S", needle, "--", &inner],
     )
     .ok()
-    .and_then(|found| found.lines().next().map(String::from))
+    .map(|found| found.trim().to_string())
+    .filter(|sha| {
+        git::git(&repo, &["show", &format!("{sha}:{inner}")])
+            .is_ok_and(|then| then.contains(needle))
+    })
     .and_then(|sha| commits.lines().position(|c| c == sha))
     .unwrap_or(0)
 }

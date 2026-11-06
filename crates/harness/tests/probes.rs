@@ -2443,6 +2443,35 @@ fn learning_standing_names_age_and_rounds_left() {
     );
 }
 
+#[test]
+fn a_reproposed_class_ages_from_its_new_entry() {
+    let (repo, cfg) = seeded();
+    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "DECISIONS.md");
+    let before = fs::read_to_string(&path).expect("read");
+    let entry = "\n## Proposed learnings\n\n- [proposed] `vacuous-test`: a test passed with its logic deleted → watch it fail first\n  instances: `SPEC.md:1`, `SPEC.md:2`\n";
+    append(&repo, "DECISIONS.md", entry);
+    for subject in [
+        "a proposed learning",
+        "a later round",
+        "another later round",
+    ] {
+        commit_state(&repo, subject);
+    }
+    fs::write(&path, &before).expect("write");
+    commit_state(&repo, "the learning left");
+    append(&repo, "DECISIONS.md", entry);
+    commit_state(&repo, "a revision under the same class");
+    commit_state(&repo, "a later round");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "learning-standing");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(
+        found[0].message.contains("has stood 1 rounds, 5 left"),
+        "{}",
+        found[0].message
+    );
+}
+
 fn commit_state(repo: &Repo, subject: &str) -> String {
     let state = repo.root.join(".enallagi");
     for (key, value) in [("user.email", "t@t"), ("user.name", "t")] {
