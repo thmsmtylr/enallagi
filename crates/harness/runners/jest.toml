@@ -10,3 +10,4 @@ test_decl_patterns = ["test('{name}'", 'test("{name}"', "it('{name}'", 'it("{nam
 source_ext = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]
 source_roots = ["src", "lib", "app"]
 test_only_glob = ["**/*.test.*", "**/*.spec.*"]
+skip_patterns = ['\b(it|test|describe)\.skip\(', '\bx(it|describe)\(']

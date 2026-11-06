@@ -1286,6 +1286,53 @@ fn every_runner_preset_names_its_failing_test() {
     }
 }
 
+#[test]
+fn presets_match_bare_skips() {
+    let cases: &[(&str, &[&str], &[&str])] = &[
+        (
+            "cargo",
+            &["#[ignore]", "    #[ignore]"],
+            &[r#"#[ignore = "slow"]"#],
+        ),
+        (
+            "pytest",
+            &["@pytest.mark.skip", "@pytest.mark.xfail(strict=True)"],
+            &[
+                r#"@pytest.mark.skip(reason="slow")"#,
+                "@pytest.mark.skipif(x, reason='y')",
+            ],
+        ),
+        ("go", &["t.Skip()", "\tt.SkipNow()"], &[r#"t.Skip("slow")"#]),
+        (
+            "jest",
+            &[
+                "it.skip(",
+                "test.skip(",
+                "describe.skip(",
+                "xit(",
+                "xdescribe(",
+            ],
+            &["it(", "exit("],
+        ),
+    ];
+    let presets = runners::presets();
+    for (runner, hit, miss) in cases {
+        let preset = presets.iter().find(|r| r.name == *runner).expect(runner);
+        let res: Vec<regex::Regex> = preset
+            .skip_patterns
+            .iter()
+            .map(|p| regex::Regex::new(p).expect(p))
+            .collect();
+        let skips = |l: &str| res.iter().any(|re| re.is_match(l));
+        for l in *hit {
+            assert!(skips(l), "{runner}: {l}");
+        }
+        for l in *miss {
+            assert!(!skips(l), "{runner}: {l}");
+        }
+    }
+}
+
 // package.json's test script, a CI workflow that runs it, and tests under tests/
 fn node_repo() -> Repo {
     let repo = Repo::new();
@@ -1532,6 +1579,18 @@ fn init_writes_the_test_glob_it_detected() {
         .filter_map(toml::Value::as_str)
         .collect();
     assert_eq!(globs, vec!["tests/*.ts"]);
+}
+
+#[test]
+fn init_writes_skip_patterns() {
+    let repo = Repo::new();
+    repo.write("Cargo.toml", "[package]\nname = \"fixture\"\n");
+    repo.write("src/lib.rs", "");
+    repo.commit_all("a cargo tree");
+    install(&repo);
+    let cfg = enallagi::config::load(&repo.root).expect("config");
+    assert_eq!(cfg.layout.test_only_glob, vec!["**/tests/**"]);
+    assert_eq!(cfg.layout.skip_patterns, vec![r"^\s*#\[ignore\]"]);
 }
 
 #[test]

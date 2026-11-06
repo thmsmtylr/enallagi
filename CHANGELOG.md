@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- a new `skip-added` gate forces a `done` back when its commits add a skip with no stated reason; init writes `layout.skip_patterns` for the detected runner
 - a new `red-first` gate forces a `done` back when its test-only files pass with the rest of the change reverted; init writes `layout.test_only_glob` for the detected runner
 - `queue-intact` halts on any ticket file deleted since the base, whatever DECISIONS.md holds; a kill is `wontfix`
 - a `claims_allow` entry matches whole command words only, so `cargo test` no longer admits `cargo testx`

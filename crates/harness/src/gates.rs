@@ -69,6 +69,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "claims" => claims(ctx),
         "scope" => scope(ctx),
         "red-first" => red_first(ctx),
+        "skip-added" => skip_added(ctx),
         "queue-intact" => queue_intact(ctx),
         "commit-identity" => commit_identity(ctx),
         "commit-task" => commit_task(ctx),
@@ -914,6 +915,88 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         &format!(
             "{task} was forced back to ready by the scope gate: {why}. The iteration's commits for {task} are on the branch; the next implement stage confirms them and answers the gate."
         ),
+    )
+}
+
+// a test switched off passes every other gate, since the hashes guard only files already hashed (T-486)
+fn skip_added(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(task) = ctx.task.clone() else {
+        return pass("no task");
+    };
+    match status_of(ctx, &task) {
+        Err(_) => return unreadable(ctx, &task),
+        Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
+        Ok(_) => {}
+    }
+    let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
+        return pass("no base");
+    };
+    if ctx.cfg.layout.skip_patterns.is_empty() {
+        return pass("skip_patterns is empty");
+    }
+    let res = match ctx
+        .cfg
+        .layout
+        .skip_patterns
+        .iter()
+        .map(|p| regex::Regex::new(p))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(res) => res,
+        Err(e) => return fail(format!("skip_patterns: {e}")),
+    };
+    let globs = &ctx.cfg.layout.test_glob;
+    let (files, commits) = match (
+        task_files(ctx, &base, &task, ""),
+        task_commits(ctx.root, &base, &task),
+    ) {
+        (Ok(files), Ok(commits)) => (files, commits),
+        (Err(e), _) | (_, Err(e)) => return fail(e.to_string()),
+    };
+    let mut hits: Vec<String> = Vec::new();
+    // an empty test_glob reads every changed file, so an unset key never switches the gate off
+    for f in files
+        .iter()
+        .filter(|f| globs.is_empty() || in_scope(f, globs))
+    {
+        let Ok(now) = git(ctx.root, &["show", &format!("HEAD:{f}")]) else {
+            continue;
+        };
+        let now: Vec<&str> = now.lines().collect();
+        for sha in &commits {
+            let diff =
+                git(ctx.root, &["show", "--format=", "-U0", sha, "--", f]).unwrap_or_default();
+            for added in diff
+                .lines()
+                .skip_while(|l| !l.starts_with("@@"))
+                .filter_map(|l| l.strip_prefix('+'))
+                .filter(|l| res.iter().any(|re| re.is_match(l)))
+            {
+                // a line a later commit took back is not at HEAD, and is no skip
+                if let Some(n) = now.iter().position(|l| *l == added) {
+                    let hit = format!("{f}:{} {}", n + 1, added.trim());
+                    if !hits.contains(&hit) {
+                        hits.push(hit);
+                    }
+                }
+            }
+        }
+    }
+    if hits.is_empty() {
+        return pass(format!("{task} added no skip"));
+    }
+    let why = format!(
+        "added a skip with no stated reason: {}; state the reason or drop the skip",
+        hits.join(", ")
+    );
+    force_back(
+        ctx,
+        "skip-added",
+        &task,
+        "ready-for-agent",
+        &format!("the verifier returned done and the skip-added gate rejected it: {why}"),
+        &format!("chore({task}): harness skip-added gate rejected a done verdict"),
+        &format!("{task} was forced back to ready by the skip-added gate: {why}."),
     )
 }
 
@@ -2140,6 +2223,48 @@ mod tests {
         let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(
             out.pass && out.reason == "test_only_glob is empty",
+            "{}",
+            out.reason
+        );
+    }
+
+    fn skip_env(line: &str) -> (Env, String) {
+        let mut env = Env::new("exit 0\n");
+        env.cfg.layout.skip_patterns = globs(&[r"^\s*#\[ignore\]"]);
+        env.cfg.layout.test_glob = globs(&["tests/*.rs"]);
+        env.repo.write("tests/a.rs", "#[test]\nfn a() {}\n");
+        env.queue("done", "tests/*", "§11 row 1");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo
+            .write("tests/a.rs", &format!("#[test]\n{line}\nfn a() {{}}\n"));
+        env.repo.commit_all("T-001 change");
+        (env, base)
+    }
+
+    #[test]
+    fn skip_added_rejects_a_bare_ignore() {
+        let (mut env, base) = skip_env("#[ignore]");
+        let out = run("skip-added", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass, "{}", out.reason);
+        assert!(
+            out.reason.contains("tests/a.rs:2 #[ignore]"),
+            "{}",
+            out.reason
+        );
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
+    }
+
+    #[test]
+    fn skip_added_passes_a_reasoned_ignore() {
+        let (mut env, base) = skip_env(r#"#[ignore = "sleeps four minutes"]"#);
+        let out = run("skip-added", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        let (mut env, base) = skip_env("#[ignore]");
+        env.cfg.layout.skip_patterns.clear();
+        let out = run("skip-added", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(
+            out.pass && out.reason == "skip_patterns is empty",
             "{}",
             out.reason
         );

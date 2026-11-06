@@ -9,3 +9,5 @@ test_decl_patterns = ["def {name}("]
 source_ext = [".py"]
 source_roots = ["src"]
 test_only_glob = ["**/test_*.py", "**/*_test.py"]
+# no lookahead in the regex crate, so the parenthesised arguments are spelled out to exclude `reason=`
+skip_patterns = ['^\s*@pytest\.mark\.(skip|xfail)(\(([^r]|r[^e]|re[^a]|rea[^s]|reas[^o]|reaso[^n]|reason[^=])*\))?\s*$']

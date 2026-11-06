@@ -129,6 +129,7 @@ The source and its tests, which init sets from a detected runner or a verified p
 - `layout.test_decl_patterns`: how a test is declared, with `{name}` for its name. Empty by default. Init writes the detected runner's or the proposal's.
 - `layout.test_glob`: git pathspecs holding test code, which the verifier diffs as `__TEST_GLOB__`. Empty by default.
 - `layout.test_only_glob`: globs naming files that hold only tests. The `red-first` gate keeps them and reverts every other file the task changed to the iteration base, and an empty list skips the gate. Empty by default. Init writes the detected runner's.
+- `layout.skip_patterns`: regexes over the lines a task adds to `layout.test_glob` files (every changed file when that is empty). A match is a skip with no stated reason, and the `skip-added` gate forces the task back; an empty list skips the gate. Empty by default. Init writes the detected runner's.
 
 The allowlists the `litter` and `rail-unenforced` probes read:
 

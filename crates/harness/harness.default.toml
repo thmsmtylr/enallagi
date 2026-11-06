@@ -52,6 +52,8 @@ test_decl_patterns = []
 test_glob = []
 # test_only_glob names the files red-first keeps when it reverts the rest of a task to its base; empty skips the gate.
 test_only_glob = []
+# skip_patterns are regexes over the lines a task adds to test_glob files; a match is a skip with no stated reason, and skip-added forces the task back.
+skip_patterns = []
 source_ext = [".ts", ".tsx", ".js", ".mjs", ".cjs", ".sh", ".py"]
 
 harness_files = [
@@ -165,7 +167,7 @@ post = ["queue-intact", "commit-identity", "commit-task", "implementer-not-done"
 name = "verify"
 role = "verifier"
 turns = 100
-post = ["commit-verdict", "queue-intact", "commit-identity", "verdict", "claims", "red-first", "scope", "install-stale"]
+post = ["commit-verdict", "queue-intact", "commit-identity", "verdict", "claims", "skip-added", "red-first", "scope", "install-stale"]
 
 [[stage]]
 name = "scout"

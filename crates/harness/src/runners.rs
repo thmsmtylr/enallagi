@@ -29,6 +29,8 @@ pub struct Runner {
     pub source_ext: Vec<String>,
     pub source_roots: Vec<String>,
     pub test_only_glob: Vec<String>,
+    /// A skip that states no reason.
+    pub skip_patterns: Vec<String>,
 }
 
 pub fn presets() -> Vec<Runner> {
@@ -162,6 +164,7 @@ fn keys(root: &Path, runner: &Runner, origin: &str) -> Vec<Detected> {
             runner.test_only_glob.clone(),
             origin,
         ),
+        at("layout.skip_patterns", runner.skip_patterns.clone(), origin),
     ];
     let dirs = source_dirs(root, runner);
     let paths = tracked(root);
