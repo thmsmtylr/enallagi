@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- the gates read ticket files once a queue is migrated, and the scope gate lets a lane edit only its own ticket
 - `tasks list`, `ready`, `set-status` and `unblock`, and the loop's own pick, read and write ticket files once a queue is migrated
 - `tasks migrate` converts TASKS.md and SPEC.md into one file per ticket under `specs/`, in one commit
 - an adopted rule is retested, and one that stops working is revised or removed

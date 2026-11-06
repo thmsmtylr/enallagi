@@ -314,7 +314,7 @@ pub fn task_queued_commit_until(
 pub fn task_base(root: &Path, harness_dir: &str, task: &str) -> Result<String, String> {
     let tasks = crate::config::instance_rel(root, harness_dir, "TASKS.md");
     let (repo, _, nested) = locate(root, harness_dir, &tasks);
-    let Some(commit) = task_queued_commit(root, harness_dir, task)? else {
+    let Some(commit) = crate::tracker::queued_commit(root, harness_dir, task)? else {
         return Ok(String::new());
     };
     if !nested {

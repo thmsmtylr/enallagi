@@ -178,8 +178,45 @@ fn instance(rel: &str) -> String {
     }
 }
 
+fn queue_path() -> String {
+    match files_layout() {
+        true => ".enallagi/specs".to_string(),
+        false => "TASKS.md".to_string(),
+    }
+}
+
 fn queue(r: &Repo, text: &str) {
     r.queue(if files_layout() { ".enallagi" } else { "" }, text);
+}
+
+// the file a stub agent appends a ticket's lines to; it may run before the queue is written
+fn ticket(r: &Repo, id: &str, title: &str) -> String {
+    match files_layout() {
+        true => format!(
+            ".enallagi/specs/{}/issues/{}",
+            enallagi::tracker::repo_slug(&r.root),
+            enallagi::tracker::file_name(id, title)
+        ),
+        false => "TASKS.md".to_string(),
+    }
+}
+
+// a stub's shell line that queues legacy block text: appended to TASKS.md, or written as its ticket file
+fn queues(r: &Repo, block: &str) -> String {
+    if block.is_empty() {
+        return String::new();
+    }
+    if !files_layout() {
+        return format!("printf '%s' '{block}' >>TASKS.md\n");
+    }
+    let (name, text) = enallagi::tracker::convert(block)
+        .expect("convert")
+        .remove(0);
+    let dir = format!(
+        ".enallagi/specs/{}/issues",
+        enallagi::tracker::repo_slug(&r.root)
+    );
+    format!("printf '%s' '{text}' >{dir}/{name}\n")
 }
 
 fn state_of(r: &Repo, id: &str) -> Option<String> {
@@ -214,12 +251,13 @@ fn implementer(repo: &Repo, extra: &str) -> String {
             "sleep 1\n\
              echo work >src/thing.ts\n\
              {bin} tasks set-status T-001 review 'stub implemented'\n\
-             echo 'iteration' >>PROGRESS.md\n\
+             echo 'iteration' >>{progress}\n\
              {extra}\
              git add -A >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
             bin = env!("CARGO_BIN_EXE_enallagi"),
+            progress = instance("PROGRESS.md"),
         ),
     )
 }
@@ -809,7 +847,7 @@ turns = 1
 #[test]
 fn stop_file_halts_at_the_next_boundary() {
     let r = repo("", "");
-    let implement = implementer(&r, "touch STOP\n");
+    let implement = implementer(&r, &format!("touch {}\n", instance("STOP")));
     let verify = verifier(&r);
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
     queue(&r, TASKS);
@@ -855,7 +893,10 @@ fn a_new_needs_spec_halts() {
 fn two_dry_rounds_end_the_run() {
     let r = repo(&base_toml(""), "");
     queue(&r, "# queue\n");
-    r.commit_all("empty queue");
+    // an empty queue is an empty directory under files, which git does not track
+    if !files_layout() {
+        r.commit_all("empty queue");
+    }
     let (digest, _) = go(&r, &opts(5));
     assert_eq!(digest.iterations, 2, "{digest:#?}");
 }
@@ -1130,11 +1171,13 @@ fn a_fetched_skill_commits_before_its_stage() {
         &format!(
             "echo work >src/a.ts\n\
              {bin} tasks set-status T-001 review 'stub implemented'\n\
-             echo 'iteration' >>PROGRESS.md\n\
-             git add -- src/a.ts PROGRESS.md TASKS.md >/dev/null 2>&1\n\
+             echo 'iteration' >>{progress}\n\
+             git add -- src/a.ts {progress} {queue} >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
             bin = env!("CARGO_BIN_EXE_enallagi"),
+            progress = instance("PROGRESS.md"),
+            queue = queue_path(),
         ),
     );
     let verify = script(
@@ -1142,10 +1185,11 @@ fn a_fetched_skill_commits_before_its_stage() {
         "src/fakeverify.sh",
         &format!(
             "{bin} tasks set-status T-001 done 'stub verified'\n\
-             git add -- TASKS.md >/dev/null 2>&1\n\
+             git add -- {queue} >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'verify: T-001 verdict' >/dev/null 2>&1\n\
              {QUIET}",
             bin = env!("CARGO_BIN_EXE_enallagi"),
+            queue = queue_path(),
         ),
     );
     let skills = r.local_skills(&toml);
@@ -1154,8 +1198,7 @@ fn a_fetched_skill_commits_before_its_stage() {
 
     let (_, events) = go(&r, &opts(1));
 
-    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    assert!(tasks.contains("status: done"), "{tasks}");
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("done"));
     assert!(
         events.iter().any(|e| matches!(&e.kind,
             Kind::Gate { gate, pass, .. } if gate == "verdict" && *pass)),
@@ -1228,11 +1271,9 @@ fn a_check_past_its_timeout_halts_the_run() {
             .any(|e| matches!(&e.kind, Kind::Halt { reason, .. } if reason.contains("2s"))),
         "no halt event"
     );
-    let tasks = std::fs::read_to_string(r.root.join(".enallagi/TASKS.md"))
-        .or_else(|_| std::fs::read_to_string(r.root.join("TASKS.md")))
-        .expect("TASKS.md");
-    assert!(
-        tasks.contains("status: done"),
+    assert_eq!(
+        state_of(&r, "T-001").as_deref(),
+        Some("done"),
         "a hang overturned the verdict"
     );
 }
@@ -1536,19 +1577,13 @@ fn verifier_noting(r: &Repo, note: &str, proposed: &str) -> String {
         "src/fakeverify.sh",
         &format!(
             "{bin} tasks set-status T-001 done ''\n\
-             printf 'notes: {note}\\n' >>TASKS.md\n\
-             printf '%s' '{proposed}' >>TASKS.md\n\
-             {QUIET}",
+             printf 'notes: {note}\\n' >>{ticket}\n\
+             {queued}{QUIET}",
             bin = env!("CARGO_BIN_EXE_enallagi"),
+            ticket = ticket(r, "T-001", "do the thing"),
+            queued = queues(r, proposed),
         ),
     )
-}
-
-fn queued_status(r: &Repo) -> Option<String> {
-    let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    let blocks = enallagi::queue::parse(&text).expect("parse");
-    let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
-    enallagi::queue::field(t001, "status")
 }
 
 #[test]
@@ -1567,7 +1602,7 @@ fn a_deferred_finding_with_no_block_is_refused() {
     });
     let reason = refusal.unwrap_or_else(|| panic!("commit-verdict passed: {events:#?}"));
     assert!(reason.contains("minor"), "{reason}");
-    assert_eq!(queued_status(&r).as_deref(), Some("review"));
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("review"));
     assert!(digest.landed.is_empty(), "{:?}", digest.landed);
     assert!(
         enallagi::git::porcelain(&r.root).is_empty(),
@@ -1652,7 +1687,7 @@ fn a_verdict_refused_for(note: &str) -> String {
         } if gate == "commit-verdict" && !*pass => Some(reason.clone()),
         _ => None,
     });
-    assert_eq!(queued_status(&r).as_deref(), Some("review"), "{note}");
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("review"), "{note}");
     refusal.unwrap_or_else(|| panic!("commit-verdict passed: {events:#?}"))
 }
 
@@ -1678,7 +1713,12 @@ fn a_prose_deferral_is_told_the_field() {
     assert!(reason.contains("`deferred:`"), "{reason}");
 }
 
-const IMPLEMENTER_NOTE: &str = "printf '  implementer: one minor edge left\\n' >>TASKS.md\n";
+fn implementer_note(r: &Repo) -> String {
+    format!(
+        "printf '  implementer: one minor edge left\\n' >>{}\n",
+        ticket(r, "T-001", "do the thing")
+    )
+}
 
 fn a_clean_verdict_after_the_implementer(r: &Repo, implement: &str) {
     let verify = verifier(r);
@@ -1700,7 +1740,7 @@ fn a_clean_verdict_after_the_implementer(r: &Repo, implement: &str) {
 #[test]
 fn an_implementer_minor_is_not_the_verdict() {
     let r = repo("", "");
-    let implement = implementer(&r, IMPLEMENTER_NOTE);
+    let implement = implementer(&r, &implementer_note(&r));
     a_clean_verdict_after_the_implementer(&r, &implement);
 }
 
@@ -1715,8 +1755,9 @@ fn an_uncommitted_minor_is_not_the_verdict() {
              {bin} tasks set-status T-001 review 'stub implemented'\n\
              git add -A >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
-             {IMPLEMENTER_NOTE}{QUIET}",
+             {note}{QUIET}",
             bin = env!("CARGO_BIN_EXE_enallagi"),
+            note = implementer_note(&r),
         ),
     );
     a_clean_verdict_after_the_implementer(&r, &implement);
@@ -3623,11 +3664,12 @@ fn a_tautologised_test_does_not_reach_done() {
             "sed -i.bak 's/assert_eq!(1 + 1, 2);/assert!(true);/' src/thing.rs\n\
              rm -f src/thing.rs.bak\n\
              {bin} tasks set-status T-001 review 'stub implemented'\n\
-             echo 'iteration' >>PROGRESS.md\n\
+             echo 'iteration' >>{progress}\n\
              git add src/thing.rs >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'T-001: stub' >/dev/null 2>&1\n\
              {QUIET}",
             bin = env!("CARGO_BIN_EXE_enallagi"),
+            progress = instance("PROGRESS.md"),
         ),
     );
     let verify = diff_reading_verifier(&r);
@@ -3646,7 +3688,9 @@ fn a_tautologised_test_does_not_reach_done() {
     go(&r, &opts(1));
     let thing = std::fs::read_to_string(r.root.join("src/thing.rs")).expect("thing.rs");
     assert!(thing.contains("assert!(true);"), "{thing}");
-    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
+    let t = enallagi::tracker::Tracker::open(&r.root, ".enallagi");
+    let block = t.get("T-001").expect("the queue").expect("T-001");
+    let tasks = enallagi::queue::block_text(&block);
     assert!(!tasks.contains("status: done"), "{tasks}");
     assert!(tasks.contains("REJECTED: assert!(true)"), "{tasks}");
     let role = std::fs::read_to_string(r.root.join(".enallagi/run/roles/verifier.md"))
@@ -3963,8 +4007,7 @@ fn an_iteration_lands_under_a_protection_finding() {
     let (digest, events) = go(&r, &opts(1));
     assert_eq!(ends(&events).len(), 2, "{events:#?}");
     assert!(digest.halts.is_empty(), "{:?}", digest.halts);
-    let tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    assert!(tasks.contains("status: done"), "{tasks}");
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("done"));
 }
 
 // the second head is a branch this checkout never built, so the step must not read it

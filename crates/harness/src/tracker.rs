@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 /// The subject of the commit `enallagi tasks migrate` makes; a ticket file it added was queued before it.
 pub const MIGRATE_SUBJECT: &str = "tasks: migrate to the specs layout";
 
+/// The instance names the queue lives under, legacy first; a commit by name passes both, and the missing one is skipped.
+pub const QUEUE: [&str; 2] = ["TASKS.md", "specs"];
+
 const STATUS: &str = "**Status:**";
 const BLOCKED_BY: &str = "**Blocked by:**";
 const CRITERIA: &str = "## Acceptance criteria";
@@ -376,7 +379,7 @@ impl Tracker {
         if specs.is_dir() {
             Tracker::Files(specs)
         } else {
-            Tracker::Legacy(crate::config::instance_path(root, harness_dir, "TASKS.md"))
+            Tracker::Legacy(crate::config::instance_path(root, harness_dir, QUEUE[0]))
         }
     }
 
@@ -517,6 +520,17 @@ impl Tracker {
 
 /// Every ticket as the instance repository held it at `rev`; a revision from before the migration reads TASKS.md.
 pub fn blocks_at(root: &Path, harness_dir: &str, rev: &str) -> Option<Vec<Block>> {
+    read_at(root, harness_dir, rev, None)
+}
+
+/// One ticket at `rev`, reading only its own file.
+pub fn get_at(root: &Path, harness_dir: &str, id: &str, rev: &str) -> Option<Block> {
+    read_at(root, harness_dir, rev, Some(id))?
+        .into_iter()
+        .find(|b| b.id == id)
+}
+
+fn read_at(root: &Path, harness_dir: &str, rev: &str, id: Option<&str>) -> Option<Vec<Block>> {
     let specs = crate::config::instance_rel(root, harness_dir, "specs");
     let (repo, inner, _) = git::locate(root, harness_dir, &specs);
     let names = git::git(&repo, &["ls-tree", "-r", "--name-only", rev, "--", &inner]).ok()?;
@@ -525,18 +539,42 @@ pub fn blocks_at(root: &Path, harness_dir: &str, rev: &str) -> Option<Vec<Block>
         .filter(|n| n.contains("/issues/") && n.ends_with(".md"))
         .collect();
     if files.is_empty() {
-        let tasks = crate::config::instance_rel(root, harness_dir, "TASKS.md");
+        let tasks = crate::config::instance_rel(root, harness_dir, QUEUE[0]);
         let (repo, inner, _) = git::locate(root, harness_dir, &tasks);
         let text = git::git(&repo, &["show", &format!("{rev}:{inner}")]).ok()?;
         return queue::parse(&text).ok();
     }
+    let mine = |n: &&str| id.is_none_or(|id| n.contains(&format!("/issues/{id}-")));
     // ponytail: one `git show` per ticket; a `cat-file --batch` read if a 1000-ticket queue makes gates slow
     let mut found = Vec::new();
-    for name in files {
+    for name in files.into_iter().filter(mine) {
         let text = git::git(&repo, &["show", &format!("{rev}:{name}")]).ok()?;
         found.push((parse_ticket(&text).ok()?, name.to_string()));
     }
     sorted(found).ok()
+}
+
+/// The commits in `range` that touched `id`'s ticket, oldest first; before the migration, every commit that touched TASKS.md.
+pub fn ticket_revs(root: &Path, harness_dir: &str, id: &str, range: &str) -> Option<Vec<String>> {
+    let specs = crate::config::instance_rel(root, harness_dir, "specs");
+    let tasks = crate::config::instance_rel(root, harness_dir, QUEUE[0]);
+    let (repo, specs, _) = git::locate(root, harness_dir, &specs);
+    let (_, tasks, _) = git::locate(root, harness_dir, &tasks);
+    let ticket = format!("{specs}/*/issues/{id}-*.md");
+    let revs = git::git(
+        &repo,
+        &[
+            "log",
+            "--reverse",
+            "--format=%H",
+            range,
+            "--",
+            &ticket,
+            &tasks,
+        ],
+    )
+    .ok()?;
+    Some(revs.lines().map(String::from).collect())
 }
 
 /// The commit that queued a ticket: the one that added its file, or, for a ticket the migration moved, the one that added its block to TASKS.md.
