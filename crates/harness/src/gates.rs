@@ -568,10 +568,15 @@ pub fn names_task(subject: &str, task: &str) -> bool {
 // the files the task's own commits changed: a commit whose subject names no task, or another task,
 // is an operator's or another round's and is not charged here. filter is a git --diff-filter value,
 // empty for every change
-fn commit_files(root: &Path, base: &str, task: &str, filter: &str) -> Vec<String> {
+fn commit_files(
+    root: &Path,
+    base: &str,
+    task: &str,
+    filter: &str,
+) -> Result<Vec<String>, git::GitError> {
     let flag = format!("--diff-filter={filter}");
     let mut files: Vec<String> = Vec::new();
-    for sha in task_commits(root, base, task) {
+    for sha in task_commits(root, base, task)? {
         let mut args = vec!["show", "--format=", "--name-only"];
         if !filter.is_empty() {
             args.push(&flag);
@@ -583,14 +588,19 @@ fn commit_files(root: &Path, base: &str, task: &str, filter: &str) -> Vec<String
             }
         }
     }
-    files
+    Ok(files)
 }
 
 // the baseline lines the task's own commits add and do not take back: each commit's removals are
 // netted against what the earlier ones added, so an add a later commit reverses is not growth
-fn baseline_lines_added(root: &Path, inner: &str, base: &str, task: &str) -> Vec<String> {
+fn baseline_lines_added(
+    root: &Path,
+    inner: &str,
+    base: &str,
+    task: &str,
+) -> Result<Vec<String>, git::GitError> {
     let mut added: Vec<String> = Vec::new();
-    for sha in task_commits(root, base, task) {
+    for sha in task_commits(root, base, task)? {
         let diff = git(root, &["show", "--format=", &sha, "--", inner]).unwrap_or_default();
         // a failure name may itself start with + or -, so the file headers are told apart by
         // position, not by a doubled prefix: everything before the first hunk is a header
@@ -611,37 +621,41 @@ fn baseline_lines_added(root: &Path, inner: &str, base: &str, task: &str) -> Vec
             added.push(new[1..].to_string());
         }
     }
-    added
+    Ok(added)
 }
 
-fn task_commits(root: &Path, base: &str, task: &str) -> Vec<String> {
+fn task_commits(root: &Path, base: &str, task: &str) -> Result<Vec<String>, git::GitError> {
     let range = format!("{base}..HEAD");
-    git(
+    Ok(git(
         root,
         &["log", "--reverse", "--no-merges", "--format=%h %s", &range],
-    )
-    .unwrap_or_default()
+    )?
     .lines()
     .filter_map(|l| l.split_once(' '))
     .filter(|(_, subject)| names_task(subject, task))
     .map(|(sha, _)| sha.to_string())
-    .collect()
+    .collect())
 }
 
 // the task's files: the product repository's, and in a nested install the harness
 // directory's under its own prefix
-fn task_files(ctx: &GateCtx, base: &str, task: &str, filter: &str) -> Vec<String> {
+fn task_files(
+    ctx: &GateCtx,
+    base: &str,
+    task: &str,
+    filter: &str,
+) -> Result<Vec<String>, git::GitError> {
     let dir = &ctx.cfg.layout.harness_dir;
     let state = git::state_root(ctx.root, dir);
-    let mut files = commit_files(ctx.root, base, task, filter);
+    let mut files = commit_files(ctx.root, base, task, filter)?;
     if let Some(state_base) = ctx.state_base.as_deref().filter(|_| state != ctx.root) {
         files.extend(
-            commit_files(&state, state_base, task, filter)
+            commit_files(&state, state_base, task, filter)?
                 .into_iter()
                 .map(|f| format!("{dir}/{f}")),
         );
     }
-    files
+    Ok(files)
 }
 
 // a proposed block's scope: line is the adjudicator's to write, so widening counts from its promotion
@@ -738,8 +752,13 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
 
     let mut out_of: Vec<String> = Vec::new();
     let mut harness_hit: Vec<String> = Vec::new();
-    let changed = task_files(ctx, &base, &task, "");
-    let added = task_files(ctx, &base, &task, "A");
+    let (changed, added) = match (
+        task_files(ctx, &base, &task, ""),
+        task_files(ctx, &base, &task, "A"),
+    ) {
+        (Ok(changed), Ok(added)) => (changed, added),
+        (Err(e), _) | (_, Err(e)) => return fail(e.to_string()),
+    };
     // cargo rewrites Cargo.lock from a manifest the range changed, and a commit without it leaves
     // the tree dirty after the next build; the manifest still has to be on the scope: line
     let manifest_in_scope = changed
@@ -828,9 +847,13 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     }
     // the baseline only ever shrinks; a line the task's own commits ADD is a red check made green by
     // hand, whatever rows: says
-    let grew = at_base(ctx, &rel(ctx, ".check-baseline")).is_some_and(|(repo, inner, base)| {
-        !baseline_lines_added(&repo, &inner, &base, &task).is_empty()
-    });
+    let grew = match at_base(ctx, &rel(ctx, ".check-baseline"))
+        .map(|(repo, inner, base)| baseline_lines_added(&repo, &inner, &base, &task))
+    {
+        Some(Err(e)) => return fail(e.to_string()),
+        Some(Ok(lines)) => !lines.is_empty(),
+        None => false,
+    };
 
     let unexplained = widening.is_some() && widened.is_empty();
     if out_of.is_empty() && harness_hit.is_empty() && !grew && !unexplained {
@@ -901,7 +924,10 @@ fn commit_identity(ctx: &mut GateCtx) -> GateOutcome {
     }
     let range = format!("{base}..HEAD");
     // a merge commit carries an author too, so it is read like any other
-    let log = git(ctx.root, &["log", "--format=%h %ae", &range]).unwrap_or_default();
+    let log = match git(ctx.root, &["log", "--format=%h %ae", &range]) {
+        Ok(log) => log,
+        Err(e) => return fail(e.to_string()),
+    };
     let strangers: Vec<String> = log
         .lines()
         .filter_map(|l| l.split_once(' '))
@@ -938,7 +964,10 @@ fn commit_task(ctx: &mut GateCtx) -> GateOutcome {
             })
     };
     let range = format!("{base}..HEAD");
-    let log = git(ctx.root, &["log", "--no-merges", "--format=%h %s", &range]).unwrap_or_default();
+    let log = match git(ctx.root, &["log", "--no-merges", "--format=%h %s", &range]) {
+        Ok(log) => log,
+        Err(e) => return fail(e.to_string()),
+    };
     let unnamed: Vec<String> = log
         .lines()
         .filter_map(|l| l.split_once(' '))
@@ -1905,6 +1934,43 @@ mod tests {
         assert!(!out.pass, "{}", out.reason);
         assert!(
             out.reason.contains(&stray) && out.reason.contains("chore(release): v1"),
+            "{}",
+            out.reason
+        );
+    }
+
+    #[test]
+    fn commit_task_fails_on_a_bad_base() {
+        let mut env = Env::new("exit 0\n");
+        let out = commit_task(&mut env.ctx(Some("T-001"), Some("deadbeef")));
+        assert!(
+            !out.pass && out.reason.contains("deadbeef"),
+            "{}",
+            out.reason
+        );
+        assert!(!out.reason.contains("every commit on"), "{}", out.reason);
+    }
+
+    #[test]
+    fn commit_identity_fails_on_a_bad_base() {
+        let mut env = Env::new("exit 0\n");
+        let out = commit_identity(&mut env.ctx(Some("T-001"), Some("deadbeef")));
+        assert!(
+            !out.pass && out.reason.contains("deadbeef"),
+            "{}",
+            out.reason
+        );
+        assert!(!out.reason.contains("every commit on"), "{}", out.reason);
+    }
+
+    #[test]
+    fn scope_fails_on_a_bad_base() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", "src/a.ts", "§11 row 1");
+        env.repo.commit_all("verdict");
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some("deadbeef")));
+        assert!(
+            !out.pass && out.reason.contains("deadbeef"),
             "{}",
             out.reason
         );
