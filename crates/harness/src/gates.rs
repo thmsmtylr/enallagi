@@ -500,7 +500,7 @@ fn claims(ctx: &mut GateCtx) -> GateOutcome {
     for (cmd, claimed) in runs {
         // the command goes to `sh -c`, so a prefix match alone would let `<prefix>; <anything>` run
         if cmd.contains([';', '&', '|', '`', '$', '<', '>', '\n'])
-            || !allow.iter().any(|p| cmd.starts_with(p.as_str()))
+            || !allow.iter().any(|p| allowed(&cmd, p))
         {
             skipped.push(format!("`{cmd}`"));
             continue;
@@ -558,6 +558,13 @@ fn claims(ctx: &mut GateCtx) -> GateOutcome {
         ));
     }
     pass(parts.join(". "))
+}
+
+// a whole command word, so `cargo test` never admits `cargo testx`
+fn allowed(cmd: &str, entry: &str) -> bool {
+    let entry = entry.trim_end();
+    cmd.strip_prefix(entry)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
 }
 
 // word boundaries, so one id never matches a longer id it prefixes
@@ -2473,6 +2480,28 @@ mod tests {
         assert!(!env.repo.root.join("outside.mark").exists());
         assert!(out.reason.contains("not re-run"), "{}", out.reason);
         assert!(out.reason.contains("touch outside.mark"), "{}", out.reason);
+    }
+
+    #[test]
+    fn a_claim_prefix_ends_at_a_word() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(
+            &["true"],
+            "VERIFIER: VERIFIED.\nran: truex\nexit: 0\nran: true\nexit: 0\nran: true --flag\nexit: 0\n",
+        );
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert!(
+            out.reason
+                .contains("reproduced: `true` claimed exit 0, re-ran exit 0 and 0; `true --flag`"),
+            "{}",
+            out.reason
+        );
+        assert!(
+            out.reason.ends_with("shell operator: `truex`"),
+            "{}",
+            out.reason
+        );
     }
 
     #[test]

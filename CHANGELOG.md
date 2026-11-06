@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- a `claims_allow` entry matches whole command words only, so `cargo test` no longer admits `cargo testx`
 - skill clones are cached under `~/.cache/enallagi/` (or `$XDG_CACHE_HOME/enallagi/`); the old `~/.cache/harness/` is no longer read
 - `commit-task`, `commit-identity` and `scope` fail with git's error when the commit range cannot be read, instead of passing an empty one
 - the role prompts work in ticket files and the new state names, and the adjudicator kills a ticket by setting it `wontfix` instead of deleting it
