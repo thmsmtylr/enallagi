@@ -1,6 +1,7 @@
 //! `enallagi tasks <verb>` -- the queue read and written from a shell, one verb per question a role asks of it.
 
 use crate::queue::{self, Queue, QueueError};
+use crate::tracker::{self, Tracker};
 use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
@@ -30,7 +31,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 Ok(b) => b,
                 Err(code) => return Ok(code),
             };
-            if let Some(id) = queue::ready_unattended(&blocks) {
+            if let Some(id) = tracker::takeable(&blocks) {
                 println!("{id}");
             }
             Ok(0)
@@ -41,7 +42,12 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 Ok(b) => b,
                 Err(code) => return Ok(code),
             };
-            for id in queue::ids_at(&blocks, &status) {
+            // `ready` names both states `attended: true` split it into
+            let states = match status.as_str() {
+                "ready" => tracker::READY.to_vec(),
+                s => vec![tracker::canonical(s)],
+            };
+            for id in tracker::ids_in(&blocks, &states) {
                 println!("{id}");
             }
             Ok(0)
@@ -87,41 +93,24 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             let id = a.first().cloned().unwrap_or_default();
             let status = a.get(1).cloned().unwrap_or_default();
             let reason = a.get(2).cloned().unwrap_or_default();
-            let path = file_arg(a, 3, "TASKS.md");
-            let text = match read_text(&path) {
-                Ok(t) => t,
-                Err(code) => return Ok(code),
-            };
-            let out = match queue::set_status(&text, &id, &status, &reason) {
-                Ok(o) => o,
+            let t = tracker_arg(a, 3);
+            match t.get(&id) {
+                Ok(Some(b)) if queue::field(&b, "status").is_some() => {}
+                Ok(_) => {
+                    eprintln!("enallagi tasks: no block {id}, nothing written");
+                    return Ok(1);
+                }
                 Err(e) => return Ok(fail(&e)),
-            };
-            if out == text {
-                eprintln!("enallagi tasks: no block {id}, nothing written");
-                return Ok(1);
             }
-            match (Queue { path }).write(&out) {
+            match t.set_status(&id, &status, &reason) {
                 Ok(()) => Ok(0),
                 Err(e) => Ok(fail(&e)),
             }
         }
-        "unblock" => {
-            let path = file_arg(a, 0, "TASKS.md");
-            let text = match read_text(&path) {
-                Ok(t) => t,
-                Err(code) => return Ok(code),
-            };
-            let out = match queue::unblock(&text) {
-                Ok(o) => o,
-                Err(e) => return Ok(fail(&e)),
-            };
-            if out != text {
-                if let Err(e) = (Queue { path }).write(&out) {
-                    return Ok(fail(&e));
-                }
-            }
-            Ok(0)
-        }
+        "unblock" => match tracker_arg(a, 0).unblock() {
+            Ok(()) => Ok(0),
+            Err(e) => Ok(fail(&e)),
+        },
         "archive" => {
             let root = toplevel()?;
             let cfg = crate::config::load(&root)?;
@@ -189,12 +178,18 @@ fn toplevel() -> anyhow::Result<PathBuf> {
 }
 
 fn migrate(root: &Path, dir: &str) -> anyhow::Result<i32> {
-    let tasks = crate::config::instance_path(root, dir, "TASKS.md");
-    if !tasks.is_file() {
-        println!("nothing to migrate");
-        return Ok(0);
-    }
-    let rel = crate::config::instance_rel(root, dir, "TASKS.md");
+    let tasks = match Tracker::open(root, dir) {
+        Tracker::Legacy(path) if path.is_file() => path,
+        _ => {
+            println!("nothing to migrate");
+            return Ok(0);
+        }
+    };
+    let rel = tasks
+        .strip_prefix(root)
+        .unwrap_or(&tasks)
+        .to_string_lossy()
+        .to_string();
     let (repo, inner, _) = crate::git::locate(root, dir, &rel);
     let home = match Path::new(&inner).parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_string_lossy().to_string(),
@@ -248,7 +243,18 @@ fn read_text(path: &Path) -> Result<String, i32> {
     .map_err(|e| fail(&e))
 }
 
+// a directory argument is a specs tree, a file a legacy queue
+fn tracker_arg(a: &[String], pos: usize) -> Tracker {
+    match a.get(pos).map(PathBuf::from) {
+        Some(p) if p.is_dir() => Tracker::Files(p),
+        Some(p) => Tracker::Legacy(p),
+        None => {
+            let root = Path::new(".");
+            Tracker::open(root, &crate::config::harness_dir(root))
+        }
+    }
+}
+
 fn parsed_blocks(a: &[String], pos: usize) -> Result<Vec<queue::Block>, i32> {
-    let text = read_text(&file_arg(a, pos, "TASKS.md"))?;
-    queue::parse(&text).map_err(|e| fail(&e))
+    tracker_arg(a, pos).blocks().map_err(|e| fail(&e))
 }

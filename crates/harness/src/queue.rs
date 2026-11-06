@@ -158,7 +158,9 @@ pub const CRITERIA_PLACEHOLDER: &str =
 pub fn unfilled_ready(blocks: &[Block]) -> Vec<String> {
     blocks
         .iter()
-        .filter(|b| field(b, "status").as_deref() == Some("ready"))
+        .filter(|b| {
+            crate::tracker::state(b).is_some_and(|s| crate::tracker::READY.contains(&s.as_str()))
+        })
         .filter(|b| {
             b.body.iter().any(|(_, line)| {
                 line.contains(SCOPE_PLACEHOLDER) || line.contains(CRITERIA_PLACEHOLDER)

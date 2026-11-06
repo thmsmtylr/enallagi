@@ -50,6 +50,18 @@ pub fn state(b: &Block) -> Option<String> {
     Some(name.to_string())
 }
 
+/// A ticket ready for anyone: the legacy `ready`, which `attended: true` splits in two.
+pub const READY: [&str; 2] = ["ready-for-agent", "ready-for-human"];
+
+/// The ids whose state is one of `states`, in queue order.
+pub fn ids_in(blocks: &[Block], states: &[&str]) -> Vec<String> {
+    blocks
+        .iter()
+        .filter(|b| state(b).is_some_and(|s| states.contains(&s.as_str())))
+        .map(|b| b.id.clone())
+        .collect()
+}
+
 /// The first `ready-for-agent` ticket, in the order given, whose blockers are all `done`.
 pub fn takeable(blocks: &[Block]) -> Option<String> {
     let states: HashMap<&str, Option<String>> =
@@ -479,6 +491,22 @@ impl Tracker {
                 std::fs::write(&path, ticket_text(&b))?;
                 Ok(path)
             }
+        }
+    }
+
+    /// Releases every legacy `blocked` block whose blockers are done; the files layout derives blocking from `Blocked by:`, so there is nothing to release.
+    pub fn unblock(&self) -> Result<(), QueueError> {
+        match self {
+            Tracker::Legacy(path) => {
+                let q = queue::Queue { path: path.clone() };
+                let text = q.read()?;
+                let out = queue::unblock(&text)?;
+                if out != text {
+                    q.write(&out)?;
+                }
+                Ok(())
+            }
+            Tracker::Files(_) => Ok(()),
         }
     }
 

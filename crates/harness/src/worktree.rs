@@ -161,12 +161,12 @@ fn follow_upstream(root: &Path, branch: &str) -> Result<String, String> {
 // under `[pr] per_task` the checkout's branch never carries the lane's product commits, so a task
 // left unfinished lives on the last lane branch, and the next lane starts there rather than at HEAD
 fn resumable_base(root: &Path, cfg: &Config) -> Option<String> {
-    let tasks = crate::config::instance_path(root, &cfg.layout.harness_dir, "TASKS.md");
-    let text = std::fs::read_to_string(tasks).unwrap_or_default();
-    let blocks = crate::queue::parse(&text).unwrap_or_default();
+    let blocks = crate::tracker::Tracker::open(root, &cfg.layout.harness_dir)
+        .blocks()
+        .unwrap_or_default();
     let open: Vec<&str> = blocks
         .iter()
-        .filter(|b| crate::queue::field(b, "status").as_deref() != Some("done"))
+        .filter(|b| crate::tracker::state(b).as_deref() != Some("done"))
         .map(|b| b.id.as_str())
         .collect();
     let listed = git::git(
@@ -414,6 +414,7 @@ pub fn lane(
 mod tests {
     use super::*;
     use crate::fixture::Repo;
+    use crate::tracker::Tracker;
 
     fn repo_with_harness_dir() -> Repo {
         let r = Repo::new();
@@ -460,8 +461,8 @@ mod tests {
     fn nested_repo() -> Repo {
         let r = Repo::new();
         crate::init::install(&r.root, &crate::init::InitOpts::default()).expect("install");
-        r.write(
-            ".enallagi/TASKS.md",
+        r.queue(
+            ".enallagi",
             "# TASKS\n\n## [T-001] one\nscope: one.txt\nstatus: ready\n\n## [T-002] two\nscope: two.txt\nstatus: ready\n",
         );
         commit_in(&r.root, "install");
@@ -473,11 +474,9 @@ mod tests {
         std::fs::write(wt.join(file), id).expect("write");
         commit_in(wt, &format!("{id} work"));
         let state = wt.join(".enallagi");
-        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("the lane's TASKS.md");
-        let at = tasks.find(&format!("## [{id}]")).expect("the block");
-        let verdict = tasks[at..].replacen("status: ready", &format!("status: {status}"), 1);
-        std::fs::write(state.join("TASKS.md"), format!("{}{verdict}", &tasks[..at]))
-            .expect("write");
+        Tracker::open(wt, ".enallagi")
+            .set_status(id, status, "")
+            .expect("the lane's verdict");
         commit_in(&state, &format!("verify {id}"));
         std::fs::write(state.join("events.jsonl"), "{}\n").expect("an ignored run log");
     }
@@ -488,13 +487,18 @@ mod tests {
 
     // the parent decides the same block the lane decides, so the state merge conflicts rather than applying
     fn decide_in_the_parent(state: &Path, status: &str) {
-        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
-        std::fs::write(
-            state.join("TASKS.md"),
-            tasks.replacen("status: ready", &format!("status: {status}"), 1),
-        )
-        .expect("write");
+        let root = state.parent().expect("the product root");
+        Tracker::open(root, ".enallagi")
+            .set_status("T-001", status, "")
+            .expect("the parent's decision");
         commit_in(state, "a second writer decided the same block");
+    }
+
+    fn state_of(root: &Path, id: &str) -> Option<String> {
+        let b = Tracker::open(root, ".enallagi")
+            .get(id)
+            .expect("the queue")?;
+        crate::tracker::state(&b)
     }
 
     fn per_task_repo() -> Repo {
@@ -583,15 +587,9 @@ mod tests {
             assert!(report.merged, "{id}: {}", report.reason);
         }
 
-        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
-        assert!(
-            tasks.contains("## [T-001] one\nscope: one.txt\nstatus: done"),
-            "{tasks}"
-        );
-        assert!(
-            tasks.contains("## [T-002] two\nscope: two.txt\nstatus: done"),
-            "{tasks}"
-        );
+        for id in ["T-001", "T-002"] {
+            assert_eq!(state_of(&r.root, id).as_deref(), Some("done"), "{id}");
+        }
         assert!(r.root.join("one.txt").exists() && r.root.join("two.txt").exists());
         for repo in [&r.root, &state] {
             let branches = git::git(repo, &["branch", "--list", "lane/*"]).expect("branch list");
@@ -603,7 +601,6 @@ mod tests {
     fn per_task_leaves_the_checkout_unmoved() {
         let r = per_task_repo();
         let cfg = cfg(&r);
-        let state = r.root.join(".enallagi");
         let pre_head = git::head(&r.root);
 
         let report = lane(&r.root, &cfg, &mut |wt| {
@@ -616,8 +613,9 @@ mod tests {
         assert!(report.merged, "reason: {}", report.reason);
         assert_eq!(git::head(&r.root), pre_head);
         assert!(!r.root.join("one.txt").exists() && !r.root.join("two.txt").exists());
-        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
-        assert_eq!(tasks.matches("status: done").count(), 2, "{tasks}");
+        for id in ["T-001", "T-002"] {
+            assert_eq!(state_of(&r.root, id).as_deref(), Some("done"), "{id}");
+        }
     }
 
     // a reviewer caught this: a checkout that did not follow its upstream reported success
@@ -837,7 +835,7 @@ mod tests {
         let mut before_the_merge = None;
         let report = lane(&r.root, &cfg, &mut |wt| {
             land(wt, "T-001", "one.txt");
-            decide_in_the_parent(&state, "blocked");
+            decide_in_the_parent(&state, "needs-spec");
             before_the_merge = git::head(&state);
             Ok(())
         })
@@ -859,9 +857,7 @@ mod tests {
         assert!(!r.root.join("one.txt").exists());
         let left = report.left.clone().expect("left in place");
         assert!(left.join("one.txt").exists());
-        let lane_tasks =
-            std::fs::read_to_string(left.join(".enallagi/TASKS.md")).expect("TASKS.md");
-        assert!(lane_tasks.contains("status: done"));
+        assert_eq!(state_of(&left, "T-001").as_deref(), Some("done"));
         remove_left(&r, &report);
     }
 
@@ -872,18 +868,22 @@ mod tests {
         let state = r.root.join(".enallagi");
         let pre_head = git::head(&r.root);
 
+        let ticket = Tracker::open(&r.root, ".enallagi")
+            .path_of("T-001")
+            .expect("T-001's file");
         let report = lane(&r.root, &cfg, &mut |wt| {
             land(wt, "T-001", "one.txt");
             std::fs::write(state.join("moved.txt"), "y").expect("write");
             commit_in(&state, "a second writer moved the state");
             // an operator's edit arriving mid-run: tracked, uncommitted, and what git refuses to overwrite
-            std::fs::write(state.join("TASKS.md"), "# TASKS\n\nedited mid-run\n").expect("write");
+            std::fs::write(&ticket, "edited mid-run\n").expect("write");
             Ok(())
         })
         .expect("lane");
 
         assert!(!report.merged, "reason: {}", report.reason);
-        assert!(report.reason.contains("TASKS.md"), "{}", report.reason);
+        let name = ticket.file_name().unwrap().to_string_lossy();
+        assert!(report.reason.contains(&*name), "{}", report.reason);
         assert!(
             !report.reason.contains("conflicts with"),
             "{}",
@@ -917,11 +917,7 @@ mod tests {
         assert_ne!(git::head(&r.root), pre_head);
         assert!(r.root.join("one.txt").exists());
         assert!(state.join("moved.txt").exists());
-        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
-        assert!(
-            tasks.contains("## [T-001] one\nscope: one.txt\nstatus: done"),
-            "{tasks}"
-        );
+        assert_eq!(state_of(&r.root, "T-001").as_deref(), Some("done"));
         // a sha and two parents: the state absorbed the second writer rather than replaying over them
         let parents = git::git(&state, &["rev-list", "--parents", "-1", "HEAD"]).expect("rev-list");
         assert_eq!(parents.split_whitespace().count(), 3, "{parents}");
@@ -953,8 +949,7 @@ mod tests {
         assert_eq!(git::head(&state), before_the_merge, "{}", report.reason);
         let parents = git::git(&state, &["rev-list", "--parents", "-1", "HEAD"]).expect("rev-list");
         assert_eq!(parents.split_whitespace().count(), 2, "{parents}");
-        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
-        assert!(!tasks.contains("status: done"), "{tasks}");
+        assert_ne!(state_of(&r.root, "T-001").as_deref(), Some("done"));
         remove_left(&r, &report);
     }
 
@@ -973,7 +968,7 @@ mod tests {
                 reason: "y".into(),
             });
             land(wt, "T-001", "one.txt");
-            decide_in_the_parent(&state, "blocked");
+            decide_in_the_parent(&state, "needs-spec");
             Ok(())
         })
         .expect("lane");
@@ -1001,8 +996,7 @@ mod tests {
 
         assert!(!report.merged, "reason: {}", report.reason);
         assert_eq!(git::head(&state), pre_state);
-        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
-        assert!(!tasks.contains("status: done"), "{tasks}");
+        assert_ne!(state_of(&r.root, "T-001").as_deref(), Some("done"));
         remove_left(&r, &report);
     }
 
@@ -1138,8 +1132,7 @@ mod tests {
         assert!(!report.merged, "reason: {}", report.reason);
         assert_eq!(git::head(&r.root), pre_root);
         assert_eq!(git::head(&state), pre_state, "reason: {}", report.reason);
-        let tasks = std::fs::read_to_string(state.join("TASKS.md")).expect("TASKS.md");
-        assert!(!tasks.contains("status: done"), "{tasks}");
+        assert_ne!(state_of(&r.root, "T-001").as_deref(), Some("done"));
         remove_left(&r, &report);
     }
 

@@ -166,6 +166,27 @@ fn write_toml_at(r: &Repo, rel: &str, toml: &str) {
     r.write(rel, &full);
 }
 
+fn files_layout() -> bool {
+    std::env::var("ENALLAGI_TEST_LAYOUT").as_deref() == Ok("files")
+}
+
+// the root layout has no files form until layout detection learns `specs/`, so a files run nests the instance
+fn instance(rel: &str) -> String {
+    match files_layout() {
+        true => format!(".enallagi/{rel}"),
+        false => rel.to_string(),
+    }
+}
+
+fn queue(r: &Repo, text: &str) {
+    r.queue(if files_layout() { ".enallagi" } else { "" }, text);
+}
+
+fn state_of(r: &Repo, id: &str) -> Option<String> {
+    let t = enallagi::tracker::Tracker::open(&r.root, ".enallagi");
+    enallagi::tracker::state(&t.get(id).expect("the queue")?)
+}
+
 fn repo(toml: &str, tasks: &str) -> Repo {
     let repo = Repo::new();
     // what `enallagi init` ignores under the harness dir; vendored skills and roles are committed
@@ -176,10 +197,10 @@ fn repo(toml: &str, tasks: &str) -> Repo {
     script(&repo, "src/fakecheck.sh", "exit 0\n");
     script(&repo, "src/fakeagent.sh", QUIET);
     if !tasks.is_empty() {
-        repo.write("TASKS.md", tasks);
+        queue(&repo, tasks);
     }
-    repo.write("SPEC.md", "# spec\n");
-    repo.write("PROGRESS.md", "# progress\n");
+    repo.write(&instance("SPEC.md"), "# spec\n");
+    repo.write(&instance("PROGRESS.md"), "# progress\n");
     write_toml(&repo, toml);
     repo.commit_all("harness");
     repo
@@ -390,7 +411,10 @@ fn a_preset_argv_carries_dir_and_context() {
 #[test]
 fn a_bare_clarification_marker_halts_the_loop() {
     let r = repo(&base_toml(""), TASKS);
-    r.write("SPEC.md", "# spec\n\n[NEEDS CLARIFICATION] which store?\n");
+    r.write(
+        &instance("SPEC.md"),
+        "# spec\n\n[NEEDS CLARIFICATION] which store?\n",
+    );
     let (digest, events) = go(&r, &opts(1));
     assert!(
         digest
@@ -427,7 +451,7 @@ fn every_stage_appends_a_run_log_record() {
     let implement = implementer(&r, "");
     let verify = verifier(&r);
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
 
     let (_, events) = go(&r, &opts(1));
@@ -456,7 +480,7 @@ fn the_verdict_gate_records_the_check_tally() {
         &format!("[check]\ncommand = \"./src/fakecheck.sh\"\nfail_name = '{cargo}'"),
     );
     write_toml(&r, &toml);
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
 
     let (digest, events) = go(&r, &opts(1));
@@ -489,7 +513,7 @@ fn a_check_with_no_count_warns_in_the_digest() {
         &format!("[check]\ncommand = \"./src/fakecheck.sh\"\nfail_name = '{cargo}'"),
     );
     write_toml(&r, &toml);
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
 
     let (digest, _) = go(&r, &opts(1));
@@ -511,7 +535,7 @@ fn the_record_carries_role_seconds_cost() {
     let implement = implementer(&r, "");
     let verify = verifier(&r);
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
 
     let (_, events) = go(&r, &opts(1));
@@ -544,7 +568,7 @@ fn the_loop_stops_before_the_budget() {
     let implement = implementer(&r, "");
     let verify = verifier(&r);
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
 
     let o = RunOpts {
@@ -757,7 +781,18 @@ turns = 1
 "#;
     // duplicate ids are what makes `queue::parse` fail; the same fixture `takeable_is_none_on_an_unreadable_queue` uses
     let broken_tasks = "## [T-001] first\nstatus: ready\n\n## [T-001] again\nstatus: ready\n";
-    let r = repo(toml, broken_tasks);
+    let r = match files_layout() {
+        false => repo(toml, broken_tasks),
+        true => {
+            let r = repo(toml, "## [T-001] first\nstatus: ready\n");
+            r.write(
+                ".enallagi/specs/x/issues/T-001-again.md",
+                "# T-001: again\n\n**Status:** ready-for-agent\n",
+            );
+            r.commit_all("a second T-001");
+            r
+        }
+    };
 
     let (digest, _) = go(&r, &opts(1));
     assert!(
@@ -777,7 +812,7 @@ fn stop_file_halts_at_the_next_boundary() {
     let implement = implementer(&r, "touch STOP\n");
     let verify = verifier(&r);
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
 
     let (digest, events) = go(&r, &opts(1));
@@ -804,7 +839,7 @@ fn a_new_needs_spec_halts() {
         "stages = [\"implement\"]",
     );
     write_toml(&r, &toml);
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
 
     // one iteration: the halt must come from this round's end, not the next round's boundary
@@ -819,7 +854,7 @@ fn a_new_needs_spec_halts() {
 #[test]
 fn two_dry_rounds_end_the_run() {
     let r = repo(&base_toml(""), "");
-    r.write("TASKS.md", "# queue\n");
+    queue(&r, "# queue\n");
     r.commit_all("empty queue");
     let (digest, _) = go(&r, &opts(5));
     assert_eq!(digest.iterations, 2, "{digest:#?}");
@@ -831,7 +866,7 @@ fn run_without_a_tty_prints_one_line_per_event() {
     let implement = implementer(&r, "");
     let verify = verifier(&r);
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     installed(&r);
     r.commit_all("stubs");
 
@@ -858,7 +893,7 @@ fn run_names_its_binary_and_each_event_its_head() {
     let implement = implementer(&r, "");
     let verify = verifier(&r);
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     installed(&r);
     r.commit_all("stubs");
     let head = enallagi::git::git(&r.root, &["rev-parse", "HEAD"]).unwrap();
@@ -1161,7 +1196,7 @@ fn a_fetched_skill_commits_before_its_stage() {
 fn an_unnamed_red_check_is_a_finding() {
     let r = repo(&base_toml(""), "");
     script(&r, "src/fakecheck.sh", "echo boom\nexit 1\n");
-    r.write("TASKS.md", "# queue\n");
+    queue(&r, "# queue\n");
     r.commit_all("a red check");
 
     let plan = plan_of(&r);
@@ -1211,7 +1246,7 @@ fn a_proposed_fix_naming_the_contract_halts() {
         "printf '\\n## [T-002] the schema is wrong\\nstatus: proposed\\nprobe: spec-untested\\noutput: SPEC.md does not say which store\\n' >>TASKS.md\n",
     );
     write_toml(&r, &base_toml(&role_command("scout", &scout)));
-    r.write("TASKS.md", "# queue\n");
+    queue(&r, "# queue\n");
     r.commit_all("stubs");
 
     let (digest, _) = go(&r, &opts(1));
@@ -1280,7 +1315,7 @@ fn an_implementer_done_skips_verify() {
     );
     let verify = script(&r, "src/fakeverify.sh", "touch verify-ran\n");
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
 
     let (digest, events) = go(&r, &opts(1));
@@ -1309,7 +1344,7 @@ fn stopping_short_of_review_skips_verify() {
     );
     let verify = script(&r, "src/fakeverify.sh", "touch verify-ran\n");
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
 
     let (digest, events) = go(&r, &opts(1));
@@ -1362,13 +1397,7 @@ fn a_stranded_review_verifies_next_run() {
         other => panic!("expected a StageStart, got {other:?}"),
     }
 
-    let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    let blocks = enallagi::queue::parse(&text).expect("parse");
-    let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
-    assert_eq!(
-        enallagi::queue::field(t001, "status").as_deref(),
-        Some("done")
-    );
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("done"));
     assert_eq!(digest.landed, vec!["T-001".to_string()]);
 }
 
@@ -1417,7 +1446,7 @@ fn an_implementer_entry_gets_no_second() {
     let implement = implementer(&r, "echo '## stub entry' >>PROGRESS.md\n");
     let verify = verifier(&r);
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
 
     let (digest, _) = go(&r, &opts(1));
@@ -1455,17 +1484,10 @@ fn review_wins_over_ready() {
         "the review pipeline, not task, must win"
     );
 
-    let text = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
-    let blocks = enallagi::queue::parse(&text).expect("parse");
-    let t001 = blocks.iter().find(|b| b.id == "T-001").expect("T-001");
-    let t002 = blocks.iter().find(|b| b.id == "T-002").expect("T-002");
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("done"));
     assert_eq!(
-        enallagi::queue::field(t001, "status").as_deref(),
-        Some("done")
-    );
-    assert_eq!(
-        enallagi::queue::field(t002, "status").as_deref(),
-        Some("ready"),
+        state_of(&r, "T-002").as_deref(),
+        Some("ready-for-agent"),
         "T-002 is untouched: the task pipeline never ran"
     );
 }
@@ -1661,7 +1683,7 @@ const IMPLEMENTER_NOTE: &str = "printf '  implementer: one minor edge left\\n' >
 fn a_clean_verdict_after_the_implementer(r: &Repo, implement: &str) {
     let verify = verifier(r);
     write_toml(r, &base_toml(&role_commands(implement, &verify)));
-    r.write("TASKS.md", TASKS);
+    queue(r, TASKS);
     r.commit_all("stubs");
 
     let (digest, events) = go(r, &opts(1));
@@ -1706,7 +1728,7 @@ fn a_root_layout_lands_a_stub_task() {
     let implement = implementer(&r, "");
     let verify = verifier(&r);
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
 
     let (digest, _) = go(&r, &opts(1));
@@ -2195,7 +2217,7 @@ fn draining_with(r: &Repo, verify: &str, filed: &str, body: &str) {
         role_command("adjudicator", &adj)
     );
     write_toml(r, &base_toml(&roles));
-    r.write("TASKS.md", TASKS);
+    queue(r, TASKS);
     r.write("src/filed.md", filed);
     r.commit_all("stubs");
 }
@@ -2250,7 +2272,7 @@ fn a_verdict_filing_nothing_skips_adjudicate() {
         role_command("adjudicator", &adj)
     );
     write_toml(&r, &base_toml(&roles));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
 
     let (digest, events) = go(&r, &opts(1));
@@ -2314,7 +2336,7 @@ fn a_nonzero_adjudicator_is_not_a_decision() {
 #[test]
 fn a_stage_at_its_turn_cap_is_named_in_the_digest() {
     let r = repo(&base_toml(""), "");
-    r.write("TASKS.md", "# queue\n");
+    queue(&r, "# queue\n");
     script(
         &r,
         "src/fakeagent.sh",
@@ -2331,7 +2353,7 @@ fn a_stage_at_its_turn_cap_is_named_in_the_digest() {
 fn digest_and_probe_agree_past_the_turn_cap() {
     use enallagi::probes::telemetry::{turns_exhausted, ProbeResult};
     let r = repo(&base_toml(""), "");
-    r.write("TASKS.md", "# queue\n");
+    queue(&r, "# queue\n");
     script(
         &r,
         "src/fakeagent.sh",
@@ -2359,7 +2381,7 @@ fn digest_and_probe_agree_on_an_uncapped_stage() {
         1,
     );
     let r = repo(&toml, "");
-    r.write("TASKS.md", "# queue\n");
+    queue(&r, "# queue\n");
     script(
         &r,
         "src/fakeagent.sh",
@@ -2401,7 +2423,7 @@ fn adjudicating_at_turns(reported: u64) -> Repo {
             "name = \"adjudicate\"\nrole = \"adjudicator\"\nturns = 20\n",
         );
     write_toml(&r, &toml);
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.write("src/filed.md", FILED);
     r.commit_all("stubs");
     r
@@ -2434,7 +2456,7 @@ fn an_uncapped_stage_is_not_named_as_a_turn_cap() {
         r#"command = ["./src/fakeagent.sh", "{prompt}"]"#,
     );
     let r = repo(&toml, "");
-    r.write("TASKS.md", "# queue\n");
+    queue(&r, "# queue\n");
     script(
         &r,
         "src/fakeagent.sh",
@@ -2459,7 +2481,7 @@ fn a_timed_out_stage_is_named_as_a_timeout() {
             "name = \"scout\"\nrole = \"scout\"\nturns = 5\ntimeout = \"1s\"\n",
         );
     let r = repo(&toml, "");
-    r.write("TASKS.md", "# queue\n");
+    queue(&r, "# queue\n");
     script(
         &r,
         "src/fakeagent.sh",
@@ -2633,7 +2655,7 @@ fn an_attended_block_waits_for_a_scout_round() {
         role_command("scout", &scout)
     );
     write_toml(&r, &base_toml(&roles));
-    r.write("TASKS.md", ATTENDED_TASKS);
+    queue(&r, ATTENDED_TASKS);
     r.commit_all("stubs");
 
     let (digest, events) = go(&r, &opts(2));
@@ -2676,7 +2698,7 @@ fn implementing(r: &Repo, tasks: &str) {
     let implement = implementer(r, "printf '%s' \"$1\" >implement-prompt\n");
     let verify = verifier(r);
     write_toml(r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", tasks);
+    queue(r, tasks);
     r.commit_all("stubs");
 }
 
@@ -2746,7 +2768,7 @@ fn a_task_round_does_not_spend_the_discovery_budget() {
         role_command("scout", &scout)
     );
     write_toml(&r, &base_toml(&roles));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
 
     // one task round, then the discover pipeline's two dry rounds: the task round is not one of them
@@ -2796,7 +2818,7 @@ fn a_standing_pile_drains_oldest_first() {
         &r,
         &base_toml(&format!("{roles}\n[queue]\nproposed_rounds = 100\n")),
     );
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.write("src/filed.md", FILED);
     r.commit_all("stubs");
 
@@ -2804,7 +2826,7 @@ fn a_standing_pile_drains_oldest_first() {
     for n in 101..=110 {
         let mut tasks = std::fs::read_to_string(r.root.join("TASKS.md")).expect("TASKS.md");
         tasks.push_str(&standing(n));
-        r.write("TASKS.md", &tasks);
+        queue(&r, &tasks);
         r.commit_all(&format!("file T-{n}"));
     }
 
@@ -2851,7 +2873,7 @@ fn the_digest_counts_standing_and_expired() {
             "{roles}\n[queue]\ndrain = 0\nproposed_rounds = 20\n"
         )),
     );
-    r.write("TASKS.md", &format!("{TASKS}{}", standing(100)));
+    queue(&r, &format!("{TASKS}{}", standing(100)));
     r.commit_all("stubs");
 
     // far more commits than proposed_rounds, so only T-100 is past the bound whatever the round commits
@@ -2967,7 +2989,7 @@ fn a_proposed_block_is_adjudicated_before_scouting() {
         role_command("adjudicator", &adj)
     );
     write_toml(&r, &base_toml(&roles));
-    r.write("TASKS.md", DONE_TASK);
+    queue(&r, DONE_TASK);
     r.commit_all("stubs");
     queued_issue(&r);
     assert_eq!(status_of(&r, "T-002").as_deref(), Some("proposed"));
@@ -3002,7 +3024,7 @@ fn an_undecided_block_hands_the_round_to_discover() {
         role_command("adjudicator", &adj)
     );
     write_toml(&r, &default_pipelines_toml(&roles));
-    r.write("TASKS.md", DONE_TASK);
+    queue(&r, DONE_TASK);
     r.commit_all("stubs");
     queued_issue(&r);
     installed(&r);
@@ -3618,7 +3640,7 @@ fn a_tautologised_test_does_not_reach_done() {
         "src/thing.rs",
         "#[test]\nfn adds() {\n    assert_eq!(1 + 1, 2);\n}\n",
     );
-    r.write("TASKS.md", TAUTOLOGY_TASK);
+    queue(&r, TAUTOLOGY_TASK);
     r.commit_all("stubs");
 
     go(&r, &opts(1));
@@ -3648,7 +3670,7 @@ fn pulls(extra: &str, check: &str) -> Pulls {
         &r,
         &base_toml(&format!("{}{extra}", role_commands(&implement, &verify))),
     );
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
     installed(&r);
     r.commit_all("installed");
@@ -3749,7 +3771,7 @@ notes: https://github.com/owner/repo/pull/13#discussion_r1000000007
 // the block a review thread raised, with the gh the read uses standing in for the host
 fn threaded(gh: &str) -> Pulls {
     let p = pulls("", "exit 0\n");
-    p.repo.write("TASKS.md", THREADED_TASK);
+    queue(&p.repo, THREADED_TASK);
     p.repo.commit_all("a block from a review thread");
     let stub = p.tools.path().join("gh");
     std::fs::write(
@@ -3929,7 +3951,7 @@ fn an_iteration_lands_under_a_protection_finding() {
     let implement = implementer(&r, "");
     let verify = verifier(&r);
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.commit_all("stubs");
     let (_origin, _branch) = hosted_origin(&r);
     let reported = protection(&r);
@@ -4124,7 +4146,7 @@ fn deciding_learning(after: &str, extra: &str) -> Repo {
         &r,
         &base_toml(&format!("{}{extra}", role_command("adjudicator", &adj))),
     );
-    r.write("TASKS.md", DONE_TASK);
+    queue(&r, DONE_TASK);
     r.write("DECISIONS.md", &decisions("", LEARNING));
     r.write("src/decided.md", after);
     r.commit_all("a proposed learning");
@@ -4227,7 +4249,7 @@ fn the_audit_runs_once_after_the_last_iteration() {
         ),
     );
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.write(
         "PROGRESS.md",
         "# progress\nfriction: the check ran past its timeout\nfriction: the check timed out again\n",
@@ -4269,7 +4291,7 @@ fn a_failed_audit_still_counts_its_spend() {
         &format!("{QUIET}case \"$1\" in *'BEGIN ENALLAGI LEARNING'*) exit 1 ;; esac\n"),
     );
     write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.write(
         "PROGRESS.md",
         "# progress\nfriction: the check ran past its timeout\nfriction: the check timed out again\n",
@@ -4300,7 +4322,7 @@ fn a_stop_skips_the_audit() {
         ),
     );
     write_toml(&r, &base_toml(""));
-    r.write("TASKS.md", TASKS);
+    queue(&r, TASKS);
     r.write(
         "PROGRESS.md",
         "# progress\nfriction: the check ran past its timeout\nfriction: the check timed out again\n",

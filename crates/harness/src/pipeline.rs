@@ -16,6 +16,7 @@ use crate::probes::{self, CheckOutcome, ProbeCtx};
 use crate::queue::{self, Queue};
 use crate::roles;
 use crate::skills::{self, ResolveOpts};
+use crate::tracker::{self, Tracker};
 use crate::{archive, audit, git, pr, review};
 
 // A lane running ps to check for competing writers must ignore its parent.
@@ -241,29 +242,28 @@ pub fn preflight(root: &Path) -> anyhow::Result<()> {
     .into())
 }
 
+fn queue_read(root: &Path, cfg: &Config) -> Result<Vec<queue::Block>, String> {
+    Tracker::open(root, &cfg.layout.harness_dir)
+        .blocks()
+        .map_err(|e| e.to_string())
+}
+
 fn queue_blocks(root: &Path, cfg: &Config) -> Vec<queue::Block> {
-    std::fs::read_to_string(config::instance_path(
-        root,
-        &cfg.layout.harness_dir,
-        "TASKS.md",
-    ))
-    .ok()
-    .and_then(|t| queue::parse(&t).ok())
-    .unwrap_or_default()
+    queue_read(root, cfg).unwrap_or_default()
 }
 
 // the same task the round would take, so the plan prices the stage the run will actually spawn
 fn plan_task(blocks: &[queue::Block], when: &Predicate) -> Option<String> {
     if matches!(when, Predicate::QueueReviewing) {
-        queue::ids_at(blocks, "review").into_iter().next()
+        tracker::ids_in(blocks, &["review"]).into_iter().next()
     } else {
-        queue::ready_unattended(blocks)
+        tracker::takeable(blocks)
     }
 }
 
 // the round's own proposals, then the oldest standing ones the drain allows
 fn handed_ids(root: &Path, cfg: &Config, at_start: &[String]) -> Vec<String> {
-    let all = queue::ids_at(&queue_blocks(root, cfg), "proposed");
+    let all = tracker::ids_in(&queue_blocks(root, cfg), &["needs-triage"]);
     let (mut standing, fresh): (Vec<String>, Vec<String>) =
         all.into_iter().partition(|id| at_start.contains(id));
     let ages = archive::ages(root, cfg, &standing);
@@ -282,7 +282,7 @@ fn planned_cap(root: &Path, cfg: &Config, stage: &config::Stage) -> u32 {
     if stage.role.as_deref() != Some("adjudicator") {
         return stage.turns;
     }
-    let at_start = queue::ids_at(&queue_blocks(root, cfg), "proposed");
+    let at_start = tracker::ids_in(&queue_blocks(root, cfg), &["needs-triage"]);
     turn_cap(cfg, stage, handed_ids(root, cfg, &at_start).len())
 }
 
@@ -496,7 +496,7 @@ impl<'a> Loop<'a> {
     }
 
     fn go(&mut self) -> anyhow::Result<Digest> {
-        self.needs_spec_at_start = self.ids_at("needs-spec");
+        self.needs_spec_at_start = self.ids_at(&["needs-info"]);
         self.learnings_at_start = waiting_classes(self.root, self.cfg);
         self.decisions_at_start =
             std::fs::read_to_string(self.file("DECISIONS.md")).unwrap_or_default();
@@ -621,7 +621,7 @@ impl<'a> Loop<'a> {
         if iterations > 0 {
             self.learnings();
         }
-        let proposed = self.ids_at("proposed");
+        let proposed = self.ids_at(&["needs-triage"]);
         self.digest.proposed_oldest = archive::ages(self.root, self.cfg, &proposed)
             .into_values()
             .max()
@@ -652,10 +652,10 @@ impl<'a> Loop<'a> {
         self.unblock();
         self.archive();
 
-        let ready_before = self.ids_at("ready");
-        self.proposed_at_start = self.ids_at("proposed");
+        let ready_before = self.ids_at(&tracker::READY);
+        self.proposed_at_start = self.ids_at(&["needs-triage"]);
         let rejections_before = self.rejections();
-        let takeable = gates::takeable(self.root, self.cfg);
+        let takeable = tracker::takeable(&self.blocks());
         let iter_base = git::head(self.root);
         let state_base = git::head(&self.state_root());
         let progress_before = file_len(&self.file("PROGRESS.md"));
@@ -1287,7 +1287,7 @@ impl<'a> Loop<'a> {
         let context = &self.cfg.layout.context_file;
         self.blocks()
             .iter()
-            .filter(|b| queue::field(b, "status").as_deref() == Some("proposed"))
+            .filter(|b| tracker::state(b).as_deref() == Some("needs-triage"))
             .find(|b| {
                 let text = queue::block_text(b);
                 text.contains(spec.as_str()) || text.contains(context.as_str())
@@ -1302,7 +1302,7 @@ impl<'a> Loop<'a> {
 
     // halts only on a NEW needs-spec task; pre-existing ones are the ordinary state of an open contract
     fn new_needs_spec(&self) -> Option<String> {
-        self.ids_at("needs-spec")
+        self.ids_at(&["needs-info"])
             .into_iter()
             .find(|id| !self.needs_spec_at_start.contains(id))
             .map(|id| {
@@ -1343,7 +1343,7 @@ impl<'a> Loop<'a> {
     }
 
     fn promotions(&mut self, ready_before: &[String], rejections_before: &[String]) {
-        for id in self.ids_at("ready") {
+        for id in self.ids_at(&tracker::READY) {
             if !ready_before.contains(&id) {
                 self.digest.promoted.push(id);
             }
@@ -1356,12 +1356,9 @@ impl<'a> Loop<'a> {
     }
 
     fn task_outcome(&mut self, task: &str, pipeline: &config::Pipeline, progress_before: u64) {
-        let status = self
-            .blocks()
-            .iter()
-            .find(|b| b.id == task)
-            .and_then(|b| queue::field(b, "status"));
-        match status.as_deref() {
+        let block = self.blocks().into_iter().find(|b| b.id == task);
+        let status = block.as_ref().and_then(|b| queue::field(b, "status"));
+        match block.as_ref().and_then(tracker::state).as_deref() {
             Some("done") => {
                 self.digest.landed.push(task.to_string());
                 let rows = self
@@ -1377,9 +1374,9 @@ impl<'a> Loop<'a> {
                 }
                 self.settle_thread(task);
             }
-            other => self.digest.warnings.push(format!(
+            _ => self.digest.warnings.push(format!(
                 "{task} ended the iteration at {}, not done.",
-                other.unwrap_or("no status")
+                status.as_deref().unwrap_or("no status")
             )),
         }
         // the entry is all the next iteration inherits, so the launcher writes the facts it has
@@ -1530,25 +1527,9 @@ impl<'a> Loop<'a> {
     }
 
     fn unblock(&mut self) {
-        let queue = Queue {
-            path: self.file("TASKS.md"),
-        };
-        let text = match queue.read() {
-            Ok(text) => text,
-            // a missing file reads as empty, so this is a real IO failure
-            Err(err) => {
-                self.digest.warnings.push(format!("TASKS.md: {err}"));
-                return;
-            }
-        };
-        match queue::unblock(&text) {
-            Ok(out) if out != text => {
-                if let Err(err) = queue.write(&out) {
-                    self.digest.warnings.push(format!("TASKS.md: {err}"));
-                }
-            }
-            Ok(_) => {}
-            Err(err) => self.digest.warnings.push(format!("TASKS.md: {err}")),
+        let t = Tracker::open(self.root, &self.cfg.layout.harness_dir);
+        if let Err(err) = t.unblock() {
+            self.digest.warnings.push(format!("the queue: {err}"));
         }
     }
 
@@ -1556,12 +1537,12 @@ impl<'a> Loop<'a> {
         queue_blocks(self.root, self.cfg)
     }
 
-    fn ids_at(&self, status: &str) -> Vec<String> {
-        queue::ids_at(&self.blocks(), status)
+    fn ids_at(&self, states: &[&str]) -> Vec<String> {
+        tracker::ids_in(&self.blocks(), states)
     }
 
     fn first_at_review(&self) -> Option<String> {
-        self.ids_at("review").into_iter().next()
+        self.ids_at(&["review"]).into_iter().next()
     }
 
     // the prompt carries the ids the stage was sized for, so it decides those and no others
@@ -1626,12 +1607,12 @@ impl<'a> Loop<'a> {
         let rejected = blocks
             .iter()
             .find(|b| b.id == task)
-            .filter(|b| queue::field(b, "status").as_deref() == Some("ready"));
+            .filter(|b| tracker::state(b).is_some_and(|s| tracker::READY.contains(&s.as_str())));
         let Some(claims) = rejected.and_then(rejection_text).map(|v| claims(&v)) else {
             return;
         };
         let restated: Vec<(String, String)> = self
-            .ids_at("ready")
+            .ids_at(&tracker::READY)
             .into_iter()
             .filter(|id| id != task && !ready_before.contains(id))
             .filter_map(|id| {
@@ -1645,15 +1626,9 @@ impl<'a> Loop<'a> {
             .collect();
         for (id, verdict) in restated {
             let reason = format!("{id} restates the verdict on {task}: {verdict}");
-            let q = Queue {
-                path: self.file("TASKS.md"),
-            };
-            let written = q
-                .read()
-                .and_then(|text| queue::set_status(&text, &id, "proposed", &reason))
-                .and_then(|text| q.write(&text));
-            if let Err(err) = written {
-                self.digest.warnings.push(format!("TASKS.md: {err}"));
+            let t = Tracker::open(self.root, &self.cfg.layout.harness_dir);
+            if let Err(err) = t.set_status(&id, "needs-triage", &reason) {
+                self.digest.warnings.push(format!("the queue: {err}"));
                 continue;
             }
             self.commit_state(&format!("queue: {reason}"));
@@ -1666,10 +1641,7 @@ impl<'a> Loop<'a> {
     fn first_attended_ready(&self) -> Option<String> {
         self.blocks()
             .iter()
-            .find(|b| {
-                queue::field(b, "status").as_deref() == Some("ready")
-                    && queue::field(b, "attended").as_deref() == Some("true")
-            })
+            .find(|b| tracker::state(b).as_deref() == Some("ready-for-human"))
             .map(|b| b.id.clone())
     }
 
@@ -1861,80 +1833,46 @@ fn waiting_classes(root: &Path, cfg: &Config) -> Vec<String> {
 fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>) -> bool {
     match when {
         Predicate::Not(inner) => !holds(root, cfg, inner, warnings),
-        Predicate::QueueTakeable => gates::takeable(root, cfg).is_some(),
+        Predicate::QueueTakeable => tracker::takeable(&queue_blocks(root, cfg)).is_some(),
         // an unreadable or unparseable queue is not evidence of a task at review, so this fails closed like `takeable`
-        Predicate::QueueReviewing => {
-            match std::fs::read_to_string(config::instance_path(
-                root,
-                &cfg.layout.harness_dir,
-                "TASKS.md",
-            ))
-            .map_err(|e| e.to_string())
-            .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
-            {
-                Ok(blocks) => !queue::ids_at(&blocks, "review").is_empty(),
-                Err(err) => {
-                    warnings.push(format!(
-                        "TASKS.md: {err}; queue.reviewing treated as false (fail closed)"
-                    ));
-                    false
-                }
+        Predicate::QueueReviewing => match queue_read(root, cfg) {
+            Ok(blocks) => !tracker::ids_in(&blocks, &["review"]).is_empty(),
+            Err(err) => {
+                warnings.push(format!(
+                    "the queue: {err}; queue.reviewing treated as false (fail closed)"
+                ));
+                false
             }
-        }
+        },
         // an unreadable or unparseable queue is not evidence of a block waiting on the adjudicator, so this fails closed like `takeable`
-        Predicate::QueueProposed => {
-            match std::fs::read_to_string(config::instance_path(
-                root,
-                &cfg.layout.harness_dir,
-                "TASKS.md",
-            ))
-            .map_err(|e| e.to_string())
-            .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
-            {
-                Ok(blocks) => {
-                    !queue::ids_at(&blocks, "proposed").is_empty()
-                        || !waiting_classes(root, cfg).is_empty()
-                }
-                Err(err) => {
-                    warnings.push(format!(
-                        "TASKS.md: {err}; queue.proposed treated as false (fail closed)"
-                    ));
-                    false
-                }
+        Predicate::QueueProposed => match queue_read(root, cfg) {
+            Ok(blocks) => {
+                !tracker::ids_in(&blocks, &["needs-triage"]).is_empty()
+                    || !waiting_classes(root, cfg).is_empty()
             }
-        }
+            Err(err) => {
+                warnings.push(format!(
+                    "the queue: {err}; queue.proposed treated as false (fail closed)"
+                ));
+                false
+            }
+        },
         // an unreadable or unparseable queue is not evidence the queue is empty, so this fails closed like `takeable`
-        Predicate::QueueEmpty => {
-            match std::fs::read_to_string(config::instance_path(
-                root,
-                &cfg.layout.harness_dir,
-                "TASKS.md",
-            ))
-            .map_err(|e| e.to_string())
-            .and_then(|t| queue::parse(&t).map_err(|e| e.to_string()))
-            {
-                Ok(blocks) => blocks.is_empty(),
-                Err(err) => {
-                    warnings.push(format!(
-                        "TASKS.md: {err}; queue.empty treated as false (fail closed)"
-                    ));
-                    false
-                }
+        Predicate::QueueEmpty => match queue_read(root, cfg) {
+            Ok(blocks) => blocks.is_empty(),
+            Err(err) => {
+                warnings.push(format!(
+                    "the queue: {err}; queue.empty treated as false (fail closed)"
+                ));
+                false
             }
-        }
+        },
         Predicate::TaskAttended => {
-            let blocks = std::fs::read_to_string(config::instance_path(
-                root,
-                &cfg.layout.harness_dir,
-                "TASKS.md",
-            ))
-            .ok()
-            .and_then(|t| queue::parse(&t).ok())
-            .unwrap_or_default();
-            blocks
+            let first = queue_blocks(root, cfg)
                 .iter()
-                .find(|b| queue::field(b, "status").as_deref() == Some("ready"))
-                .is_some_and(|b| queue::field(b, "attended").as_deref() == Some("true"))
+                .filter_map(tracker::state)
+                .find(|s| tracker::READY.contains(&s.as_str()));
+            first.as_deref() == Some("ready-for-human")
         }
         Predicate::CheckRed => gates::check_delta(root, cfg, false).red,
         Predicate::Probe(name) => {

@@ -879,8 +879,8 @@ fn the_shipped_documents_describe_and_do_not_argue() {
 #[test]
 fn tasks_ready_finds_the_queue_config_refused() {
     let r = enallagi::fixture::Repo::new();
-    r.write(
-        ".enallagi/TASKS.md",
+    r.queue(
+        ".enallagi",
         "# TASKS\n\n## [T-001] open\nscope: src/a.ts\nstatus: ready\n",
     );
     r.write(".enallagi/enallagi.toml", "[check]\ncomand = \"x\"\n");
@@ -898,10 +898,60 @@ fn tasks_ready_finds_the_queue_config_refused() {
 }
 
 #[test]
+fn tasks_set_status_and_unblock_use_the_tracker() {
+    let r = enallagi::fixture::Repo::new();
+    r.queue(
+        ".enallagi",
+        "# TASKS\n\n## [T-001] first\nstatus: review\n\n## [T-002] waits\nblockedBy: T-001\nstatus: blocked\n\n## [T-003] a person's\nstatus: ready\nattended: true\n",
+    );
+    let tasks = |args: &[&str]| {
+        enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+            .arg("tasks")
+            .args(args)
+            .current_dir(&r.root)
+            .output()
+            .expect("run enallagi tasks")
+    };
+    let stdout = |args: &[&str]| {
+        String::from_utf8_lossy(&tasks(args).stdout)
+            .trim()
+            .to_string()
+    };
+
+    assert_eq!(stdout(&["ready"]), "");
+    let out = tasks(&["set-status", "T-001", "done", "verified"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(tasks(&["unblock"]).status.code(), Some(0));
+    assert_eq!(stdout(&["ready"]), "T-002");
+    assert_eq!(stdout(&["ids-at", "ready"]), "T-002\nT-003");
+    assert_eq!(stdout(&["ids-at", "done"]), "T-001");
+
+    let out = tasks(&["set-status", "T-009", "done", ""]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no block T-009"));
+
+    let t = enallagi::tracker::Tracker::open(&r.root, ".enallagi");
+    let state = |id: &str| {
+        t.get(id)
+            .unwrap()
+            .as_ref()
+            .and_then(enallagi::tracker::state)
+    };
+    assert_eq!(state("T-001").as_deref(), Some("done"));
+    assert_eq!(state("T-002").as_deref(), Some("ready-for-agent"));
+    assert_eq!(state("T-003").as_deref(), Some("ready-for-human"));
+    let gate = t
+        .get("T-001")
+        .unwrap()
+        .and_then(|b| enallagi::queue::field(&b, "gate"));
+    assert_eq!(gate.as_deref(), Some("verified"));
+}
+
+#[test]
 fn a_task_block_carries_model_and_effort() {
     let r = enallagi::fixture::Repo::new();
-    r.write(
-        ".enallagi/TASKS.md",
+    r.queue(
+        ".enallagi",
         "# TASKS\n\n\
          ## [T-001] picked per task\n\
          scope: src/a.ts\n\
@@ -929,7 +979,8 @@ fn a_task_block_carries_model_and_effort() {
     assert_eq!(field("T-001", "model"), "claude-haiku-4-5");
     assert_eq!(field("T-001", "effort"), "low");
     assert_eq!(field("T-001", "scope"), "src/a.ts");
-    assert_eq!(field("T-001", "blockedBy"), "none");
+    // a ticket file writes `none` as an empty `Blocked by:`
+    assert!(matches!(field("T-001", "blockedBy").as_str(), "none" | ""));
     assert_eq!(field("T-002", "model"), "");
     assert_eq!(field("T-002", "effort"), "");
 
@@ -1601,20 +1652,19 @@ fn gate_scope_names_a_widening_with_a_reason() {
 #[test]
 fn tasks_ready_prefers_the_harness_dir_queue() {
     let r = enallagi::fixture::Repo::new();
-    r.write(
-        ".enallagi/TASKS.md",
+    r.queue(
+        ".enallagi",
         "# TASKS\n\n## [T-001] parent\nscope: src/a.ts\nstatus: ready\n",
     );
-    r.write(
-        "lane/.enallagi/TASKS.md",
+    r.queue(
+        "lane/.enallagi",
         "# TASKS\n\n## [T-002] lane\nscope: src/a.ts\nstatus: ready\n",
     );
     let outside = tempfile::TempDir::new().expect("tempdir");
-    std::fs::write(
-        outside.path().join("TASKS.md"),
+    r.queue(
+        &outside.path().to_string_lossy(),
         "# TASKS\n\n## [T-003] outside\nscope: src/a.ts\nstatus: ready\n",
-    )
-    .expect("write");
+    );
 
     let ready = |dir: &std::path::Path| {
         let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))

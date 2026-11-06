@@ -5,7 +5,6 @@ use std::process::{Command, Stdio};
 
 use crate::config;
 use crate::gates::{self, CheckReport};
-use crate::queue;
 use crate::skills;
 
 // this can be bypassed via Bash sed -i or a heredoc: the real authority is the verifier reading the diff
@@ -212,17 +211,15 @@ pub fn one_writer(root: &Path, _input: &str) -> (i32, String) {
         return (0, String::new());
     }
 
-    let text = queue::Queue {
-        path: config::instance_path(root, &cfg.layout.harness_dir, "TASKS.md"),
-    }
-    .read()
-    .unwrap_or_default();
-    let task = queue::parse(&text).ok().and_then(|blocks| {
-        queue::ids_at(&blocks, "review")
-            .into_iter()
-            .next()
-            .or_else(|| queue::ready_unattended(&blocks))
-    });
+    let task = crate::tracker::Tracker::open(root, &cfg.layout.harness_dir)
+        .blocks()
+        .ok()
+        .and_then(|blocks| {
+            crate::tracker::ids_in(&blocks, &["review"])
+                .into_iter()
+                .next()
+                .or_else(|| crate::tracker::takeable(&blocks))
+        });
     let named = task.map(|t| format!(" It is on {t}.")).unwrap_or_default();
     (
         2,
@@ -506,8 +503,8 @@ mod tests {
     #[test]
     fn a_write_from_another_session_is_refused() {
         let r = Repo::new();
-        r.write(
-            "TASKS.md",
+        r.queue(
+            ".enallagi",
             "## [T-001] x\nstatus: review\nblockedBy: none\n",
         );
         r.commit_all("seed");
