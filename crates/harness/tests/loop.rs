@@ -4296,3 +4296,26 @@ fn a_stop_skips_the_audit() {
     );
     assert!(!r.root.join("auditor-ran").exists(), "{digest:#?}");
 }
+
+#[test]
+fn claims_runs_directly_after_verdict() {
+    let repo = Repo::new();
+    repo.write("enallagi.toml", "[check]\ncommand = \"true\"\n");
+    let cfg = enallagi::config::load(&repo.root).expect("load");
+    let verify = cfg
+        .stage
+        .iter()
+        .find(|s| s.name == "verify")
+        .expect("a verify stage");
+    let at = verify
+        .post
+        .iter()
+        .position(|g| g == "verdict")
+        .expect("verdict on verify");
+    assert_eq!(
+        verify.post.get(at + 1).map(String::as_str),
+        Some("claims"),
+        "{:?}",
+        verify.post
+    );
+}
