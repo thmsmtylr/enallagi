@@ -2,6 +2,7 @@
 
 use enallagi::audit;
 use enallagi::config::{self, Config};
+use enallagi::events;
 use enallagi::fixture::Repo;
 use enallagi::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
 use std::fs;
@@ -60,6 +61,11 @@ fn seeded() -> (Repo, Config) {
     ));
     let cfg = config::load(&repo.root).expect("config");
     (repo, cfg)
+}
+
+fn audited(repo: &Repo, cfg: &Config) -> Result<audit::Report, audit::AuditError> {
+    let log = events::Log::open(&repo.root.join(".enallagi"));
+    audit::run(&repo.root, cfg, &mut events::Writer::new(log))
 }
 
 fn answering(repo: &Repo, answer: &str) -> Vec<String> {
@@ -185,7 +191,7 @@ fn six_findings_of_two_classes_are_two_learnings() {
             learning("vacuous test", VACUOUS, &refs(&vacuous))
         ),
     );
-    let report = audit::run(&repo.root, &cfg).expect("audit");
+    let report = audited(&repo, &cfg).expect("audit");
     let classes: Vec<&str> = report.proposed.iter().map(|p| p.class.as_str()).collect();
     assert_eq!(classes, ["lost result", "vacuous test"], "{report:?}");
     let got: Vec<Vec<String>> = report
@@ -304,7 +310,7 @@ fn an_overlapping_learning_merges_into_its_entry() {
             learning("vacuous test", VACUOUS, &refs(&vacuous))
         ),
     );
-    let report = audit::run(&repo.root, &cfg).expect("audit");
+    let report = audited(&repo, &cfg).expect("audit");
     let classes: Vec<&str> = report.proposed.iter().map(|p| p.class.as_str()).collect();
     assert_eq!(classes, ["vacuous test"], "{report:?}");
     assert_eq!(report.merged.len(), 1, "{report:?}");
@@ -334,7 +340,7 @@ fn an_earned_rule_takes_the_instances_of_its_class() {
     );
     fs::write(repo.root.join(rel), text).expect("write");
     answering(&repo, &learning("lost result", LOST, &refs(&lost)));
-    let report = audit::run(&repo.root, &cfg).expect("audit");
+    let report = audited(&repo, &cfg).expect("audit");
     assert!(report.proposed.is_empty(), "{report:?}");
     let written = decisions(&repo);
     let cites: Vec<String> = lost.iter().map(|c| format!("`{c}`")).collect();
@@ -442,7 +448,7 @@ fn one_finding_asks_the_auditor_nothing() {
         "friction: the hook swallowed the exit status\n",
     );
     let before = decisions(&repo);
-    let report = audit::run(&repo.root, &cfg).expect("audit");
+    let report = audited(&repo, &cfg).expect("audit");
     assert!(report.proposed.is_empty(), "{report:?}");
     assert!(prompts(&repo).is_empty(), "{:#?}", prompts(&repo));
     assert_eq!(decisions(&repo), before);
@@ -461,12 +467,9 @@ fn a_second_audit_repeats_no_proposal() {
             learning("vacuous test", VACUOUS, &refs(&vacuous))
         ),
     );
-    assert_eq!(
-        audit::run(&repo.root, &cfg).expect("audit").proposed.len(),
-        2
-    );
+    assert_eq!(audited(&repo, &cfg).expect("audit").proposed.len(), 2);
     let once = decisions(&repo);
-    let again = audit::run(&repo.root, &cfg).expect("audit");
+    let again = audited(&repo, &cfg).expect("audit");
     assert!(again.proposed.is_empty(), "{again:?}");
     assert_eq!(again.merged.len(), 2, "{again:?}");
     assert_eq!(decisions(&repo), once);
@@ -482,7 +485,7 @@ fn the_auditor_prompt_is_not_read_as_an_option() {
     repo.stub_agent(&format!(
         "case \"$1\" in -*) echo \"error: unknown option '$1'\"; exit 1;; esac\ncat <<'ANSWER'\n{answer}\nANSWER\n"
     ));
-    let report = audit::run(&repo.root, &cfg).expect("audit");
+    let report = audited(&repo, &cfg).expect("audit");
     let classes: Vec<&str> = report.proposed.iter().map(|p| p.class.as_str()).collect();
     assert_eq!(classes, ["lost result"], "{report:?}");
 }
@@ -495,7 +498,7 @@ fn a_failed_auditor_writes_nothing() {
     let before = decisions(&repo);
     let answer = learning("lost result", LOST, &refs(&lost));
     repo.stub_agent(&format!("cat <<'ANSWER'\n{answer}\nANSWER\nexit 1\n"));
-    let err = audit::run(&repo.root, &cfg).expect_err("a failed auditor");
+    let err = audited(&repo, &cfg).expect_err("a failed auditor");
     assert!(err.to_string().contains("exited 1"), "{err}");
     assert_eq!(decisions(&repo), before);
 }

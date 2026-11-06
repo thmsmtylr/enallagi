@@ -4108,6 +4108,200 @@ fn a_missing_host_tool_warns_and_the_run_goes_on() {
     assert!(log.contains("stage.start"), "{out}");
 }
 
+const LEARNING: &str = "- [proposed] `vacuous-test`: a test passed with its logic deleted → watch it fail first\n  instances: `SPEC.md:1`, `PROGRESS.md:1`, `TASKS.md:1`\n";
+
+fn decisions(earned: &str, proposed: &str) -> String {
+    format!(
+        "# DECISIONS\n\n## Earned rules\n\n{earned}\n## Rejected findings\n\n## Proposed learnings\n\n{proposed}"
+    )
+}
+
+// the adjudicator's stub replaces DECISIONS.md with `after`, which is how it decides the learning
+fn deciding_learning(after: &str, extra: &str) -> Repo {
+    let r = repo("", "");
+    let adj = adjudicator(&r, "cp src/decided.md DECISIONS.md\n");
+    write_toml(
+        &r,
+        &base_toml(&format!("{}{extra}", role_command("adjudicator", &adj))),
+    );
+    r.write("TASKS.md", DONE_TASK);
+    r.write("DECISIONS.md", &decisions("", LEARNING));
+    r.write("src/decided.md", after);
+    r.commit_all("a proposed learning");
+    r
+}
+
+#[test]
+fn a_promoted_learning_is_named_in_the_digest() {
+    let promoted = "- [2026-09-29] `vacuous-test`: a test passed with its logic deleted → watch it fail first (`enallagi eval --gate vacuous-test`: ACCEPT)\n";
+    let r = deciding_learning(&decisions(promoted, ""), "");
+    let (digest, events) = go(&r, &opts(1));
+    assert!(
+        stages_started(&events).contains(&"adjudicate".to_string()),
+        "{events:#?}"
+    );
+    let text = pipeline::digest_text(&digest);
+    assert!(
+        text.contains("learnings: 0 proposed, 1 promoted, 0 killed, 0 expired"),
+        "{text}"
+    );
+    assert!(text.contains("promoted `vacuous-test`"), "{text}");
+}
+
+#[test]
+fn a_learning_killed_on_a_red_gate_is_named() {
+    let killed = format!(
+        "{LEARNING}  killed: 2026-09-29 `enallagi eval --gate vacuous-test`: REFUSE, the eval passes without the rule\n"
+    );
+    let r = deciding_learning(&decisions("", &killed), "");
+    let (digest, _) = go(&r, &opts(1));
+    let text = pipeline::digest_text(&digest);
+    assert!(
+        text.contains("learnings: 0 proposed, 0 promoted, 1 killed, 0 expired"),
+        "{text}"
+    );
+    assert!(text.contains("killed `vacuous-test`"), "{text}");
+}
+
+#[test]
+fn a_learning_past_its_rounds_expires() {
+    let r = deciding_learning(&decisions("", LEARNING), "\n[queue]\nproposed_rounds = 1\n");
+    let archived = format!(
+        "{}\n## Expired findings\n\n## [T-009] expired earlier\nstatus: proposed\n",
+        decisions("", LEARNING)
+    );
+    r.write("DECISIONS.md", &archived);
+    r.write("src/decided.md", &archived);
+    r.write("src/later.md", "later\n");
+    r.commit_all("a later round");
+    let text = pipeline::digest_text(&go(&r, &opts(1)).0);
+    assert!(
+        text.contains("learnings: 0 proposed, 0 promoted, 0 killed, 1 expired"),
+        "{text}"
+    );
+    assert!(text.contains("expired `vacuous-test`"), "{text}");
+    let after = std::fs::read_to_string(r.root.join("DECISIONS.md")).expect("DECISIONS.md");
+    assert!(!after.contains("- [proposed] `vacuous-test`"), "{after}");
+    let expired = after
+        .split("## Expired findings")
+        .nth(1)
+        .unwrap_or_default();
+    assert!(expired.contains("`vacuous-test` expired after"), "{after}");
+    let task = expired
+        .find("## [T-009]")
+        .expect("the archived block stays");
+    assert!(
+        expired[..task].contains("`vacuous-test` expired after"),
+        "{after}"
+    );
+}
+
+#[test]
+fn the_audit_runs_once_after_the_last_iteration() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    // `[agent]` answers every role without its own command, and only the auditor's prompt carries its role
+    script(
+        &r,
+        "src/fakeagent.sh",
+        &format!(
+            "case \"$1\" in *'BEGIN ENALLAGI LEARNING'*)\n\
+             echo ran >>auditor-ran\n\
+             printf 'BEGIN ENALLAGI LEARNING\\nclass: `slow-check`\\nthe check ran past its timeout → run it alone\\ninstances: `PROGRESS.md:2`, `PROGRESS.md:3`\\nEND ENALLAGI LEARNING\\n' ;;\n\
+             esac\n{QUIET}"
+        ),
+    );
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
+    r.write("TASKS.md", TASKS);
+    r.write(
+        "PROGRESS.md",
+        "# progress\nfriction: the check ran past its timeout\nfriction: the check timed out again\n",
+    );
+    r.commit_all("stubs");
+
+    let (digest, _) = go(&r, &opts(2));
+    assert_eq!(digest.iterations, 2);
+    let ran = std::fs::read_to_string(r.root.join("auditor-ran")).unwrap_or_default();
+    assert_eq!(ran.lines().count(), 1, "{ran}");
+    let text = pipeline::digest_text(&digest);
+    assert!(
+        text.contains("learnings: 1 proposed, 0 promoted, 0 killed, 0 expired"),
+        "{text}"
+    );
+    assert!(text.contains("proposed `slow-check`"), "{text}");
+    // every stub prints $0.5, the auditor's included
+    assert_eq!(
+        digest.cost,
+        0.5 * (digest.stages_run + 1) as f64,
+        "{digest:#?}"
+    );
+    assert!(digest.role_seconds.contains_key("auditor"), "{digest:#?}");
+    let events = enallagi::events::Log::open(&r.root.join(".enallagi"))
+        .read()
+        .expect("events.jsonl");
+    let report = enallagi::events::prefix_report(&events, true);
+    assert!(report.contains(r#""role":"auditor""#), "{report}");
+}
+
+#[test]
+fn a_failed_audit_still_counts_its_spend() {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    script(
+        &r,
+        "src/fakeagent.sh",
+        &format!("{QUIET}case \"$1\" in *'BEGIN ENALLAGI LEARNING'*) exit 1 ;; esac\n"),
+    );
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
+    r.write("TASKS.md", TASKS);
+    r.write(
+        "PROGRESS.md",
+        "# progress\nfriction: the check ran past its timeout\nfriction: the check timed out again\n",
+    );
+    r.commit_all("stubs");
+
+    let (digest, _) = go(&r, &opts(1));
+    assert!(
+        digest.warnings.iter().any(|w| w.contains("exited 1")),
+        "{digest:#?}"
+    );
+    assert_eq!(
+        digest.cost,
+        0.5 * (digest.stages_run + 1) as f64,
+        "{digest:#?}"
+    );
+    assert!(digest.role_seconds.contains_key("auditor"), "{digest:#?}");
+}
+
+#[test]
+fn a_stop_skips_the_audit() {
+    let r = repo("", "");
+    script(
+        &r,
+        "src/fakeagent.sh",
+        &format!(
+            "case \"$1\" in *'BEGIN ENALLAGI LEARNING'*) echo ran >>auditor-ran ;; esac\n{QUIET}"
+        ),
+    );
+    write_toml(&r, &base_toml(""));
+    r.write("TASKS.md", TASKS);
+    r.write(
+        "PROGRESS.md",
+        "# progress\nfriction: the check ran past its timeout\nfriction: the check timed out again\n",
+    );
+    r.commit_all("stubs");
+    r.write("STOP", "");
+
+    let (digest, _) = go(&r, &opts(1));
+    assert!(
+        digest.halts.iter().any(|h| h.contains("STOP")),
+        "{digest:#?}"
+    );
+    assert!(!r.root.join("auditor-ran").exists(), "{digest:#?}");
+}
+
 #[test]
 fn claims_runs_directly_after_verdict() {
     let repo = Repo::new();
