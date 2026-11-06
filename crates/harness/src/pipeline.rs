@@ -432,6 +432,7 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         needs_spec_at_start: Vec::new(),
         proposed_at_start: Vec::new(),
         learnings_at_start: Vec::new(),
+        decisions_at_start: String::new(),
         dry_rounds: 0,
         dry_pipeline: None,
         spent: Vec::new(),
@@ -466,6 +467,7 @@ struct Loop<'a> {
     needs_spec_at_start: Vec<String>,
     proposed_at_start: Vec<String>,
     learnings_at_start: Vec<String>,
+    decisions_at_start: String,
     dry_rounds: u32,
     dry_pipeline: Option<String>,
     // pipelines whose end_after_dry_rounds this run has spent; `choose` passes over them until a
@@ -496,6 +498,8 @@ impl<'a> Loop<'a> {
     fn go(&mut self) -> anyhow::Result<Digest> {
         self.needs_spec_at_start = self.ids_at("needs-spec");
         self.learnings_at_start = waiting_classes(self.root, self.cfg);
+        self.decisions_at_start =
+            std::fs::read_to_string(self.file("DECISIONS.md")).unwrap_or_default();
         self.emit(Kind::RunStart {
             config_sha256: config_sha256(self.root),
             pipeline: None,
@@ -555,7 +559,12 @@ impl<'a> Loop<'a> {
 
     // once per run and never between stages: the audit reads what every iteration recorded
     fn learnings(&mut self) {
-        let (promoted, killed) = audit::decided(self.root, self.cfg, &self.learnings_at_start);
+        let (promoted, killed) = audit::decided(
+            self.root,
+            self.cfg,
+            &self.learnings_at_start,
+            &self.decisions_at_start,
+        );
         self.digest.learnings.promoted = promoted;
         self.digest.learnings.killed = killed;
         let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();

@@ -627,8 +627,13 @@ pub fn waiting(root: &Path, cfg: &Config) -> Result<Vec<Waiting>, AuditError> {
         .collect())
 }
 
-/// Of the classes that were waiting, those since moved under `## Earned rules`, and those since killed.
-pub fn decided(root: &Path, cfg: &Config, before: &[String]) -> (Vec<String>, Vec<String>) {
+/// Of the classes that were waiting, those with an `## Earned rules` entry `was` lacked, and those with a kill it lacked.
+pub fn decided(
+    root: &Path,
+    cfg: &Config,
+    before: &[String],
+    was: &str,
+) -> (Vec<String>, Vec<String>) {
     let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
     let text = read(root, &rel).unwrap_or_default();
     let still: Vec<String> = waiting(root, cfg)
@@ -636,19 +641,25 @@ pub fn decided(root: &Path, cfg: &Config, before: &[String]) -> (Vec<String>, Ve
         .into_iter()
         .map(|w| w.class)
         .collect();
-    let earned: Vec<String> = section(&text, EARNED)
-        .into_iter()
-        .map(|(_, l)| l.to_string())
-        .collect();
+    // a revision can reuse its rule's class, so an earned entry or a kill counts only when it is new
+    let earned = |text: &str, named: &str| {
+        entries(&section(text, EARNED))
+            .iter()
+            .filter(|(_, e)| e.lines().next().is_some_and(|l| l.contains(named)))
+            .count()
+    };
+    let kills = |text: &str, class: &String| {
+        entries(&section(text, PROPOSED))
+            .iter()
+            .filter(|(_, e)| class_of(e).as_ref() == Some(class) && e.contains("killed:"))
+            .count()
+    };
     let (mut promoted, mut killed) = (Vec::new(), Vec::new());
     for class in before.iter().filter(|c| !still.contains(c)) {
         let named = format!("`{class}`");
-        if earned.iter().any(|l| l.contains(&named)) {
+        if earned(&text, &named) > earned(was, &named) {
             promoted.push(class.clone());
-        } else if entries(&section(&text, PROPOSED))
-            .iter()
-            .any(|(_, e)| class_of(e).as_ref() == Some(class) && e.contains("killed:"))
-        {
+        } else if kills(&text, class) > kills(was, class) {
             killed.push(class.clone());
         }
     }
