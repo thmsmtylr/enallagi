@@ -6,6 +6,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 ## Unreleased
 
 - the claims gate re-runs the commands a verdict's `ran:` lines name
+- text probes skip the state repository's files
 - a release is cut by hand: `bump.yml` is removed, and `release.yml` runs only on a pushed `v*` tag
 
 ## v0.3.0-beta.10 (2026-10-10)
