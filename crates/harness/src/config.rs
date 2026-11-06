@@ -20,6 +20,20 @@ pub const LEGACY_DIR_TOKEN: &str = "__HARNESS_DIR__";
 pub const UNSET_CHECK: &str = "check.command is unset";
 pub const UNSET_FORCE: &str = "check.force is unset";
 
+pub fn cache_root() -> PathBuf {
+    cache_root_in(
+        std::env::var_os("XDG_CACHE_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+}
+
+fn cache_root_in(xdg: Option<&std::ffi::OsStr>, home: Option<&std::ffi::OsStr>) -> PathBuf {
+    match xdg {
+        Some(x) => PathBuf::from(x).join("enallagi"),
+        None => PathBuf::from(home.unwrap_or_default()).join(".cache/enallagi"),
+    }
+}
+
 pub const ROLE_NAMES: &[&str] = &[
     "scout",
     "adjudicator",
@@ -1113,6 +1127,17 @@ fn toml_string(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_root_is_enallagi() {
+        let xdg = Some(std::ffi::OsStr::new("/x"));
+        let home = Some(std::ffi::OsStr::new("/h"));
+        assert_eq!(cache_root_in(xdg, home), PathBuf::from("/x/enallagi"));
+        assert_eq!(
+            cache_root_in(None, home),
+            PathBuf::from("/h/.cache/enallagi")
+        );
+    }
 
     // the defaults carry no check, and validate refuses one
     fn checked() -> Config {

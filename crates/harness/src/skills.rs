@@ -168,7 +168,7 @@ impl Default for ResolveOpts {
     fn default() -> Self {
         ResolveOpts {
             frozen: frozen_from_env(std::env::var_os("CI").as_deref()),
-            cache_dir: default_cache_dir(),
+            cache_dir: crate::config::cache_root(),
         }
     }
 }
@@ -176,14 +176,6 @@ impl Default for ResolveOpts {
 // CI freezes skills like --frozen: an unattended run must fail on a stale lock, not fetch new instructions
 pub(crate) fn frozen_from_env(ci: Option<&OsStr>) -> bool {
     ci.is_some()
-}
-
-fn default_cache_dir() -> PathBuf {
-    if let Some(x) = std::env::var_os("XDG_CACHE_HOME") {
-        return PathBuf::from(x).join("harness");
-    }
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".cache").join("harness")
 }
 
 #[derive(Debug, Clone)]
