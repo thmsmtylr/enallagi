@@ -1,6 +1,6 @@
 //! `enallagi audit` -- prints each learning it proposed, each it merged into a standing entry, and each it refused with the reason.
 
-use crate::{audit, config, git};
+use crate::{audit, config, events, git};
 
 pub fn run() -> anyhow::Result<i32> {
     let cwd = std::env::current_dir()?;
@@ -9,7 +9,8 @@ pub fn run() -> anyhow::Result<i32> {
         Err(_) => cwd,
     };
     let cfg = config::load(&root)?;
-    let report = match audit::run(&root, &cfg) {
+    let log = events::Log::open(&root.join(&cfg.layout.harness_dir));
+    let report = match audit::run(&root, &cfg, &mut events::Writer::new(log)) {
         Ok(report) => report,
         Err(err) => {
             eprintln!("{err}");

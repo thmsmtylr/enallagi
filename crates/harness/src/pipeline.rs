@@ -566,7 +566,7 @@ impl<'a> Loop<'a> {
         let stopped = agent::stop_signal().is_some()
             || self.file("STOP").is_file()
             || self.over_budget().is_some();
-        let audited = (!stopped).then(|| audit::run(self.root, self.cfg));
+        let audited = (!stopped).then(|| audit::run(self.root, self.cfg, &mut self.writer));
         let spent = match &audited {
             Some(Ok(report)) => report.spent,
             Some(Err(err)) => err.spent(),
