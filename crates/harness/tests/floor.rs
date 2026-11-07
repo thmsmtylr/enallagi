@@ -790,6 +790,47 @@ fn no_identifier_runs_past_fifty_characters() {
     assert!(long.is_empty(), "{} over {CAP}: {long:#?}", long.len());
 }
 
+// shrink-only: an untouched legacy name leaves the list when it is renamed
+#[test]
+fn fn_names_terse() {
+    let prose = |name: &str| {
+        let words: Vec<&str> = name.split('_').filter(|w| !w.is_empty()).collect();
+        words.len() > 4 || words.iter().any(|w| matches!(*w, "a" | "an" | "the"))
+    };
+    assert!(
+        prose("one_two_three_four_five") && prose("an_x"),
+        "the scan cannot report"
+    );
+    assert!(
+        !prose("timeout_kills_group"),
+        "the scan reports a terse name"
+    );
+
+    let decl = re(r"\bfn\s+([a-z_][a-z0-9_]*)");
+    let list = read(&repo_root().join("crates/harness/tests/fixtures/prose-names.txt"));
+    let allowed: std::collections::BTreeSet<&str> = list.lines().collect();
+    let crates = repo_root().join("crates");
+    let (mut seen, mut bad) = (std::collections::BTreeSet::new(), Vec::new());
+    for rel in walk(&crates) {
+        if rel.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        for c in decl.captures_iter(&read(&crates.join(&rel))) {
+            let name = c[1].to_string();
+            if prose(&name) && !allowed.contains(name.as_str()) {
+                bad.push(format!("{}: {name}", rel.display()));
+            }
+            seen.insert(name);
+        }
+    }
+    let gone: Vec<&&str> = allowed.iter().filter(|n| !seen.contains(**n)).collect();
+    assert!(bad.is_empty(), "{} prose names: {bad:#?}", bad.len());
+    assert!(
+        gone.is_empty(),
+        "allowlisted names that no longer exist: {gone:?}"
+    );
+}
+
 #[test]
 fn no_identifier_names_a_task_or_a_step() {
     let task = re(r"(?i)(?:^|_)t_?[0-9]{3}(?:_|$)");
