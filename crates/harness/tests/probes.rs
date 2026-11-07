@@ -2,7 +2,7 @@
 
 use enallagi::block::{self, Block};
 use enallagi::config::{self, Config};
-use enallagi::fixture::Repo;
+use enallagi::fixture::{git, Repo};
 use enallagi::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
 use enallagi::tracker::Tracker;
 use std::fs;
@@ -113,13 +113,6 @@ fn queue(repo: &Repo, text: &str) {
     repo.queue(&config::harness_dir(&repo.root), &format!("{held}\n{text}"));
 }
 
-fn spec(repo: &Repo) -> String {
-    format!(
-        ".enallagi/specs/{}/spec.md",
-        enallagi::tracker::repo_slug(&repo.root)
-    )
-}
-
 // the file a finding about `id` cites: the ticket's own file
 fn cited(repo: &Repo, id: &str) -> String {
     let path = tracker(repo).path_of(id).expect("the ticket's file");
@@ -214,7 +207,7 @@ fn untested_reads_specs() {
             .iter()
             .map(|f| f.path.as_str())
             .collect();
-        assert_eq!(cites, [spec(&repo).as_str(), second], "{probe}");
+        assert_eq!(cites, [repo.spec().as_str(), second], "{probe}");
     }
 }
 
@@ -241,7 +234,7 @@ fn an_unclaimed_row_is_uncovered() {
 const COMMA_ROWS: &str = "# SPEC\n\n### Exit criteria\n\n| Behaviour | Test |\n| --- | --- |\n| a | `tests/x.test.ts::the frames FRAMES held, in order` |\n| b | `tests/x.test.ts::the packs a core pack holds, named` |\n\n## Out of Scope\n";
 
 fn claiming(repo: &Repo, rows: &str) {
-    repo.write(&spec(repo), COMMA_ROWS);
+    repo.write(&repo.spec(), COMMA_ROWS);
     queue(repo, &format!("\n## [T-002] the block that claims them\nscope: src/tests/x.test.ts\nblockedBy: none\nstatus: ready-for-agent\nrows: {rows}\n"),
     );
 }
@@ -285,7 +278,7 @@ const PIECE_ROWS: &str = "# SPEC\n\n### Exit criteria\n\n| Behaviour | Test |\n|
 
 fn claiming_pieces(repo: &Repo, rows: &str) {
     claiming(repo, rows);
-    repo.write(&spec(repo), PIECE_ROWS);
+    repo.write(&repo.spec(), PIECE_ROWS);
 }
 
 #[test]
@@ -1100,10 +1093,10 @@ fn slashed_row_source_root() {
         "[layout]\nsource_root = \"crate\"\ntest_file_suffix_re = '\\.rs'\ntest_decl_patterns = [\"fn {name}(\"]\n",
     );
     repo.write(
-        &spec(&repo),
+        &repo.spec(),
         "# SPEC\n\n### Exit criteria\n\n| Criterion | Test |\n| --- | --- |\n| c | `tests/x.rs::t` |\n\n## Out of Scope\n",
     );
-    let finding = format!("FINDING spec-untested {}:7 ", spec(&repo));
+    let finding = format!("FINDING spec-untested {}:7 ", repo.spec());
     let untested = |results: &[(String, ProbeResult)]| {
         render(results)
             .lines()
@@ -1809,10 +1802,6 @@ fn drift(repo: &Repo, cfg: &Config) -> ProbeResult {
         .pop()
         .expect("one result")
         .1
-}
-
-fn git(root: &std::path::Path, args: &[&str]) -> String {
-    enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
 }
 
 // a bare clone on disk, so the probe reads real refs and makes no network call

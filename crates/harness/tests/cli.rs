@@ -2756,3 +2756,34 @@ fn twin_merge_retargets_stacked() {
     let again = merge(&one);
     assert!(String::from_utf8_lossy(&again.stderr).contains("already merged"));
 }
+
+// from a subdirectory each command reads the root's instance, never a fresh one under the cwd
+#[test]
+fn subdir_finds_root() {
+    let r = enallagi::fixture::Repo::new();
+    enallagi::fixture::queue(
+        &r.root,
+        ".enallagi",
+        "## [T-001] a task\nstatus: ready-for-agent\n",
+    );
+    r.write(
+        ".enallagi/events.jsonl",
+        &(r#"{"ts":"2026-09-18T00:00:00Z","run":"r","iter":0,"seq":1,"kind":"run.start","config_sha256":"a","pipeline":null,"sandbox":"off"}"#.to_string() + "\n"),
+    );
+    r.write("src/lib.rs", "");
+    for (args, want) in [
+        (&["tasks", "block", "T-001"][..], "a task"),
+        (&["events"][..], "sandbox=off"),
+    ] {
+        let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+            .args(args)
+            .current_dir(r.root.join("src"))
+            .output()
+            .expect("run enallagi");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && text.contains(want),
+            "{args:?}: {out:?}"
+        );
+    }
+}

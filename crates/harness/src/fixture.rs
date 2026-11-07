@@ -115,6 +115,25 @@ fn stub_cache() -> &'static Path {
 }
 
 /// `Repo::queue` for a fixture that builds its own repository.
+/// `git args` in `root`, panicking on failure.
+pub fn git(root: &Path, args: &[&str]) -> String {
+    crate::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+}
+
+/// Writes an executable bash script under `set -u`; returns its path.
+pub fn exec(path: &Path, body: &str) -> String {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("mkdir");
+    }
+    fs::write(path, format!("#!/usr/bin/env bash\nset -u\n{body}")).expect("write script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    path.display().to_string()
+}
+
 pub fn queue(root: &Path, dir: &str, text: &str) {
     let t = crate::tracker::Tracker::open(root, dir);
     let spec = crate::tracker::repo_slug(root);
@@ -224,15 +243,16 @@ impl Repo {
         crate::init::install(&self.root, &crate::init::InitOpts::default()).expect("install");
     }
 
+    /// The seeded spec, relative to the root.
+    pub fn spec(&self) -> String {
+        format!(
+            ".enallagi/specs/{}/spec.md",
+            crate::tracker::repo_slug(&self.root)
+        )
+    }
+
     fn write_script(&self, rel: &str, script_body: &str) {
-        let content = format!("#!/usr/bin/env bash\n{script_body}");
-        self.write(rel, &content);
-        let path = self.root.join(rel);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod script");
-        }
+        exec(&self.root.join(rel), script_body);
     }
 }
 

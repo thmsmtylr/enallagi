@@ -1,6 +1,6 @@
 //! `enallagi eject`: a repository the harness was brought into, ran in and left looks as it did before.
 
-use enallagi::fixture::Repo;
+use enallagi::fixture::{exec, git, Repo};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -39,10 +39,6 @@ fn harness(root: &Path, args: &[&str]) -> (i32, String) {
     (out.status.code().unwrap_or(-1), text)
 }
 
-fn git(root: &Path, args: &[&str]) -> String {
-    enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
-}
-
 fn exclude(root: &Path) -> String {
     let path = git(root, &["rev-parse", "--git-path", "info/exclude"]);
     std::fs::read_to_string(root.join(path)).unwrap_or_default()
@@ -54,16 +50,6 @@ fn snapshot(root: &Path) -> (String, String, String) {
         git(root, &["ls-files", "-s"]),
         exclude(root),
     )
-}
-
-fn exec(path: &Path, body: &str) -> String {
-    std::fs::write(path, format!("#!/usr/bin/env bash\nset -u\n{body}")).expect("write script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
-    path.display().to_string()
 }
 
 // the stubs and skills live outside the repository, so nothing but init and the run touches it

@@ -10,7 +10,7 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let root = std::env::current_dir()?;
+    let root = super::root()?;
     let dir = config::harness_dir(&root);
     let t = Tracker::open(&root, &dir);
     let decisions = std::fs::read_to_string(config::instance_path(&root, &dir, "DECISIONS.md"))

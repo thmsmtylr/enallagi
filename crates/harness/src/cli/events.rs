@@ -1,7 +1,5 @@
 //! `enallagi events` -- replays the log through the filters, keeping a matched stage's surrounding events and not the matching lines alone.
 
-use std::path::Path;
-
 use crate::events::{prefix_report, render_line, stage_of, task_of, Event, Kind, Log};
 
 pub struct Args {
@@ -34,9 +32,8 @@ pub(crate) fn keep(e: &Event, opts: &Filter) -> bool {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let log = Log::open(Path::new(
-        &crate::config::load(Path::new("."))?.layout.harness_dir,
-    ));
+    let root = super::root()?;
+    let log = Log::open(&root.join(crate::config::load(&root)?.layout.harness_dir));
     let (pairs, _skipped) = match log.read_lines() {
         Ok(pairs) => pairs,
         Err(err) => {

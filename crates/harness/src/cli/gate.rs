@@ -18,7 +18,7 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let root = std::env::current_dir()?;
+    let root = super::root()?;
     let cfg = config::load(&root)?;
     let mut events = Writer::new(Log::open(&root.join(&cfg.layout.harness_dir)));
     let mut warnings = Vec::new();

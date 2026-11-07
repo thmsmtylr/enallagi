@@ -1,7 +1,7 @@
 //! Real commands under the host's real sandbox, through `Sandbox::wrap` (ADR 0004).
 
 use enallagi::config::{Config, SandboxMode};
-use enallagi::fixture::Repo;
+use enallagi::fixture::{git, Repo};
 use enallagi::sandbox::Sandbox;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -50,7 +50,8 @@ fn native(ports: &[u16]) -> Config {
             std::env::set_var(var, "planted-token");
         }
     });
-    let mut cfg = Config::default();
+    // the shipped defaults, `[respond] token_env` among them
+    let mut cfg: Config = toml::from_str(enallagi::config::DEFAULT_TOML).expect("defaults");
     cfg.layout.harness_dir = ".enallagi".into();
     cfg.sandbox.mode = SandboxMode::Native;
     cfg.sandbox.ports = ports.to_vec();
@@ -70,10 +71,6 @@ fn text(out: &Output) -> String {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     )
-}
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    enallagi::git::git(dir, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
 }
 
 // answers one fixed body to every connection, so a reachable port prints `hi`

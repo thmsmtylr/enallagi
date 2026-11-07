@@ -9,7 +9,7 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let root = std::env::current_dir()?;
+    let root = super::root()?;
     let opts = PrOpts {
         push: args.push,
         policy_read: args.policy_read,

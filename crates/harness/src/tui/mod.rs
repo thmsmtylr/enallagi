@@ -8,7 +8,7 @@ use std::panic::PanicHookInfo;
 use std::path::Path;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event as CEvent, KeyCode, KeyEvent,
@@ -45,7 +45,10 @@ pub struct Lane {
 }
 
 pub struct Model {
+    // every event but agent output, which is parsed once into `feed`
     pub events: Vec<Event>,
+    // (run, line): each stage and gate event, as `enallagi events` prints it, and each tool call
+    pub feed: Vec<(String, String)>,
     pub queue: Vec<Block>,
     pub loop_running: bool,
     pub budget_usd: Option<f64>,
@@ -72,6 +75,7 @@ impl Model {
     pub fn new() -> Model {
         Model {
             events: Vec::new(),
+            feed: Vec::new(),
             queue: Vec::new(),
             loop_running: false,
             budget_usd: std::env::var("BUDGET_USD")
@@ -126,8 +130,18 @@ impl Model {
                         lane.output.remove(0);
                     }
                 }
+                let calls = stream::tool_calls(chunk).into_iter();
+                self.feed.extend(calls.map(|l| (e.run.clone(), l)));
+                return;
             }
             _ => {}
+        }
+        if matches!(
+            e.kind,
+            Kind::StageStart { .. } | Kind::StageEnd { .. } | Kind::Gate { .. }
+        ) {
+            self.feed
+                .push((e.run.clone(), crate::events::render_line(e)));
         }
         self.events.push(e.clone());
     }
@@ -141,8 +155,12 @@ impl Model {
 
     // the focused lane's events, and those of runs with no lane, such as the launcher's
     pub fn shown(&self, e: &Event) -> bool {
+        self.shows(&e.run)
+    }
+
+    pub fn shows(&self, run: &str) -> bool {
         match self.focused() {
-            Some(lane) => e.run == lane.run || self.lanes.iter().all(|l| l.run != e.run),
+            Some(lane) => run == lane.run || self.lanes.iter().all(|l| l.run != run),
             None => true,
         }
     }
@@ -343,7 +361,7 @@ fn run_live_loop<B: Backend>(
     stop: &Path,
 ) -> anyhow::Result<()> {
     let mut model = Model::new();
-    model.queue = read_queue(tracker);
+    let mut read_at = None;
     let mut stop_written = false;
     let mut leave = false;
     loop {
@@ -358,11 +376,9 @@ fn run_live_loop<B: Backend>(
                     }
                 }
             }
-            model.queue = read_queue(tracker);
-            model.claims = tracker.0.parent().map(read_claims).unwrap_or_default();
+            refresh(&mut model, tracker, &mut read_at);
         }
-        if event::poll(Duration::from_millis(500))? {
-            let read = event::read()?;
+        if let Some(read) = next_event()? {
             if let CEvent::Mouse(mouse) = read {
                 model.handle_mouse(mouse);
             }
@@ -411,7 +427,7 @@ fn run_attached_loop<B: Backend>(
     pid_path: &Path,
 ) -> anyhow::Result<()> {
     let mut model = Model::new();
-    model.queue = read_queue(tracker);
+    let mut read_at = None;
     let mut last_seq = 0u64;
     loop {
         if let Ok(events) = log.read_since(last_seq) {
@@ -420,14 +436,12 @@ fn run_attached_loop<B: Backend>(
                 model.apply(e);
             }
         }
-        model.queue = read_queue(tracker);
-        model.claims = tracker.0.parent().map(read_claims).unwrap_or_default();
+        refresh(&mut model, tracker, &mut read_at);
         model.loop_running = loop_running(pid_path);
         terminal
             .draw(|f| view(&model, f))
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        if event::poll(Duration::from_millis(500))? {
-            let read = event::read()?;
+        if let Some(read) = next_event()? {
             if let CEvent::Mouse(mouse) = read {
                 model.handle_mouse(mouse);
             }
@@ -440,6 +454,30 @@ fn run_attached_loop<B: Backend>(
         }
     }
     Ok(())
+}
+
+const TICK: Duration = Duration::from_millis(500);
+
+// queue and claims cost git subprocesses, so a burst of keys or wheel events reads them once a tick
+fn refresh(model: &mut Model, tracker: &Tracker, read_at: &mut Option<Instant>) {
+    if read_at.is_some_and(|t| t.elapsed() < TICK) {
+        return;
+    }
+    model.queue = read_queue(tracker);
+    model.claims = tracker.0.parent().map(read_claims).unwrap_or_default();
+    *read_at = Some(Instant::now());
+}
+
+// mouse capture reports every move; a move neither wakes the loop nor redraws
+fn next_event() -> std::io::Result<Option<CEvent>> {
+    let end = Instant::now() + TICK;
+    while event::poll(end.saturating_duration_since(Instant::now()))? {
+        match event::read()? {
+            CEvent::Mouse(m) if m.kind == MouseEventKind::Moved => continue,
+            other => return Ok(Some(other)),
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -756,6 +794,37 @@ mod tests {
         let raw = draw(&model);
         assert!(raw.contains(r#"{"type":"other","n":1}"#), "{raw}");
         assert!(!raw.contains("stage.start"), "{raw}");
+    }
+
+    // each wake re-read the queue and spawned git for claims
+    #[test]
+    fn refresh_once_tick() {
+        let r = crate::fixture::Repo::new();
+        let one = "## [T-001] a\nstatus: ready-for-agent\n";
+        crate::fixture::queue(&r.root, ".enallagi", one);
+        let tracker = Tracker::open(&r.root, ".enallagi");
+        let (mut model, mut read_at) = (Model::new(), None);
+        refresh(&mut model, &tracker, &mut read_at);
+        let two = format!("{one}\n## [T-002] b\nstatus: ready-for-agent\n");
+        crate::fixture::queue(&r.root, ".enallagi", &two);
+        refresh(&mut model, &tracker, &mut read_at);
+        assert_eq!(model.queue.len(), 1);
+    }
+
+    // a long run's chunks, re-parsed on every draw, stalled the feed
+    #[test]
+    fn output_parsed_once() {
+        let mut model = with_tool_calls(1);
+        let kept = model.events.len();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut w = Writer::new(EventLog::open(dir.path()));
+        w.run = model.events[0].run.clone();
+        model.apply(&w.emit(Kind::StageOutput {
+            stage: "verify".into(),
+            chunk: r#"{"type":"other","n":1}"#.into(),
+        }));
+        assert_eq!(model.events.len(), kept);
+        assert!(draw(&model).contains("tool  Tool00"));
     }
 
     #[test]

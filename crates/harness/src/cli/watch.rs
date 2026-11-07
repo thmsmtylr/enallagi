@@ -3,9 +3,9 @@
 use std::path::{Path, PathBuf};
 
 pub fn run() -> anyhow::Result<i32> {
-    let root = Path::new(".");
-    let dir = crate::config::load(root)?.layout.harness_dir;
-    let live = live_root(root, &dir);
+    let root = super::root()?;
+    let dir = crate::config::load(&root)?.layout.harness_dir;
+    let live = live_root(&root, &dir);
     let tracker = crate::tracker::Tracker::open(&live, &dir);
     crate::tui::run_attached(&live.join(&dir), &tracker)?;
     Ok(0)

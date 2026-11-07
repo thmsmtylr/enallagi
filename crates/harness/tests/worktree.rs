@@ -1,21 +1,7 @@
 //! `enallagi worktree`: the lane it creates is named on stderr before the lane's first stage runs.
 
-use enallagi::fixture::Repo;
+use enallagi::fixture::{exec, git, Repo};
 use std::path::Path;
-
-fn git(root: &Path, args: &[&str]) -> String {
-    enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
-}
-
-fn exec(path: &Path, body: &str) -> String {
-    std::fs::write(path, format!("#!/usr/bin/env bash\nset -u\n{body}")).expect("write script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
-    path.display().to_string()
-}
 
 // the stub agent and the stub skills live outside the repository, so the lane's run makes no network call
 fn stub_config(tools: &Path) -> String {

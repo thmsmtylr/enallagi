@@ -1,5 +1,6 @@
 //! `enallagi pr`: a landed task becomes a branch off the upstream default branch holding only its own product change.
 
+use enallagi::fixture::{exec, git};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,24 +13,10 @@ struct Fixture {
     tools: PathBuf,
 }
 
-fn git(root: &Path, args: &[&str]) -> String {
-    enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
-}
-
 fn write(root: &Path, rel: &str, text: &str) {
     let path = root.join(rel);
     fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
     fs::write(path, text).expect("write");
-}
-
-fn exec(path: &Path, body: &str) -> String {
-    fs::write(path, format!("#!/usr/bin/env bash\n{body}")).expect("write script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
-    path.display().to_string()
 }
 
 fn commit(root: &Path, rel: &str, text: &str, msg: &str) -> String {

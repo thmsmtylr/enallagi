@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
 
 use super::{stream, Model, Pane};
-use crate::events::{self, Kind};
+use crate::events::Kind;
 use crate::{block, tracker};
 
 pub fn view(model: &Model, frame: &mut Frame) {
@@ -243,19 +243,12 @@ fn window<'a>(model: &Model, pane: Pane, lines: Vec<Line<'a>>, area: Rect) -> Ve
     lines.into_iter().skip(start).take(end - start).collect()
 }
 
-// one line per stage and gate event, as `enallagi events` prints it, and one per agent tool call
 fn feed(model: &Model) -> Vec<String> {
     model
-        .events
+        .feed
         .iter()
-        .filter(|e| model.shown(e))
-        .flat_map(|e| match &e.kind {
-            Kind::StageStart { .. } | Kind::StageEnd { .. } | Kind::Gate { .. } => {
-                vec![events::render_line(e)]
-            }
-            Kind::StageOutput { chunk, .. } => stream::tool_calls(chunk),
-            _ => Vec::new(),
-        })
+        .filter(|(run, _)| model.shows(run))
+        .map(|(_, line)| line.clone())
         .collect()
 }
 

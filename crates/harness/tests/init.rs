@@ -22,13 +22,6 @@ fn adapter(name: &str) -> InitOpts {
     }
 }
 
-fn spec(repo: &Repo) -> String {
-    format!(
-        ".enallagi/specs/{}/spec.md",
-        enallagi::tracker::repo_slug(&repo.root)
-    )
-}
-
 fn read(repo: &Repo, rel: &str) -> String {
     fs::read_to_string(repo.root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
 }
@@ -368,22 +361,22 @@ fn init_ignores_holdouts() {
 fn content_is_kept() {
     let repo = Repo::new();
     repo.write(".enallagi/PROGRESS.md", "# my own progress\n");
-    repo.write(&spec(&repo), "# my own spec\n");
+    repo.write(&repo.spec(), "# my own spec\n");
     let report = install(&repo);
     assert_eq!(read(&repo, ".enallagi/PROGRESS.md"), "# my own progress\n");
-    assert_eq!(read(&repo, &spec(&repo)), "# my own spec\n");
+    assert_eq!(read(&repo, &repo.spec()), "# my own spec\n");
     assert!(
         report.kept.contains(&".enallagi/PROGRESS.md".to_string()),
         "{report:?}"
     );
-    assert!(report.kept.contains(&spec(&repo)), "{report:?}");
+    assert!(report.kept.contains(&repo.spec()), "{report:?}");
 }
 
 #[test]
 fn init_seeds_spec() {
     let repo = Repo::new();
     install(&repo);
-    assert!(read(&repo, &spec(&repo)).contains("\n### Exit criteria"));
+    assert!(read(&repo, &repo.spec()).contains("\n### Exit criteria"));
     assert!(!repo.root.join(".enallagi/TASKS.md").exists());
     let t = enallagi::tracker::Tracker::open(&repo.root, ".enallagi");
     assert!(t.blocks().expect("the queue").is_empty());
@@ -478,7 +471,7 @@ fn fresh_hash_rails_true() {
     assert_eq!(findings(&repo, "rail-unenforced"), Vec::new());
     assert_eq!(findings(&repo, "hash-uncovered"), Vec::new());
     // a name the row carries in prose is one hash-uncovered cannot see and init does not hash
-    for doc in [".enallagi/RAILS.md".to_string(), spec(&repo)] {
+    for doc in [".enallagi/RAILS.md".to_string(), repo.spec()] {
         let text = read(&repo, &doc);
         let row = text
             .lines()
@@ -547,13 +540,13 @@ fn spec_resyncs_check() {
     let repo = Repo::new();
     install(&repo);
     let unset = format!("`{}`", enallagi::config::UNSET_CHECK);
-    assert!(read(&repo, &spec(&repo)).contains(&unset));
+    assert!(read(&repo, &repo.spec()).contains(&unset));
     repo.write(
         ".enallagi/enallagi.toml",
         "[check]\ncommand = \"make check\"\n",
     );
     install(&repo);
-    let spec = read(&repo, &spec(&repo));
+    let spec = read(&repo, &repo.spec());
     let at = spec.find("### 0.4").expect("no 0.4 heading");
     let section = &spec[at..];
     assert!(section.contains("`make check`"), "{section:.400}");
@@ -565,7 +558,7 @@ fn spec_resyncs_check() {
 fn seeded_spec_stages() {
     let repo = Repo::new();
     install(&repo);
-    let spec = read(&repo, &spec(&repo));
+    let spec = read(&repo, &repo.spec());
     for claim in ["precheck", "hash-verify", "trace", "The check greps"] {
         assert!(!spec.contains(claim), "{claim} in {spec}");
     }
@@ -1207,7 +1200,7 @@ fn init_plans_instance_files() {
             "{path} is planned outside the harness directory"
         );
     }
-    let spec = spec(&repo);
+    let spec = repo.spec();
     for path in [
         ".enallagi/enallagi.toml",
         spec.as_str(),

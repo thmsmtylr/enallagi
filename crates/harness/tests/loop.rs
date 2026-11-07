@@ -71,13 +71,7 @@ const QUIET: &str = "echo '{\"total_cost_usd\":0.5}'\n";
 const CACHED: &str = "echo '{\"total_cost_usd\":0.5,\"usage\":{\"input_tokens\":22,\"cache_creation_input_tokens\":54825,\"cache_read_input_tokens\":505740,\"output_tokens\":6233}}'\n";
 
 fn script(repo: &Repo, rel: &str, body: &str) -> String {
-    repo.write(rel, &format!("#!/usr/bin/env bash\nset -u\n{body}"));
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(repo.root.join(rel), std::fs::Permissions::from_mode(0o755))
-            .expect("chmod");
-    }
+    enallagi::fixture::exec(&repo.root.join(rel), body);
     format!("./{rel}")
 }
 
@@ -185,13 +179,6 @@ fn issues(r: &Repo) -> String {
     )
 }
 
-fn spec(r: &Repo) -> String {
-    format!(
-        ".enallagi/specs/{}/spec.md",
-        enallagi::tracker::repo_slug(&r.root)
-    )
-}
-
 // the file a stub agent appends a ticket's lines to; it may run before the queue is written
 fn ticket(r: &Repo, id: &str, title: &str) -> String {
     format!("{}/{}", issues(r), enallagi::tracker::file_name(id, title))
@@ -238,7 +225,7 @@ fn repo(toml: &str, tasks: &str) -> Repo {
     if !tasks.is_empty() {
         queue(&repo, tasks);
     }
-    repo.write(&spec(&repo), "# spec\n");
+    repo.write(&repo.spec(), "# spec\n");
     repo.write(&instance("PROGRESS.md"), "# progress\n");
     write_toml(&repo, toml);
     repo.commit_all("harness");
@@ -469,7 +456,7 @@ fn a_preset_argv_carries_dir_and_context() {
 #[test]
 fn clarification_halts() {
     let r = repo(&base_toml(""), TASKS);
-    r.write(&spec(&r), "# spec\n\n[NEEDS CLARIFICATION] which store?\n");
+    r.write(&r.spec(), "# spec\n\n[NEEDS CLARIFICATION] which store?\n");
     let (digest, events) = go(&r, &opts(1));
     assert!(
         digest
@@ -486,7 +473,7 @@ fn clarification_halts() {
 fn backticked_marker_runs() {
     let r = repo(&base_toml(""), TASKS);
     r.write(
-        &spec(&r),
+        &r.spec(),
         "# spec\n\nA `[NEEDS CLARIFICATION]` marker is prose about the rail.\n",
     );
     let (digest, _) = go(&r, &opts(1));
@@ -1325,7 +1312,7 @@ fn proposed_contract_halt() {
             &r,
             &format!(
                 "\n## [T-002] the schema is wrong\nstatus: needs-triage\nprobe: spec-untested\noutput: {} does not say which store\n",
-                spec(&r)
+                r.spec()
             ),
         ),
     );
@@ -1815,7 +1802,7 @@ fn nested_lands_stub() {
     script(&r, "src/fakecheck.sh", "exit 0\n");
     script(&r, "src/fakeagent.sh", QUIET);
     queue(&r, TASKS);
-    r.write(&spec(&r), "# spec\n");
+    r.write(&r.spec(), "# spec\n");
     r.write(".enallagi/PROGRESS.md", "# progress\n");
     let implement = script(
         &r,
@@ -1982,7 +1969,7 @@ fn nested(check: &str, implement_extra: &str) -> Repo {
     script(&r, "src/fakecheck.sh", check);
     script(&r, "src/fakeagent.sh", QUIET);
     queue(&r, TASKS);
-    r.write(&spec(&r), "# spec\n");
+    r.write(&r.spec(), "# spec\n");
     r.write(".enallagi/PROGRESS.md", "# progress\n");
     r.write(".enallagi/.check-baseline", "# inherited red\n");
     let implement = script(
@@ -5517,7 +5504,7 @@ fn drafts(r: &Repo, second_blocked: &str) -> String {
 }
 
 fn decomposing(r: &Repo, second_blocked: &str, adjudicate: &str) {
-    r.write(&spec(r), ACCEPTED);
+    r.write(&r.spec(), ACCEPTED);
     let decompose = script(
         r,
         "src/fakedecompose.sh",
@@ -5550,7 +5537,7 @@ fn decompose_queues_spec() {
     assert_eq!(stages_started(&events), ["decompose", "adjudicate"]);
     let prompt = std::fs::read_to_string(r.root.join(".git/decompose-prompt")).expect("the prompt");
     assert!(
-        prompt.contains(&format!("The spec to decompose is {}.", spec(&r))),
+        prompt.contains(&format!("The spec to decompose is {}.", r.spec())),
         "{prompt}"
     );
     let t = enallagi::tracker::Tracker::open(&r.root, ".enallagi");

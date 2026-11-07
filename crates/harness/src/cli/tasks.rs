@@ -120,7 +120,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         }
         "landed" => {
             let built = a.iter().any(|x| x == "--built");
-            let rows = crate::pr::landed(&std::env::current_dir()?)?;
+            let rows = crate::pr::landed(&super::root()?)?;
             for row in rows {
                 if built && !row.state.starts_with("built ") {
                     continue;
@@ -174,8 +174,8 @@ fn fail(e: &QueueError) -> i32 {
 
 fn file_arg(a: &[String], pos: usize, default: &str) -> PathBuf {
     a.get(pos).map(PathBuf::from).unwrap_or_else(|| {
-        let root = Path::new(".");
-        crate::config::instance_path(root, &crate::config::harness_dir(root), default)
+        let root = super::root().unwrap_or_else(|_| PathBuf::from("."));
+        crate::config::instance_path(&root, &crate::config::harness_dir(&root), default)
     })
 }
 
@@ -188,8 +188,8 @@ fn tracker_arg(a: &[String], pos: usize) -> Tracker {
     match a.get(pos).map(PathBuf::from) {
         Some(p) => Tracker(p),
         None => {
-            let root = Path::new(".");
-            Tracker::open(root, &crate::config::harness_dir(root))
+            let root = super::root().unwrap_or_else(|_| PathBuf::from("."));
+            Tracker::open(&root, &crate::config::harness_dir(&root))
         }
     }
 }

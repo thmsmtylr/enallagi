@@ -5,6 +5,8 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `enallagi watch` reads the queue and claims at most once per 500 ms and ignores mouse moves, and parses each agent output chunk once, so a long run or a moving mouse no longer spawns git or re-parses the stream on every redraw
+- `gate`, `watch`, `events`, `review`, `issue`, `pr`, `base` and `tasks` find the instance from a subdirectory or a nested state repo, as `run` does
 - `docs/demo.sh` quotes the paths in its `gh` shim, so a temp dir or binary path with a space no longer breaks every twin call
 - a lane's runner caches live under `~/.cache/enallagi/caches/<repo>/`, set through the new `[sandbox] caches` (`CARGO_HOME`, `GOMODCACHE`, `GOCACHE`, `npm_config_cache`, `BUN_INSTALL_CACHE_DIR`, `PIP_CACHE_DIR`, `UV_CACHE_DIR`); init seeds those and no longer makes the operator's own caches lane-writable
 - with no `bwrap` outside the product, or no `enallagi` binary found for the bridge, a Linux spawn fails instead of running whatever a PATH lookup finds
