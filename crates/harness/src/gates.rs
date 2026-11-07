@@ -1732,6 +1732,20 @@ pub fn in_scope(path: &str, globs: &[String]) -> bool {
     })
 }
 
+// conservative only because in_scope lets `*` cross `/`: two globs overlap unless their literal prefixes
+// diverge, and a byte prefix counts across a path component (`src/a` vs `src/ab.rs`)
+pub fn overlaps(a: &[String], b: &[String]) -> bool {
+    let prefix = |g: &String| g[..g.find(['*', '?', '[', '{']).unwrap_or(g.len())].to_string();
+    a.is_empty()
+        || b.is_empty()
+        || a.iter().any(|x| {
+            b.iter().any(|y| {
+                let (p, q) = (prefix(x), prefix(y));
+                p.starts_with(&q) || q.starts_with(&p)
+            })
+        })
+}
+
 // the one sentinel `probes` also writes, so a caller can tell "never started" from "started and red"
 pub const NEVER_RAN: &str = "the check could not be run:";
 
@@ -3011,6 +3025,28 @@ echo '{{"results":[]}}' > "$out"
         assert!(in_scope("src/deep/a.ts", &globs(&["src/**"])));
         assert!(in_scope("src/deep/a.ts", &globs(&["src/*"])));
         assert!(!in_scope("src/a.ts", &[]));
+    }
+
+    #[test]
+    fn overlaps_disjoint_prefixes() {
+        assert!(!overlaps(
+            &globs(&["src/tui/**"]),
+            &globs(&["src/gates.rs"])
+        ));
+        assert!(!overlaps(
+            &globs(&["docs/*.md", "src/a.rs"]),
+            &globs(&["src/b/**", "README.md"])
+        ));
+        assert!(overlaps(&globs(&["src/a"]), &globs(&["src/ab.rs"])));
+        assert!(overlaps(&globs(&["src/**"]), &globs(&["src/tui/view.rs"])));
+    }
+
+    #[test]
+    fn overlaps_empty_or_wild() {
+        for wild in [&[][..], &["**"][..], &["*.rs"][..]] {
+            assert!(overlaps(&globs(wild), &globs(&["docs/x.md"])), "{wild:?}");
+            assert!(overlaps(&globs(&["docs/x.md"]), &globs(wild)), "{wild:?}");
+        }
     }
 
     #[test]

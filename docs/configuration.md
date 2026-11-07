@@ -108,6 +108,10 @@ go test, from go1.26.2:
   Under `auto` the launcher merges a ticket's pull request on green (ADR 0002), and `per_task` is on whatever it says.
   `enallagi run` refuses to start under `auto`, listing every reason, when no spec holding a ticket that is not `done` or `wontfix` has a holdout set (see the reference's Gates), when neither `BUDGET_USD` nor `BUDGET_TOKENS` (or `--budget-usd` / `--budget-tokens`) is set (`BUDGET_SECONDS` alone does not count), when the product or state repository tracks a path under `.enallagi/holdouts/`, or when `[sandbox] mode = "off"`.
 
+## `[parallel]`
+
+- `parallel.writers`: how many writer lanes `enallagi worktree` runs at once. Default `1`, which takes no claim and runs as before. `0` is refused at load.
+
 ## `[layout]`
 
 Where the documents live:

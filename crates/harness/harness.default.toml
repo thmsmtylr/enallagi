@@ -30,6 +30,10 @@ per_task = false
 # "auto" merges a ticket's pull request on green; it needs a holdout set, a USD or token budget and the sandbox.
 merge = "human"
 
+# writers is how many writer lanes `enallagi worktree` runs at once, each on a ticket whose scope overlaps no other's.
+[parallel]
+writers = 1
+
 [layout]
 # context_file is the file every role reads first, unset meaning AGENTS.md beside the queue; pointer_files are one-line pointers to it for tools that cannot take it on their command line.
 pointer_files = ["CLAUDE.md", "GEMINI.md", "QWEN.md", ".github/copilot-instructions.md"]

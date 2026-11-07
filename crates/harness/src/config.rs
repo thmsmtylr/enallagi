@@ -135,6 +135,7 @@ pub struct Config {
     pub check: CheckConfig,
     pub queue: QueueConfig,
     pub pr: PrConfig,
+    pub parallel: ParallelConfig,
     pub layout: Layout,
     pub pipeline: Vec<Pipeline>,
     pub stage: Vec<Stage>,
@@ -266,6 +267,21 @@ pub enum MergeMode {
     #[default]
     Human,
     Auto,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ParallelConfig {
+    /// How many writer lanes `enallagi worktree` runs at once; 0 is refused by the type.
+    pub writers: std::num::NonZeroU32,
+}
+
+impl Default for ParallelConfig {
+    fn default() -> Self {
+        ParallelConfig {
+            writers: std::num::NonZeroU32::MIN,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -1313,6 +1329,17 @@ mod tests {
         write_config(d.path(), "[pr]\nmerge = 'auto'\n");
         let cfg = load(d.path()).unwrap();
         assert!(cfg.pr.merge == MergeMode::Auto && cfg.pr.per_task);
+    }
+
+    #[test]
+    fn writers_default_one() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(load(d.path()).unwrap().parallel.writers.get(), 1);
+        write_config(d.path(), "[parallel]\nwriters = 3\n");
+        assert_eq!(load(d.path()).unwrap().parallel.writers.get(), 3);
+        write_config(d.path(), "[parallel]\nwriters = 0\n");
+        let err = load(d.path()).unwrap_err().to_string();
+        assert!(err.contains("writers"), "{err}");
     }
 
     #[test]
