@@ -178,3 +178,11 @@ No role is declared by default.
 
 - `role.name`, `role.source`, `role.path` and `role.rev` fetch `<path>/<name>.md` as a skill is fetched.
 - The file lands at `<harness_dir>/roles/<name>.md` and is pinned in `harness.lock`.
+
+## `[[tool]]` in `harness.lock`
+
+The `security` gate's scanners, one entry per tool and platform (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`). Init writes the binary's pins for gitleaks and osv-scanner when the lock has none; bumping one is an edit here.
+
+- `tool.id`, `tool.version`, `tool.platform`: the binary lands at `$XDG_CACHE_HOME/enallagi/tools/<id>-<version>/<id>` (`~/.cache/enallagi` when the variable is unset).
+- `tool.url`: fetched with `curl` on first use; a `.tar.gz` is unpacked with `tar`.
+- `tool.sha256`: of the downloaded file, checked at fetch. A mismatch deletes the download and the gate halts.

@@ -48,6 +48,8 @@ pub struct Lock {
     // skipped when empty so a lock written before roles existed round-trips unchanged
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub role: Vec<LockEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool: Vec<crate::security::ToolPin>,
 }
 
 impl Default for Lock {
@@ -56,6 +58,7 @@ impl Default for Lock {
             version: 1,
             skill: Vec::new(),
             role: Vec::new(),
+            tool: Vec::new(),
         }
     }
 }

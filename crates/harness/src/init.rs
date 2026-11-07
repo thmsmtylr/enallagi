@@ -176,6 +176,21 @@ pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
     }
 
     let dir = config::load(root)?.layout.harness_dir;
+    if !opts.dry_run {
+        let lock = skills::lock_path(root, &dir);
+        let text = |e: skills::SkillError| InitError::Io {
+            path: lock.display().to_string(),
+            source: std::io::Error::other(e.to_string()),
+        };
+        let mut pins = skills::read_lock(root, &dir).map_err(text)?;
+        if pins.tool.is_empty() {
+            pins.tool = crate::security::default_pins();
+            skills::write_lock(root, &dir, &pins).map_err(text)?;
+            report
+                .wrote
+                .push(config::instance_rel(root, &dir, "harness.lock"));
+        }
+    }
     if !opts.dry_run && own_repository(root, &dir) {
         state_repository(root, &dir, &report.excluded)?;
         if let Some(note) = ignore_in_product(root, &dir)? {
@@ -1051,6 +1066,14 @@ mod tests {
             resync(&text, Some(&defaults), &cfg.check).as_deref(),
             Some("- Verify, and this is what done means: `make check`\n")
         );
+    }
+
+    #[test]
+    fn init_writes_tool_pins() {
+        let repo = crate::fixture::Repo::new();
+        repo.init_harness("");
+        let lock = skills::read_lock(&repo.root, ".enallagi").expect("lock");
+        assert_eq!(lock.tool, crate::security::default_pins());
     }
 
     #[test]

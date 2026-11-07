@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `harness.lock` pins gitleaks and osv-scanner per platform in `[[tool]]` entries, written by init; a pinned tool is fetched once into `~/.cache/enallagi/tools/` and checked against its sha256
 - `claims` re-runs only the `ran:`/`exit:` pairs under the `verdict:` line, and a PR body's Verification section prints that line and its pairs
 - `rejection-stale` and the implementer's retry prompt read the `verdict:` line; REJECTED prose in comments is no longer a verdict
 - the verifier and implementer write one `verdict:` line in the ticket's `## Harness`; the `verdict` gate sends back to `review` a `done` not `verified by verifier` and a rejection with no reason, and `implementer-not-done` refuses a `review` over a standing rejection

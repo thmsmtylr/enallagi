@@ -15,7 +15,50 @@ pub fn command(bin: &str) -> Command {
             cmd.env_remove(key);
         }
     }
+    cmd.env("XDG_CACHE_HOME", stub_cache());
     cmd
+}
+
+// writes the --report-path or --output it is handed an empty result, as a clean scan would
+const STUB_SCANNER: &str = r#"#!/bin/sh
+# stub scanner
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --report-path) echo '[]' > "$2" ;;
+    --output) echo '{"results":[]}' > "$2" ;;
+  esac
+  shift
+done
+"#;
+
+/// Stub `gitleaks` and `osv-scanner` at the default pins' cache paths, so no spawned binary fetches.
+pub fn seed_scanners(cache: &Path) {
+    let platform = crate::security::platform();
+    for pin in crate::security::default_pins() {
+        if pin.platform != platform {
+            continue;
+        }
+        let bin = crate::security::tool_path(&pin, cache);
+        fs::create_dir_all(bin.parent().expect("tool dir")).expect("create the tool dir");
+        // renamed into place, since test processes share the cache
+        let tmp = bin.with_extension(format!("{}", std::process::id()));
+        fs::write(&tmp, STUB_SCANNER).expect("write the stub scanner");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755)).expect("chmod stub");
+        }
+        fs::rename(&tmp, &bin).expect("place the stub scanner");
+    }
+}
+
+fn stub_cache() -> &'static Path {
+    static CACHE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        let cache = std::env::temp_dir().join("enallagi-fixture-cache");
+        seed_scanners(&cache);
+        cache
+    })
 }
 
 /// `Repo::queue` for a fixture that builds its own repository.
@@ -165,6 +208,27 @@ fn run(root: &std::path::Path, args: &[&str]) {
 mod tests {
     use super::*;
     use crate::tracker::{state, Tracker};
+
+    #[test]
+    fn stub_scanners_pinned() {
+        let out = command("env").output().expect("env");
+        let env = String::from_utf8_lossy(&out.stdout).into_owned();
+        let cache = env
+            .lines()
+            .find_map(|l| l.strip_prefix("XDG_CACHE_HOME="))
+            .expect("XDG_CACHE_HOME");
+        let platform = crate::security::platform();
+        for id in ["gitleaks", "osv-scanner"] {
+            let bin = crate::security::tool(
+                &crate::security::default_pins(),
+                id,
+                &platform,
+                Path::new(cache),
+            )
+            .expect("seeded");
+            assert!(fs::read_to_string(bin).expect("stub").contains("stub"));
+        }
+    }
 
     #[test]
     fn queue_reads_back() {
