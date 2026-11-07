@@ -37,6 +37,10 @@ queue. No line under `## Comments` opens with `## `: that ends the section.
 | `rows:` | the exit-criteria rows the ticket turns green, copied character for character, or `none — harness` / `none — measurement`. This is how the one-row rail binds without a second queue. |
 | `probe:` `command:` `output:` | required on a `needs-triage` ticket. The `anchored` rail: a finding with none of these is killed unread. |
 | `gate:` | written by the launcher when a gate sends the ticket back; the newest is first. |
+| `verdict:` | `verified by verifier`, `rejected by verifier: <reason>` or `answered by implementer`, replaced each time. The `verdict` gate checks it against `**Status:**`. |
+| `spec:` `standards:` | directly under `verdict:`, the verifier's findings on each review axis, or `none`. A `done` missing either goes back to `ready-for-agent`. |
+| `ran:` `exit:` | pairs under the verdict: a command a claim rests on and the exit it gave. The `claims` gate re-runs them. |
+| `deferred:` | the verifier's `needs-triage` filing for a defect outside the criteria, by id and reason. The `commit-verdict` gate reads it. |
 
 A lane edits only its own ticket file. The one other file it may add is a new ticket at
 `needs-triage`; the scope gate rejects any other change under `__ENALLAGI_DIR__/specs/`. A killed

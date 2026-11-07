@@ -17,6 +17,23 @@ const CRITERIA: &str = "## Acceptance criteria";
 const COMMENTS: &str = "## Comments";
 const HARNESS: &str = "## Harness";
 
+/// Every key a gate or role reads from `## Harness`; the ticket reference names each.
+pub const HARNESS_KEYS: &[&str] = &[
+    "scope",
+    "widened",
+    "rows",
+    "probe",
+    "command",
+    "output",
+    "gate",
+    "verdict",
+    "spec",
+    "standards",
+    "ran",
+    "exit",
+    "deferred",
+];
+
 /// The specs directory.
 pub struct Tracker(pub PathBuf);
 

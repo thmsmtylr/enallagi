@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- skill `running-the-loop` drops its role table and points to the roles directory; its ticket reference names every `## Harness` key, `verdict:`, `spec:`, `standards:`, `ran:`, `exit:` and `deferred:` included
 - `enallagi eval --gate`: an ablated role is copied over the adapter's agent file too, so the ablated agent never reads the full role
 - new eval `decomposer`: an accepted spec's drafts pass `tasks check` with `spec.md` unchanged; no ablation, the role is `to-tickets` plus `tasks check`
 - new pipeline `decompose` (`when = "spec.undecomposed"`, after `review`): a `spec.md` at `**Status:** ready-for-agent` with no tickets is broken into drafts by the new `decomposer` role, numbered and committed by the `tickets` gate, and triaged by the adjudicator in the same round; `tickets` now commits the round

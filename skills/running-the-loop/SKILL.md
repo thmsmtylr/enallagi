@@ -1,6 +1,6 @@
 ---
 name: running-the-loop
-description: Use when working in a repository that has a __ENALLAGI_DIR__ directory - explains the ticket queue, the four roles and their authority, what "done" means here, and the rails a change has to survive. Invoke before taking a ticket from __ENALLAGI_DIR__/specs/, before marking anything done, and before proposing new work.
+description: Use when working in a repository that has a __ENALLAGI_DIR__ directory - explains the ticket queue, where the roles and their authority are stated, what "done" means here, and the rails a change has to survive. Invoke before taking a ticket from __ENALLAGI_DIR__/specs/, before marking anything done, and before proposing new work.
 ---
 
 # Running the loop
@@ -17,18 +17,11 @@ entries and none of the handoff.
 Restate the task's acceptance criteria in one sentence before writing code. If you cannot, the task
 is `needs-info` and the question goes under its `## Comments`.
 
-## The four roles
+## Roles
 
-Each role has one job and one thing it may never do:
-
-| Role | Does | May never |
-| --- | --- | --- |
-| scout | turns `FINDING` lines from `enallagi probe` into `needs-triage` tickets | have a finding of its own, promote, or fix |
-| adjudicator | promotes a proposal to `ready-for-agent` with runnable criteria, or sets it `wontfix` with the command that refutes it | write a proposal, or edit a file a ticket names |
-| implementer | one task, inside its `scope:` globs, test first | mark anything `done` |
-| verifier | fresh session, adversarial, promotes to `done` or rejects with reproducible reasons | fix code |
-
-The full prompts are in `__ENALLAGI_DIR__/roles/`. Read the one for the role you are playing.
+Each role's prompt, with what it does and what it may never do, is in `__ENALLAGI_DIR__/roles/`.
+Read the one for the role you are playing. Ticket states and every field are in
+`references/ticket.md`.
 
 ## What done means
 

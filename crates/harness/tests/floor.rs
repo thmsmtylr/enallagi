@@ -1770,3 +1770,40 @@ fn no_fixture_manifest_names_another_repository() {
 const PROBE_FIXTURE: &str = r#"
 // a seeded note the fixture carries #12
 "#;
+
+// a role table or a role count in the skill goes stale the day a role is added
+fn role_restated(text: &str) -> Vec<String> {
+    let count = re(r"(?i)\b(\d+|two|three|four|five|six|seven|eight|nine|ten) roles\b");
+    let mut found: Vec<String> = count.find_iter(text).map(|m| m.as_str().into()).collect();
+    found.extend(
+        text.lines()
+            .filter(|l| l.starts_with("| Role |"))
+            .map(String::from),
+    );
+    found
+}
+
+#[test]
+fn skill_points_roles() {
+    let skill = read(&repo_root().join("skills/running-the-loop/SKILL.md"));
+    assert_eq!(role_restated(&skill), Vec::<String>::new());
+    assert!(skill.contains("roles/"), "{skill}");
+    assert!(skill.contains("references/ticket.md"), "{skill}");
+    assert_eq!(role_restated("the four roles"), ["four roles"]);
+    assert_eq!(role_restated("| Role | Does |\n"), ["| Role | Does |"]);
+}
+
+fn keys_missing(text: &str) -> Vec<&'static str> {
+    enallagi::tracker::HARNESS_KEYS
+        .iter()
+        .copied()
+        .filter(|k| !text.contains(&format!("`{k}:`")))
+        .collect()
+}
+
+#[test]
+fn ticket_names_keys() {
+    let reference = read(&repo_root().join("skills/running-the-loop/references/ticket.md"));
+    assert_eq!(keys_missing(&reference), Vec::<&str>::new());
+    assert_eq!(keys_missing(&reference.replace("`gate:`", "")), ["gate"]);
+}
