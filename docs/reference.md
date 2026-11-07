@@ -214,7 +214,7 @@ The state is one object, declared in `crates/harness/src/fixture/twin.rs`:
 - `repo` (`owner/name`), `origin` (the bare remote's path) and `default_branch`.
 - `pulls`: `number`, `url`, `title`, `body`, `head`, `base`, `head_sha`, `state` (`OPEN`, `MERGED` or `CLOSED`), `round`, `checks` (in `statusCheckRollup`'s shape), `reviews` and `comments` (`author`, `typename`, `body`, `url`), and `threads` (`id`, `resolved`, `outdated`, and `comments` with `author`, `typename`, `path`, `line`, `start_line`, `body` and `url`).
 - `script`: `{head, round, checks}` entries; `head` is a branch or `*`. When a pull reaches the round, its checks are replaced.
-- `responses`: `{args, stdout, stderr, exit}`, matched on exact argv before any served call.
+- `responses`: `{args, stdout, stderr, exit, sleep}`, matched on exact argv before any served call. `sleep` hangs the call that many seconds in a child `sleep`, whose pid goes in `sleepers`.
 - `calls`: every argv the twin was handed, in order.
 
 On every call the twin reads each open pull's head from `origin`.

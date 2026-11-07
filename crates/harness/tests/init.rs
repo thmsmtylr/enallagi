@@ -1794,25 +1794,16 @@ fn init_sync_vendors_the_declared_skills() {
 fn init_issue_queues_and_commits() {
     let repo = Repo::new();
     let tools = tempfile::tempdir().expect("tools");
-    let gh = tools.path().join("gh");
-    std::fs::write(
-        &gh,
-        format!(
-            "#!/bin/sh\nprintf '%s' '{}'\n",
-            include_str!("fixtures/issues/help-wanted.json")
-        ),
-    )
-    .expect("gh");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
-    let path = format!(
-        "{}:{}",
-        tools.path().display(),
-        std::env::var("PATH").unwrap_or_default()
+    let issue = enallagi::fixture::twin::Response::to(
+        &enallagi::issue::gh_args("owner/repo#12").expect("args"),
+        include_str!("fixtures/issues/help-wanted.json"),
     );
+    let state = enallagi::fixture::twin::State {
+        responses: vec![issue],
+        ..Default::default()
+    };
+    let (path, _) =
+        enallagi::fixture::twin::install(tools.path(), env!("CARGO_BIN_EXE_enallagi"), &state);
     let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["init", "--issue", "owner/repo#12"])
         .current_dir(&repo.root)

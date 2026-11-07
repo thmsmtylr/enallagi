@@ -1889,9 +1889,30 @@ fn a_diverged_upstream_is_one_finding() {
 }
 
 const TRUE_CHECK: &str = "[check]\ncommand = \"true\"\n";
-const ANSWERED: &str = "echo 'deletion, pull_request'\n";
-const UNAUTHENTICATED: &str = "echo 'gh: run: gh auth login' >&2\nexit 4\n";
-const ERRORED: &str = "echo 'gh: Not Found (HTTP 404)' >&2\nexit 1\n";
+use enallagi::fixture::twin::{Response, State};
+
+const ADMIN: [&str; 4] = ["api", "repos/{owner}/{repo}", "--jq", ".permissions.admin"];
+
+// the probe's rules read for `branch`, answered with `stdout`
+fn rules(branch: &str, stdout: &str) -> Response {
+    let path = format!("repos/{{owner}}/{{repo}}/rules/branches/{branch}");
+    Response::to(&["api", &path, "--jq", "[.[].type] | join(\", \")"], stdout)
+}
+
+fn failing(branch: &str, stderr: &str, exit: i32) -> Response {
+    Response {
+        stderr: stderr.to_string(),
+        exit,
+        ..rules(branch, "")
+    }
+}
+
+fn answering(responses: Vec<Response>) -> Option<State> {
+    Some(State {
+        responses,
+        ..State::default()
+    })
+}
 
 fn protection(repo: &Repo, cfg: &Config) -> ProbeResult {
     let ctx = ProbeCtx {
@@ -1921,16 +1942,13 @@ fn on_path(tool: &str) -> Option<std::path::PathBuf> {
 }
 
 // git and sh only: a host tool the machine happens to carry must not reach a probe under test
-fn bin_dir(dir: &std::path::Path, gh: Option<&str>) -> std::ffi::OsString {
+fn bin_dir(dir: &std::path::Path, twin: Option<State>) -> std::ffi::OsString {
     for tool in ["git", "sh"] {
         let found = on_path(tool).unwrap_or_else(|| panic!("{tool} is not on PATH"));
         std::os::unix::fs::symlink(found, dir.join(tool)).expect("symlink");
     }
-    if let Some(body) = gh {
-        let path = dir.join("gh");
-        fs::write(&path, format!("#!/bin/sh\n{body}")).expect("write gh");
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod gh");
+    if let Some(state) = twin {
+        enallagi::fixture::twin::install(dir, env!("CARGO_BIN_EXE_enallagi"), &state);
     }
     dir.as_os_str().to_os_string()
 }
@@ -1995,7 +2013,8 @@ fn the_host_leg_quotes_the_answer_and_command() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
     let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
-    let out = probe_bin(&repo, &bin_dir(bins.path(), Some(ANSWERED)));
+    let twin = answering(vec![rules(&branch, "deletion, pull_request\n")]);
+    let out = probe_bin(&repo, &bin_dir(bins.path(), twin));
     assert!(out.starts_with("PROBE branch-protection 2"), "{out}");
     assert!(
         out.contains(&format!(
@@ -2008,19 +2027,23 @@ fn the_host_leg_quotes_the_answer_and_command() {
 #[test]
 fn an_unadministered_repository_is_silence() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
-    let (_origin, _branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
+    let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
-    let gh = "case \"$2\" in *rules*) echo 'deletion';; *) echo false;; esac\n";
-    let out = probe_bin(&repo, &bin_dir(bins.path(), Some(gh)));
+    let twin = answering(vec![
+        Response::to(&ADMIN, "false\n"),
+        rules(&branch, "deletion\n"),
+    ]);
+    let out = probe_bin(&repo, &bin_dir(bins.path(), twin));
     assert_eq!(out.trim(), "PROBE branch-protection 0", "{out}");
 }
 
 #[test]
 fn an_unauthenticated_host_tool_reads_unknown() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
-    let (_origin, _branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
+    let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
-    let out = probe_bin(&repo, &bin_dir(bins.path(), Some(UNAUTHENTICATED)));
+    let twin = answering(vec![failing(&branch, "gh: run: gh auth login\n", 4)]);
+    let out = probe_bin(&repo, &bin_dir(bins.path(), twin));
     assert!(
         out.contains("-> unknown, exit 4: gh: run: gh auth login"),
         "{out}"
@@ -2030,9 +2053,10 @@ fn an_unauthenticated_host_tool_reads_unknown() {
 #[test]
 fn a_host_tool_error_reads_unknown() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
-    let (_origin, _branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
+    let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
-    let out = probe_bin(&repo, &bin_dir(bins.path(), Some(ERRORED)));
+    let twin = answering(vec![failing(&branch, "gh: Not Found (HTTP 404)\n", 1)]);
+    let out = probe_bin(&repo, &bin_dir(bins.path(), twin));
     assert!(
         out.contains("-> unknown, exit 1: gh: Not Found (HTTP 404)"),
         "{out}"
@@ -2045,16 +2069,22 @@ fn a_host_tool_error_reads_unknown() {
 #[test]
 fn a_hung_host_tool_reads_unknown_after_the_bound() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
-    let (_origin, _branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
+    let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
-    let pidfile = bins.path().join("gh.pid");
-    // sleep is a grandchild, so killing gh alone leaves it running
-    let stub = format!(
-        "/bin/sleep 600 &\necho $! > '{}'\nwait\n",
-        pidfile.display()
-    );
-    let path = bin_dir(bins.path(), Some(&stub));
-    let pid = || -> Option<libc::pid_t> { fs::read_to_string(&pidfile).ok()?.trim().parse().ok() };
+    // the twin's sleep is a grandchild, so killing gh alone leaves it running
+    let hang = Response {
+        sleep: 600,
+        ..rules(&branch, "")
+    };
+    let path = bin_dir(bins.path(), answering(vec![hang]));
+    let state = bins.path().join("twin.json");
+    let pid = || -> Option<libc::pid_t> {
+        let sleepers = fs::read_to_string(&state)
+            .ok()
+            .and_then(|t| serde_json::from_str::<State>(&t).ok())?
+            .sleepers;
+        Some(*sleepers.first()? as libc::pid_t)
+    };
     let mut child = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["probe", "branch-protection"])
         .current_dir(&repo.root)

@@ -39,6 +39,10 @@ fn commit(root: &Path, rel: &str, text: &str, msg: &str) -> String {
     git(root, &["rev-parse", "--short", "HEAD"])
 }
 
+fn calls(state: &Path) -> Vec<Vec<String>> {
+    enallagi::fixture::twin::load(state).calls
+}
+
 fn replace(text: &str, from: &str, to: &str) -> String {
     text.replacen(from, to, 1)
 }
@@ -122,6 +126,17 @@ impl Fixture {
             String::from_utf8_lossy(&out.stderr)
         );
         (out.status.code().unwrap_or(-1), text)
+    }
+
+    // the twin's state path; its gh shim goes in the tools directory
+    fn twin(&self) -> PathBuf {
+        let state = enallagi::fixture::twin::State {
+            repo: "owner/repo".to_string(),
+            origin: self.origin.clone(),
+            default_branch: "main".to_string(),
+            ..Default::default()
+        };
+        enallagi::fixture::twin::install(&self.tools, env!("CARGO_BIN_EXE_enallagi"), &state).1
     }
 
     fn thing(&self) -> String {
@@ -352,15 +367,11 @@ fn pr_refuses_a_checkout_behind_its_upstream() {
     );
     git(&f.root, &["push", "-q", "origin", "main"]);
     git(&f.root, &["checkout", "-q", "dogfood/round-1"]);
-    let log = f.tools.join("gh.log");
-    exec(
-        &f.tools.join("gh"),
-        &format!("printf '%s\\n' \"$@\" >{}\n", log.display()),
-    );
+    let log = f.twin();
 
     let (code, out) = f.harness(&["pr", "T-001", "--push"]);
     assert_ne!(code, 0, "{out}");
-    assert!(!log.exists(), "gh ran");
+    assert!(calls(&log).is_empty(), "gh ran");
     assert!(out.contains("HEAD..origin/main` -> 2"), "{out}");
     assert!(out.contains("git merge origin/main"), "{out}");
     assert!(!out.contains("T-001"), "{out}");
@@ -421,7 +432,7 @@ fn a_red_check_pushes_nothing() {
 #[test]
 fn a_hung_check_is_bound_by_timeout() {
     let (f, _) = landed("sleep 10\n");
-    exec(&f.tools.join("gh"), "exit 0\n");
+    f.twin();
     let toml = f.root.join(".enallagi/enallagi.toml");
     let text = fs::read_to_string(&toml).expect("config");
     fs::write(&toml, format!("{text}timeout = \"2s\"\n")).expect("config");
@@ -440,11 +451,7 @@ fn a_hung_check_is_bound_by_timeout() {
 #[test]
 fn push_pushes_the_branch_and_opens_the_pr() {
     let (f, _) = landed("exit 0\n");
-    let log = f.tools.join("gh.log");
-    exec(
-        &f.tools.join("gh"),
-        &format!("printf '%s\\n' \"$@\" >{}\n", log.display()),
-    );
+    let log = f.twin();
 
     let (code, out) = f.harness(&["pr", "T-001", "--push"]);
     assert_eq!(code, 0, "{out}");
@@ -453,8 +460,7 @@ fn push_pushes_the_branch_and_opens_the_pr() {
         "{}",
         f.remote_branches()
     );
-    let args = fs::read_to_string(&log).expect("gh ran");
-    let args: Vec<&str> = args.lines().collect();
+    let args = calls(&log).remove(0);
     assert_eq!(&args[..2], ["pr", "create"], "{args:?}");
     for pair in [["--base", "main"], ["--head", "task/T-001"]] {
         assert!(args.windows(2).any(|w| w == pair), "{args:?}");
@@ -462,7 +468,8 @@ fn push_pushes_the_branch_and_opens_the_pr() {
     let body = args
         .windows(2)
         .find(|w| w[0] == "--body-file")
-        .expect("--body-file")[1];
+        .expect("--body-file")[1]
+        .clone();
     assert!(fs::read_to_string(body)
         .expect("body")
         .contains("the thing says two twice"));
@@ -471,14 +478,7 @@ fn push_pushes_the_branch_and_opens_the_pr() {
 #[test]
 fn push_opens_pull() {
     let (f, _) = landed("exit 0\n");
-    let state = enallagi::fixture::twin::State {
-        repo: "owner/repo".to_string(),
-        origin: f.origin.clone(),
-        default_branch: "main".to_string(),
-        ..Default::default()
-    };
-    let (_, path) =
-        enallagi::fixture::twin::install(&f.tools, env!("CARGO_BIN_EXE_enallagi"), &state);
+    let path = f.twin();
     let (code, out) = f.harness(&["pr", "T-001", "--push"]);
     assert_eq!(code, 0, "{out}");
     assert!(
@@ -515,11 +515,7 @@ fn guarded() -> (Fixture, PathBuf) {
         &format!("# Contributing\n\nRun the tests.\n{REFUSAL}\n"),
         "docs: contribution guide",
     );
-    let log = f.tools.join("gh.log");
-    exec(
-        &f.tools.join("gh"),
-        &format!("printf '%s\\n' \"$@\" >{}\n", log.display()),
-    );
+    let log = f.twin();
     (f, log)
 }
 
@@ -534,7 +530,7 @@ fn push_refuses_a_guide_refusing_generated_work() {
     );
     assert!(out.contains("--policy-read"), "{out}");
     assert!(f.remote_branches().lines().all(|b| !b.contains("task/")));
-    assert!(!log.exists(), "gh ran");
+    assert!(calls(&log).is_empty(), "gh ran");
     let text = fs::read_to_string(f.root.join(".enallagi/pr/T-001.md")).expect("description");
     let policy = text.split("## Contribution policy").nth(1).expect("policy");
     assert!(
@@ -545,7 +541,7 @@ fn push_refuses_a_guide_refusing_generated_work() {
     let (code, out) = f.harness(&["pr", "T-001", "--push", "--policy-read"]);
     assert_eq!(code, 0, "{out}");
     assert!(f.remote_branches().contains("task/T-001"));
-    assert!(log.exists(), "gh did not run");
+    assert!(!calls(&log).is_empty(), "gh did not run");
     let text = fs::read_to_string(f.root.join(".enallagi/pr/T-001.md")).expect("description");
     let policy = text.split("## Contribution policy").nth(1).expect("policy");
     assert!(
@@ -564,7 +560,7 @@ fn pr_without_push_prints_the_policy_finding() {
         "{out}"
     );
     assert!(git(&f.root, &["branch", "--list", "task/T-001"]).contains("task/T-001"));
-    assert!(!log.exists(), "gh ran");
+    assert!(calls(&log).is_empty(), "gh ran");
 }
 
 #[test]
@@ -932,7 +928,7 @@ fn push_on_a_built_branch_updates_the_pushed_line() {
     assert!(text.contains("\npushed: no "), "{text}");
     let tip = git(&f.root, &["rev-parse", "task/T-001"]);
 
-    exec(&f.tools.join("gh"), "echo https://example.test/pull/1\n");
+    f.twin();
     let (code, out) = f.harness(&["pr", "T-001", "--push"]);
     assert_eq!(code, 0, "{out}");
     assert_eq!(git(&f.root, &["rev-parse", "task/T-001"]), tip);
@@ -941,7 +937,7 @@ fn push_on_a_built_branch_updates_the_pushed_line() {
     let pushed: Vec<&str> = text.lines().filter(|l| l.starts_with("pushed:")).collect();
     assert_eq!(pushed.len(), 1, "{text}");
     assert!(
-        pushed[0].starts_with("pushed: https://example.test/pull/1 "),
+        pushed[0].starts_with("pushed: https://github.com/owner/repo/pull/1 "),
         "{text}"
     );
     let state = f.root.join(".enallagi");

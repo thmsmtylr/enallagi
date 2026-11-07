@@ -3004,21 +3004,17 @@ fn an_unnamed_run_still_reaches_discover() {
     );
 }
 
-// the block under test is the one `enallagi issue` wrote, so the fixture's gh prints the issue
+// the block under test is the one `enallagi issue` wrote, so the twin answers with the issue
 fn queued_issue(r: &Repo) {
-    script(
-        r,
-        "tools/gh",
-        &format!(
-            "printf '%s' '{}'\n",
-            include_str!("fixtures/issues/help-wanted.json")
-        ),
+    let issue = Response::to(
+        &enallagi::issue::gh_args("owner/repo#12").expect("args"),
+        include_str!("fixtures/issues/help-wanted.json"),
     );
-    let path = format!(
-        "{}:{}",
-        r.root.join("tools").display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let state = State {
+        responses: vec![issue],
+        ..State::default()
+    };
+    let (path, _) = twin::install(&r.root.join("tools"), BIN, &state);
     let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["issue", "owner/repo#12"])
         .current_dir(&r.root)
@@ -3668,13 +3664,18 @@ fn tautologised_test_not_done() {
     assert!(role.contains("git diff $BASE -- 'src/*.rs'"), "{role}");
 }
 
+use enallagi::fixture::twin::{self, Pull, Remark, Response, State, Thread};
+
+const BIN: &str = env!("CARGO_BIN_EXE_enallagi");
+
 struct Pulls {
     repo: Repo,
     origin: tempfile::TempDir,
     tools: tempfile::TempDir,
+    twin: std::path::PathBuf,
 }
 
-// a bare origin at the fixture's HEAD, and a gh on PATH that records its argv and its parent's pid
+// a bare origin at the fixture's HEAD, and the twin's gh on PATH
 fn pulls(extra: &str, check: &str) -> Pulls {
     let r = repo("", "");
     script(&r, "src/fakecheck.sh", check);
@@ -3709,24 +3710,18 @@ fn pulls(extra: &str, check: &str) -> Pulls {
     );
     git(&r.root, &["fetch", "-q", "origin"]);
     let tools = tempfile::TempDir::new().expect("tempdir");
-    let gh = tools.path().join("gh");
-    std::fs::write(
-        &gh,
-        format!(
-            "#!/usr/bin/env bash\necho $PPID >{dir}/gh.ppid\nprintf '%s\\n' \"$@\" >{dir}/gh.log\necho https://example.test/pull/1\n",
-            dir = tools.path().display()
-        ),
-    )
-    .expect("gh");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    let state = State {
+        repo: "owner/repo".to_string(),
+        origin: bare,
+        default_branch: git(&r.root, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        ..State::default()
+    };
+    let (_, twin) = twin::install(tools.path(), BIN, &state);
     Pulls {
         repo: r,
         origin,
         tools,
+        twin,
     }
 }
 
@@ -3757,8 +3752,8 @@ impl Pulls {
         (pid, text)
     }
 
-    fn gh(&self) -> Option<String> {
-        std::fs::read_to_string(self.tools.path().join("gh.log")).ok()
+    fn calls(&self) -> Vec<Vec<String>> {
+        twin::load(&self.twin).calls
     }
 
     fn remote_branches(&self) -> String {
@@ -3782,37 +3777,54 @@ notes: https://github.com/owner/repo/pull/13#discussion_r1000000007
   thread: PRRT_kwDOA1
 ";
 
-// the block a review thread raised, with the gh the read uses standing in for the host
-fn threaded(gh: &str) -> Pulls {
+// the block a review thread raised, its pull request in the twin holding `threads`
+fn threaded(threads: Vec<Thread>) -> Pulls {
     let p = pulls("", "exit 0\n");
     queue(&p.repo, THREADED_TASK);
     p.repo.commit_all("a block from a review thread");
-    let stub = p.tools.path().join("gh");
-    std::fs::write(
-        &stub,
-        format!(
-            "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" >{dir}/gh.log\n{gh}",
-            dir = p.tools.path().display()
-        ),
-    )
-    .expect("gh");
+    let mut state = twin::load(&p.twin);
+    state.pulls.push(Pull {
+        number: 13,
+        url: "https://github.com/owner/repo/pull/13".to_string(),
+        head: "feature/thread".to_string(),
+        state: "OPEN".to_string(),
+        threads,
+        ..Pull::default()
+    });
+    twin::save(&p.twin, &state);
     p
 }
 
 #[test]
 fn a_landed_block_answers_its_thread() {
-    let p = threaded("exit 0\n");
+    let p = threaded(vec![Thread {
+        id: "PRRT_kwDOA1".to_string(),
+        comments: vec![Remark {
+            path: Some("src/thing.ts".to_string()),
+            body: "do the thing".to_string(),
+            url: "https://github.com/owner/repo/pull/13#discussion_r1000000007".to_string(),
+            ..Remark::default()
+        }],
+        ..Thread::default()
+    }]);
     let (_, out) = p.run(&[]);
     assert!(out.contains("tasks landed: T-001"), "{out}");
-    let args = p.gh().unwrap_or_else(|| panic!("gh never ran:\n{out}"));
-    assert!(args.starts_with("api\ngraphql\n"), "{args}");
-    assert!(args.contains("resolveReviewThread"), "{args}");
-    assert!(args.contains("\nthread=PRRT_kwDOA1\n"), "{args}");
+    let calls = p.calls();
+    let args = calls
+        .iter()
+        .find(|c| c[..2] == ["api", "graphql"])
+        .unwrap_or_else(|| panic!("gh never ran:\n{out}"));
+    assert!(
+        args.iter().any(|a| a.contains("resolveReviewThread")),
+        "{args:?}"
+    );
+    assert!(args.contains(&"thread=PRRT_kwDOA1".to_string()), "{args:?}");
+    assert!(twin::load(&p.twin).pulls[0].threads[0].resolved);
     let sha = args
-        .lines()
+        .iter()
         .find_map(|l| l.strip_prefix("body=Answered in "))
         .and_then(|l| l.split_whitespace().next())
-        .unwrap_or_else(|| panic!("no sha in the reply: {args}"));
+        .unwrap_or_else(|| panic!("no sha in the reply: {args:?}"));
     let subject = enallagi::git::git(&p.repo.root, &["log", "-1", "--format=%s", sha])
         .unwrap_or_else(|e| panic!("{sha} is not a commit here: {e}"));
     assert!(subject.contains("T-001"), "{subject}");
@@ -3820,35 +3832,35 @@ fn a_landed_block_answers_its_thread() {
 
 #[test]
 fn an_unanswered_thread_is_a_warning_not_a_halt() {
-    let p = threaded("echo 'gh: could not resolve' >&2\nexit 1\n");
+    let p = threaded(Vec::new());
     let (_, out) = p.run(&[]);
     assert!(out.contains("tasks landed: T-001"), "{out}");
     assert!(
         out.contains("T-001: thread PRRT_kwDOA1 was left open: "),
         "{out}"
     );
-    assert!(out.contains("could not resolve"), "{out}");
+    assert!(out.contains("Could not resolve"), "{out}");
     assert!(out.contains(" halts= landed=T-001 "), "{out}");
 }
 
 #[test]
 fn pr_per_task_opens_one_from_the_launcher() {
     let p = pulls("", "exit 0\n");
-    let (pid, out) = p.run(&["--pr-per-task"]);
+    let (_, out) = p.run(&["--pr-per-task"]);
     assert!(out.contains("tasks landed: T-001"), "{out}");
-    let args = p.gh().unwrap_or_else(|| panic!("gh never ran:\n{out}"));
-    assert!(args.starts_with("pr\ncreate\n"), "{args}");
-    assert!(args.contains("--head\ntask/T-001\n"), "{args}");
-    let ppid = std::fs::read_to_string(p.tools.path().join("gh.ppid")).expect("gh.ppid");
-    assert_eq!(
-        ppid.trim(),
-        pid.to_string(),
-        "gh was not the launcher's child"
+    let calls = p.calls();
+    let args = calls
+        .first()
+        .unwrap_or_else(|| panic!("gh never ran:\n{out}"));
+    assert_eq!(args[..2], ["pr", "create"], "{args:?}");
+    assert!(
+        args.windows(2).any(|w| w == ["--head", "task/T-001"]),
+        "{args:?}"
     );
     assert!(p.remote_branches().contains("task/T-001"), "{out}");
     let pulls = out.split("pull requests:").nth(1).expect(&out);
     assert!(
-        pulls.contains("T-001: https://example.test/pull/1"),
+        pulls.contains("T-001: https://github.com/owner/repo/pull/1"),
         "{out}"
     );
 
@@ -3866,7 +3878,7 @@ fn a_run_without_pr_per_task_opens_nothing() {
     let p = pulls("", "exit 0\n");
     let (_, out) = p.run(&[]);
     assert!(out.contains("tasks landed: T-001"), "{out}");
-    assert!(p.gh().is_none(), "gh ran:\n{out}");
+    assert!(p.calls().is_empty(), "gh ran:\n{out}");
     assert!(!p.remote_branches().contains("task/"), "{out}");
     assert!(!out.contains("pull requests:"), "{out}");
 }
@@ -3875,8 +3887,11 @@ fn a_run_without_pr_per_task_opens_nothing() {
 fn pr_per_task_config_opens_one() {
     let p = pulls("\n[pr]\nper_task = true\n", "exit 0\n");
     let (_, out) = p.run(&[]);
-    assert!(p.gh().is_some(), "gh never ran:\n{out}");
-    assert!(out.contains("T-001: https://example.test/pull/1"), "{out}");
+    assert!(!p.calls().is_empty(), "gh never ran:\n{out}");
+    assert!(
+        out.contains("T-001: https://github.com/owner/repo/pull/1"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -3892,7 +3907,7 @@ fn a_red_task_branch_opens_no_pr() {
 
     let (_, out) = p.run(&["--pr-per-task"]);
     assert!(out.contains("tasks landed: T-001"), "{out}");
-    assert!(p.gh().is_none(), "gh ran:\n{out}");
+    assert!(p.calls().is_empty(), "gh ran:\n{out}");
     assert!(!p.remote_branches().contains("task/"), "{out}");
     let pulls = out.split("pull requests:").nth(1).expect(&out);
     assert!(pulls.contains("T-001: none opened"), "{out}");
@@ -3981,32 +3996,35 @@ fn an_iteration_lands_under_a_protection_finding() {
 }
 
 // the second head is a branch this checkout never built, so the step must not read it
-const OPEN_PULL: &str = concat!(
-    r#"[{"url":"https://github.com/owner/repo/pull/13","headRefName":"task/T-001"},"#,
-    r#"{"url":"https://github.com/owner/repo/pull/14","headRefName":"feature/elsewhere"}]"#,
-);
+fn open_pulls() -> Vec<Pull> {
+    [(13, "task/T-001"), (14, "feature/elsewhere")]
+        .map(|(number, head)| Pull {
+            number,
+            url: format!("https://github.com/owner/repo/pull/{number}"),
+            head: head.to_string(),
+            state: "OPEN".to_string(),
+            ..Pull::default()
+        })
+        .to_vec()
+}
+
 const PLAIN_REVIEW: &str = include_str!("fixtures/reviews/plain.json");
 
-// one line per invocation, so the log counts the host calls the step made
-fn gh_recording(r: &Repo, list: &str, graphql: &str) -> String {
-    let log = r.root.join("gh.log");
-    script(
-        r,
-        "tools/gh",
-        &format!(
-            "printf '%s\\n' \"$*\" >>'{log}'\n\
-             case \"$1\" in\n\
-             pr) printf '%s' '{list}' ;;\n\
-             *) printf '%s' '{graphql}' ;;\n\
-             esac\n",
-            log = log.display(),
-        ),
-    );
-    format!(
-        "{}:{}",
-        r.root.join("tools").display(),
-        std::env::var("PATH").unwrap_or_default()
-    )
+// the twin under `tools/`, answering the review read of pull 13 with `review`; returns the PATH
+fn recording(r: &Repo, pulls: Vec<Pull>, review: &str) -> String {
+    let read = enallagi::review::gh_args("https://github.com/owner/repo/pull/13").expect("args");
+    let state = State {
+        repo: "owner/repo".to_string(),
+        pulls,
+        responses: vec![Response::to(&read, review)],
+        ..State::default()
+    };
+    let (path, _) = twin::install(&r.root.join("tools"), BIN, &state);
+    path.to_string_lossy().into_owned()
+}
+
+fn recorded(r: &Repo) -> Vec<Vec<String>> {
+    twin::load(&r.root.join("tools/twin.json")).calls
 }
 
 // every directory holding gh is dropped; git, bash and sh are linked back in case one held them too
@@ -4025,7 +4043,7 @@ fn without_gh(r: &Repo) -> String {
     }
     let kept: Vec<&str> = path
         .split(':')
-        .filter(|d| !std::path::Path::new(d).join("gh").exists())
+        .filter(|d| !std::path::Path::new(&format!("{d}/gh")).exists())
         .collect();
     format!("{}:{}", dir.display(), kept.join(":"))
 }
@@ -4084,9 +4102,9 @@ fn advance(r: &Repo, branch: &str) {
 fn a_merged_pull_branch_calls_no_host() {
     let r = driven_repo(DONE_TASK);
     enallagi::git::git(&r.root, &["branch", "task/T-001"]).expect("branch");
-    let path = gh_recording(&r, OPEN_PULL, PLAIN_REVIEW);
+    let path = recording(&r, open_pulls(), PLAIN_REVIEW);
     let out = run_with_path(&r, &path);
-    assert!(!r.root.join("gh.log").exists(), "{out}");
+    assert!(recorded(&r).is_empty(), "{out}");
 }
 
 #[test]
@@ -4094,19 +4112,18 @@ fn an_unmerged_pull_branch_is_still_asked_about() {
     let r = driven_repo(DONE_TASK);
     enallagi::git::git(&r.root, &["branch", "task/T-001"]).expect("branch");
     advance(&r, "task/T-001");
-    let path = gh_recording(&r, "[]", PLAIN_REVIEW);
+    let path = recording(&r, Vec::new(), PLAIN_REVIEW);
     let out = run_with_path(&r, &path);
-    let log = std::fs::read_to_string(r.root.join("gh.log")).unwrap_or_else(|_| panic!("{out}"));
-    let calls: Vec<&str> = log.lines().collect();
-    assert_eq!(calls.len(), 1, "{log}");
-    assert!(calls[0].starts_with("pr list"), "{log}");
+    let calls = recorded(&r);
+    assert_eq!(calls.len(), 1, "{calls:?}\n{out}");
+    assert_eq!(calls[0][..2], ["pr", "list"], "{calls:?}");
 }
 
 #[test]
 fn iteration_queues_review() {
     let r = driven_repo(DONE_TASK);
     pull_branch(&r);
-    let path = gh_recording(&r, OPEN_PULL, PLAIN_REVIEW);
+    let path = recording(&r, open_pulls(), PLAIN_REVIEW);
     let out = run_with_path(&r, &path);
 
     let tasks = tasks_text(&r);
@@ -4117,19 +4134,18 @@ fn iteration_queues_review() {
     assert!(tasks.contains("#discussion_r1000000003"), "{tasks}");
     assert!(tasks.contains("status: needs-triage"), "{tasks}");
 
-    let log = std::fs::read_to_string(r.root.join("gh.log")).expect("gh ran");
-    let calls: Vec<&str> = log.lines().collect();
-    assert_eq!(calls.len(), 2, "{log}");
-    assert!(calls[0].starts_with("pr list"), "{log}");
-    assert!(calls[1].starts_with("api graphql"), "{log}");
+    let calls = recorded(&r);
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[0][..2], ["pr", "list"], "{calls:?}");
+    assert_eq!(calls[1][..2], ["api", "graphql"], "{calls:?}");
 }
 
 #[test]
 fn a_checkout_with_no_pull_branch_calls_no_host() {
     let r = driven_repo(DONE_TASK);
-    let path = gh_recording(&r, OPEN_PULL, PLAIN_REVIEW);
+    let path = recording(&r, open_pulls(), PLAIN_REVIEW);
     let out = run_with_path(&r, &path);
-    assert!(!r.root.join("gh.log").exists(), "{out}");
+    assert!(recorded(&r).is_empty(), "{out}");
 }
 
 #[test]

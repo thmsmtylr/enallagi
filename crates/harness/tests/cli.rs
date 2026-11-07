@@ -1672,15 +1672,40 @@ fn queue_text(root: &std::path::Path) -> String {
 struct GhRepo {
     repo: enallagi::fixture::Repo,
     tools: tempfile::TempDir,
+    twin: Option<std::path::PathBuf>,
+}
+
+use enallagi::fixture::twin::{Response, State};
+
+fn answering(responses: Vec<Response>) -> Option<State> {
+    Some(State {
+        responses,
+        ..State::default()
+    })
+}
+
+// the recorded issue, answered for both forms of its reference
+fn issue_twin() -> Option<State> {
+    let json = include_str!("fixtures/issues/help-wanted.json");
+    answering(
+        ["owner/repo#12", "https://github.com/owner/repo/issues/12"]
+            .map(|r| Response::to(&enallagi::issue::gh_args(r).expect("args"), json))
+            .to_vec(),
+    )
+}
+
+fn review_twin(json: &str) -> Option<State> {
+    let args = enallagi::review::gh_args("owner/repo#13").expect("args");
+    answering(vec![Response::to(&args, json)])
 }
 
 impl GhRepo {
     // the instance is committed in its own repository, so its porcelain lists only what the command wrote
-    fn new(gh_body: &str) -> GhRepo {
-        GhRepo::with_state(gh_body, &[])
+    fn new(twin: Option<State>) -> GhRepo {
+        GhRepo::with_state(twin, &[])
     }
 
-    fn with_state(gh_body: &str, files: &[(&str, &str)]) -> GhRepo {
+    fn with_state(twin: Option<State>, files: &[(&str, &str)]) -> GhRepo {
         let repo = enallagi::fixture::Repo::new();
         repo.init_harness("");
         let state = repo.root.join(".enallagi");
@@ -1710,29 +1735,17 @@ impl GhRepo {
             enallagi::git::git(&state, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"));
         }
         let tools = tempfile::tempdir().expect("tempdir");
-        if !gh_body.is_empty() {
-            let gh = tools.path().join("gh");
-            std::fs::write(&gh, format!("#!/bin/sh\n{gh_body}")).expect("write gh");
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        }
-        GhRepo { repo, tools }
+        let twin = twin.map(|state| {
+            enallagi::fixture::twin::install(tools.path(), env!("CARGO_BIN_EXE_enallagi"), &state).1
+        });
+        GhRepo { repo, tools, twin }
     }
 
-    // shell builtins only: PATH holds nothing but the stub
-    fn gh_printing(json: &str) -> String {
-        assert!(
-            !json.contains('\''),
-            "the fixture cannot sit in single quotes"
-        );
-        format!("printf '%s\\n' \"$@\" >\"${{0%/*}}/gh.log\"\nprintf '%s' '{json}'\n")
+    fn calls(&self) -> Vec<Vec<String>> {
+        enallagi::fixture::twin::load(self.twin.as_ref().expect("a twin")).calls
     }
 
-    fn fixture_gh() -> String {
-        GhRepo::gh_printing(include_str!("fixtures/issues/help-wanted.json"))
-    }
-
-    // PATH is the tools directory alone, so a missing stub is a missing gh
+    // PATH is the tools directory alone, so no twin is a missing gh
     fn command(&self, name: &str, args: &[&str]) -> std::process::Output {
         enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
             .arg(name)
@@ -1768,16 +1781,15 @@ impl GhRepo {
 
 #[test]
 fn issue_appends_block() {
-    let f = GhRepo::new(&GhRepo::fixture_gh());
+    let f = GhRepo::new(issue_twin());
     let before = f.tasks();
 
     let out = f.issue(&["owner/repo#12"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
 
-    let args = std::fs::read_to_string(f.tools.path().join("gh.log")).expect("gh ran");
     assert_eq!(
-        args.lines().collect::<Vec<_>>(),
-        [
+        f.calls(),
+        [[
             "issue",
             "view",
             "12",
@@ -1785,7 +1797,7 @@ fn issue_appends_block() {
             "owner/repo",
             "--json",
             "number,title,body,url,labels,state"
-        ]
+        ]]
     );
     assert!(f.porcelain().starts_with("?? specs/"), "{}", f.porcelain());
 
@@ -1830,7 +1842,7 @@ notes: https://github.com/owner/repo/issues/12
 
 #[test]
 fn issue_dry_run() {
-    let f = GhRepo::new(&GhRepo::fixture_gh());
+    let f = GhRepo::new(issue_twin());
     let before = f.tasks();
 
     let out = f.issue(&["https://github.com/owner/repo/issues/12", "--dry-run"]);
@@ -1841,16 +1853,15 @@ fn issue_dry_run() {
         "{stdout}"
     );
     assert!(stdout.contains("status: needs-triage"), "{stdout}");
-    let args = std::fs::read_to_string(f.tools.path().join("gh.log")).expect("gh ran");
     assert_eq!(
-        args.lines().collect::<Vec<_>>(),
-        [
+        f.calls(),
+        [[
             "issue",
             "view",
             "https://github.com/owner/repo/issues/12",
             "--json",
             "number,title,body,url,labels,state"
-        ]
+        ]]
     );
     assert_eq!(f.tasks(), before);
     assert_eq!(f.porcelain(), "");
@@ -1858,7 +1869,7 @@ fn issue_dry_run() {
 
 #[test]
 fn issue_refuses_queued() {
-    let f = GhRepo::new(&GhRepo::fixture_gh());
+    let f = GhRepo::new(issue_twin());
     assert_eq!(f.issue(&["owner/repo#12"]).status.code(), Some(0));
     let once = f.tasks();
 
@@ -1880,7 +1891,7 @@ fn issue_refuses_archived() {
     let decisions = "# DECISIONS\n\n## Rejected findings\n\n## [T-001] landed\nstatus: done\n\
         notes: https://github.com/owner/repo/issues/12\n";
     let f = GhRepo::with_state(
-        &GhRepo::fixture_gh(),
+        issue_twin(),
         &[("queue", LANDED_STUB), ("DECISIONS.md", decisions)],
     );
     let before = f.tasks();
@@ -1903,7 +1914,7 @@ fn issue_requeues_expired() {
     let decisions = "# DECISIONS\n\n## Rejected findings\n\n## Expired findings\n\n\
         ## [T-001] landed\nstatus: needs-triage\nnotes: https://github.com/owner/repo/issues/12\n";
     let f = GhRepo::with_state(
-        &GhRepo::fixture_gh(),
+        issue_twin(),
         &[("queue", LANDED_STUB), ("DECISIONS.md", decisions)],
     );
     let out = f.issue(&["owner/repo#12"]);
@@ -1914,13 +1925,26 @@ fn issue_requeues_expired() {
 
 #[test]
 fn issue_names_the_gh_command_that_failed() {
-    for gh in [
-        "",
-        "echo 'To get started with GitHub CLI, please run:  gh auth login' >&2\nexit 4\n",
-        "echo 'GraphQL: Could not resolve to an issue with the number of 12.' >&2\nexit 1\n",
-        "echo 'not json'\n",
+    let args = enallagi::issue::gh_args("owner/repo#12").expect("args");
+    let failing = |stderr: &str, exit: i32| Response {
+        stderr: stderr.to_string(),
+        exit,
+        ..Response::to(&args, "")
+    };
+    for twin in [
+        None,
+        answering(vec![failing(
+            "To get started with GitHub CLI, please run:  gh auth login\n",
+            4,
+        )]),
+        answering(vec![failing(
+            "GraphQL: Could not resolve to an issue with the number of 12.\n",
+            1,
+        )]),
+        answering(vec![Response::to(&args, "not json\n")]),
     ] {
-        let f = GhRepo::new(gh);
+        let gh = format!("{twin:?}");
+        let f = GhRepo::new(twin);
         let before = f.tasks();
         let out = f.issue(&["owner/repo#12"]);
         assert_ne!(out.status.code(), Some(0), "{gh}: {out:?}");
@@ -1961,10 +1985,6 @@ const REVIEW_QUERY: &str = concat!(
     "}}}",
 );
 
-fn review_gh(fixture: &str) -> String {
-    GhRepo::gh_printing(fixture)
-}
-
 const SUMMARY: &str = include_str!("fixtures/reviews/summary.json");
 const SETTLED: &str = include_str!("fixtures/reviews/settled.json");
 const GENERATED: &str = include_str!("fixtures/reviews/generated.json");
@@ -1984,7 +2004,7 @@ fn scaffold_of(block: &str) -> Vec<&str> {
 
 #[test]
 fn short_read_kept() {
-    let f = GhRepo::new(&review_gh(SHORT));
+    let f = GhRepo::new(review_twin(SHORT));
     let out = f.review(&["owner/repo#13"]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     let said = String::from_utf8_lossy(&out.stderr);
@@ -1998,16 +2018,15 @@ fn short_read_kept() {
 
 #[test]
 fn review_block_per_thread() {
-    let f = GhRepo::new(&review_gh(SUMMARY));
+    let f = GhRepo::new(review_twin(SUMMARY));
     let before = f.tasks();
 
     let out = f.review(&["owner/repo#13"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
 
-    let args = std::fs::read_to_string(f.tools.path().join("gh.log")).expect("gh ran");
     assert_eq!(
-        args.lines().collect::<Vec<_>>(),
-        [
+        f.calls(),
+        [[
             "api",
             "graphql",
             "-f",
@@ -2018,7 +2037,7 @@ fn review_block_per_thread() {
             "repo=repo",
             "-F",
             "number=13",
-        ]
+        ]]
     );
 
     let after = f.tasks();
@@ -2058,7 +2077,7 @@ notes: https://github.com/owner/repo/pull/13#discussion_r1000000001
 
 #[test]
 fn review_folds_thread() {
-    let f = GhRepo::new(&review_gh(THREAD));
+    let f = GhRepo::new(review_twin(THREAD));
     let before = enallagi::block::parse(&f.tasks()).expect("parse").len();
 
     let out = f.review(&["owner/repo#13"]);
@@ -2098,7 +2117,7 @@ fn review_folds_thread() {
 
 #[test]
 fn repeated_finding_one_block() {
-    let f = GhRepo::new(&review_gh(AGREED));
+    let f = GhRepo::new(review_twin(AGREED));
     let before = enallagi::block::parse(&f.tasks()).expect("parse").len();
 
     let out = f.review(&["owner/repo#13"]);
@@ -2124,7 +2143,7 @@ fn repeated_finding_one_block() {
 #[test]
 fn different_finding_same_line() {
     let differs = AGREED.replacen("drops the timezone", "drops the offset", 1);
-    let f = GhRepo::new(&review_gh(&differs));
+    let f = GhRepo::new(review_twin(&differs));
     let before = enallagi::block::parse(&f.tasks()).expect("parse").len();
 
     let out = f.review(&["owner/repo#13"]);
@@ -2140,12 +2159,12 @@ fn different_finding_same_line() {
 
 #[test]
 fn review_skips_resolved() {
-    let f = GhRepo::new(&review_gh(SETTLED));
+    let f = GhRepo::new(review_twin(SETTLED));
     let out = f.review(&["https://github.com/owner/repo/pull/13"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
 
-    let args = std::fs::read_to_string(f.tools.path().join("gh.log")).expect("gh ran");
-    assert!(args.contains("number=13"), "{args}");
+    let calls = f.calls();
+    assert!(calls[0].contains(&"number=13".to_string()), "{calls:?}");
 
     let blocks = enallagi::block::parse(&f.tasks()).expect("parse");
     assert_eq!(blocks.len(), 2, "{}", f.tasks());
@@ -2162,7 +2181,7 @@ fn review_skips_resolved() {
 
 #[test]
 fn review_run_twice_appends_nothing() {
-    let f = GhRepo::new(&review_gh(SUMMARY));
+    let f = GhRepo::new(review_twin(SUMMARY));
     assert_eq!(f.review(&["owner/repo#13"]).status.code(), Some(0));
     let once = f.tasks();
 
@@ -2187,7 +2206,7 @@ fn review_run_twice_appends_nothing() {
 
 #[test]
 fn review_dry_run() {
-    let f = GhRepo::new(&review_gh(SUMMARY));
+    let f = GhRepo::new(review_twin(SUMMARY));
     let before = f.tasks();
 
     let out = f.review(&["owner/repo#13", "--dry-run"]);
@@ -2207,7 +2226,7 @@ fn review_dry_run() {
 fn a_generated_and_a_plain_comment_share_a_shape() {
     let mut shapes = Vec::new();
     for fixture in [GENERATED, PLAIN] {
-        let f = GhRepo::new(&review_gh(fixture));
+        let f = GhRepo::new(review_twin(fixture));
         let out = f.review(&["owner/repo#13", "--dry-run"]);
         assert_eq!(out.status.code(), Some(0), "{out:?}");
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -2479,8 +2498,7 @@ fn reviewed_pull() -> enallagi::fixture::twin::State {
 
 #[test]
 fn twin_serves_review_threads() {
-    let f = GhRepo::new("");
-    enallagi::fixture::twin::install(f.tools.path(), BIN, &reviewed_pull());
+    let f = GhRepo::new(Some(reviewed_pull()));
     let out = f.review(&["https://github.com/owner/repo/pull/7"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     let blocks = enallagi::block::parse(&f.tasks()).expect("parse");

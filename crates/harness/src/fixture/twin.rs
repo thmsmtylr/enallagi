@@ -18,6 +18,8 @@ pub struct State {
     pub script: Vec<Round>,
     pub responses: Vec<Response>,
     pub calls: Vec<Vec<String>>,
+    // pids of the sleeps `sleep` responses started, so a test can see a killed gh took them along
+    pub sleepers: Vec<u32>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -87,9 +89,20 @@ pub struct Response {
     pub stdout: String,
     pub stderr: String,
     pub exit: i32,
+    // seconds the call hangs in a child `sleep` before it answers
+    pub sleep: u64,
 }
 
 impl Response {
+    /// The canned answer `stdout` to the call `args`.
+    pub fn to<S: AsRef<str>>(args: &[S], stdout: &str) -> Response {
+        Response {
+            args: args.iter().map(|a| a.as_ref().to_string()).collect(),
+            stdout: stdout.to_string(),
+            ..Response::default()
+        }
+    }
+
     fn ok(stdout: String) -> Response {
         Response {
             stdout,
@@ -164,6 +177,15 @@ pub fn gh(args: &[String]) -> i32 {
         .cloned()
         .or_else(|| serve(&mut state, args))
         .unwrap_or_else(|| Response::err(format!("twin: no response for gh {}\n", args.join(" "))));
+    if reply.sleep > 0 {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg(reply.sleep.to_string())
+            .spawn()
+            .expect("twin: spawn sleep");
+        state.sleepers.push(child.id());
+        save(&path, &state);
+        let _ = child.wait();
+    }
     save(&path, &state);
     print!("{}", reply.stdout);
     eprint!("{}", reply.stderr);
@@ -171,6 +193,9 @@ pub fn gh(args: &[String]) -> i32 {
 }
 
 fn origin_sha(state: &State, branch: &str) -> Option<String> {
+    if state.origin.as_os_str().is_empty() {
+        return None;
+    }
     let rev = format!("refs/heads/{branch}");
     crate::git::git(&state.origin, &["rev-parse", "--verify", "-q", &rev]).ok()
 }

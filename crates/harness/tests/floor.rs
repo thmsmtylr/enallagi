@@ -184,6 +184,57 @@ fn the_launcher_parses_no_task_blocks_itself() {
     );
 }
 
+// a path to a file named gh, other than a read of whether one exists
+fn names_gh(line: &str) -> bool {
+    (line.contains("join(\"gh\")") || line.contains("/gh\""))
+        && !line.contains(".config/gh")
+        && !line.contains(".exists()")
+}
+
+#[test]
+fn no_gh_stub() {
+    for (sample, stub) in [
+        ("let gh = tools.path().join(\"gh\");", true),
+        ("script(r, \"tools/gh\", body);", true),
+        ("deny(\"~/.config/gh\")", false),
+        (
+            ".filter(|d| !Path::new(&format!(\"{d}/gh\")).exists())",
+            false,
+        ),
+    ] {
+        assert_eq!(names_gh(sample), stub, "{sample}");
+    }
+    // the twin's install is the one place a gh is written
+    let root = repo_root().join("crates/harness");
+    let mut files: Vec<PathBuf> = walk(&root.join("tests"))
+        .into_iter()
+        .map(|p| Path::new("tests").join(p))
+        .chain(
+            walk(&root.join("src"))
+                .into_iter()
+                .map(|p| Path::new("src").join(p)),
+        )
+        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+        .collect();
+    files.retain(|p| p != Path::new("src/fixture/twin.rs"));
+    assert!(files.len() > 10, "{files:?}");
+    let stubs: Vec<String> = files
+        .iter()
+        .flat_map(|rel| {
+            read(&root.join(rel))
+                .lines()
+                .enumerate()
+                .filter(|(_, l)| names_gh(l))
+                .map(|(n, _)| format!("{}:{}", rel.display(), n + 1))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(
+        stubs.is_empty(),
+        "write gh through fixture::twin: {stubs:?}"
+    );
+}
+
 #[test]
 fn the_write_path_gate_installs_with_the_rules() {
     let repo = Repo::new();
