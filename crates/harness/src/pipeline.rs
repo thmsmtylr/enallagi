@@ -672,13 +672,17 @@ impl<'a> Loop<'a> {
         let mut iterations = 0u32;
         for i in 1..=self.opts.max_iter {
             self.writer.set_iter(i);
+            let it = format!("{}/{i}", self.writer.run);
+            git::ITERATION.set(Some(it));
             iterations = i;
             if !self.iteration() {
                 break;
             }
         }
 
-        Ok(self.finish(iterations))
+        let digest = self.finish(iterations);
+        git::ITERATION.set(None);
+        Ok(digest)
     }
 
     // neither a refusal nor an error is a halt: the queue is still readable and the round can run

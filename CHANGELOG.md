@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `queue.proposed_rounds` counts loop iterations, not state commits: each loop state commit carries an `Iteration: <run>/<n>` trailer, so a respond round no longer ages a filed finding by several rounds
 - `enallagi watch` keeps one stage and output view per run: `l` focuses the next lane (newest by default), and the queue pane names the lane branch of each claimed ticket
 - under `writers > 1` the launcher also starts a reader lane (`run --task <id> --pipeline review`) per `review` ticket no live claim holds, outside the `writers` count; a pinned verifier verifies only its ticket
 - a writer lane's implementer prompt lists the commits other lanes landed on the parent branch since its base (short sha, subject, files), each once per run

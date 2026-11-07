@@ -98,7 +98,7 @@ go test, from go1.26.2:
 
 - `queue.drain`: how many standing `needs-triage` tickets one adjudicate stage takes, oldest first. Default `3`.
 - `queue.turns_per_block`: turns added to that stage for each ticket. Default `25`.
-- `queue.proposed_rounds`: how many state commits a `needs-triage` ticket stands before it expires to `wontfix`. Default `6`.
+- `queue.proposed_rounds`: how many rounds a `needs-triage` ticket stands before it expires to `wontfix`. A round is one loop iteration (its state commits carry one `Iteration:` trailer) or one commit made outside the loop. Default `6`.
 - `queue.title_cap_from`: the first ticket id `title-length` holds to the 72-character cap; titles below it are the record as written. Default `1`.
 
 ## `[pr]`

@@ -158,6 +158,18 @@ pub fn identity_args(root: &Path) -> Vec<String> {
 }
 
 // the subject names the product HEAD the state was committed against, which is what `enallagi base` reads back
+thread_local! {
+    // the loop's `<run>/<iteration>`, so expiry counts an iteration's state commits as one round
+    pub static ITERATION: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+fn stamped(msg: &str, sha: &str) -> String {
+    match ITERATION.with_borrow(Clone::clone) {
+        Some(it) => format!("{msg} at {sha}\n\nIteration: {it}"),
+        None => format!("{msg} at {sha}"),
+    }
+}
+
 pub fn commit_instance(
     root: &Path,
     harness_dir: &str,
@@ -169,7 +181,7 @@ pub fn commit_instance(
         return Ok(false);
     }
     let sha = git(root, &["rev-parse", "HEAD"])?;
-    let msg = format!("{msg} at {sha}");
+    let msg = stamped(msg, &sha);
     if state == root {
         let paths: Vec<String> = names
             .iter()
@@ -207,7 +219,7 @@ pub fn commit_instance_only(
         return commit_instance(root, harness_dir, names, msg);
     }
     let sha = git(root, &["rev-parse", "HEAD"])?;
-    let msg = format!("{msg} at {sha}");
+    let msg = stamped(msg, &sha);
     let mut add = vec!["add", "--"];
     add.extend(names);
     git(&state, &add)?;

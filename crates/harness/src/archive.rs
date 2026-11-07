@@ -30,40 +30,50 @@ pub struct ArchiveReport {
     pub refused: Option<String>,
 }
 
-fn state_commits(root: &Path, dir: &str) -> (PathBuf, Vec<String>) {
+// newest first, each with its round: a loop commit's `Iteration:` trailer, else the commit itself
+fn state_commits(root: &Path, dir: &str) -> (PathBuf, Vec<(String, String)>) {
     let rel = config::instance_rel(root, dir, tracker::SPECS);
     let (repo, _, _) = git::locate(root, dir, &rel);
-    let commits = git::git(&repo, &["log", "--format=%H"])
-        .map(|out| out.lines().map(String::from).collect())
+    let format = "--format=%H %(trailers:key=Iteration,valueonly,separator=)";
+    let commits = git::git(&repo, &["log", format])
+        .map(|out| {
+            out.lines()
+                .map(|l| l.split_once(' ').unwrap_or((l, "")))
+                .map(|(sha, it)| (sha.to_string(), it.trim().to_string()))
+                .collect()
+        })
         .unwrap_or_default();
     (repo, commits)
 }
 
-// a ticket's age in state commits, counted from the one that queued it; an id no commit carries is one a hand edit just wrote
-pub(crate) fn ages(root: &Path, cfg: &Config, ids: &[String]) -> BTreeMap<String, usize> {
+// rounds since the commit that queued the ticket, one per loop iteration or hand commit, and
+// whether a root commit queued it; an id no commit carries is one a hand edit just wrote
+fn aged(root: &Path, cfg: &Config, ids: &[String]) -> BTreeMap<String, (usize, bool)> {
     let dir = &cfg.layout.harness_dir;
-    let (_, commits) = state_commits(root, dir);
+    let (repo, commits) = state_commits(root, dir);
+    let roots = git::git(&repo, &["rev-list", "--max-parents=0", "HEAD"]).unwrap_or_default();
     ids.iter()
         .map(|id| {
-            let age = tracker::queued_commit(root, dir, id)
-                .ok()
-                .flatten()
-                .and_then(|sha| commits.iter().position(|c| *c == sha))
+            let sha = tracker::queued_commit(root, dir, id).ok().flatten();
+            let at = sha
+                .as_ref()
+                .and_then(|sha| commits.iter().position(|(c, _)| c == sha))
                 .unwrap_or(0);
-            (id.clone(), age)
+            let rounds: HashSet<&str> = commits[..at]
+                .iter()
+                .map(|(c, it)| if it.is_empty() { c } else { it })
+                .map(String::as_str)
+                .collect();
+            let root = sha.is_some_and(|sha| roots.lines().any(|r| r == sha));
+            (id.clone(), (rounds.len(), root))
         })
         .collect()
 }
 
-// a root commit installed the queue whole, so a ticket it carries records no round it was filed in
-fn root_ages(root: &Path, cfg: &Config) -> HashSet<usize> {
-    let (repo, commits) = state_commits(root, &cfg.layout.harness_dir);
-    let roots = git::git(&repo, &["rev-list", "--max-parents=0", "HEAD"]).unwrap_or_default();
-    commits
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| roots.lines().any(|r| r == *c))
-        .map(|(i, _)| i)
+pub(crate) fn ages(root: &Path, cfg: &Config, ids: &[String]) -> BTreeMap<String, usize> {
+    aged(root, cfg, ids)
+        .into_iter()
+        .map(|(id, (age, _))| (id, age))
         .collect()
 }
 
@@ -185,12 +195,12 @@ fn expire_proposed(root: &Path, cfg: &Config, dry_run: bool) -> Result<Vec<Strin
     if proposed.is_empty() {
         return Ok(Vec::new());
     }
-    let ages = ages(root, cfg, &proposed);
-    let roots = root_ages(root, cfg);
-    let age = |id: &String| ages.get(id).copied().unwrap_or(0);
+    let aged = aged(root, cfg, &proposed);
+    let age = |id: &String| aged.get(id).map_or(0, |a| a.0);
+    // a root commit installed the queue whole, so a ticket it carries records no round it was filed in
     let mut stale: Vec<String> = proposed
         .into_iter()
-        .filter(|id| age(id) >= cfg.queue.proposed_rounds && !roots.contains(&age(id)))
+        .filter(|id| age(id) >= cfg.queue.proposed_rounds && !aged.get(id).is_some_and(|a| a.1))
         .collect();
     stale.sort_by_key(|id| std::cmp::Reverse(age(id)));
     if stale.is_empty() || dry_run {
@@ -374,6 +384,26 @@ mod tests {
         let standing = t.get("T-002").unwrap().unwrap();
         assert_eq!(tracker::state(&standing).as_deref(), Some("needs-triage"));
         assert!(!config::instance_path(&r.root, ".enallagi", "DECISIONS.md").exists());
+    }
+
+    #[test]
+    fn one_iteration_one_round() {
+        let r = Repo::new();
+        r.queue(
+            ".enallagi",
+            "## [T-001] a finding one iteration filed\nstatus: needs-triage\n",
+        );
+        r.commit_all("file the finding");
+        for n in 1..=8 {
+            r.write(".enallagi/PROGRESS.md", &format!("commit {n}\n"));
+            r.commit_all(&format!("commit {n}\n\nIteration: run-a/{}", n / 3));
+        }
+
+        let cfg = cfg(&r.root);
+        let aged = ages(&r.root, &cfg, &["T-001".to_string()]);
+        assert_eq!(aged["T-001"], 3, "{aged:?}");
+        let report = archive_done(&r.root, &cfg, false).expect("archive_done");
+        assert!(report.expired.is_empty(), "{:?}", report.expired);
     }
 
     #[test]

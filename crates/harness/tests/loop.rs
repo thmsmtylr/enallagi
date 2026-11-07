@@ -2160,11 +2160,11 @@ fn landed_leaves_no_instance_path() {
     let state = r.root.join(".enallagi");
     let after = in_dir(&r.root, &["rev-parse", "HEAD"]);
     assert_ne!(before, after);
-    let subjects = in_dir(&state, &["log", "--format=%s|%an|%ae|%b"]);
+    let subjects = in_dir(&state, &["log", "--format=%s|%an|%ae"]);
     assert!(
         subjects
             .lines()
-            .any(|l| l == format!("implement T-001 at {after}|t|t@t|")),
+            .any(|l| l == format!("implement T-001 at {after}|t|t@t")),
         "{subjects}"
     );
     assert!(in_dir(&state, &["status", "--porcelain"]).is_empty());
@@ -4939,7 +4939,6 @@ fn respond_converges_on_twin() {
     );
     assert_eq!(field_of(&p.repo, "T-900", "rounds").as_deref(), Some("1"));
     assert_eq!(text.matches("finding:").count(), 3, "{text}");
-    // filed at needs-triage; the second run's state commits may already have expired it
     let filed: Vec<String> = enallagi::tracker::Tracker::open(&p.repo.root, ".enallagi")
         .blocks()
         .expect("queue")
@@ -4953,6 +4952,14 @@ fn respond_converges_on_twin() {
         .map(|b| b.id)
         .collect();
     assert_eq!(filed, ["T-901"], "{}", tasks_text(&p.repo));
+    let t = enallagi::tracker::Tracker::open(&p.repo.root, ".enallagi");
+    let state = enallagi::tracker::state(&t.get("T-901").expect("queue").expect("T-901"));
+    assert_eq!(
+        state.as_deref(),
+        Some("needs-triage"),
+        "{}",
+        tasks_text(&p.repo)
+    );
     assert!(out.contains("proposed: T-901 from"), "{out}");
     assert_eq!(pull.threads.len(), 2, "{pull:?}");
     assert!(pull.threads.iter().all(|t| t.resolved), "{pull:?}");
