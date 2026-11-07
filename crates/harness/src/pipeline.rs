@@ -1006,6 +1006,7 @@ impl<'a> Loop<'a> {
                 warnings: &mut self.digest.warnings,
                 halts: &mut self.digest.halts,
                 dry_rounds: &mut self.dry_rounds,
+                cache: crate::config::cache_root(),
             };
             let outcome = gates::run(gate, &mut ctx);
             self.check_log();

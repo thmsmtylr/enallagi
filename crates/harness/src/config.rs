@@ -48,6 +48,7 @@ pub const GATE_NAMES: &[&str] = &[
     "verdict",
     "claims",
     "skip-added",
+    "security",
     "scope",
     "red-first",
     "queue-intact",

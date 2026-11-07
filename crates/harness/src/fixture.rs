@@ -55,9 +55,9 @@ pub fn seed_scanners(cache: &Path) {
 fn stub_cache() -> &'static Path {
     static CACHE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
-        let cache = std::env::temp_dir().join("enallagi-fixture-cache");
-        seed_scanners(&cache);
-        cache
+        let xdg = std::env::temp_dir().join("enallagi-fixture-cache");
+        seed_scanners(&xdg.join("enallagi"));
+        xdg
     })
 }
 
@@ -213,19 +213,16 @@ mod tests {
     fn stub_scanners_pinned() {
         let out = command("env").output().expect("env");
         let env = String::from_utf8_lossy(&out.stdout).into_owned();
-        let cache = env
+        let xdg = env
             .lines()
             .find_map(|l| l.strip_prefix("XDG_CACHE_HOME="))
             .expect("XDG_CACHE_HOME");
+        let cache = Path::new(xdg).join("enallagi");
         let platform = crate::security::platform();
         for id in ["gitleaks", "osv-scanner"] {
-            let bin = crate::security::tool(
-                &crate::security::default_pins(),
-                id,
-                &platform,
-                Path::new(cache),
-            )
-            .expect("seeded");
+            let bin =
+                crate::security::tool(&crate::security::default_pins(), id, &platform, &cache)
+                    .expect("seeded");
             assert!(fs::read_to_string(bin).expect("stub").contains("stub"));
         }
     }

@@ -34,6 +34,8 @@ pub struct GateCtx<'a> {
     pub warnings: &'a mut Vec<String>,
     pub halts: &'a mut Vec<String>,
     pub dry_rounds: &'a mut u32,
+    // the scanners and their reports; config::cache_root() outside a test
+    pub cache: PathBuf,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -70,6 +72,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "scope" => scope(ctx),
         "red-first" => red_first(ctx),
         "skip-added" => skip_added(ctx),
+        "security" => security(ctx),
         "queue-intact" => queue_intact(ctx),
         "commit-identity" => commit_identity(ctx),
         "commit-task" => commit_task(ctx),
@@ -1249,6 +1252,10 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
         "{} lost its ticket file; a kill is wontfix, never a deletion; recover with `{show} {base}:{inner}`",
         lost.join(", "),
     );
+    halted(ctx, reason)
+}
+
+fn halted(ctx: &mut GateCtx, reason: String) -> GateOutcome {
     ctx.warnings.push(reason.clone());
     ctx.halts.push(reason.clone());
     GateOutcome {
@@ -1257,6 +1264,101 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
         halt: true,
         ..GateOutcome::default()
     }
+}
+
+// a leak is never handed back to a lane: the history rewrite it needs is a person's (ADR 0009)
+fn security(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(task) = ctx.task.clone() else {
+        return pass("no task");
+    };
+    match status_of(ctx, &task) {
+        Err(_) => return unreadable(ctx, &task),
+        Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
+        Ok(_) => {}
+    }
+    let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
+        return pass("no base");
+    };
+    let leaks = match gitleaks(ctx, &base) {
+        Ok(leaks) => leaks,
+        Err(e) => return halted(ctx, format!("security: {e}")),
+    };
+    if leaks.is_empty() {
+        return pass(format!("{task} added no secret"));
+    }
+    let why = format!(
+        "a secret in the task's commits: {}; the history needs rewriting by hand",
+        leaks.join(", ")
+    );
+    let out = force_back(
+        ctx,
+        "security",
+        &task,
+        "ready-for-human",
+        &format!("the verifier returned done and the security gate held it: {why}"),
+        &format!("chore({task}): harness security gate held a leaked secret"),
+        &format!("{task} was set to ready-for-human by the security gate: {why}."),
+    );
+    halted(ctx, out.reason)
+}
+
+// only rule, file, line and commit leave the report: events.jsonl and the ticket are committed
+fn gitleaks(ctx: &GateCtx, base: &str) -> Result<Vec<String>, String> {
+    let dir = &ctx.cfg.layout.harness_dir;
+    let pins = crate::skills::read_lock(ctx.root, dir)
+        .map_err(|e| e.to_string())?
+        .tool;
+    let platform = crate::security::platform();
+    let bin = crate::security::tool(&pins, "gitleaks", &platform, &ctx.cache)?;
+    let reports = ctx.cache.join("security");
+    let io = |e: std::io::Error| format!("{}: {e}", reports.display());
+    std::fs::create_dir_all(&reports).map_err(io)?;
+    let scratch = tempfile::Builder::new()
+        .prefix("run-")
+        .tempdir_in(&reports)
+        .map_err(io)?;
+    let report = scratch.path().join("gitleaks.json");
+    let at = |name: &str| crate::config::instance_path(ctx.root, dir, name);
+    let out = Command::new(&bin)
+        .current_dir(ctx.root)
+        .arg("git")
+        .arg(format!("--log-opts={base}..HEAD"))
+        .args(["--redact", "--report-format", "json", "--report-path"])
+        .arg(&report)
+        .arg("--config")
+        .arg(at("gitleaks.toml"))
+        .arg("--gitleaks-ignore-path")
+        .arg(at("gitleaksignore"))
+        .output()
+        .map_err(|e| format!("{}: {e}", bin.display()))?;
+    let findings = std::fs::read_to_string(&report)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Vec<serde_json::Value>>(&t).ok());
+    let findings = match (out.status.code(), findings) {
+        (Some(0 | 1), Some(findings)) => findings,
+        (code, _) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let tail: Vec<&str> = stderr.lines().rev().take(5).collect();
+            return Err(format!(
+                "gitleaks exited {} with no readable report: {}",
+                code.map_or("on a signal".to_string(), |c| c.to_string()),
+                tail.into_iter().rev().collect::<Vec<_>>().join(" / ")
+            ));
+        }
+    };
+    Ok(findings
+        .iter()
+        .map(|f| {
+            let s = |k: &str| f[k].as_str().unwrap_or("?").to_string();
+            format!(
+                "{} {}:{} {}",
+                s("RuleID"),
+                s("File"),
+                f["StartLine"],
+                s("Commit")
+            )
+        })
+        .collect())
 }
 
 fn added_ids(base: &[LockEntry], head: &[LockEntry]) -> Vec<String> {
@@ -1934,6 +2036,7 @@ mod tests {
         warnings: Vec<String>,
         halts: Vec<String>,
         dry_rounds: u32,
+        cache: tempfile::TempDir,
     }
 
     impl Env {
@@ -1962,6 +2065,7 @@ mod tests {
                 warnings: Vec::new(),
                 halts: Vec::new(),
                 dry_rounds: 0,
+                cache: tempfile::tempdir().expect("cache"),
             }
         }
 
@@ -1978,6 +2082,7 @@ mod tests {
                 warnings: &mut self.warnings,
                 halts: &mut self.halts,
                 dry_rounds: &mut self.dry_rounds,
+                cache: self.cache.path().to_path_buf(),
             }
         }
 
@@ -2291,6 +2396,115 @@ mod tests {
             out.reason
         );
         assert!(env.tasks_text().contains("status: ready-for-agent"));
+    }
+
+    const LEAK: &str = r#"[{"RuleID":"aws-access-token","File":"src/key.txt","StartLine":1,"Commit":"abc123","Secret":"AKIAHIDDEN0SECRET99","Match":"key = AKIAHIDDEN0SECRET99"}]"#;
+
+    // a done task with the default pins locked; the stub gitleaks records its argv and copies
+    // <cache>/gitleaks.json to --report-path, then exits `exit`
+    fn leak_env(report: &str, exit: i32) -> (Env, String) {
+        let env = Env::new("exit 0\n");
+        let lock = crate::skills::Lock {
+            tool: crate::security::default_pins(),
+            ..Default::default()
+        };
+        crate::skills::write_lock(&env.repo.root, ".enallagi", &lock).expect("lock");
+        let cache = env.cache.path();
+        crate::fixture::seed_scanners(cache);
+        std::fs::write(cache.join("gitleaks.json"), report).expect("report");
+        let pin = crate::security::default_pins()
+            .into_iter()
+            .find(|p| p.id == "gitleaks" && p.platform == crate::security::platform())
+            .expect("a gitleaks pin for this platform");
+        std::fs::write(
+            crate::security::tool_path(&pin, cache),
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > {c}/gitleaks.argv\nwhile [ $# -gt 0 ]; do [ \"$1\" = --report-path ] && cp {c}/gitleaks.json \"$2\"; shift; done\necho scanner-stderr >&2\nexit {exit}\n",
+                c = cache.display()
+            ),
+        )
+        .expect("stub gitleaks");
+        env.queue("done", "src/*", "§11 row 1");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write("src/key.txt", "key\n");
+        env.repo.commit_all("T-001 change");
+        (env, base)
+    }
+
+    #[test]
+    fn security_holds_leak() {
+        let (mut env, base) = leak_env(LEAK, 1);
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass && out.halt, "{}", out.reason);
+        assert!(
+            out.reason.contains("aws-access-token src/key.txt:1 abc123"),
+            "{}",
+            out.reason
+        );
+        assert!(env.tasks_text().contains("status: ready-for-human"));
+        assert_eq!(env.halts, vec![out.reason]);
+    }
+
+    #[test]
+    fn reason_hides_secret() {
+        let (mut env, base) = leak_env(LEAK, 1);
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        let events =
+            std::fs::read_to_string(env.repo.root.join(".enallagi/events.jsonl")).expect("events");
+        assert!(events.contains("aws-access-token"), "{events}");
+        for text in [&out.reason, &events, &env.tasks_text()] {
+            assert!(!text.contains("AKIAHIDDEN0SECRET99"), "{text}");
+        }
+    }
+
+    #[test]
+    fn security_runs_gitleaks_redacted() {
+        let (mut env, base) = leak_env("[]", 0);
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        let argv = std::fs::read_to_string(env.cache.path().join("gitleaks.argv")).expect("argv");
+        let argv: Vec<&str> = argv.lines().collect();
+        let dir = env.repo.root.join(".enallagi");
+        let after = |flag: &str| argv.iter().position(|a| *a == flag).map(|i| argv[i + 1]);
+        assert_eq!(argv[0], "git");
+        assert!(
+            argv.contains(&format!("--log-opts={base}..HEAD").as_str()),
+            "{argv:?}"
+        );
+        assert!(argv.contains(&"--redact"), "{argv:?}");
+        assert_eq!(after("--report-format"), Some("json"));
+        let config = dir.join("gitleaks.toml").display().to_string();
+        assert_eq!(after("--config"), Some(config.as_str()));
+        let ignore = dir.join("gitleaksignore").display().to_string();
+        assert_eq!(after("--gitleaks-ignore-path"), Some(ignore.as_str()));
+        let report = after("--report-path").expect("--report-path");
+        assert!(
+            Path::new(report).starts_with(env.cache.path().join("security")),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn security_no_pin_halts() {
+        let (mut env, base) = leak_env("[]", 0);
+        crate::skills::write_lock(&env.repo.root, ".enallagi", &Default::default()).expect("lock");
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass && out.halt, "{}", out.reason);
+        assert!(
+            out.reason.contains(&crate::security::platform()),
+            "{}",
+            out.reason
+        );
+    }
+
+    #[test]
+    fn security_bad_exit_halts() {
+        let (mut env, base) = leak_env("[]", 2);
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass && out.halt, "{}", out.reason);
+        assert!(out.reason.contains("scanner-stderr"), "{}", out.reason);
+        assert!(env.tasks_text().contains("status: done"));
     }
 
     #[test]

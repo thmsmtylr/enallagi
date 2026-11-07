@@ -45,6 +45,8 @@ const DOCS: &[(&str, &str)] = &[
         ".check-baseline",
         include_str!("../../../templates/dot.check-baseline"),
     ),
+    // passed as --config, so a client's own root config is never read
+    ("gitleaks.toml", "[extend]\nuseDefault = true\n"),
 ];
 
 const SKILL: &[(&str, &str)] = &[
@@ -1074,6 +1076,14 @@ mod tests {
         repo.init_harness("");
         let lock = skills::read_lock(&repo.root, ".enallagi").expect("lock");
         assert_eq!(lock.tool, crate::security::default_pins());
+    }
+
+    #[test]
+    fn init_seeds_gitleaks_config() {
+        let repo = crate::fixture::Repo::new();
+        repo.init_harness("");
+        let text = fs::read_to_string(repo.root.join(".enallagi/gitleaks.toml")).expect("seeded");
+        assert_eq!(text, "[extend]\nuseDefault = true\n");
     }
 
     #[test]

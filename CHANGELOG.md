@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- a new `security` gate runs gitleaks with `--redact` over a `done` task's commits; a leak sets the ticket to `ready-for-human` and halts the run. Init seeds `gitleaks.toml`
 - `harness.lock` pins gitleaks and osv-scanner per platform in `[[tool]]` entries, written by init; a pinned tool is fetched once into `~/.cache/enallagi/tools/` and checked against its sha256
 - `claims` re-runs only the `ran:`/`exit:` pairs under the `verdict:` line, and a PR body's Verification section prints that line and its pairs
 - `rejection-stale` and the implementer's retry prompt read the `verdict:` line; REJECTED prose in comments is no longer a verdict

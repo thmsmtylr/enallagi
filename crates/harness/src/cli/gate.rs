@@ -52,6 +52,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             warnings: &mut warnings,
             halts: &mut halts,
             dry_rounds: &mut dry_rounds,
+            cache: config::cache_root(),
         },
     );
     println!("{}", outcome.reason);
