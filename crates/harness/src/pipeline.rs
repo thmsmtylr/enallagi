@@ -563,6 +563,16 @@ struct Loop<'a> {
     built: Vec<String>,
 }
 
+// a respond round's worktree on its pull request's branch, and the checkout the loop returns to
+struct Lane<'a> {
+    checkout: &'a Path,
+    dir: PathBuf,
+    // the state repository's branch the lane's ticket edits are committed on
+    named: String,
+    branch: String,
+    base: String,
+}
+
 enum Flow {
     Go,
     SkipRest,
@@ -748,7 +758,7 @@ impl<'a> Loop<'a> {
             ));
             return false;
         }
-        let iter_base = git::head(self.root);
+        let mut iter_base = git::head(self.root);
         let state_base = git::head(&self.state_root());
         let progress_before = file_len(&self.file("PROGRESS.md"));
 
@@ -793,6 +803,19 @@ impl<'a> Loop<'a> {
             _ => takeable,
         };
 
+        let lane = match task.as_deref().map(|t| self.open_lane(t)) {
+            // the round has nowhere to run, and every later one would take the same ticket
+            Some(Err(err)) => {
+                self.digest.warnings.push(err);
+                return false;
+            }
+            Some(Ok(lane)) => lane,
+            None => None,
+        };
+        if let Some(lane) = &lane {
+            iter_base = Some(lane.base.clone());
+        }
+        let mut stopped = false;
         for name in &pipeline.stages {
             let Some(stage) = self.cfg.stage.iter().find(|s| &s.name == name).cloned() else {
                 continue;
@@ -815,18 +838,25 @@ impl<'a> Loop<'a> {
                     self.boundary(false);
                     break;
                 }
-                // a stage that exhausted its turns still decided the blocks it decided before it did
                 Flow::Stop => {
-                    self.promotions(&ready_before, &rejections_before);
-                    return false;
+                    stopped = true;
+                    break;
                 }
             }
+        }
+        if let Some(lane) = &lane {
+            self.close_lane(lane);
+        }
+        // a stage that exhausted its turns still decided the blocks it decided before it did
+        if stopped {
+            self.promotions(&ready_before, &rejections_before);
+            return false;
         }
 
         self.refuse_restated(task.as_deref(), &ready_before);
         self.promotions(&ready_before, &rejections_before);
         match &task {
-            Some(task) => self.task_outcome(task, &pipeline, progress_before),
+            Some(task) => self.task_outcome(task, &pipeline, progress_before, lane.as_ref()),
             None => {
                 if let Some(reason) = self.proposed_names_contract() {
                     self.halt("needs-triage", reason);
@@ -1515,7 +1545,13 @@ impl<'a> Loop<'a> {
         }
     }
 
-    fn task_outcome(&mut self, task: &str, pipeline: &config::Pipeline, progress_before: u64) {
+    fn task_outcome(
+        &mut self,
+        task: &str,
+        pipeline: &config::Pipeline,
+        progress_before: u64,
+        lane: Option<&Lane<'a>>,
+    ) {
         let block = self.blocks().into_iter().find(|b| b.id == task);
         let status = block.as_ref().and_then(|b| block::field(b, "status"));
         match block.as_ref().and_then(tracker::state).as_deref() {
@@ -1529,7 +1565,9 @@ impl<'a> Loop<'a> {
                 if let Some(rows) = rows.filter(|r| !r.is_empty()) {
                     self.digest.rows.push(format!("{task}: {rows}"));
                 }
-                if self.opts.pr_per_task || self.cfg.pr.per_task {
+                if let Some(lane) = lane {
+                    self.push_lane(task, lane);
+                } else if self.opts.pr_per_task || self.cfg.pr.per_task {
                     self.open_pull(task);
                 }
                 self.settle_thread(task);
@@ -1538,6 +1576,10 @@ impl<'a> Loop<'a> {
                 "{task} ended the iteration at {}, not done.",
                 status.as_deref().unwrap_or("no status")
             )),
+        }
+        if let Some(lane) = lane {
+            let dir = lane.dir.to_string_lossy();
+            let _ = git::git(self.root, &["worktree", "remove", "--force", &dir]);
         }
         // the entry is all the next iteration inherits, so the launcher writes the facts it has
         // rather than warning that a role left none -- a verify-only round has no other record
@@ -1715,6 +1757,135 @@ impl<'a> Loop<'a> {
             .and_then(|_| t.set_field(id, "rounds", &round.to_string()))
             .and_then(|_| t.set_status(id, "ready-for-agent", ""))
             .map_err(|e| e.to_string())
+    }
+
+    // a returned ticket works its pull request's branch in a worktree of its own, and the round's
+    // stages and gates run there; the checkout's branch never carries it
+    fn open_lane(&mut self, task: &str) -> Result<Option<Lane<'a>>, String> {
+        let state_root = self.state_root();
+        let branch = self
+            .blocks()
+            .iter()
+            .find(|b| b.id == task)
+            .and_then(|b| block::field(b, "branch"));
+        let Some(branch) = branch.filter(|_| state_root != self.root) else {
+            return Ok(None);
+        };
+        let dir = self.file("worktrees").join(format!("respond-{task}"));
+        let state = dir.join(&self.cfg.layout.harness_dir);
+        let named = format!("respond/{task}");
+        let _ = git::git(
+            self.root,
+            &["worktree", "remove", "--force", &dir.to_string_lossy()],
+        );
+        let _ = git::git(&state_root, &["worktree", "prune"]);
+        let base = git::git(self.root, &["fetch", "-q", "origin", &branch])
+            .and_then(|_| git::git(self.root, &["rev-parse", "FETCH_HEAD"]))
+            .and_then(|base| {
+                git::git(
+                    self.root,
+                    &[
+                        "worktree",
+                        "add",
+                        "-q",
+                        "--detach",
+                        &dir.to_string_lossy(),
+                        &base,
+                    ],
+                )?;
+                git::git(
+                    &state_root,
+                    &[
+                        "worktree",
+                        "add",
+                        "-q",
+                        "-B",
+                        &named,
+                        &state.to_string_lossy(),
+                    ],
+                )?;
+                Ok(base)
+            })
+            .map_err(|e| format!("{task}: no lane on {branch}: {e}"))?;
+        // ponytail: one leaked path per respond round, so the loop's borrowed root can point at the lane
+        let dir: &'static Path = Box::leak(dir.into_boxed_path());
+        Ok(Some(Lane {
+            checkout: std::mem::replace(&mut self.root, dir),
+            dir: dir.to_path_buf(),
+            named,
+            branch,
+            base,
+        }))
+    }
+
+    // the lane's state commits are the round's record, so they come back to the checkout's state repository
+    fn close_lane(&mut self, lane: &Lane<'a>) {
+        self.root = lane.checkout;
+        let state_root = self.state_root();
+        let named = &lane.named;
+        let state = lane.dir.join(&self.cfg.layout.harness_dir);
+        match git::git(&state_root, &["merge", "-q", "--ff-only", named]) {
+            Ok(_) => {
+                let _ = git::git(
+                    &state_root,
+                    &["worktree", "remove", "--force", &state.to_string_lossy()],
+                );
+                let _ = git::git(&state_root, &["branch", "-D", named]);
+            }
+            Err(err) => self.digest.warnings.push(format!(
+                "{named} did not fast-forward into {}, left in {}: {err}",
+                state_root.display(),
+                state.display()
+            )),
+        }
+    }
+
+    // fast-forward only, and never a state commit: the pull request is what a reviewer reads
+    fn push_lane(&mut self, task: &str, lane: &Lane<'a>) {
+        let range = format!("{}..HEAD", lane.base);
+        let subjects = git::git(&lane.dir, &["log", "--format=%s", &range]).unwrap_or_default();
+        let head = git::git(&lane.dir, &["rev-parse", "HEAD"]).unwrap_or_default();
+        let remote = git::git(
+            self.root,
+            &[
+                "ls-remote",
+                "origin",
+                &format!("refs/heads/{}", lane.branch),
+            ],
+        )
+        .unwrap_or_default();
+        let refused = if let Some(s) = subjects.lines().find(|s| git::recorded_sha(s).is_some()) {
+            Some(format!("push refused: state commit `{s}` in {range}"))
+        } else if remote.split_whitespace().next() != Some(lane.base.as_str()) {
+            Some(format!("push refused: origin's {} moved", lane.branch))
+        } else {
+            git::git(
+                &lane.dir,
+                &[
+                    "push",
+                    "-q",
+                    "origin",
+                    &format!("HEAD:refs/heads/{}", lane.branch),
+                ],
+            )
+            .err()
+            .map(|e| format!("push refused: {e}"))
+        };
+        let t = Tracker::open(self.root, &self.cfg.layout.harness_dir);
+        let now = jiff::Timestamp::now().strftime("%Y-%m-%dT%H:%M:%SZ");
+        let set = match &refused {
+            Some(reason) => t.set_status(task, "open", reason),
+            None => t
+                .set_status(task, "open", "")
+                .and_then(|_| t.set_field(task, "pushed", &format!("{head} {now}"))),
+        };
+        if let Err(err) = set {
+            self.digest.warnings.push(format!("{task}: {err}"));
+        }
+        if let Some(reason) = refused {
+            self.digest.warnings.push(format!("{task}: {reason}"));
+        }
+        self.commit_state(&format!("queue: {task} pushed"));
     }
 
     // the launcher pushes, never the lane: the lane's argv denies `git push`

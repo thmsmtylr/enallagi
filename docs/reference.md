@@ -31,6 +31,10 @@ A merged pull request sets `done`, and a closed one sets `wontfix` with gate `pu
 The full review read runs only when that key differs from the ticket's `polled:`, which then takes the new key.
 A finding inside the ticket's `scope:`, or with no anchor, goes back to that ticket as a `finding:` entry with its body quoted; the ticket returns to `ready-for-agent`, `rounds:` goes up by one, and its criteria are never touched.
 A finding outside the scope becomes a `needs-triage` ticket, and the launcher replies on its thread naming that ticket and resolves it.
+A returned ticket, a `ready-for-agent` one carrying `pr:`, is taken before any other.
+Its round runs in a worktree started from `origin/<branch>` after a fetch, with that head as the gate base, and the checkout's branch never carries it.
+After verify passes, the launcher fast-forward pushes the round's commits to `<branch>`, writes `pushed:` (sha and time) and sets the ticket `open`.
+A range holding a state commit, or a remote head that moved, refuses the push: the ticket goes back to `open` with the reason under `gate:`.
 A finding is already carried, and not routed again, when any ticket (`wontfix` included) holds its URL or its key, or an `.out-of-scope/` file lists its URL under `## Prior requests`.
 `enallagi review <pr>` reads a pull request no ticket owns, and every finding there lands as one `needs-triage` ticket: an unresolved thread (carrying its thread id), a review body, a plain comment, or a failed check on the head.
 The same finding raised twice on the same lines is one ticket.

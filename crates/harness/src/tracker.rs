@@ -35,6 +35,7 @@ pub const HARNESS_KEYS: &[&str] = &[
     "pr",
     "branch",
     "polled",
+    "pushed",
     "rounds",
     "finding",
 ];
@@ -67,18 +68,18 @@ pub fn takeable(blocks: &[Block]) -> Option<String> {
 pub fn takeable_by(blocks: &[Block], ok: impl Fn(&Block) -> bool) -> Option<String> {
     let states: HashMap<&str, Option<String>> =
         blocks.iter().map(|b| (b.id.as_str(), state(b))).collect();
-    blocks
-        .iter()
-        .filter(|b| state(b).as_deref() == Some("ready-for-agent") && ok(b))
-        .find(|b| {
-            block::blockers(b).iter().all(|id| {
+    let mut ready = blocks.iter().filter(|b| {
+        state(b).as_deref() == Some("ready-for-agent")
+            && ok(b)
+            && block::blockers(b).iter().all(|id| {
                 matches!(
                     states.get(id.as_str()).and_then(|s| s.as_deref()),
                     Some("done" | "open")
                 )
             })
-        })
-        .map(|b| b.id.clone())
+    });
+    let first = ready.clone().find(|b| block::field(b, "pr").is_some());
+    first.or_else(|| ready.next()).map(|b| b.id.clone())
 }
 
 fn number(id: &str) -> u64 {
@@ -1098,6 +1099,17 @@ mod tests {
         assert_eq!(takeable(&t.blocks().unwrap()).as_deref(), Some("T-002"));
         t.set_status("T-002", "open", "").unwrap();
         assert_eq!(takeable(&t.blocks().unwrap()), None);
+    }
+
+    #[test]
+    fn returned_ticket_taken_first() {
+        let r = Repo::new();
+        let t = files(&r);
+        t.set_status("T-003", "ready-for-agent", "").unwrap();
+        assert_eq!(takeable(&t.blocks().unwrap()).as_deref(), Some("T-002"));
+        t.set_field("T-003", "pr", "https://github.com/o/r/pull/3")
+            .unwrap();
+        assert_eq!(takeable(&t.blocks().unwrap()).as_deref(), Some("T-003"));
     }
 
     #[test]

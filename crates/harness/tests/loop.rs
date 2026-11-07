@@ -279,13 +279,17 @@ fn verifier(repo: &Repo) -> String {
 // a stub's verdict, written as a role writes it: one line, replacing the last, in `## Harness`, the file's last section
 // a verified verdict carries both review axes, as the verdict gate wants
 fn verdict(line: &str) -> String {
+    verdict_for("T-001", line)
+}
+
+fn verdict_for(id: &str, line: &str) -> String {
     let axes = if line.starts_with("verified") {
         "spec: none\\nstandards: none\\n"
     } else {
         ""
     };
     format!(
-        "f=$(ls {}/*/issues/T-001-*.md)\nsed -i.bak -e '/^verdict:/d' -e '/^spec:/d' -e '/^standards:/d' \"$f\"\nrm -f \"$f.bak\"\nprintf 'verdict: {line}\\n{axes}' >>\"$f\"\n",
+        "f=$(ls {}/*/issues/{id}-*.md)\nsed -i.bak -e '/^verdict:/d' -e '/^spec:/d' -e '/^standards:/d' \"$f\"\nrm -f \"$f.bak\"\nprintf 'verdict: {line}\\n{axes}' >>\"$f\"\n",
         queue_path()
     )
 }
@@ -4435,6 +4439,105 @@ fn missing_gh_warns() {
     assert!(!out.contains("HALT"), "{out}");
     let log = std::fs::read_to_string(r.root.join(".enallagi/events.jsonl")).unwrap_or_default();
     assert!(log.contains("stage.start"), "{out}");
+}
+
+const RETURNED: &str = "
+## [T-900] answer the review
+
+scope: src/thing.ts
+rows: none — harness
+status: ready-for-agent
+criteria:
+  - it happens
+pr: https://github.com/owner/repo/pull/9
+branch: task/T-900
+";
+
+// a returned ticket's lane, its stubs working whichever ticket the launcher hands them
+fn returned(commit: &str) -> Pulls {
+    let p = pulls("", "exit 0\n");
+    let r = &p.repo;
+    let bin = env!("CARGO_BIN_EXE_enallagi");
+    let implement = script(
+        r,
+        "src/fakeimpl.sh",
+        &format!(
+            "echo fix >src/thing.ts\n{bin} tasks set-status \"$ENALLAGI_TASK\" review stub\n\
+             git add -A && git -c commit.gpgsign=false commit -qm {commit}\n{QUIET}"
+        ),
+    );
+    let verify = script(
+        r,
+        "src/fakeverify.sh",
+        &format!(
+            "{bin} tasks set-status \"$ENALLAGI_TASK\" done stub\n{}{QUIET}",
+            verdict_for("$ENALLAGI_TASK", "verified by verifier")
+        ),
+    );
+    write_toml(r, &base_toml(&role_commands(&implement, &verify)));
+    queue(r, &format!("{TASKS}{RETURNED}"));
+    // as an install leaves it: the harness directory is its own repository, the product never tracks it
+    let git = |root: &std::path::Path, args: &[&str]| {
+        enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+    };
+    git(&r.root, &["rm", "-r", "-q", "--cached", ".enallagi"]);
+    r.write(".git/info/exclude", "/.enallagi/\n");
+    r.commit_all("a returned ticket");
+    let state = r.root.join(".enallagi");
+    git(&state, &["init", "-q"]);
+    git(&state, &["add", "-A"]);
+    git(
+        &state,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "state",
+        ],
+    );
+    git(
+        &r.root,
+        &["push", "-q", "origin", "HEAD:refs/heads/task/T-900"],
+    );
+    p
+}
+
+fn checkout(r: &Repo) -> String {
+    enallagi::git::git(&r.root, &["rev-parse", "--abbrev-ref", "HEAD", "HEAD"]).expect("head")
+}
+
+#[test]
+fn respond_pushes_branch() {
+    let p = returned("'T-900: fix'");
+    let before = checkout(&p.repo);
+    let (_, out) = p.run(&[]);
+    let origin = p.origin.path().join("origin.git");
+    let log = enallagi::git::git(&origin, &["log", "--format=%s", "task/T-900"]).expect("log");
+    assert_eq!(log.lines().next(), Some("T-900: fix"), "{out}");
+    assert_eq!(checkout(&p.repo), before, "{out}");
+    assert_eq!(state_of(&p.repo, "T-900").as_deref(), Some("open"), "{out}");
+    let head = enallagi::git::git(&origin, &["rev-parse", "task/T-900"]).expect("head");
+    let pushed = field_of(&p.repo, "T-900", "pushed").unwrap_or_default();
+    assert!(pushed.starts_with(&head), "{pushed}\n{out}");
+}
+
+#[test]
+fn push_refuses_state_commit() {
+    let p = returned("'queue: T-900 at 1234567'");
+    let origin = p.origin.path().join("origin.git");
+    let head = enallagi::git::git(&origin, &["rev-parse", "task/T-900"]).expect("head");
+    let (_, out) = p.run(&[]);
+    assert_eq!(
+        enallagi::git::git(&origin, &["rev-parse", "task/T-900"]).ok(),
+        Some(head),
+        "{out}"
+    );
+    assert_eq!(state_of(&p.repo, "T-900").as_deref(), Some("open"), "{out}");
+    let gate = field_of(&p.repo, "T-900", "gate").unwrap_or_default();
+    assert!(gate.contains("state commit"), "{gate}\n{out}");
 }
 
 const LEARNING: &str = "- [proposed] `vacuous-test`: a test passed with its logic deleted → watch it fail first\n  instances: `SPEC.md:1`, `PROGRESS.md:1`, `TASKS.md:1`\n";

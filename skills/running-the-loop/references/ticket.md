@@ -41,6 +41,7 @@ queue. No line under `## Comments` opens with `## `: that ends the section.
 | `spec:` `standards:` | directly under `verdict:`, the verifier's findings on each review axis, or `none`. A `done` missing either goes back to `ready-for-agent`. |
 | `ran:` `exit:` | pairs under the verdict: a command a claim rests on and the exit it gave. The `claims` gate re-runs them. |
 | `pr:` `branch:` `polled:` | written by the launcher: the open pull request's URL, its head branch, and the poll's last key (head sha, newest comment and review, check rollup). |
+| `pushed:` | written by the launcher after a respond round reaches the pull request branch: the pushed sha and the time. |
 | `finding:` `rounds:` | written by the launcher when the poll returns a finding to the ticket: `finding: F-<n> <source> round <r>`, then indented `by:`, `key:`, `url:`, `anchor:`, `thread-id:` and `severity:` as the finding has them, then its body quoted. `rounds:` counts the respond rounds. |
 | `deferred:` | the verifier's `needs-triage` filing for a defect outside the criteria, by id and reason. The `commit-verdict` gate reads it. |
 
