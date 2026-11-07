@@ -1490,9 +1490,15 @@ mod tests {
             .expect("first lane");
             assert!(first.merged, "{}", first.reason);
             file_in(wt, "T-003", "b finding");
-            Tracker::open(wt, ".enallagi")
-                .set_field("T-001", "deferred", "T-003 b finding")
+            file_in(wt, "T-004", "c finding");
+            let lane = Tracker::open(wt, ".enallagi");
+            lane.set_field("T-001", "deferred", "T-003 b finding")
                 .expect("deferred");
+            let sibling = lane.path_of("T-004").expect("T-004 file");
+            let text = std::fs::read_to_string(&sibling).expect("read");
+            let blocked = regex::Regex::new(r"(?m)^\*\*Blocked by:\*\*.*$").expect("pattern");
+            let text = blocked.replace(&text, "**Blocked by:** T-003");
+            std::fs::write(&sibling, text.as_ref()).expect("write");
             land(wt, "T-001", "one.txt");
             Ok(())
         })
@@ -1506,14 +1512,16 @@ mod tests {
             .map(|b| (b.id.as_str(), b.title.as_str()))
             .collect();
         assert!(titles.contains(&("T-003", "a finding")), "{titles:?}");
-        assert!(titles.contains(&("T-004", "b finding")), "{titles:?}");
-        let name = t.path_of("T-004").expect("T-004 file");
-        assert!(name.ends_with("T-004-b-finding.md"), "{}", name.display());
+        assert!(titles.contains(&("T-005", "b finding")), "{titles:?}");
+        let name = t.path_of("T-005").expect("T-005 file");
+        assert!(name.ends_with("T-005-b-finding.md"), "{}", name.display());
         let own = t.get("T-001").expect("queue").expect("T-001");
         assert_eq!(
             crate::block::field(&own, "deferred").as_deref(),
-            Some("T-004 b finding")
+            Some("T-005 b finding")
         );
+        let sibling = t.get("T-004").expect("queue").expect("T-004");
+        assert_eq!(crate::block::blockers(&sibling), ["T-005"]);
     }
 
     #[test]

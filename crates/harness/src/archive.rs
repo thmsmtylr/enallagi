@@ -159,7 +159,15 @@ pub fn archive_done_with(
     // An uncommitted verdict folded into an archive commit loses its author and its message.
     let dir = &cfg.layout.harness_dir;
     let (repo, inner, _) = git::locate(root, dir, &config::instance_rel(root, dir, tracker::SPECS));
-    if !dry_run && !git::git_ok(&repo, &["diff", "--quiet", "--", &inner]) {
+    // untracked too: a filed ticket or a halted decompose's drafts
+    let status = [
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--",
+        &inner,
+    ];
+    if !dry_run && git::git(&repo, &status).map_or(true, |s| !s.trim().is_empty()) {
         return Err(ArchiveError::UncommittedTasks);
     }
 
@@ -433,6 +441,22 @@ mod tests {
         }
         let aged = ages(&r.root, &cfg(&r.root), &["T-001".to_string()]);
         assert_eq!(aged["T-001"], 2, "{aged:?}");
+    }
+
+    #[test]
+    fn untracked_ticket_refused() {
+        let r = Repo::new();
+        r.queue(".enallagi", "## [T-001] a\nstatus: done\n");
+        r.commit_all("queue");
+        let t = Tracker::open(&r.root, ".enallagi");
+        let spec = t.spec_of("T-001").expect("spec");
+        t.append(&spec, "## [T-002] filed\nstatus: needs-triage\n")
+            .expect("file");
+        let err = archive_done(&r.root, &cfg(&r.root), false).err();
+        assert!(
+            matches!(err, Some(ArchiveError::UncommittedTasks)),
+            "{err:?}"
+        );
     }
 
     #[test]

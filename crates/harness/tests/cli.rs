@@ -2389,6 +2389,13 @@ fn check_flags_drafts() {
             vec![good[0].clone(), ("notes.md", "scratch\n".to_string())],
             &[".enallagi/specs/app/issues/notes.md: changed beside the drafts"],
         ),
+        (
+            vec![
+                good[0].clone(),
+                ("01-again.md", draft("01", "None", "it shows")),
+            ],
+            &["01-first.md: 01 used twice"],
+        ),
     ];
     for (drafts, want) in cases {
         let (code, out) = check(&r, &drafts);
@@ -2400,6 +2407,16 @@ fn check_flags_drafts() {
             );
         }
     }
+
+    // a blocker whose pull request is open has landed for every draft after it
+    r.queue(
+        ".enallagi",
+        "## [T-001] open\nstatus: ready-for-agent\n\n## [T-002] pulled\nstatus: open\n",
+    );
+    std::fs::remove_dir_all(r.root.join(".enallagi/specs/app/issues")).expect("rm drafts");
+    r.commit_all("pulled");
+    let after = [("01-first.md", draft("01", "T-002", "`adds` passes"))];
+    assert_eq!(check(&r, &after), (Some(0), String::new()));
 
     r.write("src/b.ts", "export const y = 2\n");
     let (code, out) = check(&r, &good);

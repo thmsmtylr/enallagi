@@ -677,7 +677,13 @@ pub fn check(root: &Path, cfg: &crate::config::Config, slug: &str) -> Vec<String
     let open: HashMap<String, bool> = match t.blocks() {
         Ok(b) => b
             .iter()
-            .map(|b| (b.id.clone(), state(b).as_deref() != Some("done")))
+            // an open pull request is landed work, as `takeable_by` reads it
+            .map(|b| {
+                (
+                    b.id.clone(),
+                    !matches!(state(b).as_deref(), Some("done" | "open")),
+                )
+            })
             .collect(),
         Err(e) => {
             out.push(e.to_string());
@@ -688,6 +694,13 @@ pub fn check(root: &Path, cfg: &crate::config::Config, slug: &str) -> Vec<String
     let name = |d: &Draft| d.path.file_name().unwrap_or_default().display().to_string();
     for d in &drafts {
         let n = name(d);
+        // `number_drafts` keys drafts by number, so two with one number would share an id
+        if let Some(num) = d
+            .num
+            .filter(|k| nums.iter().filter(|m| *m == k).count() > 1)
+        {
+            out.push(format!("{n}: {num:02} used twice"));
+        }
         for (ok, what) in [
             (d.num.is_some(), "`# NN: title` heading"),
             (d.status, "**Status:** line"),
@@ -1025,7 +1038,7 @@ impl Tracker {
         Ok(block::next_id(&self.blocks()?, archived))
     }
 
-    /// Renames each of this queue's ticket files whose id `parent` holds at another path to the next free id, rewriting the id in it and in `own`'s file. Returns (old, new) pairs.
+    /// Renames each of this queue's ticket files whose id `parent` holds at another path to the next free id, rewriting the id in every ticket of this queue. Returns (old, new) pairs.
     pub fn renumber(
         &self,
         parent: &Tracker,
@@ -1071,9 +1084,12 @@ impl Tracker {
                 word.replace_all(&text, new.as_str()).as_ref(),
             )?;
             std::fs::remove_file(&path)?;
-            if let Some(own) = &own_path {
-                let text = std::fs::read_to_string(own)?;
-                std::fs::write(own, word.replace_all(&text, new.as_str()).as_ref())?;
+            // every lane ticket naming the old id meant the lane's own
+            for sibling in ticket_files(&self.0) {
+                let text = std::fs::read_to_string(&sibling)?;
+                if word.is_match(&text) {
+                    std::fs::write(&sibling, word.replace_all(&text, new.as_str()).as_ref())?;
+                }
             }
             out.push((id, new));
         }
@@ -1165,9 +1181,15 @@ mod tests {
     fn takes_lowest_ready_unblocked_id() {
         let r = Repo::new();
         let t = files(&r);
+        // a higher id in a spec dir that sorts first
+        t.append(
+            "aaa",
+            "## [T-010] later\nscope: z.rs\nstatus: ready-for-agent\n",
+        )
+        .unwrap();
         assert_eq!(takeable(&t.blocks().unwrap()).as_deref(), Some("T-002"));
         t.set_status("T-001", "review", "").unwrap();
-        assert_eq!(takeable(&t.blocks().unwrap()), None);
+        assert_eq!(takeable(&t.blocks().unwrap()).as_deref(), Some("T-010"));
     }
 
     #[test]

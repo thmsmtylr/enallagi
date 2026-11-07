@@ -1187,8 +1187,11 @@ impl<'a> Loop<'a> {
                 false => Adjudication::Ran,
             };
         }
-        let msg = format!("{} {}", stage.name, task.unwrap_or_default());
-        self.commit_state(msg.trim_end());
+        // a halted decompose leaves its drafts uncommitted, so the next check still sees them
+        if role.as_deref() != Some("decomposer") || !matches!(flow, Flow::Stop) {
+            let msg = format!("{} {}", stage.name, task.unwrap_or_default());
+            self.commit_state(msg.trim_end());
+        }
         flow
     }
 

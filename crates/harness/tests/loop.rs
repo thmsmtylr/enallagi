@@ -5560,13 +5560,16 @@ fn bad_drafts_halt() {
             .any(|h| h.contains("blocking cycle through 02")),
         "{digest:#?}"
     );
-    let issues = std::fs::read_dir(r.root.join(issues(&r))).unwrap();
-    let names: Vec<String> = issues
+    let dir = issues(&r);
+    let names: Vec<String> = std::fs::read_dir(r.root.join(&dir))
+        .unwrap()
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     assert!(!names.iter().any(|n| n.starts_with("T-")), "{names:?}");
     assert_eq!(names.len(), 2, "{names:?}");
+    let tracked = enallagi::git::git(&r.root, &["ls-files", &dir]).expect("ls-files");
+    assert_eq!(tracked, "", "{digest:#?}");
 }
 
 #[test]
