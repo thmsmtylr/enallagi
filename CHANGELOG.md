@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `enallagi eval --gate verifier-findings` builds its ablated arm again; a test fails when any eval's `ablate.sh` anchor misses its role
 - the adjudicator triages with Pocock's `triage`: a kill records its line in `.out-of-scope/<concept>.md` instead of DECISIONS.md `## Rejected findings`, which stays read-only history the probes still honour; a `probe: decompose` ticket is judged against its spec; a ticket needing a person goes to `ready-for-human`
 - new eval `verifier-filing`: the verifier files a defect outside the criteria as one `needs-triage` ticket; its ablation removes only that rule
 - the verifier reviews along `code-review`'s Spec and Standards axes and runs `ponytail-review`; the `verdict` gate sends a `done` back to `ready-for-agent` unless `spec:` and `standards:` lines sit under its verdict; a new command that writes files or calls a model is verified in a copy of the harness directory

@@ -464,3 +464,32 @@ fn filing_ablate_strips_rule() {
     let (kept, cut) = (text.lines().count(), shipped.lines().count());
     assert!(cut - kept <= 2, "{cut} -> {kept}");
 }
+
+// an ablate.sh whose anchor left its role cannot build the gate's ablated arm
+#[test]
+fn ablate_anchors_match() {
+    let pkg = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut broken = Vec::new();
+    for entry in fs::read_dir(pkg.join("evals")).unwrap() {
+        let ablate = entry.unwrap().path().join("ablate.sh");
+        if !ablate.is_file() {
+            continue;
+        }
+        let repo = enallagi::fixture::Repo::new();
+        repo.init_harness("");
+        let out = std::process::Command::new("bash")
+            .arg(&ablate)
+            .env("EVAL_PKG", &pkg)
+            .current_dir(&repo.root)
+            .output()
+            .expect("run ablate.sh");
+        if !out.status.success() {
+            broken.push(format!(
+                "{}: {}",
+                ablate.display(),
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+    }
+    assert!(broken.is_empty(), "{broken:#?}");
+}

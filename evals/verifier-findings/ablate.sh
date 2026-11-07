@@ -10,7 +10,7 @@ subs = [
     ("and a mutation: one a criterion names, or step 5's removal of the logic a test covers. For a mutation, one `Edit` makes the change in the file it names,",
      'and a mutation a criterion names. For a mutation, one `Edit` makes the change the criterion states in the file it names,'),
     ('A check that exits non-zero is a rejection, and the only exception is a failure whose name the baseline below lists. Before deciding, re-run it alone in its shell call. A failure is never put down to the environment, a sandbox or noise to pass the task. ', ''),
-    (". Every verdict line carries the command it ran and that command's output. A verdict line with neither is refused by this checklist: rewrite it before you write the status.\n", ':\n'),
+    (", and every claim there carries the command it ran and that command's output. A claim with neither is refused by this checklist: rewrite it before you write the status.\n", '.\n'),
     ('7. Try to break it', '6. Try to break it'),
 ]
 for rule, was in subs:
