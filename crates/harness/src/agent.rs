@@ -305,20 +305,25 @@ pub struct UsageValues {
     pub turns: Option<u64>,
 }
 
-// agents stream one JSON object per line with totals in the last one, so the last parseable line wins
+// totals sit in the last object; claude 2.1.300 prints a system line after its result, so a result line wins
 pub fn extract_usage(output: &str, paths: &UsagePaths) -> UsageValues {
     let mut values = UsageValues::default();
-    let Some(last) = output.lines().rev().find_map(|line| {
-        serde_json::from_str::<serde_json::Value>(line.trim())
-            .ok()
-            .filter(serde_json::Value::is_object)
-    }) else {
+    let objects: Vec<serde_json::Value> = output
+        .lines()
+        .filter_map(|line| serde_json::from_str(line.trim()).ok())
+        .filter(serde_json::Value::is_object)
+        .collect();
+    let Some(last) = objects
+        .iter()
+        .rfind(|o| o["type"] == "result")
+        .or(objects.last())
+    else {
         return values;
     };
     let at = |path: &Option<String>| -> Option<&serde_json::Value> {
         path.as_deref()?
             .split('.')
-            .try_fold(&last, |node, key| node.get(key))
+            .try_fold(last, |node, key| node.get(key))
     };
     values.cost = at(&paths.cost).and_then(serde_json::Value::as_f64);
     values.input_tokens = at(&paths.input_tokens).and_then(serde_json::Value::as_u64);
@@ -975,6 +980,18 @@ mod tests {
         assert_eq!(u.output_tokens, Some(5));
         let none = extract_usage("no json here\n", &presets()["claude"].usage);
         assert_eq!(none.cost, None);
+    }
+
+    #[test]
+    fn cost_after_result() {
+        // claude 2.1.300 tail, recorded 2026-11-07, result line trimmed
+        let out = concat!(
+            "{\"duration_api_ms\":28921,\"stop_reason\":\"end_turn\",\"session_id\":\"f830a49b-de54-4dcd-aad4-dcc68588d064\",\"total_cost_usd\":0.34952540000000004,\"usage\":{\"input_tokens\":24,\"cache_creation_input_tokens\":27608,\"cache_read_input_tokens\":375627,\"output_tokens\":2672},\"is_error\":false,\"num_turns\":15,\"subtype\":\"success\",\"type\":\"result\"}\n",
+            "{\"type\":\"system\",\"subtype\":\"session_state_changed\",\"state\":\"idle\",\"uuid\":\"c8c9eade-667f-4529-ab3c-c29c12ddb480\",\"session_id\":\"f830a49b-de54-4dcd-aad4-dcc68588d064\"}\n",
+        );
+        let u = extract_usage(out, &presets()["claude"].usage);
+        assert_eq!(u.cost, Some(0.34952540000000004));
+        assert_eq!(u.turns, Some(15));
     }
 
     #[test]
