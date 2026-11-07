@@ -2737,7 +2737,8 @@ rows: none — harness
 status: ready-for-agent
 criteria:
   - it happens
-notes: REJECTED: the red deleted the whole call site, so it covered no branch.
+verdict: rejected by verifier: the red deleted the whole call site, so it covered no branch.
+notes: REJECTED: an older verdict quoted in prose.
 ";
 
 fn implementing(r: &Repo, tasks: &str) {
@@ -2764,6 +2765,7 @@ fn the_implement_prompt_names_a_rejected_attempt() {
     let prompt = implement_prompt(&r);
     assert!(prompt.contains(&format!("git show {attempt}")), "{prompt}");
     assert!(prompt.contains("it covered no branch"), "{prompt}");
+    assert!(!prompt.contains("older verdict"), "{prompt}");
 }
 
 #[test]

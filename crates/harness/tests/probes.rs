@@ -1370,203 +1370,48 @@ fn rejection_stale(repo: &Repo, cfg: &Config) -> Vec<String> {
         .collect()
 }
 
-fn reviewed_block(id: &str, status: &str, verdicts: &str) -> String {
-    format!("\n## [{id}] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: {status}\nnotes: the review record.\n{verdicts}")
+fn reviewed_block(id: &str, status: &str, lines: &str) -> String {
+    format!(
+        "\n## [{id}] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: {status}\n{lines}"
+    )
 }
 
-const REJECTION: &str =
-    "  REJECTED: the quoted figure does not reproduce (verifier, 2026-09-17).\n";
-
-// the shape T-064 carried: a verdict quoted in a later paragraph is a reference, not a verdict
-const QUOTED: &str = "  Named and not a rejection point: two citations sit inside this block's `REJECTED:` records.\n";
+#[test]
+fn unanswered_rejection() {
+    let (repo, cfg) = seeded();
+    let rejected = "verdict: rejected by verifier: the figure does not reproduce\n";
+    let answered = "verdict: answered by implementer\n";
+    let blocks: String = [
+        ("T-002", "review", rejected),
+        ("T-003", "done", rejected),
+        ("T-004", "ready-for-agent", rejected),
+        ("T-005", "ready-for-human", rejected),
+        ("T-006", "review", answered),
+        ("T-007", "needs-info", answered),
+    ]
+    .iter()
+    .map(|(id, status, line)| reviewed_block(id, status, line))
+    .collect();
+    queue(&repo, &blocks);
+    let found = rejection_stale(&repo, &cfg);
+    assert_eq!(found.len(), 3, "{found:?}");
+    for (f, id) in found.iter().zip(["T-002", "T-003", "T-007"]) {
+        assert!(f.contains(id), "{f}");
+    }
+}
 
 #[test]
-fn an_unanswered_rejection_is_reported() {
+fn rejection_prose_ignored() {
     let (repo, cfg) = seeded();
     queue(
         &repo,
         &reviewed_block(
             "T-002",
             "review",
-            &format!("  IMPLEMENTER 2026-09-17: the change is committed.\n{REJECTION}"),
+            "notes: the review record.\n  REJECTED: the figure does not reproduce (verifier, 2026-09-17).\n",
         ),
     );
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("T-002"), "{}", found[0]);
-}
-
-#[test]
-fn an_answered_rejection_is_quiet_at_review() {
-    let (repo, cfg) = seeded();
-    for (id, answer) in [
-        ("T-002", "VERIFIED"),
-        ("T-003", "Passed"),
-        ("T-004", "IMPLEMENTER"),
-    ] {
-        queue(
-            &repo,
-            &reviewed_block(
-                id,
-                "review",
-                &format!(
-                    "{REJECTION}  {answer} 2026-09-17: the rejection point is answered.\n{QUOTED}"
-                ),
-            ),
-        );
-    }
     assert_eq!(rejection_stale(&repo, &cfg), Vec::<String>::new());
-}
-
-#[test]
-fn an_answered_rejection_is_quiet_at_done() {
-    let (repo, cfg) = seeded();
-    for (id, answer) in [
-        ("T-002", "VERIFIED"),
-        ("T-003", "Passed"),
-        ("T-004", "IMPLEMENTER"),
-    ] {
-        queue(
-            &repo,
-            &reviewed_block(
-                id,
-                "done",
-                &format!(
-                    "{REJECTION}  {answer} 2026-09-17: the rejection point is answered.\n{QUOTED}"
-                ),
-            ),
-        );
-    }
-    assert_eq!(rejection_stale(&repo, &cfg), Vec::<String>::new());
-}
-
-#[test]
-fn a_verdict_word_inside_a_rejection_is_not_read() {
-    let (repo, cfg) = seeded();
-    for (id, rejection) in [
-        (
-            "T-002",
-            "  REJECTED: only three of the five criteria Passed (verifier, 2026-09-17).\n",
-        ),
-        (
-            "T-003",
-            "  REJECTED: the IMPLEMENTER left the tree dirty (verifier, 2026-09-17).\n",
-        ),
-    ] {
-        queue(&repo, &reviewed_block(id, "review", rejection));
-    }
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 2, "{found:?}");
-    assert!(found[0].contains("T-002"), "{}", found[0]);
-    assert!(found[1].contains("T-003"), "{}", found[1]);
-}
-
-#[test]
-fn a_verdict_word_later_in_a_rejection_is_not_read() {
-    let (repo, cfg) = seeded();
-    let rejection =
-        "  REJECTED: the diff is out of scope. Only three criteria Passed (verifier, 2026-09-18).\n";
-    queue(&repo, &reviewed_block("T-002", "review", rejection));
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("T-002"), "{}", found[0]);
-}
-
-#[test]
-fn a_verdict_first_in_a_rejection_is_not_read() {
-    let (repo, cfg) = seeded();
-    queue(
-        &repo,
-        &reviewed_block(
-            "T-002",
-            "review",
-            "  REJECTED: Passed counts do not reproduce.\n",
-        ),
-    );
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("T-002"), "{}", found[0]);
-}
-
-#[test]
-fn a_dated_verdict_first_rejection_is_reported() {
-    let (repo, cfg) = seeded();
-    queue(
-        &repo,
-        &reviewed_block(
-            "T-002",
-            "review",
-            "  REJECTED 2026-09-21: Passed counts do not reproduce.\n",
-        ),
-    );
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("T-002"), "{}", found[0]);
-}
-
-#[test]
-fn a_mid_line_answer_silences_a_rejection() {
-    let (repo, cfg) = seeded();
-    let block = format!(
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: review\nnotes: {}\n",
-        "Adjudicated 2026-09-17. REJECTED: the quoted figure does not reproduce (verifier, 2026-09-17). IMPLEMENTER 2026-09-17: the figure is re-run and stamped. VERIFIER 2026-09-17: VERIFIED."
-    );
-    queue(&repo, &block);
-    assert_eq!(rejection_stale(&repo, &cfg), Vec::<String>::new());
-}
-
-#[test]
-fn a_rejection_behind_a_role_label_is_reported() {
-    let (repo, cfg) = seeded();
-    queue(
-        &repo,
-        &reviewed_block(
-            "T-002",
-            "review",
-            "  VERIFIER 2026-09-18: REJECTED: the gate is red.\n",
-        ),
-    );
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("T-002"), "{}", found[0]);
-}
-
-#[test]
-fn a_prose_colon_prefix_is_not_a_rejection_label() {
-    let (repo, cfg) = seeded();
-    for (id, prose) in [
-        ("T-004", "the rejection point stands"),
-        ("T-005", "Reproduced at 2026-09-20"),
-    ] {
-        queue(
-            &repo,
-            &reviewed_block(
-                id,
-                "review",
-                &format!("{REJECTION}  {prose}: VERIFIED was never printed.\n"),
-            ),
-        );
-    }
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 2, "{found:?}");
-    assert!(found[0].contains("T-004"), "{}", found[0]);
-    assert!(found[1].contains("T-005"), "{}", found[1]);
-}
-
-#[test]
-fn a_rejection_behind_a_dated_label_is_reported() {
-    let (repo, cfg) = seeded();
-    queue(
-        &repo,
-        &reviewed_block(
-            "T-003",
-            "review",
-            "  2026-09-18 verifier: REJECTED: the gate is red.\n",
-        ),
-    );
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("T-003"), "{}", found[0]);
 }
 
 const LONG_TITLE: &str = "a task/ branch that outlives its merged pull request calls gh pr list once every iteration for good";
@@ -1619,23 +1464,6 @@ fn old_title_left() {
         "{}",
         found[0].message
     );
-}
-
-// the label's own first word is the verdict, and the reasons after the colon are not an answer to it
-#[test]
-fn a_rejection_dated_in_its_own_label_is_reported() {
-    let (repo, cfg) = seeded();
-    queue(
-        &repo,
-        &reviewed_block(
-            "T-003",
-            "review",
-            "  REJECTED 2026-09-21: Passed counts do not reproduce.\n",
-        ),
-    );
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("T-003"), "{}", found[0]);
 }
 
 #[test]

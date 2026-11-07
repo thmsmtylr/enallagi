@@ -112,7 +112,7 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `learning-standing` | a proposed learning still undecided, with its age and the rounds left before it expires |
 | `skill-ungated` | a `[[skill]]` whose `gate` is `none` |
 | `ponytail-ceiling` | a `ponytail:` marker no kill line names |
-| `rejection-stale` | a ticket whose last verdict is REJECTED and whose status is not `ready-for-agent`, or a ticket at `needs-info` |
+| `rejection-stale` | a ticket whose `verdict:` line reads `rejected` and whose status is not `ready-for-agent` or `ready-for-human`, or a ticket at `needs-info` |
 | `title-length` | a ticket title past 72 characters, from `queue.title_cap_from` on, except an imported issue still `needs-triage`; the id and the count |
 | `queue-hygiene` | a repeated id, a missing status, an undefined blocker, or a scope entry matching nothing |
 | `friction-repeat` | a friction recorded twice that no LEARNINGS.md rule, `## Earned rules` line or kill line covers, and an earned rule whose class recurred after its `promoted:` commit |

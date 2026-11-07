@@ -1583,7 +1583,7 @@ impl<'a> Loop<'a> {
             .unwrap_or_default();
         Some(format!(
             "{task} carries a prior implementation attempt no verdict accepted. \
-             Read {} and the block's REJECTED: text before you write any code. \
+             Read {} and the ticket's `verdict:` and `gate:` lines before you write any code. \
              Do not re-send a diff an attempt already had rejected for the same reason.{answer}",
             shows.join(", ")
         ))
@@ -1756,14 +1756,12 @@ fn listing(out: &mut String, heading: &str, items: &[String]) {
     }
 }
 
-// the verifier writes its verdict into the block's notes as `REJECTED`; a `gate:` line is written
-// only by set_status, and the newest one sits directly under `status:`
+// the verifier's reason, else the newest gate's: set_status writes it first
 fn rejection_text(b: &block::Block) -> Option<String> {
-    let text = block::block_text(b);
-    if let Some(at) = text.rfind("REJECTED") {
-        return Some(text[at..].to_string());
+    match tracker::verdict(b) {
+        Some((tracker::Verdict::Rejected(reason), _)) if !reason.is_empty() => Some(reason),
+        _ => block::field(b, "gate").filter(|v| !v.trim().is_empty()),
     }
-    block::field(b, "gate").filter(|v| !v.trim().is_empty())
 }
 
 // a verdict is a paragraph and a promotion copies one claim of it, never the whole thing. A run
@@ -1927,6 +1925,29 @@ fn shell_preset() -> Preset {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_quotes_reason() {
+        let ticket = |harness: &str| {
+            tracker::parse_ticket(&format!("# T-001: t\n\n**Status:** ready-for-agent\n\n## Comments\n\nREJECTED: prose\n\n## Harness\n\ngate: the newest gate\ngate: an older gate\n{harness}\n")).expect("ticket")
+        };
+        let text = |harness| rejection_text(&ticket(harness));
+        assert_eq!(
+            text("verdict: rejected by verifier: the red covers no branch").as_deref(),
+            Some("the red covers no branch")
+        );
+        for fallback in [
+            "verdict: rejected by verifier",
+            "verdict: answered by implementer",
+            "",
+        ] {
+            assert_eq!(
+                text(fallback).as_deref(),
+                Some("the newest gate"),
+                "{fallback}"
+            );
+        }
+    }
 
     #[test]
     fn lanes_read_the_earned_rules_range() {
