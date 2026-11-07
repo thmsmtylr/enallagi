@@ -4455,6 +4455,65 @@ fn second_red_holdout_halts() {
     assert_eq!(digest.iterations, 2, "{events:#?}");
 }
 
+const BURNED: &str = "a lane named a holdout path; the set may be burned";
+
+// a set for the fixture spec, and an implementer running `extra` with SET as the set's dir
+fn leak_repo(extra: &str, post: &str) -> Repo {
+    let r = repo("", "");
+    let implement = implementer(&r, &extra.replace("SET", &holdout_dir(&r)));
+    let verify = verifier(&r);
+    let toml = base_toml(&role_commands(&implement, &verify))
+        .replace(r#"post = ["implementer-not-done"]"#, post);
+    write_toml(&r, &toml);
+    queue(&r, TASKS);
+    r.commit_all("stubs");
+    script(&r, &format!("{}/a.sh", holdout_dir(&r)), "exit 0\n");
+    r
+}
+
+fn assert_burned(r: &Repo, digest: &Digest) {
+    assert_eq!(state_of(r, "T-001").as_deref(), Some("ready-for-human"));
+    assert!(
+        digest
+            .halts
+            .iter()
+            .any(|h| h == &format!("implement: {BURNED}")),
+        "{:?}",
+        digest.halts
+    );
+    let said = format!("{}{:?}{:?}", tasks_text(r), digest.halts, digest.warnings);
+    assert!(!said.contains("holdouts/"), "{said}");
+}
+
+#[test]
+fn leaked_holdout_path_halts() {
+    let r = leak_repo("echo 'cat SET/a.sh'\n", "post = []");
+    let (digest, events) = go(&r, &opts(3));
+    assert_burned(&r, &digest);
+    assert_eq!(digest.iterations, 1, "{events:#?}");
+}
+
+#[test]
+fn holdout_leak_halts() {
+    let r = leak_repo(
+        "echo 'SET' >src/notes.txt\n",
+        r#"post = ["implementer-not-done"]"#,
+    );
+    let (digest, _) = go(&r, &opts(3));
+    assert_burned(&r, &digest);
+}
+
+#[test]
+fn unset_slug_runs() {
+    let r = leak_repo(
+        "echo 'cat .enallagi/holdouts/other/a.sh'\n",
+        r#"post = ["implementer-not-done"]"#,
+    );
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(digest.landed, vec!["T-001".to_string()], "{events:#?}");
+    assert!(digest.halts.is_empty(), "{:?}", digest.halts);
+}
+
 #[test]
 fn claims_after_verdict() {
     let repo = Repo::new();

@@ -115,6 +115,8 @@ A spec's set is the executable regular files in `.enallagi/holdouts/<spec>/`, wh
 Each holdout runs in name order, in a scratch worktree of the commit under test under `.enallagi/worktrees/`, with `ENALLAGI_HOLDOUTS` set to the set's absolute path and `[check] timeout` as its bound.
 Exit 0 passes it and anything else is red.
 Its output goes to `~/.cache/enallagi/holdouts/<repo>/<ticket>/<holdout>.log` and nowhere else, so the queue never names a holdout.
+After every lane of every stage, whatever its `post` list, the launcher looks for `holdouts/<spec>` of any spec with a set in the stage's transcript and in the product and state diffs since the iteration's bases.
+A match sets the ticket to `ready-for-human` and halts the run with `<stage>: a lane named a holdout path; the set may be burned`, naming no path.
 
 ## Probes
 

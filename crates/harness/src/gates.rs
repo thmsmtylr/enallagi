@@ -1180,6 +1180,45 @@ pub fn holdout_set(root: &Path, cfg: &Config, slug: &str) -> Vec<PathBuf> {
     set
 }
 
+/// The specs with a holdout set.
+pub fn holdout_specs(root: &Path, cfg: &Config) -> Vec<String> {
+    let dir = crate::config::instance_path(root, &cfg.layout.harness_dir, "holdouts");
+    let mut specs: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|slug| !holdout_set(root, cfg, slug).is_empty())
+        .collect();
+    specs.sort();
+    specs
+}
+
+/// Whether a lane's transcript, or the product or state diff since its bases, names a set's path.
+/// Concrete set paths only, so prose about holdouts never trips it (spec 6).
+pub fn names_holdout(
+    root: &Path,
+    cfg: &Config,
+    bases: &(Option<String>, Option<String>),
+    output: &str,
+) -> bool {
+    let paths: Vec<String> = holdout_specs(root, cfg)
+        .iter()
+        .map(|s| format!("holdouts/{s}"))
+        .collect();
+    if paths.is_empty() {
+        return false;
+    }
+    let state = git::state_root(root, &cfg.layout.harness_dir);
+    let mut texts = vec![output.to_string()];
+    for (repo, base) in [(root, &bases.0), (state.as_path(), &bases.1)] {
+        if let Some(base) = base.as_deref().filter(|b| !b.is_empty()) {
+            texts.extend(git(repo, &["diff", base]).ok());
+        }
+    }
+    texts.iter().any(|t| paths.iter().any(|p| t.contains(p)))
+}
+
 /// Runs a spec's holdouts at `rev` in a scratch worktree; returns (run, red) and nothing else,
 /// since anything more reaches the queue a writer reads (spec 6).
 pub fn holdouts(

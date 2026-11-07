@@ -970,7 +970,10 @@ impl<'a> Loop<'a> {
         });
 
         let beyond_wait = result.reset_beyond_wait.take();
-        let flow = if let Some(signal) = agent::stop_signal() {
+        let flow = if gates::names_holdout(self.root, self.cfg, &iter_bases, &result.output) {
+            self.burned(stage, task.as_deref());
+            Flow::Stop
+        } else if let Some(signal) = agent::stop_signal() {
             self.halt(
                 "signal",
                 format!("{} was stopped by {signal}, exiting.", stage.name),
@@ -1353,6 +1356,30 @@ impl<'a> Loop<'a> {
                     "{id} went to needs-info. The contract does not answer it and no lane may decide it."
                 )
             })
+    }
+
+    // not a gate: a stage whose post list left it out would void the holdouts under auto
+    fn burned(&mut self, stage: &config::Stage, task: Option<&str>) {
+        const BURNED: &str = "a lane named a holdout path; the set may be burned";
+        if let Some(task) = task {
+            let t = tracker::Tracker::open(self.root, &self.cfg.layout.harness_dir);
+            let from = t
+                .get(task)
+                .ok()
+                .flatten()
+                .and_then(|b| tracker::state(&b))
+                .unwrap_or_default();
+            if t.set_status(task, "ready-for-human", BURNED).is_ok() {
+                self.emit(Kind::TaskStatus {
+                    task: task.to_string(),
+                    from,
+                    to: "ready-for-human".into(),
+                    reason: BURNED.into(),
+                    by: "holdout".into(),
+                });
+            }
+        }
+        self.halt("holdout", format!("{}: {BURNED}", stage.name));
     }
 
     fn halt(&mut self, name: &str, reason: String) {
