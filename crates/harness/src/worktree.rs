@@ -418,6 +418,9 @@ fn rebase_checked(
     if report.accepts() {
         return Ok(());
     }
+    if let Some(reason) = report.timed_out {
+        return Err(format!("integrate: {reason}"));
+    }
     let tip = git::git(dir, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
     let named = if report.unforgiven.is_empty() {
         "no failure could be named".to_string()

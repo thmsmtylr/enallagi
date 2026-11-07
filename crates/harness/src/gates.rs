@@ -574,17 +574,22 @@ fn claims(ctx: &mut GateCtx) -> GateOutcome {
         }
         let mut exits = [-1; 2];
         for exit in &mut exits {
-            let Ok(run) = run_bounded(ctx.sandbox, ctx.root, &cmd, timeout) else {
-                continue;
-            };
-            let report = CheckReport {
-                timed_out: hang_reason("the claim", &cmd, timeout, &run),
-                ..CheckReport::default()
+            let report = match run_bounded(ctx.sandbox, ctx.root, &cmd, timeout) {
+                Ok(run) => {
+                    *exit = run.exit;
+                    CheckReport {
+                        timed_out: hang_reason("the claim", &cmd, timeout, &run),
+                        ..CheckReport::default()
+                    }
+                }
+                Err(e) => CheckReport {
+                    timed_out: Some(format!("{NEVER_RAN} `{cmd}`: {e}")),
+                    ..CheckReport::default()
+                },
             };
             if let Some(halt) = hung(ctx, &report) {
                 return halt;
             }
-            *exit = run.exit;
         }
         let [a, b] = exits;
         let line = format!("`{cmd}` claimed exit {claimed}, re-ran exit {a} and {b}");
@@ -1219,9 +1224,6 @@ fn red_first(ctx: &mut GateCtx) -> GateOutcome {
     }
     let mut report = check_delta(ctx.sandbox, at, ctx.cfg, false);
     drop(tree);
-    if report.output.starts_with(NEVER_RAN) {
-        return fail(format!("red-first: {}", report.output));
-    }
     if let Some(halt) = hung(ctx, &report) {
         return halt;
     }
@@ -1354,15 +1356,13 @@ pub fn holdouts(
         w.env.push(("ENALLAGI_HOLDOUTS".to_string(), dir));
         let name = h.file_name().unwrap_or_default().to_string_lossy();
         let output = match run_wrapped(&w, timeout) {
+            Ok(run) if run.refused.is_some() => return Err(run.refused.unwrap_or_default()),
             Ok(run) if run.exit == 0 && !run.timed_out && run.stopped.is_none() => run.output,
             Ok(run) => {
                 red += 1;
                 run.output
             }
-            Err(e) => {
-                red += 1;
-                e.to_string()
-            }
+            Err(e) => return Err(e.to_string()),
         };
         let _ = std::fs::write(logs.join(format!("{name}.log")), output);
     }
@@ -1855,7 +1855,7 @@ pub struct CheckReport {
     pub unnamed: bool,
     pub output: String,
     pub exit: i32,
-    /// why the check halted: past `[check] timeout` or a signal; neither red nor green
+    /// why the check halted: past `[check] timeout`, a signal, or no start; neither red nor green
     pub timed_out: Option<String>,
     pub tally: Tally,
 }
@@ -1909,6 +1909,8 @@ struct Run {
     output: String,
     timed_out: bool,
     stopped: Option<&'static str>,
+    // the wrapper's own setup error: nothing of the product ran
+    refused: Option<String>,
 }
 
 const POLL: Duration = Duration::from_millis(100);
@@ -1995,11 +1997,22 @@ fn run_wrapped(wrapped: &crate::sandbox::Wrapped, timeout: Duration) -> std::io:
             .code()
             .unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
     };
+    let wrapper = Path::new(&wrapped.argv[0]).file_name();
+    let refused = (exit != 0
+        && (wrapper == Some("sandbox-exec".as_ref()) && output.starts_with("sandbox-exec:")
+            || wrapper == Some("bwrap".as_ref()) && output.starts_with("bwrap:")))
+    .then(|| {
+        format!(
+            "{} (exit {exit})",
+            output.lines().next().unwrap_or_default()
+        )
+    });
     Ok(Run {
         exit,
         output,
         timed_out,
         stopped,
+        refused,
     })
 }
 
@@ -2127,11 +2140,11 @@ pub fn check_delta(
     let run = match run_bounded(sandbox, root, command, timeout) {
         Ok(run) => run,
         Err(err) => {
+            let reason = format!("{NEVER_RAN} {err}");
             return CheckReport {
-                red: true,
-                unnamed: true,
-                output: format!("{NEVER_RAN} {err}"),
+                output: reason.clone(),
                 exit: -1,
+                timed_out: Some(reason),
                 ..CheckReport::default()
             };
         }
@@ -2237,6 +2250,11 @@ fn baseline(path: &Path) -> Vec<String> {
 }
 
 fn hang_reason(what: &str, command: &str, timeout: Duration, run: &Run) -> Option<String> {
+    if let Some(line) = &run.refused {
+        return Some(format!(
+            "the sandbox could not start {what}, so it is neither red nor green: {line}; run outside any other sandbox, or set `[sandbox] mode = \"off\"`"
+        ));
+    }
     match run.stopped {
         Some(signal) => Some(format!(
             "{what} was stopped by {signal} and its process group was killed: `{command}`"
@@ -3515,6 +3533,19 @@ echo '{{"results":[]}}' > "$out"
         run("check-delta", &mut env.ctx(Some("T-001"), None));
         assert!(env.warnings.is_empty(), "{:?}", env.warnings);
         assert_eq!(gate_tally(&env).map(|t| t.passed), Some(3));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sandbox_refusal_halts() {
+        let mut cfg = Config::default();
+        cfg.sandbox.mode = crate::config::SandboxMode::Off;
+        let sb = crate::sandbox::Sandbox::start(Path::new("."), &cfg);
+        let profile = "(version 1)(allow network-outbound (remote ip \"localhost:0\"))";
+        let argv = ["/usr/bin/sandbox-exec", "-p", profile, "--", "true"];
+        let run = run_wrapped(&sb.wrap(&argv, Path::new("."), &[]), POLL * 100).unwrap();
+        let reason = hang_reason("the check", "true", POLL, &run).expect("a halt");
+        assert!(reason.contains("invalid port"), "{reason}");
     }
 
     #[test]
