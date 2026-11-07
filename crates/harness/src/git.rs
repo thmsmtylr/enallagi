@@ -29,6 +29,13 @@ fn cmd(root: &Path, args: &[&str]) -> Command {
 }
 
 pub fn git(root: &Path, args: &[&str]) -> Result<String, GitError> {
+    if enters_gitlinks(args) {
+        gitlinks_safe(root, args)?;
+    }
+    raw(root, args)
+}
+
+fn raw(root: &Path, args: &[&str]) -> Result<String, GitError> {
     let out = cmd(root, args).output()?;
     if !out.status.success() {
         return Err(GitError::Failed {
@@ -37,6 +44,66 @@ pub fn git(root: &Path, args: &[&str]) -> Result<String, GitError> {
         });
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+}
+
+// the subcommands that run git inside a populated gitlink, and with it that repository's config
+fn enters_gitlinks(args: &[&str]) -> bool {
+    let mut words = args.iter();
+    while let Some(w) = words.next() {
+        if *w == "-c" || *w == "-C" {
+            words.next();
+        } else if !w.starts_with('-') {
+            return matches!(
+                *w,
+                "status"
+                    | "add"
+                    | "diff"
+                    | "diff-index"
+                    | "diff-files"
+                    | "describe"
+                    | "commit"
+                    | "stash"
+            );
+        }
+    }
+    false
+}
+
+// ponytail: one index listing per such call; cache by index mtime if it shows in a profile
+fn gitlinks_safe(root: &Path, args: &[&str]) -> Result<(), GitError> {
+    let staged = raw(root, &["ls-files", "-s", "-z"])?;
+    let links: Vec<&str> = staged
+        .split('\0')
+        .filter_map(|e| e.strip_prefix("160000 ")?.split_once('\t').map(|(_, p)| p))
+        .filter(|p| root.join(p).join(".git").exists())
+        .collect();
+    if links.is_empty() {
+        return Ok(());
+    }
+    // a real submodule's repository sits under modules/, which the sandbox denies a lane
+    let common = raw(
+        root,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let modules = std::fs::canonicalize(Path::new(&common).join("modules")).ok();
+    for link in links {
+        let dotgit = root.join(link).join(".git");
+        let target = std::fs::read_to_string(&dotgit)
+            .ok()
+            .and_then(|t| Some(dotgit.parent()?.join(t.strip_prefix("gitdir:")?.trim())))
+            .and_then(|p| std::fs::canonicalize(p).ok());
+        let held = matches!((&target, &modules), (Some(t), Some(m)) if t.starts_with(m));
+        if !held {
+            return Err(GitError::Failed {
+                args: args.join(" "),
+                stderr: format!(
+                    "{link} is a gitlink to a repository inside the checkout, whose config a lane \
+                     can write; remove it (`git rm --cached {link}`) and run again"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 pub fn git_ok(root: &Path, args: &[&str]) -> bool {
@@ -303,6 +370,57 @@ pub fn recorded_sha(subject: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::fixture::Repo;
+
+    #[test]
+    fn nested_fsmonitor_inert() {
+        let r = Repo::new();
+        let raw = |dir: &Path, args: &[&str]| {
+            let ok = Command::new("git")
+                .current_dir(dir)
+                .args(args)
+                .output()
+                .expect("git")
+                .status
+                .success();
+            assert!(ok, "{args:?}");
+        };
+        let x = r.root.join("x");
+        std::fs::create_dir_all(&x).unwrap();
+        raw(&x, &["init", "-q"]);
+        r.write("x/f", "hi\n");
+        raw(&x, &["add", "f"]);
+        raw(
+            &x,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                "f",
+            ],
+        );
+        raw(&r.root, &["add", "x"]);
+        let marker = r.root.join("ran");
+        r.write(
+            "hook.sh",
+            &format!("#!/bin/sh\ntouch {}\n", marker.display()),
+        );
+        raw(&r.root, &["update-index", "--chmod=+x", "--add", "hook.sh"]);
+        std::fs::set_permissions(
+            r.root.join("hook.sh"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        let hook = r.root.join("hook.sh").display().to_string();
+        raw(&x, &["config", "core.fsmonitor", &hook]);
+        let err = git(&r.root, &["status", "--porcelain"]).unwrap_err();
+        assert!(err.to_string().contains("x"), "{err}");
+        assert!(porcelain(&r.root).is_empty());
+        assert!(!marker.exists());
+    }
+
     #[test]
     fn head_and_porcelain_read_a_fixture() {
         let r = Repo::new();

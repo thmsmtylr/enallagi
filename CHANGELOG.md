@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- the launcher's `status`, `add`, `diff`, `commit` and `stash` refuse a gitlink to a repository inside the checkout, whose `core.fsmonitor` or filter a lane could set to run outside the sandbox; a lane cannot write `.git/modules/`
 - a confined lane inherits only an allowlist of the launcher's env (`PATH`, `HOME`, locale, `XDG_*`, `ENALLAGI_*`, the agent keys) plus the names in the new `[sandbox] env`; `GH_TOKEN`, `GITHUB_TOKEN`, `[respond] token_env` and every other credential stay with the launcher; `harness.default.toml` gains the `[sandbox]` table
 - the security gate reads its scanner pins from the binary, never from `harness.lock`, which a lane can write; `[[tool]]` entries are ignored and init no longer writes them
 - `docs/demo.sh` runs one spec from decompose to a dark merge against the GitHub twin, with Kilo and Greptile scripted; `merge = "auto"` counts an accepted spec not yet decomposed as open work; holdout sets resolve through the main worktree, so a respond lane's `holdout` gate runs them

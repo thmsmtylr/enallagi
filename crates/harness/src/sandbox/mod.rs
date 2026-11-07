@@ -325,9 +325,15 @@ fn policy(
         if repo == cwd {
             instances.extend(common.parent().map(|p| p.join(dir)));
         }
-        // a missing hooks dir is one a lane could create
-        let _ = std::fs::create_dir_all(common.join("hooks"));
-        deny.extend([common.join("config"), common.join("hooks")]);
+        // a missing hooks or modules dir is one a lane could create
+        for sub in ["hooks", "modules"] {
+            let _ = std::fs::create_dir_all(common.join(sub));
+        }
+        deny.extend([
+            common.join("config"),
+            common.join("hooks"),
+            common.join("modules"),
+        ]);
         for lane in std::fs::read_dir(common.join("worktrees"))
             .into_iter()
             .flatten()

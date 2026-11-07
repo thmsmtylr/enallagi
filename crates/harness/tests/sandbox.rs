@@ -360,6 +360,7 @@ fn git_config_unwritable() {
         "git -C .enallagi config core.hooksPath /tmp",
         "echo x > .git/hooks/pre-commit",
         "echo x > .enallagi/.git/hooks/pre-commit",
+        "mkdir -p .git/modules/x && echo x > .git/modules/x/config",
         "mv .git .g",
         "mv .git/hooks .git/h",
         "mv .git/worktrees .git/w",
