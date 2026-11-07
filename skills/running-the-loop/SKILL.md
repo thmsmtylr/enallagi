@@ -45,7 +45,7 @@ so write the verdict you can defend against a command someone else runs.
 
 It re-runs the **scope** check too: the iteration's own commits, diffed against the task's `scope:`
 globs. A file the scope line does not name sends the task back to `ready-for-agent`, and so does a diff
-touching the launcher, the hooks, the check script, `__ENALLAGI_DIR__/.check-baseline` or `test-hashes.json` under a
+touching `__ENALLAGI_DIR__/`, a `hooks/` path, `enallagi.toml`, `harness.lock`, `.check-baseline` or `test-hashes.json` under a
 task whose `rows:` is not `none — harness` — one round changes a product lever or the measure of
 that lever, never both.
 

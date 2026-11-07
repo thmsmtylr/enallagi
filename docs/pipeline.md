@@ -7,7 +7,7 @@ Every edit goes in `.enallagi/enallagi.toml`, and `enallagi init` runs after it.
 ## Skills
 
 A `[[skill]]` in `enallagi.toml` replaces the whole default list.
-Keeping seven of the eight shipped skills means declaring all seven.
+Keeping twelve of the thirteen shipped skills means declaring all twelve.
 
 ### Removing a skill
 
@@ -55,9 +55,20 @@ when = "queue.reviewing"
 stages = ["verify"]
 
 [[pipeline]]
+name = "decompose"
+when = "spec.undecomposed"
+stages = ["decompose", "adjudicate"]
+
+[[pipeline]]
 name = "task"
 when = "queue.takeable"
 stages = ["implement", "verify"]
+
+[[pipeline]]
+name = "triage"
+when = "queue.proposed"
+stages = ["adjudicate"]
+end_after_dry_rounds = 1
 
 [[pipeline]]
 name = "discover"
@@ -66,13 +77,13 @@ stages = ["scout", "adjudicate"]
 end_after_dry_rounds = 2
 ```
 
-A block the verifier files then waits for the next `discover` round's `adjudicate`.
+A ticket the verifier files then waits until no ticket is takeable, for the `triage` round's `adjudicate`.
 `a_task_pipeline_without_adjudicate_skips_it` checks the dry-run plan.
 
 ## Stages
 
-A `[[stage]]` in `enallagi.toml` replaces all four defaults.
-A new stage is declared beside `implement`, `verify`, `scout` and `adjudicate`.
+A `[[stage]]` in `enallagi.toml` replaces all five defaults.
+A new stage is declared beside `implement`, `verify`, `scout`, `decompose` and `adjudicate`.
 
 ### A stage that runs a new role
 
@@ -89,7 +100,8 @@ Add `"security"` to a pipeline's `stages`.
 The stage renders the prompt to `.enallagi/run/roles/security.md` and runs the configured agent.
 `a_stage_naming_a_new_role_runs_it` runs it.
 
-`[agent.<role>]` accepts only the five shipped role names.
+`[agent.<role>]` accepts only the six shipped role names: `decomposer`, `scout`, `adjudicator`,
+`implementer`, `verifier` and `researcher`.
 A new role runs on `[agent]`, and `[agent.security]` is refused.
 
 ### A stage that runs a shell command

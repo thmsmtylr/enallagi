@@ -220,12 +220,13 @@ The list is `registry()` in `crates/harness/src/probes/mod.rs`.
 | `litter` | a tracked path the repository treats as disposable, or an untracked path on no allowlist |
 | `plain-record` | a commit subject, note or printed line that comments instead of recording |
 | `install-stale` | an installed file that differs from what `enallagi init` writes now |
+| `prompt-unsubstituted` | a rendered role prompt with a `__TOKEN__` left, or a test pathspec matching no tracked file |
 | `contribution-policy` | a guide sentence that refuses or conditions generated changes |
 | `upstream-drift` | the checkout's branch and its upstream each carrying commits the other lacks |
 | `branch-protection` | what this checkout and a host tool can establish about the default branch |
 | `review-merged` | a block at `status: review` whose id a product commit on the remote's default branch names |
 | `context-behind` | a Commands line the context template renders that the installed context file lacks |
-| `verdict-flip` | a task flipped from `done` to `ready` more than once in one run |
+| `verdict-flip` | a task the `verdict` gate sent from `done` back to `ready-for-agent` more than once in one run |
 | `rejection-repeat` | one rejection reason repeated across tasks |
 | `stage-outlier` | a stage over twice its role's median time or cost |
 | `turns-exhausted` | a stage that used its whole turn cap |
@@ -264,7 +265,7 @@ A task's own `model:` and `effort:` lines win over `[agent]` and `[agent.<role>]
 
 - `queue.takeable`
 - `queue.reviewing`
-- `queue.proposed` (a `needs-triage` ticket stands)
+- `queue.proposed` (a `needs-triage` ticket stands, or a proposed learning in DECISIONS.md is undecided)
 - `queue.empty`
 - `task.attended` (the first ready ticket is `ready-for-human`)
 - `spec.undecomposed` (a `specs/<slug>/spec.md` at `**Status:** ready-for-agent` has no `T-NNN-*.md` in `issues/`)
@@ -288,11 +289,13 @@ Those two commits are what an install leaves in the product's history.
 | Path | What |
 | --- | --- |
 | `.enallagi/roles/{decomposer,scout,adjudicator,implementer,verifier,researcher}.md` | the six role prompts, always resubstituted |
-| `.enallagi/RAILS.md`, `.enallagi/.gitignore` | the rails, each naming its enforcement, and the ignore file for scratch state |
+| `.enallagi/RAILS.md`, `.enallagi/.gitignore`, `.enallagi/.gitattributes` | the rails, each naming its enforcement, the ignore file for scratch state, and `PROGRESS.md merge=union` |
 | `<skills_dir>/running-the-loop/` | the loop's own usage skill, in the preset's skill directory |
-| `.enallagi/{enallagi.toml,PROGRESS.md,LEARNINGS.md,DECISIONS.md,.check-baseline,evals/README.md}` | seeded once and never overwritten |
+| `.enallagi/{enallagi.toml,PROGRESS.md,LEARNINGS.md,DECISIONS.md,.check-baseline,gitleaks.toml,evals/README.md}` | seeded once and never overwritten |
+| `.enallagi/test-hashes.json` | seeded with the hash of `enallagi.toml`; that key is re-hashed when the file changes |
 | `.enallagi/specs/<repo>/spec.md` | the spec, seeded once; its tickets go in `issues/` beside it, one file each |
-| `.enallagi/AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | seeded once: the context file, and one-line pointers to it |
+| `.enallagi/AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | seeded once: the context file, and one-line pointers to it, written only for a preset that does not take the context file on its command line (`claude` does) |
+| the preset's `hooks_file` | the `enallagi hook` entries merged into it; for `claude`, `.enallagi/adapters/claude/hooks/hooks.json`, with the role prompts under `agents/` and `.claude-plugin/plugin.json` beside it |
 | `.gitignore` | `/.enallagi/` appended and committed, so the product's linters skip the harness directory |
 
 ## Twins

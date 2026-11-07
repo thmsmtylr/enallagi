@@ -12,9 +12,7 @@ under `.enallagi/specs/<spec>/issues/` at `ready-for-agent`.
 
 - A `ponytail:` marker is an exception to the comment rule, recorded in AGENTS.md § Style on
   2026-09-16. It names a ceiling and its upgrade path, `enallagi probe ponytail-ceiling` reports
-  it until a kill line settles it, and it stays in the source. The six markers stay where they
-  are: init.rs:366, agent.rs:413, probes/friction_repeat.rs:38 and :65,
-  probes/plain_record.rs:148, probes/check_unnamed.rs:3.
+  it until a kill line settles it, and it stays in the source.
 
 ## Parked tickets
 

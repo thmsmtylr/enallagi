@@ -63,7 +63,8 @@ enallagi run --pr-per-task --iterations 3    # or one pull request per task, ope
 
 ## How a run works
 
-Each iteration takes the lowest-id `ready-for-agent` ticket whose blockers are `done`.
+Each iteration takes the lowest-id `ready-for-agent` ticket whose blockers are `done` or `open`.
+A ticket answering review findings on its open pull request goes first.
 
 - The implementer edits only the paths on the task's `scope:` line.
 - It commits, writes its notes under `## Comments`, and sets the ticket to `review`.
@@ -74,7 +75,7 @@ A `done` the gates disagree with goes back to `ready-for-agent`. A question the 
 answer becomes `needs-info` and halts the run.
 
 `enallagi run --pipeline task` runs only the pipeline named. Repeat the flag to name more than one.
-With none named, every pipeline in `.enallagi/enallagi.toml` is eligible.
+With none named, each iteration runs the first configured pipeline whose `when` holds.
 
 The pipeline, gate, probe, key and file tables are in [docs/reference.md](docs/reference.md).
 Changing a skill, a pipeline or a stage is in [docs/pipeline.md](docs/pipeline.md).

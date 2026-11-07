@@ -38,11 +38,11 @@ enallagi init --issue https://github.com/owner/repo/issues/12
 The issue lands as a `needs-triage` ticket with `probe: issue`.
 Its scope reads `<written by the adjudicator at promotion>`, and its criteria are a placeholder too.
 The adjudicator writes both from the issue text when it promotes the ticket.
-`enallagi run` and `enallagi worktree` refuse a `ready` block that still carries either placeholder.
+`enallagi run` and `enallagi worktree` refuse a `ready-for-agent` ticket that still carries either placeholder.
 
 Init detects the test runner from the files the repository carries.
 Each detected key is printed with the `file:line` that decided it.
-Four of the six lines read:
+Four of them read:
 
 ```text
   detected: check.command = "npm test" (package.json:4)
@@ -51,10 +51,9 @@ Four of the six lines read:
   detected: layout.source_root = "src" (src/date.ts:1)
 ```
 
-A tree that matches no runner, or more than one, is asked four questions instead: `agent.preset`,
-`check.command`, `check.fail_name` and `layout.source_root`, each defaulting to what detection
-found. `--check`, `--fail-name`, `--source-root` and `--preset` answer a question without asking
-it, and `--yes` takes every default. A stdin that is not a terminal never asks.
+Init then asks four questions on a terminal: `agent.preset`, `check.command`, `check.fail_name`
+and `layout.source_root`, each defaulting to what detection found. `--check`, `--fail-name`,
+`--source-root` and `--preset` answer a question without asking it, and `--yes` takes every default. A stdin that is not a terminal never asks.
 
 ```bash
 enallagi init --yes
@@ -120,9 +119,9 @@ rows: none — harness
 - `.git/info/exclude`, which git reads
 - a `/.enallagi/` line in `.gitignore`, which linters and formatters read, committed so each lane's checkout has it
 
-The verdict gate fails a task while a file in `.enallagi/` carries an uncommitted edit.
-Init commits what it wrote, and `enallagi worktree` commits your queue edits before it branches.
-Under `enallagi run`, commit them yourself with `git -C .enallagi add specs && git -C .enallagi commit -m "queue T-001"`.
+The verdict gate forces a `done` back while the product tree carries an uncommitted path.
+Init commits what it wrote, `enallagi run` commits your queue edits at the start of each iteration,
+and `enallagi worktree` commits them before it branches.
 
 Edit `.enallagi/enallagi.toml` later and the rendered copies name the old values; re-run
 `enallagi init` and it re-renders them, or `enallagi probe install-stale` names each stale file
@@ -137,8 +136,8 @@ enallagi run --pr-per-task --iterations 1
 The adjudicator decides the `needs-triage` ticket, the implementer commits and sets it to `review`, the
 verifier returns `done` or a rejection, and a landed task is pushed to its own branch and opened
 as a pull request. `pr` branches off the upstream default branch, carries only the commits naming
-the task, and reads the target's contribution guide before it pushes. The pull request is merged
-by a person, never by the binary.
+the task, and reads the target's contribution guide before it pushes. Under the default
+`[pr] merge = "human"`, a person merges the pull request, never the binary.
 
 ```bash
 enallagi tasks list
@@ -148,13 +147,15 @@ enallagi probe install-stale
 
 ## 4. Read a rejection
 
-A rejected task goes back to `ready` with the verifier's reasons in `notes:`.
+A rejected task goes back to `ready-for-agent`. The verifier writes its reasons under the ticket's
+`## Comments`, and a gate that overturns a `done` adds a `gate:` line under `## Harness`.
 
 ```bash
 enallagi tasks rejections
 enallagi events --task T-001
 ```
 
-`tasks rejections` prints every open rejection with its reasons, and `tasks block T-001` one block.
+`tasks block T-001` prints the ticket with its reasons, and `tasks rejections` the kill lines under
+`## Rejected findings` in `DECISIONS.md`.
 `events --task` prints each stage and gate the task went through.
 Answer each point in the criteria or the scope, commit, and run again.
