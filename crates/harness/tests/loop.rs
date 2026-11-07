@@ -5643,3 +5643,204 @@ fn auditor_cannot_write() {
     assert!(digest.role_seconds.contains_key("auditor"), "{digest:#?}");
     assert!(!r.root.join("auditor-ran").exists());
 }
+
+const PULL_1: &str = "https://github.com/owner/repo/pull/1";
+
+// under auto, the first run opens pull 1 and the twin's round 0 reports `checks`
+fn auto_pull(checks: &[&str], holdout: &str) -> Pulls {
+    let p = pulls("\n[pr]\nmerge = \"auto\"\n", "exit 0\n");
+    script(&p.repo, &format!("{}/a.sh", holdout_dir(&p.repo)), holdout);
+    let mut state = twin::load(&p.twin);
+    let check =
+        |c: &&str| serde_json::json!({"name": "test", "status": "COMPLETED", "conclusion": c});
+    state.script = vec![Round {
+        head: "*".to_string(),
+        round: 0,
+        checks: checks.iter().map(check).collect(),
+        ..Round::default()
+    }];
+    twin::save(&p.twin, &state);
+    let (_, out) = p.run(&["--budget-usd", "5"]);
+    assert_eq!(state_of(&p.repo, "T-001").as_deref(), Some("open"), "{out}");
+    p
+}
+
+fn merges(p: &Pulls) -> usize {
+    p.calls()
+        .iter()
+        .filter(|c| c[..2] == ["pr", "merge"])
+        .count()
+}
+
+#[test]
+fn auto_merges_green_pull() {
+    let p = auto_pull(&["SUCCESS"], "exit 0\n");
+    let (_, out) = p.run(&["--budget-usd", "5"]);
+    let pull = twin::load(&p.twin).pulls.pop().expect("pull 1");
+    assert_eq!(pull.state, "MERGED", "{out}");
+    let origin = p.origin.path().join("origin.git");
+    let main = twin::load(&p.twin).default_branch;
+    let parents = enallagi::git::git(&origin, &["rev-list", "--parents", "-n", "1", &main]);
+    let parents = parents.expect("main");
+    assert!(
+        parents.ends_with(&format!(" {}", pull.head_sha)),
+        "{parents}"
+    );
+    assert_eq!(parents.split(' ').count(), 3, "{parents}");
+    assert_eq!(state_of(&p.repo, "T-001").as_deref(), Some("done"), "{out}");
+    assert!(tasks_text(&p.repo).contains(&format!("merged {PULL_1}")));
+    assert!(out.contains(&format!("T-001: merged {PULL_1}")), "{out}");
+}
+
+#[test]
+fn open_thread_blocks_merge() {
+    let p = auto_pull(&["SUCCESS"], "exit 0\n");
+    let mut state = twin::load(&p.twin);
+    state.pulls[0].threads.push(Thread {
+        id: "PRRT_own".to_string(),
+        comments: vec![Remark {
+            author: "someone".to_string(),
+            body: "<!-- enallagi:T-001 --> still talking".to_string(),
+            url: format!("{PULL_1}#discussion_own"),
+            ..Remark::default()
+        }],
+        ..Thread::default()
+    });
+    twin::save(&p.twin, &state);
+    let (_, out) = p.run(&["--budget-usd", "5"]);
+    assert!(
+        out.contains("T-001: left open, 1 unresolved thread(s)"),
+        "{out}"
+    );
+    assert_eq!(merges(&p), 0, "{out}");
+}
+
+#[test]
+fn red_check_blocks_merge() {
+    // a red the review read does not route back, so the merge step judges it
+    let p = auto_pull(&["STALE"], "exit 0\n");
+    let (_, out) = p.run(&["--budget-usd", "5"]);
+    assert!(
+        out.contains("T-001: left open, checks: test STALE"),
+        "{out}"
+    );
+    assert_eq!(merges(&p), 0, "{out}");
+}
+
+#[test]
+fn no_checks_blocks_merge() {
+    let p = auto_pull(&[], "exit 0\n");
+    let (_, out) = p.run(&["--budget-usd", "5"]);
+    assert!(
+        out.contains("T-001: left open, no checks reported"),
+        "{out}"
+    );
+    assert_eq!(merges(&p), 0, "{out}");
+}
+
+#[test]
+fn red_holdout_blocks_merge() {
+    let p = auto_pull(&["SUCCESS"], "test ! -e \"$ENALLAGI_HOLDOUTS/red\"\n");
+    p.repo.write(&format!("{}/red", holdout_dir(&p.repo)), "");
+    let (_, out) = p.run(&["--budget-usd", "5"]);
+    assert!(
+        out.contains("T-001: left open, holdouts: 1 of 1 red"),
+        "{out}"
+    );
+    assert_eq!(merges(&p), 0, "{out}");
+    let text = tasks_text(&p.repo);
+    assert!(text.contains("holdouts: 1 of 1 red"), "{text}");
+    assert!(!text.contains("a.sh"), "{text}");
+}
+
+#[test]
+fn moved_head_blocks_merge() {
+    let p = auto_pull(&["SUCCESS"], "exit 0\n");
+    let mut state = twin::load(&p.twin);
+    let fields = "state,baseRefName,headRefName,headRefOid,statusCheckRollup";
+    let mut stale = twin::load(&p.twin).pulls[0].clone();
+    stale.head_sha = "0".repeat(40);
+    let view = serde_json::json!({
+        "state": "OPEN",
+        "baseRefName": stale.base,
+        "headRefName": stale.head,
+        "headRefOid": stale.head_sha,
+        "statusCheckRollup": stale.checks,
+    });
+    state.responses.push(Response::to(
+        &["pr", "view", PULL_1, "--json", fields],
+        &format!("{view}\n"),
+    ));
+    twin::save(&p.twin, &state);
+    let (_, out) = p.run(&["--budget-usd", "5"]);
+    assert!(out.contains("T-001: left open, head moved"), "{out}");
+    assert_eq!(merges(&p), 0, "{out}");
+}
+
+#[test]
+fn spec_without_holdouts_waits() {
+    let p = auto_pull(&["SUCCESS"], "exit 0\n");
+    std::fs::remove_dir_all(p.repo.root.join(holdout_dir(&p.repo))).expect("rm set");
+    // another spec's set and open work, so auto still starts
+    script(&p.repo, ".enallagi/holdouts/other/a.sh", "exit 0\n");
+    enallagi::tracker::Tracker::open(&p.repo.root, ".enallagi")
+        .append(
+            "other",
+            "## [T-050] another spec's work\nstatus: ready-for-human\n",
+        )
+        .expect("append");
+    let (_, out) = p.run(&["--budget-usd", "5"]);
+    assert!(out.contains("T-001: left open, no holdout set"), "{out}");
+    assert_eq!(merges(&p), 0, "{out}");
+}
+
+#[test]
+fn human_mode_never_merges() {
+    let p = pulls("", "exit 0\n");
+    script(
+        &p.repo,
+        &format!("{}/a.sh", holdout_dir(&p.repo)),
+        "exit 0\n",
+    );
+    let mut state = twin::load(&p.twin);
+    state.script = vec![Round {
+        head: "*".to_string(),
+        round: 0,
+        checks: vec![
+            serde_json::json!({"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}),
+        ],
+        ..Round::default()
+    }];
+    twin::save(&p.twin, &state);
+    p.run(&["--pr-per-task"]);
+    let (_, out) = p.run(&[]);
+    assert_eq!(state_of(&p.repo, "T-001").as_deref(), Some("open"), "{out}");
+    assert_eq!(merges(&p), 0, "{out}");
+    assert_eq!(twin::load(&p.twin).pulls[0].state, "OPEN");
+}
+
+#[test]
+fn stale_clean_blocks_merge() {
+    let p = auto_pull(&["SUCCESS"], "exit 0\n");
+    let origin = p.origin.path().join("origin.git");
+    let git = |args: &[&str]| enallagi::git::git(&origin, args).expect("git");
+    let old = git(&["rev-parse", "task/T-001"]);
+    let ident = ["-c", "user.name=t", "-c", "user.email=t@t"];
+    let tree = format!("{old}^{{tree}}");
+    let new = git(&[
+        &ident[..],
+        &["commit-tree", &tree, "-p", &old, "-m", "push"],
+    ]
+    .concat());
+    git(&["update-ref", "refs/heads/task/T-001", &new]);
+    // a push inside the quiet window: the poll judges nothing, so the clean stays at the old head
+    let t = enallagi::tracker::Tracker::open(&p.repo.root, ".enallagi");
+    let now = jiff::Timestamp::now();
+    t.set_field("T-001", "respond", &format!("clean at {old}"))
+        .and_then(|_| t.set_field("T-001", "pushed", &format!("{new} {now}")))
+        .expect("fields");
+    let (_, out) = p.run(&["--budget-usd", "5"]);
+    let reason = format!("T-001: left open, respond: not clean at {new}");
+    assert!(out.contains(&reason), "{out}");
+    assert_eq!(merges(&p), 0, "{out}");
+}

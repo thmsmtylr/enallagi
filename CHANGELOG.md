@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- under `[pr] merge = "auto"` each iteration merges an `open` ticket's pull request when its spec has holdouts, its base is the default branch, its head is the origin tip, every check passed, no thread is unresolved, `respond: clean at` names the head and the holdouts pass there; otherwise the digest names why it was left open; the GitHub twin serves `pr merge`
 - `queue.proposed_rounds` counts loop iterations, not state commits: each loop state commit carries an `Iteration: <run>/<n>` trailer, so a respond round no longer ages a filed finding by several rounds
 - `enallagi watch` keeps one stage and output view per run: `l` focuses the next lane (newest by default), and the queue pane names the lane branch of each claimed ticket
 - under `writers > 1` the launcher also starts a reader lane (`run --task <id> --pipeline review`) per `review` ticket no live claim holds, outside the `writers` count; a pinned verifier verifies only its ticket

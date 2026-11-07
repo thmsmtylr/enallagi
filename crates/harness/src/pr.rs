@@ -537,7 +537,7 @@ fn io(path: impl std::fmt::Display) -> impl FnOnce(std::io::Error) -> PrError {
 }
 
 // origin/HEAD is only set by a clone, so ask the remote
-fn default_branch(root: &Path) -> Result<String, PrError> {
+pub fn default_branch(root: &Path) -> Result<String, PrError> {
     let out = git::git(root, &["ls-remote", "--symref", "origin", "HEAD"])?;
     out.lines()
         .find_map(|l| l.strip_prefix("ref: refs/heads/"))
@@ -739,4 +739,70 @@ fn open(root: &Path, report: &PrReport) -> Result<String, PrError> {
             String::from_utf8_lossy(&out.stderr).trim().to_string(),
         )),
     }
+}
+
+/// A pull request as the merge step reads it.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Head {
+    pub state: String,
+    pub base_ref_name: String,
+    pub head_ref_name: String,
+    pub head_ref_oid: String,
+    pub status_check_rollup: Vec<serde_json::Value>,
+}
+
+fn gh(root: &Path, args: &[&str]) -> Result<String, String> {
+    let out = Command::new("gh")
+        .current_dir(root)
+        .args(args)
+        .output()
+        .map_err(|e| format!("gh {}: {e}", args.join(" ")))?;
+    match out.status.success() {
+        true => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+        false => Err(String::from_utf8_lossy(&out.stderr).trim().to_string()),
+    }
+}
+
+pub fn view(root: &Path, url: &str) -> Result<Head, String> {
+    let fields = "state,baseRefName,headRefName,headRefOid,statusCheckRollup";
+    let out = gh(root, &["pr", "view", url, "--json", fields])?;
+    serde_json::from_str(&out).map_err(|e| format!("gh pr view {url}: {e}"))
+}
+
+/// Why a pull request is not merged yet, or None when it is green.
+pub fn blocked(head: &Head, default: &str, tip: &str, unresolved: usize) -> Option<String> {
+    if !head.head_ref_name.starts_with("task/") {
+        return Some(format!("{} is not a task/ branch", head.head_ref_name));
+    }
+    if head.base_ref_name != default {
+        return Some(format!("stacked on {}", head.base_ref_name));
+    }
+    if head.head_ref_oid != tip {
+        return Some("head moved".to_string());
+    }
+    if head.status_check_rollup.is_empty() {
+        return Some("no checks reported".to_string());
+    }
+    // a check run carries name/status/conclusion, a commit status context/state
+    for c in &head.status_check_rollup {
+        let word = |k: &str| c[k].as_str().unwrap_or_default().to_uppercase();
+        let name = c["name"].as_str().or(c["context"].as_str()).unwrap_or("?");
+        let (status, end) = match c.get("context") {
+            Some(_) => ("COMPLETED".to_string(), word("state")),
+            None => (word("status"), word("conclusion")),
+        };
+        if status != "COMPLETED" {
+            return Some(format!("checks: {name} {status}"));
+        }
+        if !matches!(end.as_str(), "SUCCESS" | "NEUTRAL" | "SKIPPED") {
+            return Some(format!("checks: {name} {end}"));
+        }
+    }
+    (unresolved > 0).then(|| format!("{unresolved} unresolved thread(s)"))
+}
+
+pub fn merge(root: &Path, url: &str, sha: &str) -> Result<(), String> {
+    let args = ["pr", "merge", url, "--merge", "--match-head-commit", sha];
+    gh(root, &[&args[..], &["--delete-branch"]].concat()).map(|_| ())
 }

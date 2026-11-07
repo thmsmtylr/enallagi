@@ -43,7 +43,20 @@ Replies, comments, resolves and re-review requests run with `GH_TOKEN` set to th
 The poll judges nothing on a ticket whose `pushed:` time is less than `[respond] quiet` ago. When no pipeline's `when` holds and a pushed ticket is inside its window, the launcher sleeps until the earliest window closes and iterates.
 Once judged, the poll re-reads each answered thread and resolves only the ones still unresolved, so a thread a bot resolved itself is never resolved again.
 A new finding with the same author, path and words as one the ticket rejected is not routed: the launcher replies with the rejection's URL, resolves its thread, writes `settled: F-<n> <url> for <new url>` and starts no round.
-The loop stops on the first rule that holds: new in-scope findings on a ticket that has had `[respond] max_rounds` rounds set it `ready-for-human` with gate `respond: max_rounds (<n>) reached, <k> findings open` and `respond: max_rounds`; no new finding, a `SUCCESS` check rollup and every thread resolved write `respond: clean at <sha>` and leave it `open` for a person, or spec 6's merge mode, to merge.
+The loop stops on the first rule that holds: new in-scope findings on a ticket that has had `[respond] max_rounds` rounds set it `ready-for-human` with gate `respond: max_rounds (<n>) reached, <k> findings open` and `respond: max_rounds`; no new finding, a `SUCCESS` check rollup and every thread resolved write `respond: clean at <sha>` and leave it `open` for a person, or `merge = "auto"`, to merge.
+Under `[pr] merge = "auto"`, after the poll, each iteration judges every `open` ticket's pull request with `gh pr view --json state,baseRefName,headRefName,headRefOid,statusCheckRollup` and the review read, and leaves it open with one `pull requests:` digest line, `T-NNN: left open, <reason>`, on the first that holds:
+- `no holdout set`: the ticket's spec has no holdout set;
+- `<head> is not a task/ branch`;
+- `stacked on <base>`: the base is not the remote's default branch;
+- `head moved`: `headRefOid` is not the tip of the head on `origin`;
+- `no checks reported`: the rollup is empty;
+- `checks: <name> <state>`: a check is not completed, or completed other than `SUCCESS`, `NEUTRAL` or `SKIPPED`;
+- `<n> unresolved thread(s)`: any thread is unresolved, outdated ones too;
+- `respond: not clean at <sha>`: the ticket's `respond:` is not `clean at` the head, so a clean written before the last push counts for nothing;
+- `holdouts: <k> of <n> red`: the spec's holdouts run on the fetched head; the ticket goes back to `ready-for-agent`, and a second red in one run halts it;
+- `merge refused: <gh's first line>`: `gh pr merge <url> --merge --match-head-commit <sha> --delete-branch` failed, also a warning.
+Otherwise the pull merges, the ticket goes `done` with gate `merged <url>`, and the digest line reads `T-NNN: merged <url>`.
+`merge = "human"`, the default, never calls `gh pr merge`.
 A finding is already carried, and not routed again, when any ticket (`wontfix` included) holds its URL or its key, or an `.out-of-scope/` file lists its URL under `## Prior requests`.
 `enallagi review <pr>` reads a pull request no ticket owns, and every finding there lands as one `needs-triage` ticket: an unresolved thread (carrying its thread id), a review body, a plain comment, or a failed check on the head.
 The same finding raised twice on the same lines is one ticket.
@@ -299,6 +312,7 @@ A moved head is a push: `head_sha` follows it, `round` goes up by one, and that 
 Served calls:
 
 - `pr create` (`--head`, `--base`, `--title`, `--body` or `--body-file`), `pr list --json` (`--state`), `pr view <url|number|branch> --json`, and `pr comment <pull> --body`.
+- `pr merge <pull> --merge --match-head-commit <sha> [--delete-branch]`: refuses a merged or closed pull, a sha other than `head_sha`, or a conflict, in gh's words; otherwise writes a two-parent merge commit onto `origin`'s base, sets `MERGED`, and under `--delete-branch` deletes the head ref and retargets open pulls based on it to that base.
 - `--json` takes `number`, `url`, `title`, `body`, `state`, `headRefName`, `baseRefName`, `headRefOid`, `statusCheckRollup`, `reviews` and `comments`.
 - `api graphql` dispatched on the document's operation name: `ReviewThreads` (the review read: head sha, comments, reviews and threads with their authors, and the head's check rollup), `PullState` (the poll's light read, its check rollup derived from `checks`), `ReplyThread` (a thread reply, answering its URL) and `ResolveThread`.
 

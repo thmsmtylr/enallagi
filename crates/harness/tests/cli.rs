@@ -2664,3 +2664,79 @@ fn twin_refuses_unknown_call() {
         [["repo", "fork"]]
     );
 }
+
+#[test]
+fn twin_merge_retargets_stacked() {
+    use enallagi::fixture::twin::Pull;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = dir.path().join("work");
+    let origin = dir.path().join("origin.git");
+    let r = enallagi::fixture::Repo::new();
+    let git = |root: &std::path::Path, args: &[&str]| {
+        enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+    };
+    let src = r.root.display().to_string();
+    git(dir.path(), &["clone", "-q", "--bare", &src, "origin.git"]);
+    let url = origin.display().to_string();
+    git(dir.path(), &["clone", "-q", &url, "work"]);
+    let main = git(&work, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    let commit = |file: &str| {
+        std::fs::write(work.join(file), file).expect("write");
+        git(&work, &["add", "-A"]);
+        let id = ["-c", "user.name=t", "-c", "user.email=t@t"];
+        let mut args = id.to_vec();
+        args.extend(["-c", "commit.gpgsign=false", "commit", "-q", "-m", file]);
+        git(&work, &args);
+        git(&work, &["rev-parse", "HEAD"])
+    };
+    git(&work, &["checkout", "-q", "-b", "task/T-001"]);
+    let one = commit("one.txt");
+    git(&work, &["checkout", "-q", "-b", "task/T-002"]);
+    let two = commit("two.txt");
+    git(&work, &["push", "-q", "origin", "task/T-001", "task/T-002"]);
+    let pull = |number: u64, head: &str, base: &str, sha: &str| Pull {
+        number,
+        url: format!("https://github.com/owner/repo/pull/{number}"),
+        head: head.to_string(),
+        base: base.to_string(),
+        head_sha: sha.to_string(),
+        state: "OPEN".to_string(),
+        ..Pull::default()
+    };
+    let state = enallagi::fixture::twin::State {
+        repo: "owner/repo".to_string(),
+        origin: origin.clone(),
+        default_branch: main.clone(),
+        pulls: vec![
+            pull(7, "task/T-001", &main, &one),
+            pull(8, "task/T-002", "task/T-001", &two),
+        ],
+        ..Default::default()
+    };
+    let (_, path) = enallagi::fixture::twin::install(&dir.path().join("tools"), BIN, &state);
+    let merge = |sha: &str| {
+        let args = ["pr", "merge", "7", "--merge", "--match-head-commit", sha];
+        twin_call(&path, &[&args[..], &["--delete-branch"]].concat())
+    };
+
+    let stale = merge(&two);
+    assert_eq!(stale.status.code(), Some(1), "{stale:?}");
+    assert!(String::from_utf8_lossy(&stale.stderr).contains("Head branch was modified"));
+    let out = merge(&one);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+
+    let tip = format!("refs/heads/{main}");
+    let parents = git(&origin, &["rev-list", "--parents", "-n", "1", &tip]);
+    assert!(parents.ends_with(&format!(" {one}")), "{parents}");
+    assert_eq!(parents.split(' ').count(), 3, "{parents}");
+    let gone = enallagi::git::git(
+        &origin,
+        &["rev-parse", "--verify", "-q", "refs/heads/task/T-001"],
+    );
+    assert!(gone.is_err(), "{gone:?}");
+    let state = enallagi::fixture::twin::load(&path);
+    assert_eq!(state.pulls[0].state, "MERGED");
+    assert_eq!(state.pulls[1].base, main);
+    let again = merge(&one);
+    assert!(String::from_utf8_lossy(&again.stderr).contains("already merged"));
+}

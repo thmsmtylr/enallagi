@@ -787,6 +787,12 @@ impl<'a> Loop<'a> {
         }
 
         self.poll();
+        if self.cfg.pr.merge == config::MergeMode::Auto {
+            self.merge_green();
+            if self.stopped {
+                return false;
+            }
+        }
         // a block a human queued by hand is recorded against the product HEAD it was written at
         self.commit_state("queue");
         self.archive();
@@ -1747,6 +1753,100 @@ impl<'a> Loop<'a> {
                 self.digest.warnings.push(format!("{id}: {err}"));
             }
         }
+    }
+
+    // `merge = "auto"`: each open pull request whose ticket is green on every count merges
+    fn merge_green(&mut self) {
+        let t = Tracker::open(self.root, &self.cfg.layout.harness_dir);
+        let open: Vec<(String, String, Option<String>)> = self
+            .blocks()
+            .iter()
+            .filter(|b| tracker::state(b).as_deref() == Some("open"))
+            .filter_map(|b| {
+                Some((
+                    b.id.clone(),
+                    block::field(b, "pr")?,
+                    block::field(b, "respond"),
+                ))
+            })
+            .collect();
+        for (id, url, respond) in open {
+            let line = match self.merge_one(&t, &id, &url, respond.as_deref()) {
+                Ok(()) => format!("{id}: merged {url}"),
+                Err(why) => format!("{id}: left open, {why}"),
+            };
+            self.digest.pulls.push(line);
+            if self.stopped {
+                return;
+            }
+        }
+    }
+
+    fn merge_one(
+        &mut self,
+        t: &Tracker,
+        id: &str,
+        url: &str,
+        respond: Option<&str>,
+    ) -> Result<(), String> {
+        let slug = t.spec_of(id).unwrap_or_default();
+        if gates::holdout_set(self.root, self.cfg, &slug).is_empty() {
+            return Err("no holdout set".to_string());
+        }
+        let head = pr::view(self.root, url)?;
+        if head.state != "OPEN" {
+            return Err(format!("the pull request is {}", head.state));
+        }
+        let default = pr::default_branch(self.root).map_err(|e| e.to_string())?;
+        let rev = format!("refs/heads/{}", head.head_ref_name);
+        let tip = git::git(self.root, &["ls-remote", "origin", &rev]).unwrap_or_default();
+        let tip = tip.split_whitespace().next().unwrap_or_default();
+        let unresolved = review::read(url).map_err(|e| e.to_string())?.open.len();
+        if let Some(why) = pr::blocked(&head, &default, tip, unresolved) {
+            return Err(why);
+        }
+        // a clean written before the last push vouches for nothing at this head
+        let sha = head.head_ref_oid;
+        if respond != Some(format!("clean at {sha}").as_str()) {
+            return Err(format!("respond: not clean at {sha}"));
+        }
+        git::git(self.root, &["fetch", "-q", "origin", &rev]).map_err(|e| e.to_string())?;
+        let cache = config::cache_root();
+        let ran = gates::holdouts(self.sandbox, self.root, self.cfg, &cache, &slug, id, &sha);
+        match ran.map_err(|e| format!("the holdouts could not be run: {e}"))? {
+            (_, 0) => {}
+            (n, k) => {
+                let why = format!("holdouts: {k} of {n} red");
+                t.set_status(id, "ready-for-agent", &why)
+                    .map_err(|e| e.to_string())?;
+                self.commit_state(&format!("queue: {id} red on holdouts"));
+                let seen = self
+                    .refusals
+                    .entry(("holdout".into(), id.into()))
+                    .or_insert(0);
+                *seen += 1;
+                if *seen >= 2 {
+                    self.halt(
+                        id,
+                        format!("{id} was red on holdouts twice this run: {why}"),
+                    );
+                }
+                return Err(why);
+            }
+        }
+        if let Err(err) = pr::merge(self.root, url, &sha) {
+            self.digest
+                .warnings
+                .push(format!("{id}: {url} was not merged: {err}"));
+            return Err(format!(
+                "merge refused: {}",
+                err.lines().next().unwrap_or_default()
+            ));
+        }
+        t.set_status(id, "done", &format!("merged {url}"))
+            .map_err(|e| e.to_string())?;
+        self.commit_state(&format!("queue: {id} merged"));
+        Ok(())
     }
 
     // how much of `[respond] quiet` is left since `pushed: <sha> <time>`

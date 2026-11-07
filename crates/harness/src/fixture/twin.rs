@@ -361,6 +361,7 @@ fn serve(state: &mut State, args: &[String]) -> Option<Response> {
         ["pr", "list", ..] => list(state, args),
         ["pr", "view", ..] => view(state, args),
         ["pr", "comment", ..] => comment(state, args),
+        ["pr", "merge", ..] => merge(state, args),
         ["api", "graphql", ..] => return graphql(state, args),
         _ => return None,
     })
@@ -507,6 +508,62 @@ fn comment(state: &mut State, args: &[String]) -> Response {
         ..Note::default()
     });
     Response::ok(format!("{url}\n"))
+}
+
+// a merge commit on the origin's base, as `--merge` writes it; refusals carry gh's text
+fn merge(state: &mut State, args: &[String]) -> Response {
+    let Some(i) = find(state, args.get(2)) else {
+        return Response::err("twin: pr merge names no pull request\n".to_string());
+    };
+    let pull = state.pulls[i].clone();
+    let name = format!("{}#{}", state.repo, pull.number);
+    match pull.state.as_str() {
+        "MERGED" => return Response::err(format!("X Pull request {name} was already merged\n")),
+        "CLOSED" => return Response::err(format!("X Pull request {name} is closed\n")),
+        _ => {}
+    }
+    if flag(args, "--match-head-commit").is_some_and(|sha| sha != pull.head_sha) {
+        return Response::err(
+            "GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)\n"
+                .to_string(),
+        );
+    }
+    let git = |a: &[&str]| crate::git::git(&state.origin, a);
+    let base = format!("refs/heads/{}", pull.base);
+    let msg = format!("Merge pull request #{} from {}", pull.number, pull.head);
+    let merged = git(&["rev-parse", &base]).and_then(|tip| {
+        let tree = git(&["merge-tree", "--write-tree", &tip, &pull.head_sha])?;
+        let commit = git(&[
+            "-c",
+            "user.name=twin",
+            "-c",
+            "user.email=twin@localhost",
+            "commit-tree",
+            &tree,
+            "-p",
+            &tip,
+            "-p",
+            &pull.head_sha,
+            "-m",
+            &msg,
+        ])?;
+        git(&["update-ref", &base, &commit, &tip])
+    });
+    if merged.is_err() {
+        return Response::err(format!(
+            "X Pull request {name} is not mergeable: the merge commit cannot be cleanly created.\n"
+        ));
+    }
+    state.pulls[i].state = "MERGED".to_string();
+    if args.iter().any(|a| a == "--delete-branch") {
+        let _ = git(&["update-ref", "-d", &format!("refs/heads/{}", pull.head)]);
+        for p in state.pulls.iter_mut().filter(|p| p.state == "OPEN") {
+            if p.base == pull.head {
+                p.base = pull.base.clone();
+            }
+        }
+    }
+    Response::ok(String::new())
 }
 
 // the operation a document names: `query Name(...)` or `mutation Name(...)`
