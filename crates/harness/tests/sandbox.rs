@@ -397,6 +397,35 @@ fn git_config_unwritable() {
     assert!(!git(&r.root, &["config", "--list"]).contains("hookspath"));
 }
 
+// what the launcher re-reads at the next spawn or run: a lane edit would widen its own sandbox
+#[test]
+fn instance_config_unwritable() {
+    if nested() {
+        return;
+    }
+    let r = nested_repo();
+    r.write(".enallagi/enallagi.toml", "[check]\ncommand = \"true\"\n");
+    r.write(".enallagi/roles/implementer.md", "role\n");
+    r.write(".enallagi/gitleaksignore", "\n");
+    let sb = Sandbox::start(&r.root, &native(&[]));
+    for attempt in [
+        "echo x >> .enallagi/enallagi.toml",
+        "rm .enallagi/enallagi.toml",
+        "echo x > .enallagi/roles/implementer.md",
+        "echo x > .enallagi/roles/verifier.md",
+        "mv .enallagi/roles .enallagi/r",
+        "echo x >> .enallagi/gitleaksignore",
+        "mkdir -p .enallagi/security && echo x > .enallagi/security/b.json",
+    ] {
+        let out = sh(&sb, &r.root, attempt);
+        assert!(!out.status.success(), "{attempt}: {}", text(&out));
+    }
+    let out = sh(&sb, &r.root, "echo x >> .enallagi/PROGRESS.md");
+    assert!(out.status.success(), "{}", text(&out));
+    let config = std::fs::read_to_string(r.root.join(".enallagi/enallagi.toml")).expect("config");
+    assert_eq!(config, "[check]\ncommand = \"true\"\n");
+}
+
 // a product with its parent instance's holdouts, and a worktree lane with its own nested instance
 fn holdouts_repo() -> (Repo, std::path::PathBuf) {
     let r = nested_repo();

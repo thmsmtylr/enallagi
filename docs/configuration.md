@@ -33,6 +33,7 @@ A compound check line (`cd sub && pytest`) runs whole inside it.
 - `sandbox.env`: launcher variables a lane also inherits, by name. Default empty. A lane otherwise sees only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `COLORTERM`, `LANG`, `LANGUAGE`, `TZ`, `LC_*`, `XDG_*`, `ENALLAGI_*` except `[respond] token_env`, and the agent keys `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY` and `GEMINI_API_KEY`; `GH_TOKEN` and every other credential stay with the launcher.
 
 A lane writes only to its checkout, both repositories' git dirs (never `config`, `hooks/`, `modules/` or worktree pointers), a per-spawn `TMPDIR`, the preset's own state paths and `sandbox.write`.
+It never writes an instance's `enallagi.toml` (or its legacy name), `roles/`, `gitleaks.toml`, `gitleaksignore`, `osv-scanner.toml` or `security/`, which the launcher re-reads.
 No lane or check reads or writes `<harness_dir>/holdouts/`, its own or its parent instance's, or `~/.cache/enallagi/holdouts/`, and renaming a parent does not expose them. No lane reads `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc` or `~/.config/gh`: the launcher, not a lane, pushes and calls GitHub.
 Its only egress is the proxy, reached through `HTTPS_PROXY`; each refused host is logged as `sandbox.denied`, and a red check's output ends with one `sandbox refused <host>:<port> (<reason>)` line per refusal during it.
 Under `native`, a run refuses to start when the sandbox is unavailable, naming the fix.

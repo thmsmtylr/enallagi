@@ -40,6 +40,17 @@ const ENV_PREFIXES: &[&str] = &["LC_", "XDG_", "ENALLAGI_"];
 // operator credentials no lane reads: the launcher, not a lane, pushes and calls GitHub (ADR 0004)
 const SECRETS: &[&str] = &[".ssh", ".aws", ".gnupg", ".netrc", ".config/gh"];
 
+// instance files the launcher re-reads: config, role prompts and policy, the security gate's inputs
+const INSTANCE_DENY: &[&str] = &[
+    "enallagi.toml",
+    "harness.toml",
+    "roles",
+    "gitleaks.toml",
+    "gitleaksignore",
+    "osv-scanner.toml",
+    "security",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Kind {
     Off,
@@ -362,6 +373,13 @@ fn policy(
             .collect();
     }
     write.extend(extra.map(|p| canon(&p)));
+    // ponytail: bwrap mounts over existing paths only, so a missing file here stays creatable on Linux
+    for i in instances.iter().filter(|i| i.is_dir()) {
+        for dir in ["roles", "security"] {
+            let _ = std::fs::create_dir_all(i.join(dir));
+        }
+        deny.extend(INSTANCE_DENY.iter().map(|name| canon(&i.join(name))));
+    }
     write.sort();
     write.dedup();
     deny.sort();

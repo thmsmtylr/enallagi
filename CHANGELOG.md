@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- a lane cannot write either instance's `enallagi.toml`, `harness.toml`, `roles/`, `gitleaks.toml`, `gitleaksignore`, `osv-scanner.toml` or `security/`, which the launcher re-reads at the next spawn or gate
 - a role's `writes:` entry that is absolute, climbs out with `..` or resolves outside the checkout is dropped, so it never widens what the lane may write
 - on Linux the unfiltered sandbox bridge marks itself undumpable, so its lane cannot ptrace it or read its `/proc` entries
 - the launcher's `status`, `add`, `diff`, `commit` and `stash` refuse a gitlink to a repository inside the checkout, whose `core.fsmonitor` or filter a lane could set to run outside the sandbox; a lane cannot write `.git/modules/`
