@@ -86,7 +86,11 @@ fn render_queue(model: &Model, frame: &mut Frame, area: Rect) {
                 text.push_str("  ");
                 text.push_str(&blockers.join(", "));
             }
-            if model.current_task.as_deref() == Some(b.id.as_str()) {
+            if let Some((_, lane)) = model.claims.iter().find(|(id, _)| *id == b.id) {
+                text.push_str("  ");
+                text.push_str(lane);
+            }
+            if model.focused().and_then(|l| l.task.as_deref()) == Some(b.id.as_str()) {
                 Line::styled(text, Style::default().add_modifier(Modifier::BOLD))
             } else {
                 Line::from(text)
@@ -112,7 +116,7 @@ struct StageRow {
 fn stage_rows(model: &Model) -> Vec<StageRow> {
     let mut rows: Vec<StageRow> = Vec::new();
     let mut open: HashMap<(String, Option<String>), usize> = HashMap::new();
-    for e in &model.events {
+    for e in model.events.iter().filter(|e| model.shown(e)) {
         match &e.kind {
             Kind::StageStart { stage, task, .. } => {
                 rows.push(StageRow {
@@ -198,19 +202,20 @@ fn render_stages(model: &Model, frame: &mut Frame, area: Rect) {
 }
 
 fn output_title(model: &Model) -> String {
-    let Some(stage) = &model.current_stage else {
+    let Some((lane, stage)) = model.focused().and_then(|l| Some((l, l.stage.as_ref()?))) else {
         return "output".to_string();
     };
     let mut t = stage.clone();
-    if let Some(task) = &model.current_task {
+    if let Some(task) = &lane.task {
         t.push(' ');
         t.push_str(task);
     }
-    if let Some(cmd) = &model.current_command {
+    if let Some(cmd) = &lane.command {
         t.push_str(" \u{b7} ");
         t.push_str(cmd);
     }
-    let turns = model
+    t.push_str(&lane_tag(model));
+    let turns = lane
         .output
         .iter()
         .filter(|c| stream::is_assistant_chunk(c))
@@ -219,6 +224,13 @@ fn output_title(model: &Model) -> String {
         t.push_str(&format!(" \u{b7} turn {turns}"));
     }
     t
+}
+
+fn lane_tag(model: &Model) -> String {
+    match model.focused().filter(|_| model.lanes.len() > 1) {
+        Some(lane) => format!(" \u{b7} lane {} \u{b7} l: next", lane.run),
+        None => String::new(),
+    }
 }
 
 // the lines of `lines` that fit `area`, ending `model.offset(pane)` lines before the tail
@@ -236,6 +248,7 @@ fn feed(model: &Model) -> Vec<String> {
     model
         .events
         .iter()
+        .filter(|e| model.shown(e))
         .flat_map(|e| match &e.kind {
             Kind::StageStart { .. } | Kind::StageEnd { .. } | Kind::Gate { .. } => {
                 vec![events::render_line(e)]
@@ -249,7 +262,9 @@ fn feed(model: &Model) -> Vec<String> {
 fn render_output(model: &Model, frame: &mut Frame, area: Rect) {
     let (all_lines, title) = if model.raw {
         let lines = model
-            .output
+            .focused()
+            .map(|l| l.output.as_slice())
+            .unwrap_or_default()
             .iter()
             .flat_map(|c| stream::parse_chunk(c))
             .collect();
@@ -258,7 +273,10 @@ fn render_output(model: &Model, frame: &mut Frame, area: Rect) {
             format!("{} \u{b7} raw \u{b7} r: events", output_title(model)),
         )
     } else {
-        (feed(model), "events \u{b7} r: raw".to_string())
+        (
+            feed(model),
+            format!("events{} \u{b7} r: raw", lane_tag(model)),
+        )
     };
     let width = area.width.saturating_sub(2).max(1) as usize;
     let lines = all_lines
@@ -321,7 +339,7 @@ fn render_footer(model: &Model, frame: &mut Frame, area: Rect) {
 
 fn render_help(frame: &mut Frame, area: Rect) {
     let width = area.width.min(48);
-    let height = area.height.min(10);
+    let height = area.height.min(11);
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
     let help_area = Rect::new(x, y, width, height);
@@ -332,6 +350,7 @@ fn render_help(frame: &mut Frame, area: Rect) {
          PgUp PgDn  scroll a page\n\
          Home End   top / follow the tail\n\
          r          events / raw agent output\n\
+         l          next lane\n\
          ?          toggle this help",
     )
     .block(Block::bordered().title("help"));

@@ -111,6 +111,7 @@ A skill that no stage loading it ever used is named as unproven in this log.
 `enallagi watch` attaches read-only to a live loop, and `enallagi run` draws the same view.
 The output pane opens on the event feed.
 It shows one line per stage and gate event, as `enallagi events` prints it, and one line per agent tool call.
+Each run in the log is a lane: the stages and output panes show the focused lane, newest by default, and the queue pane names the lane branch of each claimed ticket.
 
 | Key | What |
 | --- | --- |
@@ -119,6 +120,7 @@ It shows one line per stage and gate event, as `enallagi events` prints it, and 
 | `PgUp` `PgDn` | scroll the focused pane by its height |
 | `Home` `End` | the top of the focused pane, and back to following its tail |
 | `r` | switch the output pane between the event feed and the agent's raw output |
+| `l` | focus the next lane |
 | `?` | toggle the key list |
 | `q` | write `STOP` under `run`, and leave under `watch` or once a run has finished |
 

@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `enallagi watch` keeps one stage and output view per run: `l` focuses the next lane (newest by default), and the queue pane names the lane branch of each claimed ticket
 - under `writers > 1` the launcher also starts a reader lane (`run --task <id> --pipeline review`) per `review` ticket no live claim holds, outside the `writers` count; a pinned verifier verifies only its ticket
 - a writer lane's implementer prompt lists the commits other lanes landed on the parent branch since its base (short sha, subject, files), each once per run
 - under `writers > 1` a ticket a lane filed whose id another lane landed first is renamed to the next free id at landing, and the old id is rewritten in it and in the lane's own ticket

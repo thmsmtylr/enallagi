@@ -315,6 +315,18 @@ fn with_claims<T>(
     Ok(out)
 }
 
+/// The live claims under `harness`'s main worktree, read without the lock, so a watch never writes the file.
+pub fn peek(harness: &Path) -> Vec<Claim> {
+    let path = git::main_worktree_path(harness)
+        .unwrap_or_else(|| harness.to_path_buf())
+        .join("run")
+        .join("claims.json");
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let mut claims: Vec<Claim> = serde_json::from_str(&text).unwrap_or_default();
+    claims.retain(|c| c.worktree.exists());
+    claims
+}
+
 pub fn claims(root: &Path, harness_dir: &str) -> Vec<Claim> {
     with_claims(root, harness_dir, |c| c.clone()).unwrap_or_default()
 }

@@ -34,6 +34,16 @@ pub enum Pane {
     Output,
 }
 
+// one run's stage and output, so lanes appending to one log keep separate views
+#[derive(Debug, Clone, Default)]
+pub struct Lane {
+    pub run: String,
+    pub stage: Option<String>,
+    pub task: Option<String>,
+    pub command: Option<String>,
+    pub output: Vec<String>,
+}
+
 pub struct Model {
     pub events: Vec<Event>,
     pub queue: Vec<Block>,
@@ -45,14 +55,14 @@ pub struct Model {
     // the output pane shows the agent's stream in place of the event feed
     pub raw: bool,
     pub stop_requested: bool,
-    pub current_stage: Option<String>,
-    pub output: Vec<String>,
+    pub lanes: Vec<Lane>,
+    // the run `l` focused; none follows the newest lane
+    pub lane: Option<String>,
+    // (ticket id, lane branch) from the claims file
+    pub claims: Vec<(String, String)>,
     pub help: bool,
     // set once the event channel disconnects; the view then stays up (nothing more will change) until `q`
     pub finished: bool,
-    // tracked for the queue's bold row and the output pane's title; not part of the shared interface, so private
-    current_task: Option<String>,
-    current_command: Option<String>,
     // each pane's inner height and furthest offset, recorded by the last draw so keys page and stop at the top
     heights: Cell<[usize; 3]>,
     max_scroll: Cell<[usize; 3]>,
@@ -71,18 +81,17 @@ impl Model {
             scroll: [0; 3],
             raw: false,
             stop_requested: false,
-            current_stage: None,
-            output: Vec::new(),
+            lanes: Vec::new(),
+            lane: None,
+            claims: Vec::new(),
             help: false,
             finished: false,
-            current_task: None,
-            current_command: None,
             heights: Cell::new([10; 3]),
             max_scroll: Cell::new([usize::MAX; 3]),
         }
     }
 
-    // output is capped at the last 200 chunks
+    // output is capped at the last 200 chunks per lane
     pub fn apply(&mut self, e: &Event) {
         match &e.kind {
             Kind::StageStart {
@@ -91,22 +100,51 @@ impl Model {
                 command,
                 ..
             } => {
-                self.current_stage = Some(stage.clone());
-                self.current_task = task.clone();
-                self.current_command = command.clone();
-                self.output.clear();
+                let lane = match self.lanes.iter().position(|l| l.run == e.run) {
+                    Some(i) => &mut self.lanes[i],
+                    None => {
+                        self.lanes.push(Lane::default());
+                        self.lanes.last_mut().expect("just pushed")
+                    }
+                };
+                *lane = Lane {
+                    run: e.run.clone(),
+                    stage: Some(stage.clone()),
+                    task: task.clone(),
+                    command: command.clone(),
+                    output: Vec::new(),
+                };
             }
-            Kind::StageOutput { stage, chunk }
-                if self.current_stage.as_deref() == Some(stage.as_str()) =>
-            {
-                self.output.push(chunk.clone());
-                if self.output.len() > 200 {
-                    self.output.remove(0);
+            Kind::StageOutput { stage, chunk } => {
+                if let Some(lane) = self
+                    .lanes
+                    .iter_mut()
+                    .find(|l| l.run == e.run && l.stage.as_deref() == Some(stage.as_str()))
+                {
+                    lane.output.push(chunk.clone());
+                    if lane.output.len() > 200 {
+                        lane.output.remove(0);
+                    }
                 }
             }
             _ => {}
         }
         self.events.push(e.clone());
+    }
+
+    pub fn focused(&self) -> Option<&Lane> {
+        self.lane
+            .as_ref()
+            .and_then(|run| self.lanes.iter().find(|l| &l.run == run))
+            .or(self.lanes.last())
+    }
+
+    // the focused lane's events, and those of runs with no lane, such as the launcher's
+    pub fn shown(&self, e: &Event) -> bool {
+        match self.focused() {
+            Some(lane) => e.run == lane.run || self.lanes.iter().all(|l| l.run != e.run),
+            None => true,
+        }
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
@@ -131,6 +169,14 @@ impl Model {
             }
             KeyCode::End => self.scroll[self.focus as usize] = 0,
             KeyCode::Char('r') => self.raw = !self.raw,
+            KeyCode::Char('l') => {
+                let at = self
+                    .focused()
+                    .and_then(|f| self.lanes.iter().position(|l| l.run == f.run));
+                if let Some(i) = at {
+                    self.lane = Some(self.lanes[(i + 1) % self.lanes.len()].run.clone());
+                }
+            }
             KeyCode::Char('?') => self.help = !self.help,
             _ => {}
         }
@@ -182,6 +228,14 @@ impl Default for Model {
 
 fn read_queue(tracker: &Tracker) -> Vec<Block> {
     tracker.blocks().unwrap_or_default()
+}
+
+fn read_claims(harness: &Path) -> Vec<(String, String)> {
+    crate::worktree::peek(harness)
+        .into_iter()
+        .filter(|c| !c.id.is_empty())
+        .map(|c| (c.id, c.branch))
+        .collect()
 }
 
 fn loop_running(pid_path: &Path) -> bool {
@@ -305,6 +359,7 @@ fn run_live_loop<B: Backend>(
                 }
             }
             model.queue = read_queue(tracker);
+            model.claims = tracker.0.parent().map(read_claims).unwrap_or_default();
         }
         if event::poll(Duration::from_millis(500))? {
             let read = event::read()?;
@@ -366,6 +421,7 @@ fn run_attached_loop<B: Backend>(
             }
         }
         model.queue = read_queue(tracker);
+        model.claims = tracker.0.parent().map(read_claims).unwrap_or_default();
         model.loop_running = loop_running(pid_path);
         terminal
             .draw(|f| view(&model, f))
@@ -593,6 +649,7 @@ mod tests {
         let mut model = fixture_model();
         let dir = tempfile::tempdir().expect("tempdir");
         let mut w = Writer::new(EventLog::open(dir.path()));
+        w.run = model.events[0].run.clone();
         for i in 0..n {
             model.apply(&w.emit(Kind::StageOutput {
                 stage: "verify".into(),
@@ -658,6 +715,7 @@ mod tests {
         let mut model = fixture_model();
         let dir = tempfile::tempdir().expect("tempdir");
         let mut w = Writer::new(EventLog::open(dir.path()));
+        w.run = model.events[0].run.clone();
         for _ in 0..30 {
             model.apply(&w.emit(Kind::Gate {
                 gate: "verdict".into(),
@@ -684,6 +742,7 @@ mod tests {
         let mut model = with_tool_calls(1);
         let dir = tempfile::tempdir().expect("tempdir");
         let mut w = Writer::new(EventLog::open(dir.path()));
+        w.run = model.events[0].run.clone();
         model.apply(&w.emit(Kind::StageOutput {
             stage: "verify".into(),
             chunk: r#"{"type":"other","n":1}"#.into(),
@@ -700,11 +759,66 @@ mod tests {
     }
 
     #[test]
+    fn lanes_keep_separate_output() {
+        let mut model = Model::new();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut writers: Vec<Writer> = ["run-a", "run-b"]
+            .iter()
+            .map(|run| {
+                let mut w = Writer::new(EventLog::open(dir.path()));
+                w.run = run.to_string();
+                w
+            })
+            .collect();
+        for (w, task) in writers.iter_mut().zip(["T-001", "T-002"]) {
+            model.apply(&w.emit(Kind::StageStart {
+                stage: "implement".into(),
+                role: Some("implementer".into()),
+                command: None,
+                task: Some(task.into()),
+            }));
+        }
+        for i in 0..3 {
+            for (w, name) in writers.iter_mut().zip(["Alpha", "Beta"]) {
+                model.apply(&w.emit(Kind::StageOutput {
+                    stage: "implement".into(),
+                    chunk: tool_chunk(&format!("{name}{i}")),
+                }));
+            }
+        }
+        model.raw = true;
+        let outputs: Vec<usize> = model.lanes.iter().map(|l| l.output.len()).collect();
+        assert_eq!(outputs, [3, 3]);
+        let newest = draw(&model);
+        assert!(
+            newest.contains("Beta2") && !newest.contains("Alpha"),
+            "{newest}"
+        );
+        model.handle_key(press('l'));
+        let first = draw(&model);
+        assert!(
+            first.contains("Alpha2") && !first.contains("Beta"),
+            "{first}"
+        );
+        assert!(first.contains("implement T-001"), "{first}");
+        model.handle_key(press('l'));
+        assert!(draw(&model).contains("Beta2"));
+    }
+
+    #[test]
+    fn claimed_row_names_lane() {
+        let mut model = fixture_model();
+        model.claims = vec![("T-002".into(), "lane/b".into())];
+        let text = draw(&model);
+        assert!(text.contains("T-002  ready-for-agent  lane/b"), "{text}");
+    }
+
+    #[test]
     fn help_lists_keys() {
         let mut model = fixture_model();
         model.handle_key(press('?'));
         let text = draw(&model);
-        for needle in ["Tab", "PgUp PgDn", "Home", "End", "wheel", "r ", "q "] {
+        for needle in ["Tab", "PgUp PgDn", "Home", "End", "wheel", "r ", "l ", "q "] {
             assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
         }
     }
