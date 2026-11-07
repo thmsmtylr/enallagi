@@ -256,6 +256,16 @@ impl Default for QueueConfig {
 pub struct PrConfig {
     /// `enallagi run` opens one pull request per landed task, as `--pr-per-task` does.
     pub per_task: bool,
+    pub merge: MergeMode,
+}
+
+/// Who merges a ticket's pull request: a person, or the launcher on green (ADR 0002).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MergeMode {
+    #[default]
+    Human,
+    Auto,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -509,6 +519,8 @@ pub fn load(root: &Path) -> Result<Config, ConfigError> {
         cfg.layout.context_file = instance_rel(root, &cfg.layout.harness_dir, "AGENTS.md");
     }
     cfg.layout.spec = crate::tracker::spec_rel(root, &cfg);
+    // a dark merge needs a pull request to merge
+    cfg.pr.per_task |= cfg.pr.merge == MergeMode::Auto;
     Ok(cfg)
 }
 
@@ -1279,6 +1291,20 @@ mod tests {
         assert!(err.contains("docker"), "{err}");
         write_config(d.path(), "[sandbox]\nmode = 'native'\n");
         assert!(load(d.path()).is_ok());
+    }
+
+    #[test]
+    fn merge_rejects_unknown_mode() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(load(d.path()).unwrap().pr.merge, MergeMode::Human);
+        write_config(d.path(), "[pr]\nmerge = 'yolo'\n");
+        let err = load(d.path()).unwrap_err().to_string();
+        for word in ["merge", "yolo", "human", "auto"] {
+            assert!(err.contains(word), "{word}: {err}");
+        }
+        write_config(d.path(), "[pr]\nmerge = 'auto'\n");
+        let cfg = load(d.path()).unwrap();
+        assert!(cfg.pr.merge == MergeMode::Auto && cfg.pr.per_task);
     }
 
     #[test]

@@ -27,6 +27,8 @@ title_cap_from = 1
 # per_task has enallagi run push each landed task to its own branch and open its pull request, as --pr-per-task does.
 [pr]
 per_task = false
+# "auto" merges a ticket's pull request on green; it needs a holdout set, a USD or token budget and the sandbox.
+merge = "human"
 
 [layout]
 # context_file is the file every role reads first, unset meaning AGENTS.md beside the queue; pointer_files are one-line pointers to it for tools that cannot take it on their command line.

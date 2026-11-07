@@ -421,6 +421,11 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         .into());
     }
 
+    let refusals = auto_refusals(root, &cfg, opts);
+    if !refusals.is_empty() {
+        return Err(Refused(refusals.join("\n")).into());
+    }
+
     if opts.dry_run {
         print!(
             "{}",
@@ -459,6 +464,50 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         built: Vec::new(),
     };
     looper.go()
+}
+
+// every reason `merge = "auto"` may not start, so the operator fixes them in one pass (ADR 0002)
+fn auto_refusals(root: &Path, cfg: &Config, opts: &RunOpts) -> Vec<String> {
+    if cfg.pr.merge != config::MergeMode::Auto {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let t = tracker::Tracker::open(root, &cfg.layout.harness_dir);
+    let open = t
+        .blocks()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|b| !matches!(tracker::state(b).as_deref(), Some("done" | "wontfix")));
+    let sets = gates::holdout_specs(root, cfg);
+    if !open
+        .filter_map(|b| t.spec_of(&b.id))
+        .any(|spec| sets.contains(&spec))
+    {
+        out.push(format!(
+            "merge = \"auto\": no spec with open work has a holdout set under {}/",
+            config::instance_rel(root, &cfg.layout.harness_dir, "holdouts")
+        ));
+    }
+    if opts.budget_usd.is_none() && opts.budget_tokens.is_none() {
+        out.push(
+            "merge = \"auto\" needs BUDGET_USD or BUDGET_TOKENS (or --budget-usd / --budget-tokens); BUDGET_SECONDS alone does not bound spend".into(),
+        );
+    }
+    let rel = config::instance_rel(root, &cfg.layout.harness_dir, "holdouts");
+    let (state, inner, _) = git::locate(root, &cfg.layout.harness_dir, &rel);
+    for (repo, path) in [(root, rel.as_str()), (state.as_path(), inner.as_str())] {
+        if git::git(repo, &["ls-files", "--", path]).is_ok_and(|f| !f.is_empty()) {
+            out.push(format!(
+                "merge = \"auto\": {} tracks a holdout, which any lane can read through git",
+                repo.display()
+            ));
+            break;
+        }
+    }
+    if cfg.sandbox.mode == config::SandboxMode::Off {
+        out.push("merge = \"auto\" refuses [sandbox] mode = \"off\"".into());
+    }
+    out
 }
 
 // answers "is a loop running in this checkout?" for archive_done and the one-writer hook; removed on every exit via Drop

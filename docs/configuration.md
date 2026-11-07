@@ -104,6 +104,9 @@ go test, from go1.26.2:
 ## `[pr]`
 
 - `pr.per_task`: `enallagi run` opens one pull request per landed task, as `--pr-per-task` does. Default `false`.
+- `pr.merge`: `human` or `auto`. Default `human`, under which nobody but a person merges. Any other value is refused at load.
+  Under `auto` the launcher merges a ticket's pull request on green (ADR 0002), and `per_task` is on whatever it says.
+  `enallagi run` refuses to start under `auto`, listing every reason, when no spec holding a ticket that is not `done` or `wontfix` has a holdout set (see the reference's Gates), when neither `BUDGET_USD` nor `BUDGET_TOKENS` (or `--budget-usd` / `--budget-tokens`) is set (`BUDGET_SECONDS` alone does not count), when the product or state repository tracks a path under `.enallagi/holdouts/`, or when `[sandbox] mode = "off"`.
 
 ## `[layout]`
 

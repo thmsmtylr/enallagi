@@ -3874,6 +3874,23 @@ fn pr_per_task_opens_one_from_the_launcher() {
 }
 
 #[test]
+fn auto_opens_pull() {
+    let p = pulls("\n[pr]\nmerge = \"auto\"\n", "exit 0\n");
+    script(
+        &p.repo,
+        &format!("{}/a.sh", holdout_dir(&p.repo)),
+        "exit 0\n",
+    );
+    let (_, out) = p.run(&["--budget-usd", "5"]);
+    assert!(out.contains("tasks landed: T-001"), "{out}");
+    let calls = p.calls();
+    assert!(
+        calls.iter().any(|c| c[..2] == ["pr", "create"]),
+        "{calls:?}\n{out}"
+    );
+}
+
+#[test]
 fn a_run_without_pr_per_task_opens_nothing() {
     let p = pulls("", "exit 0\n");
     let (_, out) = p.run(&[]);
@@ -4512,6 +4529,104 @@ fn unset_slug_runs() {
     let (digest, events) = go(&r, &opts(1));
     assert_eq!(digest.landed, vec!["T-001".to_string()], "{events:#?}");
     assert!(digest.halts.is_empty(), "{:?}", digest.halts);
+}
+
+// T-001 open in the fixture spec, a set for it, a USD budget: every refusal answered
+fn auto_repo(toml_extra: &str) -> Repo {
+    let r = holdout_repo();
+    let toml = std::fs::read_to_string(r.root.join(".enallagi/enallagi.toml")).expect("toml");
+    r.write(
+        ".enallagi/enallagi.toml",
+        &format!("{toml}\n[pr]\nmerge = \"auto\"\n{toml_extra}"),
+    );
+    r.commit_all("auto");
+    script(&r, &format!("{}/a.sh", holdout_dir(&r)), "exit 0\n");
+    r
+}
+
+fn usd() -> RunOpts {
+    RunOpts {
+        budget_usd: Some(5.0),
+        ..opts(1)
+    }
+}
+
+// the refusal's text, with no stage started
+fn refused(r: &Repo, opts: &RunOpts) -> String {
+    let (result, events) = try_go(r, opts);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e.kind, Kind::StageStart { .. })),
+        "{events:#?}"
+    );
+    match result {
+        Err(e) => e.to_string(),
+        Ok(d) => panic!("ran: {d:?}"),
+    }
+}
+
+#[test]
+fn auto_refuses_without_holdouts() {
+    let r = auto_repo("");
+    std::fs::remove_file(r.root.join(holdout_dir(&r)).join("a.sh")).expect("rm");
+    let err = refused(&r, &usd());
+    assert!(
+        err.contains("no spec with open work has a holdout set"),
+        "{err}"
+    );
+    // a set whose spec holds only done work does not count
+    let r = auto_repo("");
+    queue(&r, DONE_TASK);
+    r.commit_all("done");
+    assert!(refused(&r, &usd()).contains("holdout set"));
+}
+
+#[test]
+fn auto_refuses_without_budget() {
+    let r = auto_repo("");
+    let err = refused(&r, &opts(1));
+    assert!(err.contains("BUDGET_USD or BUDGET_TOKENS"), "{err}");
+    let seconds = RunOpts {
+        budget_seconds: Some(600),
+        ..opts(1)
+    };
+    assert!(refused(&r, &seconds).contains("BUDGET_USD or BUDGET_TOKENS"));
+    let tokens = RunOpts {
+        budget_tokens: Some(1000),
+        ..opts(1)
+    };
+    let (result, _) = try_go(&r, &tokens);
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn auto_refuses_tracked_holdouts() {
+    let r = auto_repo("");
+    enallagi::git::git(&r.root, &["add", "-f", &holdout_dir(&r)]).expect("add");
+    r.commit_all("tracked");
+    let err = refused(&r, &usd());
+    assert!(err.contains("tracks a holdout"), "{err}");
+    // every reason is listed at once
+    let both = refused(&r, &opts(1));
+    assert!(
+        both.contains("tracks a holdout") && both.contains("BUDGET_USD"),
+        "{both}"
+    );
+}
+
+#[test]
+fn auto_refuses_sandbox_off() {
+    let r = auto_repo("\n[sandbox]\nmode = \"off\"\n");
+    let err = refused(&r, &usd());
+    assert!(err.contains("[sandbox] mode = \"off\""), "{err}");
+}
+
+#[test]
+fn auto_runs_answered() {
+    let r = auto_repo("");
+    let (digest, events) = go(&r, &usd());
+    assert_eq!(digest.landed, vec!["T-001".to_string()], "{events:#?}");
 }
 
 #[test]

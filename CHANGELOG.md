@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `[pr] merge = "human" | "auto"`, default `human`; `auto` opens a pull request per ticket and refuses to start without a holdout set for open work, a USD or token budget, untracked holdouts and the sandbox on
 - a lane whose transcript or diff names a holdout set's path sets its ticket to `ready-for-human` and halts the run, after every stage whatever its `post` list
 - a new `holdout` gate, last on verify, runs the executable files in `.enallagi/holdouts/<spec>/` in a scratch worktree and sends a `done` back with only `holdouts: <k> of <n> red`; a second red for one ticket halts the run
 - a role's frontmatter declares `writes:` (checkout-relative paths, replacing the checkout and git dirs as its writable set) and `hosts:` (proxy entries for its spawns, `*` for any name), enforced by the sandbox; `tools:` is gone from the shipped roles and refused at load; the auditor writes nothing and the researcher writes only `REFERENCES.md` and reaches any host
