@@ -125,6 +125,8 @@ pub enum ConfigError {
     BadTimeout { stage: String, value: String },
     #[error("[check] timeout `{0}` is not <n>s, <n>m or <n>h")]
     BadCheckTimeout(String),
+    #[error("[respond] quiet `{0}` is not <n>s, <n>m or <n>h")]
+    BadQuiet(String),
     #[error("pipeline {pipeline}: when references probe `{probe}`, not one of {}", crate::probes::NAMES.join(", "))]
     UnknownProbe { pipeline: String, probe: String },
 }
@@ -265,15 +267,31 @@ pub struct PrConfig {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RespondConfig {
+    /// New in-scope findings past this many rounds hand the ticket to a person.
+    pub max_rounds: u64,
+    /// `<n>s`, `<n>m` or `<n>h` after a push before the poll judges the pull request.
+    pub quiet: String,
+    /// Reviewers asked again on each push, as `gh pr edit --add-reviewer` takes them.
+    pub rereview: Vec<String>,
     /// The variable whose value replies and resolves pass to gh as `GH_TOKEN`; unset is gh's own auth.
     pub token_env: String,
 }
 
+// the same values as the `[respond]` table in harness.default.toml
 impl Default for RespondConfig {
     fn default() -> Self {
         RespondConfig {
+            max_rounds: 3,
+            quiet: "10m".to_string(),
+            rereview: Vec::new(),
             token_env: "ENALLAGI_GH_TOKEN".to_string(),
         }
+    }
+}
+
+impl RespondConfig {
+    pub fn quiet_duration(&self) -> Result<Duration, ConfigError> {
+        parse_timeout(self.quiet.trim()).ok_or_else(|| ConfigError::BadQuiet(self.quiet.clone()))
     }
 }
 
@@ -805,6 +823,9 @@ pub fn validate(
         }
     }
     if let Err(e) = cfg.check.timeout_duration() {
+        errs.push(e);
+    }
+    if let Err(e) = cfg.respond.quiet_duration() {
         errs.push(e);
     }
     let mut declared_roles: BTreeSet<&str> = BTreeSet::new();

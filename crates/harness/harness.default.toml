@@ -35,6 +35,12 @@ merge = "human"
 writers = 1
 
 [respond]
+# a ticket whose pull request draws new in-scope findings after max_rounds goes to ready-for-human.
+max_rounds = 3
+# how long after a push the poll waits before judging the pull request.
+quiet = "10m"
+# reviewers asked again on each push, e.g. "@copilot" or "@greptileai", for bots that do not re-review on push.
+rereview = []
 # names the variable whose value replies and resolves pass to gh as GH_TOKEN; unset uses gh's own auth.
 token_env = "ENALLAGI_GH_TOKEN"
 

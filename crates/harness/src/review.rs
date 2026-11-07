@@ -257,6 +257,8 @@ pub struct Light {
     pub state: String,
     /// What `polled` holds: equal keys mean nothing new to read.
     pub key: String,
+    /// The head's check rollup, `SUCCESS` when every check passed.
+    pub rollup: String,
 }
 
 pub fn light(reference: &str) -> Result<Light, ReviewError> {
@@ -277,6 +279,7 @@ pub fn light(reference: &str) -> Result<Light, ReviewError> {
     ];
     Ok(Light {
         state: pull["state"].as_str().unwrap_or_default().to_string(),
+        rollup: key[3].clone(),
         key: key.join(" "),
     })
 }
@@ -584,6 +587,11 @@ pub fn resolve(token: Option<&str>, thread: &str) -> Result<(), ReviewError> {
 /// Replies `body` on the thread and resolves it.
 pub fn settle(token: Option<&str>, thread: &str, body: &str) -> Result<(), ReviewError> {
     reply(token, thread, body).and_then(|_| resolve(token, thread))
+}
+
+/// Asks `who` to review the pull request again.
+pub fn rereview(token: Option<&str>, pr: &str, who: &str) -> Result<(), ReviewError> {
+    write(token, &["pr", "edit", pr, "--add-reviewer", who]).map(drop)
 }
 
 /// Comments `body` on the pull request; returns the comment's URL.

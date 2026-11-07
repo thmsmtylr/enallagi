@@ -4467,11 +4467,11 @@ finding: F-2 comment round 1
 
 // a returned ticket's lane, its stubs working whichever ticket the launcher hands them
 fn returned(commit: &str) -> Pulls {
-    returned_with(commit, "", "")
+    returned_with(commit, "", "", "")
 }
 
 // `answers` are appended to the ticket by the implementer, `runs` under the verdict by the verifier
-fn returned_with(commit: &str, answers: &str, runs: &str) -> Pulls {
+fn returned_with(commit: &str, answers: &str, runs: &str, extra: &str) -> Pulls {
     let p = pulls("", "exit 0\n");
     let r = &p.repo;
     let bin = env!("CARGO_BIN_EXE_enallagi");
@@ -4495,7 +4495,11 @@ fn returned_with(commit: &str, answers: &str, runs: &str) -> Pulls {
             queue_path()
         ),
     );
-    write_toml(r, &base_toml(&role_commands(&implement, &verify)));
+    write_toml(
+        r,
+        &base_toml(&format!("{}{extra}", role_commands(&implement, &verify))),
+    );
+    installed(r);
     queue(r, &format!("{TASKS}{RETURNED}"));
     // as an install leaves it: the harness directory is its own repository, the product never tracks it
     let git = |root: &std::path::Path, args: &[&str]| {
@@ -4564,7 +4568,7 @@ fn push_refuses_state_commit() {
 #[test]
 fn rejection_out_of_scope() {
     let answers = "answer: F-1 reject naming: true\\nanswer: F-2 reject naming: true\\n";
-    let p = returned_with("'T-900: fix'", answers, "ran: true\\nexit: 0\\n");
+    let p = returned_with("'T-900: fix'", answers, "ran: true\\nexit: 0\\n", "");
     let (_, out) = p.run(&[]);
     let path = p.repo.root.join(".enallagi/.out-of-scope/naming.md");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{out}"));
@@ -4586,8 +4590,14 @@ fn rejection_out_of_scope() {
 // T-900's pull in the twin, F-1 its thread and F-2 its comment, answered one each way;
 // the twin's round after the push resolves `resolved`
 fn answered(resolved: &[&str]) -> Pulls {
+    answered_with(resolved, "")
+}
+
+// `extra` follows a `[respond]` table holding `quiet = "0s"`
+fn answered_with(resolved: &[&str], extra: &str) -> Pulls {
     let answers = "answer: F-1 accept fix\\nanswer: F-2 reject naming: true\\n";
-    let p = returned_with("'T-900: fix'", answers, "ran: true\\nexit: 0\\n");
+    let respond = format!("\n[respond]\nquiet = \"0s\"\n{extra}");
+    let p = returned_with("'T-900: fix'", answers, "ran: true\\nexit: 0\\n", &respond);
     let origin = p.origin.path().join("origin.git");
     let head = enallagi::git::git(&origin, &["rev-parse", "task/T-900"]).expect("head");
     let url = "https://github.com/owner/repo/pull/9";
@@ -4713,6 +4723,92 @@ fn token_env_reaches_gh() {
         .map(|(_, t)| t)
         .collect();
     assert_eq!(tokens, ["tok"], "{out}");
+}
+
+#[test]
+fn max_rounds_human() {
+    let r = driven_repo(&OPEN_TASKS.replacen(
+        "branch: task/T-001\n",
+        "branch: task/T-001\nrounds: 3\n",
+        1,
+    ));
+    let path = serving(&r, pull_with(vec![thread_on("src/thing.ts", 7)]));
+    let out = run_with_path(&r, &path);
+    assert_eq!(
+        state_of(&r, "T-001").as_deref(),
+        Some("ready-for-human"),
+        "{out}"
+    );
+    assert_eq!(
+        field_of(&r, "T-001", "gate").as_deref(),
+        Some("respond: max_rounds (3) reached, 1 findings open")
+    );
+    assert_eq!(
+        field_of(&r, "T-001", "respond").as_deref(),
+        Some("max_rounds")
+    );
+    assert_eq!(field_of(&r, "T-001", "rounds").as_deref(), Some("3"));
+}
+
+#[test]
+fn clean_round_marks_clean() {
+    let r = driven_repo(OPEN_TASKS);
+    let mut pulls = open_pulls();
+    let check =
+        |c: &str| serde_json::json!({"name": "test", "status": "COMPLETED", "conclusion": c});
+    pulls[0].head_sha = "abc123".to_string();
+    pulls[0].checks = vec![check("SUCCESS")];
+    pulls[0].threads = vec![Thread {
+        resolved: true,
+        ..thread_on("src/thing.ts", 7)
+    }];
+    pulls[1].checks = vec![serde_json::json!({"name": "test", "status": "IN_PROGRESS"})];
+    let path = serving(&r, pulls);
+    let out = run_with_path(&r, &path);
+    assert_eq!(
+        field_of(&r, "T-001", "respond").as_deref(),
+        Some("clean at abc123"),
+        "{out}"
+    );
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("open"), "{out}");
+    assert_eq!(field_of(&r, "T-002", "respond"), None, "{out}");
+}
+
+#[test]
+fn quiet_window_defers_judging() {
+    let now = jiff::Timestamp::now().strftime("%Y-%m-%dT%H:%M:%SZ");
+    let pushed = format!("branch: task/T-001\npushed: abc123 {now}\n");
+    let r = driven_repo(&OPEN_TASKS.replacen("branch: task/T-001\n", &pushed, 1));
+    let path = serving(&r, pull_with(vec![thread_on("src/thing.ts", 7)]));
+    let out = run_with_path(&r, &path);
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("open"), "{out}");
+    assert!(!ticket_file(&r, "T-001").contains("finding:"), "{out}");
+    assert_eq!(graphql_ops(&recorded(&r)), ["query PullState"; 2], "{out}");
+}
+
+#[test]
+fn rereview_requested_on_push() {
+    let edit = |who: &str| -> Vec<String> {
+        [
+            "pr",
+            "edit",
+            "https://github.com/owner/repo/pull/9",
+            "--add-reviewer",
+            who,
+        ]
+        .map(String::from)
+        .to_vec()
+    };
+    let p = answered_with(&[], "rereview = [\"@copilot\", \"@greptileai\"]\n");
+    let mut state = twin::load(&p.twin);
+    state.responses.push(Response::to(&edit("@copilot"), ""));
+    twin::save(&p.twin, &state);
+    let (_, out) = p.run(&[]);
+    let calls = p.calls();
+    assert!(calls.contains(&edit("@copilot")), "{calls:?}\n{out}");
+    assert!(calls.contains(&edit("@greptileai")), "{calls:?}");
+    assert!(out.contains("@greptileai"), "{out}");
+    assert_eq!(state_of(&p.repo, "T-900").as_deref(), Some("open"), "{out}");
 }
 
 const LEARNING: &str = "- [proposed] `vacuous-test`: a test passed with its logic deleted → watch it fail first\n  instances: `SPEC.md:1`, `PROGRESS.md:1`, `TASKS.md:1`\n";

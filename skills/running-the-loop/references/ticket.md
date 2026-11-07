@@ -45,6 +45,7 @@ queue. No line under `## Comments` opens with `## `: that ends the section.
 | `finding:` `rounds:` | written by the launcher when the poll returns a finding to the ticket: `finding: F-<n> <source> round <r>`, then indented `by:`, `key:`, `url:`, `anchor:`, `thread-id:` and `severity:` as the finding has them, then its body quoted. `rounds:` counts the respond rounds. |
 | `answer:` | written by the implementer, one per `finding:`: `answer: F-<n> accept <test>` (a test the round adds or changes, failing at the round base) or `answer: F-<n> reject <concept>: <command>`, with the reasoning under `## Comments`. The `findings` gate checks them. |
 | `settled:` | written by the launcher after a push: `settled: F-<n> <url>`, the URL of its reply to the finding. A thread reply for a thread, one comment per push for the rest, each marked `<!-- enallagi:F-<n> -->`. At the next poll the launcher resolves each answered thread still unresolved. |
+| `respond:` | written by the launcher when a respond loop stops: `clean at <sha>` (no new finding, checks green, every thread resolved; the ticket stays `open`) or `max_rounds` (new in-scope findings after `[respond] max_rounds` rounds; the ticket goes to `ready-for-human`). |
 | `deferred:` | the verifier's `needs-triage` filing for a defect outside the criteria, by id and reason. The `commit-verdict` gate reads it. |
 
 A lane edits only its own ticket file. The one other file it may add is a new ticket at

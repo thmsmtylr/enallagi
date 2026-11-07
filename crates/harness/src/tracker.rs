@@ -40,6 +40,7 @@ pub const HARNESS_KEYS: &[&str] = &[
     "finding",
     "answer",
     "settled",
+    "respond",
 ];
 
 /// The specs directory.

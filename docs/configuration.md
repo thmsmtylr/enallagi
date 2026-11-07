@@ -114,6 +114,9 @@ go test, from go1.26.2:
 
 ## `[respond]`
 
+- `respond.max_rounds`: when new in-scope findings reach an `open` ticket that has already had this many respond rounds, the ticket goes to `ready-for-human` with gate reason `respond: max_rounds (<n>) reached, <k> findings open`. Default `3`.
+- `respond.quiet`: `<n>s`, `<n>m` or `<n>h` after a push during which the poll judges nothing on the pull request, so bots can review again. When no pipeline's `when` holds and a pushed ticket is inside its window, the launcher sleeps until the earliest window closes and iterates. Default `10m`.
+- `respond.rereview`: reviewers the launcher asks again on each push with `gh pr edit <pr> --add-reviewer <r>`, for bots that do not re-review on push (for example `@copilot`, `@greptileai`). A failure is a warning. Default `[]`.
 - `respond.token_env`: the name of the environment variable whose value the launcher passes to `gh` as `GH_TOKEN` when it replies on, comments on or resolves a ticket's pull request. Unset means `gh`'s own auth. A write refused for permissions names this key in its warning. Default `ENALLAGI_GH_TOKEN`.
 
 ## `[layout]`

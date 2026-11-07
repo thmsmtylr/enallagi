@@ -771,6 +771,21 @@ impl<'a> Loop<'a> {
                     self.opts.pipelines.join(", ")
                 )
             };
+            // a pushed pull request still inside its quiet window is work the loop waits for
+            let wait = self
+                .blocks()
+                .iter()
+                .filter(|b| tracker::state(b).as_deref() == Some("open"))
+                .filter_map(|b| self.quiet_left(block::field(b, "pushed").as_deref()))
+                .min();
+            if let Some(wait) = wait {
+                println!(
+                    "  waiting {}s for a pushed pull request's [respond] quiet window",
+                    wait.as_secs()
+                );
+                std::thread::sleep(wait);
+                return self.iteration();
+            }
             self.digest.warnings.push(reason);
             return false;
         };
@@ -1648,7 +1663,7 @@ impl<'a> Loop<'a> {
         let t = Tracker::open(self.root, &self.cfg.layout.harness_dir);
         let spec = tracker::repo_slug(self.root);
         let decisions = std::fs::read_to_string(self.file("DECISIONS.md")).unwrap_or_default();
-        let open: Vec<(String, String, Option<String>)> = self
+        let open: Vec<(String, String, Option<String>, Option<String>)> = self
             .blocks()
             .iter()
             .filter(|b| tracker::state(b).as_deref() == Some("open"))
@@ -1657,10 +1672,11 @@ impl<'a> Loop<'a> {
                     b.id.clone(),
                     block::field(b, "pr")?,
                     block::field(b, "polled"),
+                    block::field(b, "pushed"),
                 ))
             })
             .collect();
-        for (id, url, polled) in open {
+        for (id, url, polled, pushed) in open {
             let light = match review::light(&url) {
                 Ok(light) => light,
                 Err(err) => {
@@ -1673,16 +1689,29 @@ impl<'a> Loop<'a> {
                 "CLOSED" => t
                     .set_status(&id, "wontfix", "pull request closed unmerged")
                     .map_err(|e| e.to_string()),
+                // the bots get the window to review the push before anything is judged
+                _ if self.quiet_left(pushed.as_deref()).is_some() => Ok(()),
                 _ if polled.as_deref() == Some(light.key.as_str()) => Ok(()),
-                _ => self.route(&t, &spec, &decisions, &id, &url).and_then(|_| {
-                    t.set_field(&id, "polled", &light.key)
-                        .map_err(|e| e.to_string())
-                }),
+                _ => self
+                    .route(&t, &spec, &decisions, &id, &url, &light.rollup)
+                    .and_then(|_| {
+                        t.set_field(&id, "polled", &light.key)
+                            .map_err(|e| e.to_string())
+                    }),
             };
             if let Err(err) = moved {
                 self.digest.warnings.push(format!("{id}: {err}"));
             }
         }
+    }
+
+    // how much of `[respond] quiet` is left since `pushed: <sha> <time>`
+    fn quiet_left(&self, pushed: Option<&str>) -> Option<Duration> {
+        let at: jiff::Timestamp = pushed?.split_whitespace().nth(1)?.parse().ok()?;
+        let quiet = self.cfg.respond.quiet_duration().ok()?;
+        let since =
+            Duration::try_from(jiff::Timestamp::now().duration_since(at)).unwrap_or_default();
+        quiet.checked_sub(since).filter(|left| !left.is_zero())
     }
 
     // a finding inside the ticket's scope, or with no anchor, goes back to the ticket; any other is a new
@@ -1694,6 +1723,7 @@ impl<'a> Loop<'a> {
         decisions: &str,
         id: &str,
         url: &str,
+        rollup: &str,
     ) -> Result<(), String> {
         let found = match review::read(url) {
             Ok(found) => found,
@@ -1718,12 +1748,16 @@ impl<'a> Loop<'a> {
             .iter()
             .filter_map(|(_, l)| l.strip_prefix("settled: ")?.split_whitespace().next())
             .filter_map(|f| tracker::finding_field(ticket, f, "thread-id:"));
+        let mut resolved = Vec::new();
         for thread in answered.filter(|th| found.open.contains(th)) {
-            if let Err(err) = review::resolve(token.as_deref(), &thread) {
-                let err = self.denied(err);
-                self.digest
-                    .warnings
-                    .push(format!("{id}: thread {thread} was left open: {err}"));
+            match review::resolve(token.as_deref(), &thread) {
+                Ok(()) => resolved.push(thread),
+                Err(err) => {
+                    let err = self.denied(err);
+                    self.digest
+                        .warnings
+                        .push(format!("{id}: thread {thread} was left open: {err}"));
+                }
             }
         }
         let scope: Vec<String> = block::field(ticket, "scope")
@@ -1749,8 +1783,9 @@ impl<'a> Loop<'a> {
                 || blocks.iter().any(|b| b.body.iter().any(|(_, l)| *l == key))
                 || prior.iter().any(|l| crate::issue::carries(l, &f.url))
         };
+        let fresh: Vec<&review::Finding> = found.findings.iter().filter(|f| !carried(f)).collect();
         let mut entries = Vec::new();
-        for f in found.findings.iter().filter(|f| !carried(f)) {
+        for f in fresh.iter().copied() {
             if f.path.as_deref().is_none_or(|p| gates::in_scope(p, &scope)) {
                 let n = had + entries.len() + 1;
                 entries.push(review::entry(f, &format!("F-{n}"), round));
@@ -1788,7 +1823,29 @@ impl<'a> Loop<'a> {
             }
         }
         if entries.is_empty() {
+            let left = found.open.iter().any(|th| !resolved.contains(th));
+            let clean = format!("clean at {}", found.head);
+            if fresh.is_empty()
+                && rollup == "SUCCESS"
+                && !left
+                && block::field(ticket, "respond").as_deref() != Some(clean.as_str())
+            {
+                t.set_field(id, "respond", &clean)
+                    .map_err(|e| e.to_string())?;
+            }
             return Ok(());
+        }
+        let max = self.cfg.respond.max_rounds;
+        if round > max {
+            let reason = format!(
+                "respond: max_rounds ({max}) reached, {} findings open",
+                entries.len()
+            );
+            return t
+                .add_lines(id, &entries.join("\n"))
+                .and_then(|_| t.set_field(id, "respond", "max_rounds"))
+                .and_then(|_| t.set_status(id, "ready-for-human", &reason))
+                .map_err(|e| e.to_string());
         }
         t.add_lines(id, &entries.join("\n"))
             .and_then(|_| t.set_field(id, "rounds", &round.to_string()))
@@ -1944,6 +2001,13 @@ impl<'a> Loop<'a> {
             .filter_map(|l| l.strip_prefix("settled: ")?.split_whitespace().next())
             .collect();
         let token = self.token();
+        for who in &self.cfg.respond.rereview {
+            if let Err(err) = review::rereview(token.as_deref(), &pr, who) {
+                self.digest
+                    .warnings
+                    .push(format!("{task}: no re-review from {who}: {err}"));
+            }
+        }
         let mut done = Vec::new();
         let mut listed = Vec::new();
         for answer in lines.iter().filter_map(|l| l.strip_prefix("answer: ")) {
