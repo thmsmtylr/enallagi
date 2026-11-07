@@ -1309,10 +1309,11 @@ fn tickets(ctx: &mut GateCtx) -> GateOutcome {
                 .map_err(|e| e.to_string())
         });
     match numbered {
-        Ok(ids) => pass(format!(
-            "{slug}: drafts queued as {} at needs-triage",
-            ids.join(", ")
-        )),
+        Ok(ids) => commit(
+            ctx,
+            &[SPECS],
+            &format!("decompose {slug}: {} at needs-triage", ids.join(", ")),
+        ),
         Err(e) => halted(ctx, format!("tickets: {slug}: {e}")),
     }
 }
@@ -2316,6 +2317,12 @@ mod tests {
             .unwrap()
             .ends_with("app/issues/T-004-step.md"));
         assert!(t.drafts("app").unwrap().is_empty());
+        assert!(
+            env.log()
+                .contains("decompose app: T-002, T-003, T-004 at needs-triage"),
+            "{}",
+            env.log()
+        );
     }
 
     #[test]

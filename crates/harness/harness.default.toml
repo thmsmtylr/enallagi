@@ -138,6 +138,12 @@ name = "review"
 when = "queue.reviewing"
 stages = ["verify"]
 
+# decompose runs before task: an accepted spec with no tickets is broken down, numbered and triaged first.
+[[pipeline]]
+name = "decompose"
+when = "spec.undecomposed"
+stages = ["decompose", "adjudicate"]
+
 # adjudicate runs last: the round drains whatever the verdict filed before the next task is picked.
 [[pipeline]]
 name = "task"
@@ -174,6 +180,12 @@ name = "scout"
 role = "scout"
 turns = 30
 env = { ENALLAGI_DRIVER = "1" }
+
+[[stage]]
+name = "decompose"
+role = "decomposer"
+turns = 60
+post = ["tickets", "commit-round", "queue-intact"]
 
 [[stage]]
 name = "adjudicate"

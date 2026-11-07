@@ -12,6 +12,10 @@ use std::path::{Path, PathBuf};
 
 const ROLES: &[(&str, &str)] = &[
     (
+        "decomposer.md",
+        include_str!("../../../roles/decomposer.md"),
+    ),
+    (
         "adjudicator.md",
         include_str!("../../../roles/adjudicator.md"),
     ),

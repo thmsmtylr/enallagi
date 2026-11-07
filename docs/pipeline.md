@@ -45,7 +45,7 @@ Without a change to `source` or `rev`, sync prints `tdd  cached` and keeps the o
 
 ## Pipelines
 
-A `[[pipeline]]` in `enallagi.toml` replaces all three defaults.
+A `[[pipeline]]` in `enallagi.toml` replaces every default pipeline.
 This `task` pipeline runs without `adjudicate`:
 
 ```toml

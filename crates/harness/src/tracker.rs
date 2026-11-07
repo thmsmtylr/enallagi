@@ -499,6 +499,28 @@ fn ticket_files(specs: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// The accepted specs with no ticket yet, by slug: `spec.md` at `**Status:** ready-for-agent`, no `T-NNN-*.md` in `issues/`.
+pub fn undecomposed(root: &Path, harness_dir: &str) -> Vec<String> {
+    let accepted = format!("{STATUS} ready-for-agent");
+    spec_paths(root, harness_dir)
+        .into_iter()
+        .filter(|p| {
+            std::fs::read_to_string(p).is_ok_and(|t| t.lines().any(|l| l.trim_end() == accepted))
+        })
+        .filter_map(|p| p.parent().map(Path::to_path_buf))
+        .filter(|dir| {
+            let names = std::fs::read_dir(dir.join("issues"))
+                .into_iter()
+                .flatten()
+                .flatten();
+            !names
+                .into_iter()
+                .any(|e| e.file_name().to_string_lossy().starts_with("T-"))
+        })
+        .filter_map(|dir| Some(dir.file_name()?.to_str()?.to_string()))
+        .collect()
+}
+
 /// A `to-tickets` draft, `issues/NN-<slug>.md`, before the `tickets` gate numbers it.
 pub struct Draft {
     pub path: PathBuf,

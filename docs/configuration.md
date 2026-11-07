@@ -17,7 +17,7 @@ The re-run rewrites this file's key in `test-hashes.json` to its new sha256 and 
 - `agent.rate_limit_pattern`: output that means the agent hit a rate limit, matched without case. Default `"hit your session limit"`.
 - `agent.dangerously_skip_permissions`: adds the preset's bypass flag to every lane. Default `false`.
   The `claude` preset needs no bypass: its lanes run in the Claude Code sandbox, described below.
-- `[agent.<role>]`: `preset`, `command`, `model`, `effort` and `usage` for one role. The role is one of `scout`, `adjudicator`, `implementer`, `verifier` or `researcher`.
+- `[agent.<role>]`: `preset`, `command`, `model`, `effort` and `usage` for one role. The role is one of `decomposer`, `scout`, `adjudicator`, `implementer`, `verifier` or `researcher`.
 
 ### The `claude` preset's sandbox
 

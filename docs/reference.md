@@ -10,12 +10,16 @@ The defaults are in `crates/harness/harness.default.toml`.
 | Pipeline | `when` | Stages |
 | --- | --- | --- |
 | `review` | `queue.reviewing` | **verify** |
+| `decompose` | `spec.undecomposed` | **decompose** → **adjudicate** |
 | `task` | `queue.takeable` | **implement** → **verify** → **adjudicate** |
 | `triage` | `queue.proposed` | **adjudicate** |
 | `discover` | `!queue.takeable` | **scout** → **adjudicate** |
 
 A queue holding a `needs-triage` ticket and nothing takeable takes `triage`, so a ticket the operator
 queued is decided before the scout files more.
+An accepted spec with no tickets takes `decompose`: the decomposer writes `to-tickets` drafts beside
+it, the `tickets` gate numbers them into `needs-triage` tickets and commits them, and the adjudicator
+triages them in the same round. With several such specs, the lowest slug goes first.
 `discover` ends the run after two dry rounds.
 `triage` has one: a round that leaves its `needs-triage` ticket undecided hands the next round to
 `discover`, and a round that leaves takeable work reopens it.
@@ -90,7 +94,7 @@ or halts the run. The names are matched in `crates/harness/src/gates.rs`.
 | `commit-task` | a commit in the iteration's range whose subject names no task id, unless it touches only the loop's own state | implement |
 | `check-delta` | a check failure that is not already in `.check-baseline` | wherever a stage's `post` names it |
 | `commit-round` | a failed commit of the queue and DECISIONS.md | adjudicate |
-| `tickets` | a spec's drafts that fail `enallagi tasks check <spec>`: halts, drafts left in place; on a pass numbers them `T-NNN` from the next id, maps their blockers, sets `needs-triage` with `probe: decompose` (`enallagi gate tickets <spec>` by hand) | decompose |
+| `tickets` | a spec's drafts that fail `enallagi tasks check <spec>`: halts, drafts left in place; on a pass numbers them `T-NNN` from the next id, maps their blockers, sets `needs-triage` with `probe: decompose`, and commits them (`enallagi gate tickets <spec>` by hand) | decompose |
 | `adjudicator-halt` | an adjudicator output line opening with `halt` and naming a task id, and halts the run | adjudicate |
 | `dry-round` | a round that leaves no `ready-for-agent` ticket, counted toward `end_after_dry_rounds` | adjudicate |
 | `install-stale` | an installed file that drifted from what `enallagi init` writes now, read by spawning the binary | verify |
@@ -169,6 +173,7 @@ A task's own `model:` and `effort:` lines win over `[agent]` and `[agent.<role>]
 - `queue.proposed` (a `needs-triage` ticket stands)
 - `queue.empty`
 - `task.attended` (the first ready ticket is `ready-for-human`)
+- `spec.undecomposed` (a `specs/<slug>/spec.md` at `**Status:** ready-for-agent` has no `T-NNN-*.md` in `issues/`)
 - `check.red`
 - `probe.<name>`
 
@@ -188,7 +193,7 @@ Those two commits are what an install leaves in the product's history.
 
 | Path | What |
 | --- | --- |
-| `.enallagi/roles/{scout,adjudicator,implementer,verifier,researcher}.md` | the five role prompts, always resubstituted |
+| `.enallagi/roles/{decomposer,scout,adjudicator,implementer,verifier,researcher}.md` | the six role prompts, always resubstituted |
 | `.enallagi/RAILS.md`, `.enallagi/.gitignore` | the rails, each naming its enforcement, and the ignore file for scratch state |
 | `<skills_dir>/running-the-loop/` | the loop's own usage skill, in the preset's skill directory |
 | `.enallagi/{enallagi.toml,PROGRESS.md,LEARNINGS.md,DECISIONS.md,.check-baseline,evals/README.md}` | seeded once and never overwritten |

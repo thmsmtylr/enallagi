@@ -43,6 +43,7 @@ pub const ROLE_NAMES: &[&str] = &[
     "implementer",
     "verifier",
     "researcher",
+    "decomposer",
 ];
 
 pub const GATE_NAMES: &[&str] = &[
@@ -72,7 +73,7 @@ pub enum ConfigError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(
-        "when: `{0}` is not a predicate (one of queue.takeable, queue.reviewing, queue.proposed, queue.empty, task.attended, check.red, probe.<name>, optionally prefixed with !)"
+        "when: `{0}` is not a predicate (one of queue.takeable, queue.reviewing, queue.proposed, queue.empty, task.attended, spec.undecomposed, check.red, probe.<name>, optionally prefixed with !)"
     )]
     BadWhen(String),
     #[error("pipeline {pipeline}: stage `{stage}` is not defined by any [[stage]]")]
@@ -365,6 +366,7 @@ pub enum Predicate {
     QueueProposed,
     QueueEmpty,
     TaskAttended,
+    SpecUndecomposed,
     CheckRed,
     Probe(String),
     Not(Box<Predicate>),
@@ -381,6 +383,7 @@ pub fn parse_when(s: &str) -> Result<Predicate, ConfigError> {
         "queue.proposed" => Ok(Predicate::QueueProposed),
         "queue.empty" => Ok(Predicate::QueueEmpty),
         "task.attended" => Ok(Predicate::TaskAttended),
+        "spec.undecomposed" => Ok(Predicate::SpecUndecomposed),
         "check.red" => Ok(Predicate::CheckRed),
         _ => match s.strip_prefix("probe.") {
             Some(name) if !name.is_empty() && !name.contains(char::is_whitespace) => {
@@ -1216,7 +1219,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let c = load(d.path()).unwrap();
         assert_eq!(c.check.command, "");
-        assert_eq!(c.pipeline.len(), 4);
+        assert_eq!(c.pipeline.len(), 5);
         assert_eq!(c.stage[0].turns, 120);
     }
 
@@ -1371,8 +1374,8 @@ mod tests {
         assert_eq!(c.layout.learnings_cap, 12);
         assert_eq!(c.layout.skills_dir, None);
         assert_eq!(c.stage[2].env["ENALLAGI_DRIVER"], "1");
-        assert_eq!(c.pipeline[2].end_after_dry_rounds, 1);
-        assert_eq!(c.pipeline[3].end_after_dry_rounds, 2);
+        assert_eq!(c.pipeline[3].end_after_dry_rounds, 1);
+        assert_eq!(c.pipeline[4].end_after_dry_rounds, 2);
     }
 
     // tables merge key by key; an array of tables replaces the list whole, so a user's one [[stage]] is the only stage
@@ -1670,7 +1673,7 @@ mod tests {
         assert_eq!(c.skill[1].source, "github:DietrichGebert/ponytail");
         assert_eq!(c.skill[1].rev.as_deref(), Some("v4.8.4"));
         assert_eq!(c.skill[6].gate, "queue-uncovered");
-        assert_eq!(c.stage.len(), 4);
+        assert_eq!(c.stage.len(), 5);
         let roles = |_: &str| Some(String::new());
         let errs = validate(&c, &crate::agent::presets(), &roles).unwrap_err();
         assert!(

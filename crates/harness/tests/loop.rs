@@ -4422,3 +4422,114 @@ fn claims_after_verdict() {
         verify.post
     );
 }
+
+const ACCEPTED: &str = "# spec\n\n**Status:** ready-for-agent\n";
+
+// a stub decomposer's shell lines writing two drafts beside the accepted spec, the second blocked by the first
+fn drafts(r: &Repo, second_blocked: &str) -> String {
+    let draft = |num: &str, blocked: &str| {
+        format!("# {num}: Step {num}\n\n**What to build:** step {num}.\n\n**Blocked by:** {blocked}\n\n**Status:** ready-for-agent\n\n- [ ] step {num} shows\n")
+    };
+    format!(
+        "mkdir -p {issues}\nprintf '%s' '{}' >{issues}/01-one.md\nprintf '%s' '{}' >{issues}/02-two.md\n",
+        draft("01", "None"),
+        draft("02", second_blocked),
+        issues = issues(r)
+    )
+}
+
+fn decomposing(r: &Repo, second_blocked: &str, adjudicate: &str) {
+    r.write(&spec(r), ACCEPTED);
+    let decompose = script(
+        r,
+        "src/fakedecompose.sh",
+        &format!("{}{QUIET}", drafts(r, second_blocked)),
+    );
+    let adj = adjudicator(r, adjudicate);
+    let roles = format!(
+        "{}{}",
+        role_command("decomposer", &decompose),
+        role_command("adjudicator", &adj)
+    );
+    write_toml(r, &default_pipelines_toml(&roles));
+    r.commit_all("stubs");
+}
+
+#[test]
+fn decompose_queues_spec() {
+    let r = repo("", "");
+    decomposing(
+        &r,
+        "01",
+        &format!("{}{}", promotes("T-001"), promotes("T-002")),
+    );
+
+    let (digest, events) = go(&r, &opts(1));
+    assert!(digest.halts.is_empty(), "{digest:#?}");
+    assert_eq!(stages_started(&events), ["decompose", "adjudicate"]);
+    let t = enallagi::tracker::Tracker::open(&r.root, ".enallagi");
+    let two = t.get("T-002").unwrap().expect("T-002");
+    assert_eq!(enallagi::block::blockers(&two), ["T-001"]);
+    assert_eq!(
+        enallagi::block::field(&two, "probe").as_deref(),
+        Some("decompose")
+    );
+    for id in ["T-001", "T-002"] {
+        assert_eq!(state_of(&r, id).as_deref(), Some("ready-for-agent"), "{id}");
+    }
+    let added = enallagi::git::git(
+        &r.root,
+        &[
+            "log",
+            "--diff-filter=A",
+            "--format=%s",
+            "--",
+            &format!("{}/T-*", issues(&r)),
+        ],
+    )
+    .unwrap();
+    let subjects: Vec<&str> = added.lines().collect();
+    assert_eq!(subjects.len(), 1, "{added}");
+    assert!(subjects[0].starts_with("decompose"), "{added}");
+}
+
+#[test]
+fn bad_drafts_halt() {
+    let r = repo("", "");
+    decomposing(&r, "02", &promotes("T-001"));
+
+    let (digest, events) = go(&r, &opts(1));
+    assert_eq!(stages_started(&events), ["decompose"]);
+    assert!(
+        digest
+            .halts
+            .iter()
+            .any(|h| h.contains("blocking cycle through 02")),
+        "{digest:#?}"
+    );
+    let issues = std::fs::read_dir(r.root.join(issues(&r))).unwrap();
+    let names: Vec<String> = issues
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(!names.iter().any(|n| n.starts_with("T-")), "{names:?}");
+    assert_eq!(names.len(), 2, "{names:?}");
+}
+
+#[test]
+fn dry_run_plans_decompose() {
+    let r = repo("", TASKS);
+    r.write(".enallagi/specs/app/spec.md", ACCEPTED);
+    write_toml(&r, &default_pipelines_toml(""));
+    r.commit_all("accepted");
+    let (code, out) = harness(&r.root, &["run", "--dry-run"]);
+    assert_eq!(code, 0, "{out}");
+    let at = |p: &str| {
+        out.find(&format!("=== pipeline {p} "))
+            .unwrap_or(usize::MAX)
+    };
+    assert!(
+        at("decompose") < at("task") && at("task") != usize::MAX,
+        "{out}"
+    );
+}
