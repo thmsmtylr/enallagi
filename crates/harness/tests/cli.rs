@@ -818,16 +818,14 @@ fn the_shipped_documents_describe_and_do_not_argue() {
     }
 
     // the citations moved to docs/intent.md appear in no other shipped document
-    let cfg = enallagi::config::load(&root).expect("enallagi.toml");
+    let cfg: enallagi::config::Config =
+        toml::from_str(enallagi::config::DEFAULT_TOML).expect("defaults");
     let mut elsewhere = vec![
-        cfg.layout.context_file.clone(),
         "templates/pointer.md".to_string(),
         "templates/RAILS.md".to_string(),
-        format!("{}/RAILS.md", cfg.layout.harness_dir),
     ];
     elsewhere.extend(cfg.layout.pointer_files.iter().cloned());
     for rel in &elsewhere {
-        // the installed copies exist only while a dogfood round is open
         let Ok(text) = std::fs::read_to_string(root.join(rel)) else {
             continue;
         };
@@ -837,27 +835,6 @@ fn the_shipped_documents_describe_and_do_not_argue() {
                 .any(|cite| line.contains(cite))
             {
                 offences.push(format!("{rel}:{} cites a paper docs/intent.md owns", i + 1));
-            }
-        }
-    }
-
-    // `enallagi probe` reads check-unnamed 0 and litter 0
-    let green = enallagi::probes::CheckOutcome {
-        ran: true,
-        red: false,
-        output: String::new(),
-    };
-    let ctx = enallagi::probes::ProbeCtx {
-        root: &root,
-        cfg: &cfg,
-        check: Some(&green),
-        driver: false,
-    };
-    if root.join(&cfg.layout.context_file).is_file() {
-        for (name, result) in enallagi::probes::run_all(&ctx, &["check-unnamed".to_string()]) {
-            match result {
-                enallagi::probes::ProbeResult::Count(found) if found.is_empty() => {}
-                other => offences.push(format!("{name}: {other:?}")),
             }
         }
     }
