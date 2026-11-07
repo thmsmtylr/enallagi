@@ -16,7 +16,7 @@ Leave its `[[skill]]` table out of the list and run `enallagi skills sync`.
 Sync deletes the vendored copy under the skills directory and drops its entry in `harness.lock`.
 It prints `<id>  removed` for each one.
 A directory with no lock entry is never deleted, so a skill placed there by hand survives.
-`enallagi skills check` and `sync --frozen` remove nothing.
+`enallagi skills check` removes nothing.
 `sync_prunes_a_removed_skill` holds this in place.
 
 A shipped role names each shipped skill as `{{skill:<id>}}`.

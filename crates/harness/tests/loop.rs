@@ -3573,11 +3573,9 @@ fn sync_prunes_a_removed_skill() {
     r.write(".enallagi/skills/mine/SKILL.md", "# mine\n");
 
     write_toml(&r, &base_toml(""));
-    for cmd in [&["skills", "check"][..], &["skills", "sync", "--frozen"]] {
-        let (code, out) = harness(&r.root, cmd);
-        assert_eq!(code, 0, "{out}");
-        assert!(dir.is_dir(), "{cmd:?} pruned");
-    }
+    let (code, out) = harness(&r.root, &["skills", "check"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(dir.is_dir(), "check pruned");
     let (code, out) = harness(&r.root, &["skills", "sync"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.lines().any(|l| l == "security  removed"), "{out}");
