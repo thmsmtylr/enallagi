@@ -1,4 +1,4 @@
-//! The security gate's scanners: pinned per platform in harness.lock, fetched once into the user cache.
+//! The security gate's scanners: pinned per platform in this binary, fetched once into the user cache.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ pub struct ToolPin {
     pub sha256: String,
 }
 
-// from each release's checksums file; bumping one is an operator edit to harness.lock
+// from each release's checksums file; in the binary, since a lane can write harness.lock
 const PINS: &[(&str, &str, &str, &str, &str)] = &[
     ("gitleaks", "8.30.1", "darwin-arm64", "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_darwin_arm64.tar.gz", "b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5"),
     ("gitleaks", "8.30.1", "darwin-x64", "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_darwin_x64.tar.gz", "dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709"),
@@ -64,7 +64,7 @@ pub fn tool(pins: &[ToolPin], id: &str, platform: &str, cache: &Path) -> Result<
     let pin = pins
         .iter()
         .find(|p| p.id == id && p.platform == platform)
-        .ok_or_else(|| format!("harness.lock pins no {id} for {platform}"))?;
+        .ok_or_else(|| format!("enallagi pins no {id} for {platform}"))?;
     let bin = tool_path(pin, cache);
     // trusted once fetched, as ~/.cargo/bin is
     if bin.is_file() {
@@ -121,10 +121,7 @@ pub fn gitleaks(
     args: &[String],
     report: &Path,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let pins = crate::skills::read_lock(root, dir)
-        .map_err(|e| e.to_string())?
-        .tool;
-    let bin = tool(&pins, "gitleaks", &platform(), cache)?;
+    let bin = tool(&default_pins(), "gitleaks", &platform(), cache)?;
     let at = |name: &str| crate::config::instance_path(root, dir, name);
     let out = Command::new(&bin)
         .current_dir(root)
@@ -175,10 +172,7 @@ pub fn osv(
     lockfile: &Path,
     report: &Path,
 ) -> Result<Vec<(String, String, String)>, String> {
-    let pins = crate::skills::read_lock(root, dir)
-        .map_err(|e| e.to_string())?
-        .tool;
-    let bin = tool(&pins, "osv-scanner", &platform(), cache)?;
+    let bin = tool(&default_pins(), "osv-scanner", &platform(), cache)?;
     let mut cmd = Command::new(&bin);
     cmd.current_dir(root)
         .args(["scan", "source", "--lockfile"])
@@ -313,6 +307,29 @@ mod tests {
     }
 
     #[test]
+    fn lock_pin_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tar = tarball(tmp.path());
+        let sha = crate::skills::sha256(&fs::read(&tar).unwrap());
+        let repo = crate::fixture::Repo::new();
+        let mut planted = pin(&format!("file://{}", tar.display()), &sha);
+        planted.platform = platform();
+        repo.write(
+            ".enallagi/harness.lock",
+            &format!(
+                "version = 1\n\n[[tool]]\nid = \"gitleaks\"\nversion = \"1.0.0\"\nplatform = \"{}\"\nurl = \"{}\"\nsha256 = \"{}\"\n",
+                planted.platform, planted.url, planted.sha256
+            ),
+        );
+        let cache = tmp.path().join("cache");
+        crate::fixture::stub_gitleaks(&cache, "[]", 0);
+        let report = tmp.path().join("report.json");
+        gitleaks(&repo.root, ".enallagi", &cache, &[], &report).expect("scan");
+        assert!(!tool_path(&planted, &cache).exists());
+        assert!(cache.join("gitleaks.argv").exists());
+    }
+
+    #[test]
     fn old_lock_round_trips() {
         let text = "version = 1\n\n[[skill]]\nid = \"tdd\"\nsource = \"path:vendor/tdd\"\nsha256 = \"ab\"\n";
         let repo = crate::fixture::Repo::new();
@@ -336,11 +353,6 @@ mod tests {
         repo.write(".enallagi/.gitignore", "events.jsonl\n");
         repo.write(".enallagi/enallagi.toml", "[check]\ncommand = \"true\"\n");
         repo.write(".enallagi/gitleaks.toml", "[extend]\nuseDefault = true\n");
-        let pins = crate::skills::Lock {
-            tool: default_pins(),
-            ..Default::default()
-        };
-        crate::skills::write_lock(&repo.root, ".enallagi", &pins).unwrap();
         repo.write("Cargo.lock", &lock("1.13.2"));
         let done = "## [T-001] bump\nstatus: done\nverdict: verified by verifier\n";
         repo.queue(".enallagi", done);

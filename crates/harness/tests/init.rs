@@ -2165,17 +2165,17 @@ fn init_secrets_baseline() {
 fn baseline_fetch_warns() {
     let repo = Repo::new();
     let xdg = tempfile::tempdir().expect("xdg");
-    let pins: String = enallagi::security::default_pins()
-        .iter()
-        .map(|p| {
-            format!(
-                "\n[[tool]]\nid = \"{}\"\nversion = \"0\"\nplatform = \"{}\"\nurl = \"file:///nonexistent\"\nsha256 = \"0\"\n",
-                p.id, p.platform
-            )
-        })
-        .collect();
-    repo.write(".enallagi/harness.lock", &format!("version = 1\n{pins}"));
-    let stdout = init_with_cache(&repo, xdg.path());
+    // a refused proxy fails the fetch offline
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .arg("init")
+        .env("XDG_CACHE_HOME", xdg.path())
+        .env("https_proxy", "http://127.0.0.1:9")
+        .env("HTTPS_PROXY", "http://127.0.0.1:9")
+        .current_dir(&repo.root)
+        .output()
+        .expect("run enallagi init");
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout
             .lines()

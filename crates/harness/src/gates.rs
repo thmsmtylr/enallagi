@@ -2871,14 +2871,9 @@ mod tests {
 
     const LEAK: &str = r#"[{"RuleID":"aws-access-token","File":"src/key.txt","StartLine":1,"Commit":"abc123","Secret":"AKIAHIDDEN0SECRET99","Match":"key = AKIAHIDDEN0SECRET99"}]"#;
 
-    // a done task with the default pins locked and an empty baseline committed
+    // a done task with an empty baseline committed
     fn leak_env(report: &str, exit: i32) -> (Env, String) {
         let env = Env::new("exit 0\n");
-        let lock = crate::skills::Lock {
-            tool: crate::security::default_pins(),
-            ..Default::default()
-        };
-        crate::skills::write_lock(&env.repo.root, ".enallagi", &lock).expect("lock");
         crate::fixture::stub_gitleaks(env.cache.path(), report, exit);
         env.repo
             .write(".enallagi/security/gitleaks-baseline.json", "[]\n");
@@ -3048,19 +3043,6 @@ echo '{{"results":[]}}' > "$out"
         let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
         assert!(!env.cache.path().join("osv.argv").exists());
-    }
-
-    #[test]
-    fn security_no_pin_halts() {
-        let (mut env, base) = leak_env("[]", 0);
-        crate::skills::write_lock(&env.repo.root, ".enallagi", &Default::default()).expect("lock");
-        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
-        assert!(!out.pass && out.halt, "{}", out.reason);
-        assert!(
-            out.reason.contains(&crate::security::platform()),
-            "{}",
-            out.reason
-        );
     }
 
     #[test]
