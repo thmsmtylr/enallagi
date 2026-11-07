@@ -104,6 +104,9 @@ Present and empty, only those two are writable. Absent, the writable set is unch
 Checks and gates keep the run's policy.
 A role file carrying `tools:` is refused at load: it reached the model as prose and enforced nothing.
 The shipped `auditor` declares `writes:` empty; the `researcher` declares `writes: REFERENCES.md` and `hosts: "*"`.
+No default stage runs the `researcher`.
+To run it, declare a `[[stage]]` with `role = "researcher"` and name that stage in a pipeline's `stages` after `adjudicate`.
+A `[[stage]]` replaces all five default stages, so declare those too (`docs/pipeline.md`, Stages).
 
 `enallagi events --prefix` prints one row per role stage in `events.jsonl`.
 Each row carries the stage's three input token lanes.
