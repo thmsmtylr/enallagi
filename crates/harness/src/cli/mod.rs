@@ -195,7 +195,7 @@ pub enum Command {
     Gate {
         /// Which gate to run
         which: GateWhich,
-        /// Task id the gate judges
+        /// Task id the gate judges; a spec slug for tickets
         task: String,
         /// Commit-ish the task's diff is measured against (default HEAD~1)
         #[arg(long)]

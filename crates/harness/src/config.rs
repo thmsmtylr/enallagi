@@ -62,6 +62,7 @@ pub const GATE_NAMES: &[&str] = &[
     "adjudicator-halt",
     "dry-round",
     "install-stale",
+    "tickets",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -1247,9 +1248,10 @@ mod tests {
     #[test]
     fn unknown_gate_is_refused() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
-        c.stage[0].post.push("nope".into());
+        c.stage[0].post.extend(["nope".into(), "tickets".into()]);
         let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
-        assert!(errs.iter().any(|e| e.to_string().contains("nope")));
+        assert!(errs.iter().any(|e| e.to_string().contains("`nope`")));
+        assert!(!errs.iter().any(|e| e.to_string().contains("`tickets`")));
     }
 
     #[test]

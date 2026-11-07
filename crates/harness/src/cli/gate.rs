@@ -1,4 +1,4 @@
-//! `enallagi gate verdict|scope <task>` -- runs one gate by hand against a base revision, and exits 2 when it does not pass.
+//! `enallagi gate verdict|scope <task>` or `enallagi gate tickets <spec>` -- runs one gate by hand against a base revision, and exits 2 when it does not pass.
 
 use crate::config;
 use crate::events::{Log, Writer};
@@ -8,6 +8,7 @@ use crate::gates::{self, GateCtx};
 pub enum GateWhich {
     Verdict,
     Scope,
+    Tickets,
 }
 
 pub struct Args {
@@ -26,6 +27,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     let name = match args.which {
         GateWhich::Verdict => "verdict",
         GateWhich::Scope => "scope",
+        GateWhich::Tickets => "tickets",
     };
     let iter_base = args.base.clone().unwrap_or_else(|| "HEAD~1".to_string());
     let state_base = match &args.base {

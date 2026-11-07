@@ -82,6 +82,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "adjudicator-halt" => adjudicator_halt(ctx),
         "dry-round" => dry_round(ctx),
         "install-stale" => install_stale(ctx),
+        "tickets" => tickets(ctx),
         other => fail(format!("no such gate: {other}")),
     };
     let task = ctx.task.clone().unwrap_or_default();
@@ -1281,6 +1282,41 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
     halted(ctx, reason)
 }
 
+// the decompose stage names a spec, not a ticket, so its slug rides in ctx.task
+fn tickets(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(slug) = ctx.task.clone() else {
+        return pass("no spec");
+    };
+    let problems = tracker::check(ctx.root, ctx.cfg, &slug);
+    if !problems.is_empty() {
+        return halted(
+            ctx,
+            format!(
+                "tickets: the drafts of {slug} fail `enallagi tasks check {slug}`: {}",
+                problems.join("; ")
+            ),
+        );
+    }
+    let q = queue_of(ctx);
+    let decisions =
+        std::fs::read_to_string(ctx.root.join(rel(ctx, "DECISIONS.md"))).unwrap_or_default();
+    let archived = block::parse(&decisions).unwrap_or_default();
+    let numbered = q
+        .next_id(&archived)
+        .map_err(|e| e.to_string())
+        .and_then(|next| {
+            q.number_drafts(&slug, next[2..].parse().unwrap_or(1))
+                .map_err(|e| e.to_string())
+        });
+    match numbered {
+        Ok(ids) => pass(format!(
+            "{slug}: drafts queued as {} at needs-triage",
+            ids.join(", ")
+        )),
+        Err(e) => halted(ctx, format!("tickets: {slug}: {e}")),
+    }
+}
+
 fn halted(ctx: &mut GateCtx, reason: String) -> GateOutcome {
     ctx.warnings.push(reason.clone());
     ctx.halts.push(reason.clone());
@@ -2232,6 +2268,74 @@ mod tests {
                 self.tasks_text()
             );
         }
+    }
+
+    fn draft(num: &str, blocked: &str) -> String {
+        format!("# {num}: Step {num}\n\n**What to build:** step {num}.\n\n**Blocked by:** {blocked}\n\n**Status:** ready-for-agent\n\n- [ ] step {num} shows\n")
+    }
+
+    // T-001 queued, an accepted spec `app`, and its drafts left uncommitted as a decomposer leaves them
+    fn drafted(drafts: &[(&str, &str)]) -> Env {
+        let env = Env::new("exit 0\n");
+        env.write_queue("## [T-001] open\nstatus: ready-for-agent\n");
+        env.repo.write(
+            ".enallagi/specs/app/spec.md",
+            "# App\n\n**Status:** ready-for-agent\n",
+        );
+        env.repo.commit_all("spec");
+        for (num, blocked) in drafts {
+            env.repo.write(
+                &format!(".enallagi/specs/app/issues/{num}-step.md"),
+                &draft(num, blocked),
+            );
+        }
+        env
+    }
+
+    #[test]
+    fn tickets_numbers_drafts() {
+        let mut env = drafted(&[("01", "None"), ("02", "None"), ("03", "01, 02")]);
+        let out = run("tickets", &mut env.ctx(Some("app"), None));
+        assert!(out.pass, "{out:?}");
+        let t = env.tracker();
+        let blocks = t.blocks().unwrap();
+        let ids: Vec<&str> = blocks.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, ["T-001", "T-002", "T-003", "T-004"]);
+        for b in &blocks[1..] {
+            assert_eq!(tracker::state(b).as_deref(), Some("needs-triage"), "{b:?}");
+            assert_eq!(
+                block::field(b, "probe").as_deref(),
+                Some("decompose"),
+                "{b:?}"
+            );
+            assert!(block::field(b, "criteria").is_some(), "{b:?}");
+        }
+        assert_eq!(block::blockers(&blocks[3]), ["T-002", "T-003"]);
+        assert!(t
+            .path_of("T-004")
+            .unwrap()
+            .ends_with("app/issues/T-004-step.md"));
+        assert!(t.drafts("app").unwrap().is_empty());
+    }
+
+    #[test]
+    fn tickets_halts_on_cycle() {
+        let mut env = drafted(&[("01", "02"), ("02", "01")]);
+        let issues = env.repo.root.join(".enallagi/specs/app/issues");
+        let before = std::fs::read_to_string(issues.join("01-step.md")).unwrap();
+        let out = run("tickets", &mut env.ctx(Some("app"), None));
+        assert!(!out.pass && out.halt, "{out:?}");
+        assert!(
+            out.reason.contains("blocking cycle through 01, 02"),
+            "{out:?}"
+        );
+        assert_eq!(env.halts, vec![out.reason]);
+        assert_eq!(
+            std::fs::read_to_string(issues.join("01-step.md")).unwrap(),
+            before
+        );
+        assert_eq!(env.tracker().drafts("app").unwrap().len(), 2);
+        assert_eq!(env.tracker().blocks().unwrap().len(), 1);
     }
 
     fn globs(v: &[&str]) -> Vec<String> {

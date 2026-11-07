@@ -125,6 +125,13 @@ pub fn parse_ticket(text: &str) -> Result<Block, String> {
                         .filter(|w| number(w) != u64::MAX)
                         .collect();
                     body.push((at, format!("blockedBy: {}", ids.join(", "))));
+                } else if let Some(item) = line.strip_prefix("- [ ] ") {
+                    // Pocock's local template lists criteria with no heading
+                    if !criteria {
+                        body.push((at, "criteria:".to_string()));
+                        criteria = true;
+                    }
+                    body.push((at, format!("  - {item}")));
                 }
             }
             CRITERIA => {
@@ -796,6 +803,73 @@ impl Tracker {
             .into_iter()
             .map(|p| Ok(parse_draft(&p, &std::fs::read_to_string(&p)?)))
             .collect()
+    }
+
+    /// The `tickets` gate's rewrite: drafts in `NN` order become `T-NNN-<slug>.md` from `first`, local blockers mapped, at `needs-triage` with `probe: decompose`. Returns the ids.
+    pub fn number_drafts(&self, slug: &str, first: u64) -> std::io::Result<Vec<String>> {
+        let mut drafts = self.drafts(slug)?;
+        drafts.sort_by_key(|d| d.num);
+        let ids: HashMap<String, String> = drafts
+            .iter()
+            .zip(first..)
+            .filter_map(|(d, n)| Some((d.num?.to_string(), format!("T-{n:03}"))))
+            .collect();
+        let id_of = |b: &str| {
+            local(b)
+                .and_then(|n| ids.get(&n.to_string()))
+                .map_or(b, String::as_str)
+                .to_string()
+        };
+        let mut out = Vec::new();
+        for d in &drafts {
+            let id = id_of(&d.num.unwrap_or_default().to_string());
+            let mut lines: Vec<String> = Vec::new();
+            for line in std::fs::read_to_string(&d.path)?.lines() {
+                lines.push(
+                    if line.starts_with("# ") && lines.iter().all(|l| l.trim().is_empty()) {
+                        format!("# {id}: {}", d.title)
+                    } else if line.starts_with(STATUS) {
+                        format!("{STATUS} needs-triage")
+                    } else if line.starts_with(BLOCKED_BY) {
+                        let mapped: Vec<String> =
+                            d.blockers.iter().flatten().map(|b| id_of(b)).collect();
+                        format!(
+                            "{BLOCKED_BY} {}",
+                            if mapped.is_empty() {
+                                "None".to_string()
+                            } else {
+                                mapped.join(", ")
+                            }
+                        )
+                    } else {
+                        line.to_string()
+                    },
+                );
+            }
+            while lines.last().is_some_and(|l| l.trim().is_empty()) {
+                lines.pop();
+            }
+            lines.extend([
+                String::new(),
+                HARNESS.to_string(),
+                String::new(),
+                "probe: decompose".to_string(),
+                String::new(),
+            ]);
+            let name = d
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            let rest = name.split_once('-').map_or(name, |(_, r)| r);
+            std::fs::write(
+                d.path.with_file_name(format!("{id}-{rest}")),
+                lines.join("\n"),
+            )?;
+            std::fs::remove_file(&d.path)?;
+            out.push(id);
+        }
+        Ok(out)
     }
 
     pub fn next_id(&self, archived: &[Block]) -> Result<String, QueueError> {

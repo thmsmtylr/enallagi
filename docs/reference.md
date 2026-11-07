@@ -90,6 +90,7 @@ or halts the run. The names are matched in `crates/harness/src/gates.rs`.
 | `commit-task` | a commit in the iteration's range whose subject names no task id, unless it touches only the loop's own state | implement |
 | `check-delta` | a check failure that is not already in `.check-baseline` | wherever a stage's `post` names it |
 | `commit-round` | a failed commit of the queue and DECISIONS.md | adjudicate |
+| `tickets` | a spec's drafts that fail `enallagi tasks check <spec>`: halts, drafts left in place; on a pass numbers them `T-NNN` from the next id, maps their blockers, sets `needs-triage` with `probe: decompose` (`enallagi gate tickets <spec>` by hand) | decompose |
 | `adjudicator-halt` | an adjudicator output line opening with `halt` and naming a task id, and halts the run | adjudicate |
 | `dry-round` | a round that leaves no `ready-for-agent` ticket, counted toward `end_after_dry_rounds` | adjudicate |
 | `install-stale` | an installed file that drifted from what `enallagi init` writes now, read by spawning the binary | verify |
