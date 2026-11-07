@@ -425,7 +425,7 @@ pub struct Landed {
     pub state: String,
 }
 
-/// Every done task, archived ones first, with the product commits naming it and its pull-request state.
+/// Every done or open task, archived ones first, with the product commits naming it and its pull-request state.
 pub fn landed(root: &Path) -> Result<Vec<Landed>, PrError> {
     let cfg = config::load(root).map_err(|e| PrError::Refused(vec![e.to_string()]))?;
     let dir = cfg.layout.harness_dir.clone();
@@ -437,7 +437,7 @@ pub fn landed(root: &Path) -> Result<Vec<Landed>, PrError> {
         .filter(|a| !queued.iter().any(|q| q.id == a.id));
     let done: Vec<&block::Block> = unstubbed
         .chain(&queued)
-        .filter(|b| block::field(b, "status").as_deref() == Some("done"))
+        .filter(|b| matches!(block::field(b, "status").as_deref(), Some("done" | "open")))
         .collect();
     let ids: Vec<String> = done.iter().map(|b| b.id.clone()).collect();
     let picked = commits(root, "HEAD", &ids)?;
@@ -556,8 +556,10 @@ fn commits(root: &Path, range: &str, ids: &[String]) -> Result<Vec<(String, Stri
         .filter_map(|l| l.split_once(' '))
         // contains first: the matcher compiles a regex per call, and a whole history meets every id
         .filter(|(_, subject)| {
-            ids.iter()
-                .any(|id| subject.contains(id.as_str()) && gates::names_task(subject, id))
+            git::recorded_sha(subject).is_none()
+                && ids
+                    .iter()
+                    .any(|id| subject.contains(id.as_str()) && gates::names_task(subject, id))
         })
         .map(|(sha, subject)| (sha.to_string(), subject.to_string()))
         .collect())

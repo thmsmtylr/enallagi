@@ -943,3 +943,58 @@ fn push_on_a_built_branch_updates_the_pushed_line() {
     let state = f.root.join(".enallagi");
     assert_eq!(git(&state, &["status", "--porcelain", "--", "pr"]), "");
 }
+
+// in-tree: the harness directory is the product's own, so a state commit naming the ticket sits beside its product commit
+#[test]
+fn pr_skips_state_commits() {
+    let f = Fixture::new(
+        "## [T-001] the thing says two twice\nscope: src/thing.txt\nblockedBy: none\nstatus: done\n",
+        "exit 0\n",
+    );
+    fs::remove_dir_all(f.root.join(".enallagi/.git")).expect("rm state repo");
+    let exclude = f
+        .root
+        .join(git(&f.root, &["rev-parse", "--git-path", "info/exclude"]));
+    fs::write(exclude, "").expect("exclude");
+    git(&f.root, &["add", ".enallagi"]);
+    git(
+        &f.root,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "chore: install",
+        ],
+    );
+    let product = commit(
+        &f.root,
+        "src/thing.txt",
+        &replace(THING, "two\n", "two two\n"),
+        "feat(thing): T-001 two says itself twice",
+    );
+    write(&f.root, ".enallagi/PROGRESS.md", "# progress\n\nverified\n");
+    assert!(enallagi::git::commit_instance(
+        &f.root,
+        ".enallagi",
+        &["PROGRESS.md"],
+        "verify: T-001"
+    )
+    .expect("state commit"));
+
+    let (code, out) = f.harness(&["pr", "T-001"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        git(
+            &f.root,
+            &["diff", "--name-only", "origin/main", "task/T-001"]
+        ),
+        "src/thing.txt"
+    );
+    let (code, out) = f.harness(&["tasks", "landed"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        format!("T-001\tthe thing says two twice\t{product}\tbuilt task/T-001\n")
+    );
+}
