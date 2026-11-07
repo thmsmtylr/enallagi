@@ -1,4 +1,4 @@
-//! `enallagi gate verdict|scope <task>` or `enallagi gate tickets <spec>` -- runs one gate by hand against a base revision, and exits 2 when it does not pass.
+//! `enallagi gate verdict|scope <task>|tickets <spec>` -- one gate by hand; exit 2 when it fails
 
 use crate::config;
 use crate::events::{Log, Writer};

@@ -1,4 +1,4 @@
-//! fixture: test support, also used by `enallagi eval` and the driver.
+//! test support, also used by `enallagi eval` and the driver
 
 pub mod twin;
 
@@ -21,7 +21,7 @@ pub fn command(bin: &str) -> Command {
     cmd
 }
 
-/// Every shipped skill id, in the defaults' order.
+/// every shipped skill id, in the defaults' order
 pub const SKILL_IDS: [&str; 13] = [
     "to-tickets",
     "triage",
@@ -50,7 +50,7 @@ while [ $# -gt 0 ]; do
 done
 "#;
 
-/// Stub `gitleaks` and `osv-scanner` at the default pins' cache paths, so no spawned binary fetches.
+/// stub `gitleaks` and `osv-scanner` at the default pins' cache paths, so no spawned binary fetches
 pub fn seed_scanners(cache: &Path) {
     let platform = crate::security::platform();
     for pin in crate::security::default_pins() {
@@ -71,8 +71,7 @@ pub fn seed_scanners(cache: &Path) {
     }
 }
 
-/// A gitleaks at the pinned path: it records its argv in `<cache>/gitleaks.argv`, then writes `report`
-/// to `--report-path` and exits `exit`, or writes `[]` and exits 0 when `--baseline-path` holds that report.
+/// a gitleaks logging argv to `<cache>/gitleaks.argv` that emits `report`, or `[]` when baselined
 pub fn stub_gitleaks(cache: &Path, report: &str, exit: i32) {
     seed_scanners(cache);
     fs::write(cache.join("gitleaks.json"), report).expect("write the stub report");
@@ -114,13 +113,12 @@ fn stub_cache() -> &'static Path {
     })
 }
 
-/// `Repo::queue` for a fixture that builds its own repository.
-/// `git args` in `root`, panicking on failure.
+/// `git args` in `root`, panicking on failure
 pub fn git(root: &Path, args: &[&str]) -> String {
     crate::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
 }
 
-/// Writes an executable bash script under `set -u`; returns its path.
+/// writes an executable bash script under `set -u`; returns its path
 pub fn exec(path: &Path, body: &str) -> String {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("mkdir");
@@ -165,7 +163,7 @@ impl Repo {
         repo
     }
 
-    // a fixture that can't be built is an I/O error here, never a panic, so eval reports ERROR not a crash
+    // an unbuildable fixture is an I/O error, never a panic, so eval reports ERROR
     pub fn try_new() -> std::io::Result<Repo> {
         let dir = tempfile::TempDir::new()?;
         let root = dir.path().to_path_buf();
@@ -195,7 +193,7 @@ impl Repo {
         fs::write(path, content)
     }
 
-    /// Writes block text as ticket files under `dir/specs/`, replacing the queue.
+    /// writes block text as ticket files under `dir/specs/`, replacing the queue
     pub fn queue(&self, dir: &str, text: &str) {
         queue(&self.root, dir, text);
     }
@@ -222,8 +220,7 @@ impl Repo {
         "./src/fakecheck.sh".to_string()
     }
 
-    /// `[[skill]]` entries for every shipped skill id the given TOML does not declare, each a
-    /// `path:` source under `vendor/`, so a fixture run never reaches the network.
+    /// `[[skill]]` entries, each a `path:` source under `vendor/`, for every shipped id the TOML lacks
     pub fn local_skills(&self, toml: &str) -> String {
         let mut out = String::new();
         for id in SKILL_IDS {
@@ -243,7 +240,7 @@ impl Repo {
         crate::init::install(&self.root, &crate::init::InitOpts::default()).expect("install");
     }
 
-    /// The seeded spec, relative to the root.
+    /// the seeded spec, relative to the root
     pub fn spec(&self) -> String {
         format!(
             ".enallagi/specs/{}/spec.md",

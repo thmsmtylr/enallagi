@@ -1,4 +1,4 @@
-//! The named checks the loop runs after a stage exits.
+//! the named checks the loop runs after a stage exits
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -27,7 +27,7 @@ pub struct GateCtx<'a> {
     pub cfg: &'a Config,
     pub task: Option<String>,
     pub iter_base: Option<String>,
-    // the harness directory repository's base; the same as iter_base while instance files share the product's
+    // the harness directory repo's base; equals iter_base while instance files share the product's
     pub state_base: Option<String>,
     pub stage_output: String,
     pub events: &'a mut Writer,
@@ -219,8 +219,7 @@ fn force_back(
     fail(reason)
 }
 
-// a done written by the implementer itself (not the verifier) is forced back to ready; anything short
-// of review has nothing to verify either, so the rest of the iteration is skipped in both cases
+// a done the implementer wrote goes back to ready; below review the rest of the iteration is skipped
 fn implementer_not_done(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -541,7 +540,7 @@ fn claimed_runs(ctx: &GateCtx, task: &str) -> Vec<(String, i32)> {
         .unwrap_or_default()
 }
 
-// a verdict's pasted exit is otherwise its word alone; the allowlist bounds what a lane's text may run here
+// a verdict's pasted exit is otherwise its word alone; the allowlist bounds what lane text may run
 fn claims(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -734,9 +733,7 @@ pub fn names_task(subject: &str, task: &str) -> bool {
     regex::Regex::new(&format!(r"\b{}\b", regex::escape(task))).is_ok_and(|re| re.is_match(subject))
 }
 
-// the files the task's own commits changed: a commit whose subject names no task, or another task,
-// is an operator's or another round's and is not charged here. filter is a git --diff-filter value,
-// empty for every change
+// files changed by commits naming this task; filter is a --diff-filter value, empty for all
 fn commit_files(
     root: &Path,
     base: &str,
@@ -761,8 +758,7 @@ fn commit_files(
     Ok(files)
 }
 
-// the baseline lines the task's own commits add and do not take back: each commit's removals are
-// netted against what the earlier ones added, so an add a later commit reverses is not growth
+// baseline lines the task's commits net add: a line a later commit takes back is not growth
 fn baseline_lines_added(
     root: &Path,
     inner: &str,
@@ -772,8 +768,7 @@ fn baseline_lines_added(
     let mut added: Vec<String> = Vec::new();
     for sha in task_commits(root, base, task)? {
         let diff = git(root, &["show", "--format=", &sha, "--", inner]).unwrap_or_default();
-        // a failure name may itself start with + or -, so the file headers are told apart by
-        // position, not by a doubled prefix: everything before the first hunk is a header
+        // a failure name may start with + or -, so headers are told by position: all before the first hunk
         let body: Vec<&str> = diff
             .lines()
             .skip_while(|l| !l.starts_with("@@"))
@@ -807,8 +802,7 @@ fn task_commits(root: &Path, base: &str, task: &str) -> Result<Vec<String>, git:
     .collect())
 }
 
-// the task's files: the product repository's, and in a nested install the harness
-// directory's under its own prefix
+// the task's files: the product repo's, and in a nested install the harness dir's under its prefix
 fn task_files(
     ctx: &GateCtx,
     base: &str,
@@ -855,7 +849,7 @@ fn filed_untriaged(ctx: &GateCtx, path: &str) -> bool {
         == Some("needs-triage")
 }
 
-// diffs the iteration's own commits against the task's scope: globs; also routes the three loops via rows: none — harness
+// diffs the iteration's own commits against the task's scope: globs
 fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -870,14 +864,12 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         return pass("no base");
     }
 
-    // the lane edits the block it is graded against, so a path the line gained since the queue
-    // passes only with a `widened:` reason, and the verdict names it
+    // the lane edits its own block, so a path the line gained since queueing needs a `widened:` reason
     let head_block = |key: &str| {
         field_at(ctx, &task, key, Some("HEAD")).unwrap_or_else(|| field_of(ctx, &task, key))
     };
     let pats = scope_globs(&head_block("scope"));
-    // the commit that queued the block, not the round's base: in a review-only round the base is the
-    // implement round's own state commit, which already carries the widening
+    // the queueing commit, not the round's base: a review-only round's base already has the widening
     let queued_rev = tracker::queued_commit(ctx.root, &ctx.cfg.layout.harness_dir, &task)
         .ok()
         .flatten()
@@ -926,8 +918,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         (Ok(changed), Ok(added)) => (changed, added),
         (Err(e), _) | (_, Err(e)) => return fail(e.to_string()),
     };
-    // cargo rewrites Cargo.lock from a manifest the range changed, and a commit without it leaves
-    // the tree dirty after the next build; the manifest still has to be on the scope: line
+    // Cargo.lock follows a changed manifest or the next build dirties the tree; the manifest needs scope:
     let manifest_in_scope = changed
         .iter()
         .any(|f| f.ends_with("Cargo.toml") && in_scope(f, &pats));
@@ -951,16 +942,14 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         {
             continue;
         }
-        // a file the range ADDS under a locked id is that id's re-vendoring; one it rewrites is a
-        // hand edit, which the scope: line still has to name
+        // a file ADDED under a locked id is its re-vendoring; a rewrite is a hand edit scope: must name
         if added.contains(&f) && locked_skills.iter().any(|d| f.starts_with(d)) {
             continue;
         }
         if manifest_in_scope && (f == "Cargo.lock" || f.ends_with("/Cargo.lock")) {
             continue;
         }
-        // test-hashes.json is exempt when every re-cut key (present at base too, with a new value)
-        // is in scope; a key ADDED fresh (absent at base) needs no scope: line to cover it
+        // test-hashes.json is exempt when every re-cut key is in scope; a freshly added key needs no scope:
         if let Some(key_re) = (f == hashes).then_some(HASHES_KEY) {
             let touched = recut_keys(ctx, &f, key_re);
             if !touched.is_empty() {
@@ -994,8 +983,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         }
     }
 
-    // present at base and (gone, or a field differs) at HEAD: a re-cut or a removal, neither of
-    // which is the pipeline's own fresh vendoring, so the id's vendored file still needs the scope: line
+    // present at base and gone or changed at HEAD: not fresh vendoring, so it still needs the scope: line
     let recut: Vec<(String, String)> = recut_ids(&base_lock.skill, &head_lock.skill)
         .into_iter()
         .map(|id| (format!("{skills_dir}/{id}/SKILL.md"), id))
@@ -1017,8 +1005,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     if rows.contains("none") && rows.contains("harness") {
         harness_hit.clear();
     }
-    // the baseline only ever shrinks; a line the task's own commits ADD is a red check made green by
-    // hand, whatever rows: says
+    // the baseline only shrinks; a line the task ADDS is a red made green by hand, whatever rows: says
     let grew = match at_base(ctx, &rel(ctx, ".check-baseline"))
         .map(|(repo, inner, base)| baseline_lines_added(&repo, &inner, &base, &task))
     {
@@ -1065,9 +1052,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     }
     let why = parts.join("; ");
     let reason = format!("the verifier returned done and the scope gate rejected it: {why}");
-    // to ready, not review: every scope refusal is answered by a code or block edit, and the
-    // implementer is the one role that may make it; its confirm-only arm finds the iteration's
-    // commits already on the branch and adds the `widened:` line or reverts the stray file
+    // to ready, not review: only the implementer may answer a scope refusal with a code or block edit
     force_back(
         ctx,
         "scope",
@@ -1187,7 +1172,7 @@ impl Drop for Scratch {
     }
 }
 
-// a test that passes with the task's other files back at base proves nothing (T-485)
+// a test that passes with the task's other files back at base proves nothing
 fn red_first(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -1278,7 +1263,7 @@ fn holdout_root(root: &Path, cfg: &Config) -> PathBuf {
         .unwrap_or_else(|| crate::config::instance_path(root, dir, "holdouts"))
 }
 
-/// A spec's holdouts: the executable regular files in `holdouts/<slug>/`, sorted.
+/// a spec's holdouts: the executable regular files in `holdouts/<slug>/`, sorted
 pub fn holdout_set(root: &Path, cfg: &Config, slug: &str) -> Vec<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
     let dir = holdout_root(root, cfg).join(slug);
@@ -1296,7 +1281,6 @@ pub fn holdout_set(root: &Path, cfg: &Config, slug: &str) -> Vec<PathBuf> {
     set
 }
 
-/// The specs with a holdout set.
 pub fn holdout_specs(root: &Path, cfg: &Config) -> Vec<String> {
     let dir = holdout_root(root, cfg);
     let mut specs: Vec<String> = std::fs::read_dir(dir)
@@ -1310,8 +1294,7 @@ pub fn holdout_specs(root: &Path, cfg: &Config) -> Vec<String> {
     specs
 }
 
-/// Whether a lane's transcript, or the product or state diff since its bases, names a set's path.
-/// Concrete set paths only, so prose about holdouts never trips it (spec 6).
+/// whether a lane's transcript or diff names a concrete set path; prose about holdouts never trips it
 pub fn names_holdout(
     root: &Path,
     cfg: &Config,
@@ -1335,8 +1318,7 @@ pub fn names_holdout(
     texts.iter().any(|t| paths.iter().any(|p| t.contains(p)))
 }
 
-/// Runs a spec's holdouts at `rev` in a scratch worktree; returns (run, red) and nothing else,
-/// since anything more reaches the queue a writer reads (spec 6).
+/// runs a spec's holdouts at `rev`; returns only (run, red), as anything more would reach a writer
 pub fn holdouts(
     sandbox: &crate::sandbox::Sandbox,
     root: &Path,
@@ -1387,7 +1369,7 @@ pub fn holdouts(
     Ok((set.len(), red))
 }
 
-// a red holdout says only how many, so the writer has nothing to fit the code to (spec 6)
+// a red holdout says only how many, so the writer has nothing to fit the code to
 fn holdout(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -1429,8 +1411,6 @@ fn holdout(ctx: &mut GateCtx) -> GateOutcome {
     }
 }
 
-// a heading an agent deletes mid-edit leaves a block nothing counts: its body merges into its
-// neighbour and archive moves both out, so the id is gone with the tree still consistent (T-020, 9c0b4af)
 // a lane that sets its own author puts an identity the operator never chose into their history
 fn commit_identity(ctx: &mut GateCtx) -> GateOutcome {
     let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
@@ -1600,7 +1580,7 @@ fn halted(ctx: &mut GateCtx, reason: String) -> GateOutcome {
     }
 }
 
-// a leak is never handed back to a lane: the history rewrite it needs is a person's (ADR 0009)
+// a leak is never handed back to a lane: the history rewrite it needs is a person's
 fn security(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -1803,16 +1783,14 @@ pub(crate) fn skills_dir_for(cfg: &Config) -> String {
 // harness.lock has its own struct and is compared with skills::parse_lock, not this text pattern
 const HASHES_KEY: &str = r#"^[+-]\s*"([^"]+)"\s*:"#;
 
-// the lock as toml::from_str reads it at a given commit; a missing file (nothing vendored yet at
-// that commit) is an empty lock, not an error
+// the lock at a commit as toml::from_str reads it; a missing file is an empty lock, not an error
 fn lock_at(ctx: &GateCtx, lock: &str, rev: Option<&str>) -> crate::skills::Lock {
     show_at(ctx, lock, rev)
         .and_then(|text| crate::skills::parse_lock(&text).ok())
         .unwrap_or_default()
 }
 
-// same key regex as HASHES_KEY, applied to a revision's whole file rather than a diff, to
-// tell an added key (present in HEAD, absent at base) from a re-cut of one already at base
+// HASHES_KEY over a revision's whole file, to tell a key added at HEAD from a re-cut of a base key
 fn keys_at(ctx: &GateCtx, file: &str, diff_key_re: &str) -> Vec<String> {
     let plain = format!("^{}", &diff_key_re[5..]);
     let (Ok(re), Some(text)) = (regex::Regex::new(&plain), show_at(ctx, file, None)) else {
@@ -1877,7 +1855,7 @@ pub struct CheckReport {
     pub unnamed: bool,
     pub output: String,
     pub exit: i32,
-    /// The halt reason when the check ran past `[check] timeout` or a signal stopped it. Neither red nor green.
+    /// why the check halted: past `[check] timeout` or a signal; neither red nor green
     pub timed_out: Option<String>,
     pub tally: Tally,
 }
@@ -1896,8 +1874,7 @@ impl CheckReport {
         }
     }
 
-    // a failure the exit hid, or a check that ran and printed no count, is a number nobody can quote.
-    // `counts` is whether this repository's check prints a count the tally reads at all
+    // a failure the exit hid, or no printed count, is a number nobody can quote; `counts`: one is printed
     pub fn tally_warning(&self, command: &str, counts: bool) -> Option<String> {
         if self.timed_out.is_some() || self.output.starts_with(NEVER_RAN) {
             return None;
@@ -1940,7 +1917,7 @@ const GRACE: Duration = Duration::from_secs(10);
 // how long a killed group's pipes get to close before an unfinished reader is left detached
 const DRAIN: Duration = Duration::from_secs(1);
 
-// the check gets its own process group so a build tool's children die with it, not with the shell alone
+// the check gets its own process group so a build tool's children die with it, not the shell alone
 fn run_bounded(
     sandbox: &crate::sandbox::Sandbox,
     root: &Path,
@@ -1961,7 +1938,7 @@ fn run_wrapped(wrapped: &crate::sandbox::Wrapped, timeout: Duration) -> std::io:
         .spawn()?;
     let pgid = child.id();
 
-    // stdout and stderr interleave into one buffer, and draining them keeps a chatty check off a full pipe
+    // stdout and stderr interleave into one buffer; draining keeps a chatty check off a full pipe
     let buffer = Arc::new(Mutex::new(String::new()));
     let mut readers = Vec::new();
     if let Some(out) = child.stdout.take() {
@@ -2114,7 +2091,6 @@ fn tally_by(output: &str, pattern: &str) -> Tally {
     t
 }
 
-// the gate's copy of the tally, and the digest's warning when the tally contradicts the exit
 // the runner whose summary `tally` parses, named by the fail_name the preset pins
 fn counts_test_results(cfg: &Config) -> bool {
     !cfg.check.tally.is_empty()
@@ -2221,7 +2197,6 @@ pub fn check_delta(
     }
 }
 
-/// The text with its ANSI colour and cursor sequences removed.
 pub fn strip_ansi(text: &str) -> String {
     static ANSI: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     ANSI.get_or_init(|| {
@@ -2234,7 +2209,7 @@ pub fn strip_ansi(text: &str) -> String {
     .into_owned()
 }
 
-// strips a trailing " [<digits>(.<digits>)?(s|m)]" — a test-runner-printed duration, not part of the test's name
+// strips a trailing " [<n>(.<n>)?(s|m)]": a runner-printed duration, not part of the test name
 fn strip_duration(name: &str) -> String {
     let trimmed = name.trim_end();
     let Some(open) = trimmed.rfind(" [") else {
@@ -2331,8 +2306,7 @@ fn judged(report: &CheckReport) -> GateOutcome {
     ))
 }
 
-// the probe answers from the templates its own binary compiled in, so the gate spawns the binary
-// the check just rebuilt instead of reading them in this process
+// the probe answers from its binary's compiled templates, so the gate spawns the freshly built one
 fn install_stale(ctx: &mut GateCtx) -> GateOutcome {
     let spawned = std::env::current_exe()
         .map_err(|e| e.to_string())
@@ -2387,7 +2361,7 @@ fn stale_path(text: &str) -> Result<Option<String>, String> {
     ))
 }
 
-// a fix needing the spec or contract is neither a promotion nor a kill; the adjudicator halts and the run stops
+// a fix needing the spec or contract is neither promotion nor kill; the adjudicator halts the run
 fn adjudicator_halt(ctx: &mut GateCtx) -> GateOutcome {
     let Some(id) = halt_id(&ctx.stage_output) else {
         return pass("the adjudicator did not halt");

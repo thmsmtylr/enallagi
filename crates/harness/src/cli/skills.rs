@@ -1,4 +1,4 @@
-//! `enallagi skills check|sync|list|--cost` -- the CLI surface over `skills`.
+//! `enallagi skills check|sync|list|--cost` -- the CLI surface over `skills`
 
 use crate::agent;
 use crate::config;

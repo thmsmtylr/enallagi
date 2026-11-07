@@ -1,4 +1,4 @@
-//! A pull request's threads, reviews, comments and failed checks, read with gh, as findings.
+//! a pull request's threads, reviews, comments and failed checks, read with gh, as findings
 
 use crate::block::{self, QueueError};
 use crate::issue;
@@ -150,40 +150,39 @@ struct Response {
     data: Data,
 }
 
-/// One finding, whatever raised it.
 #[derive(Debug, Clone, Default)]
 pub struct Finding {
-    /// `F-<n>`, in read order.
+    /// `F-<n>`, in read order
     pub id: String,
-    /// `thread`, `review`, `comment` or `check`.
+    /// `thread`, `review`, `comment` or `check`
     pub source: &'static str,
-    /// The vendor for a bot in the table, else the account's own name.
+    /// the vendor for a bot in the table, else the account's own name
     pub by: String,
-    /// What makes two findings the same: the thread id, a summary's marker, else `by`, path and plain body.
+    /// two findings match on thread id, a summary's marker, else `by`, path and plain body
     pub key: String,
     pub url: String,
     pub path: Option<String>,
     lines: (Option<u64>, Option<u64>),
-    /// The host's id for a resolvable thread.
+    /// the host's id for a resolvable thread
     pub thread: Option<String>,
-    /// The count a bot's summary carries.
+    /// the count a bot's summary carries
     pub severity: Option<u64>,
     pub body: String,
-    /// Later comments in an open thread, quoted under its block.
+    /// later comments in an open thread, quoted under its block
     pub replies: Vec<String>,
-    /// The same finding raised again on the same lines: its permalinks.
+    /// the same finding raised again on the same lines: its permalinks
     pub also: Vec<String>,
-    /// A summary or a check: its URL outlives its words, so the URL carries nothing.
+    /// a summary or a check: its URL outlives its words, so the URL carries nothing
     pub reused: bool,
 }
 
 #[derive(Debug, Default)]
 pub struct Found {
     pub findings: Vec<Finding>,
-    /// The head the read saw.
+    /// the head the read saw
     pub head: String,
     pub settled: usize,
-    /// Every unresolved thread's id, as the read saw it.
+    /// every unresolved thread's id, as the read saw it
     pub open: Vec<String>,
     pub folded: usize,
     // a list came back at its page limit, so what follows was never read
@@ -252,11 +251,11 @@ const LIGHT: &str = concat!(
 
 #[derive(Debug, PartialEq)]
 pub struct Light {
-    /// `OPEN`, `MERGED` or `CLOSED`.
+    /// `OPEN`, `MERGED` or `CLOSED`
     pub state: String,
-    /// What `polled` holds: equal keys mean nothing new to read.
+    /// what `polled` holds: equal keys mean nothing new to read
     pub key: String,
-    /// The head's check rollup, `SUCCESS` when every check passed.
+    /// the head's check rollup, `SUCCESS` when every check passed
     pub rollup: String,
 }
 
@@ -445,7 +444,7 @@ fn plain(body: &str) -> String {
         .join(" ")
 }
 
-/// Who said what where, wording aside: the same request raised again in a new thread has the same gist.
+/// who said what where, wording aside: one request raised again in a new thread keeps its gist
 pub fn gist(by: &str, path: Option<&str>, body: &str) -> String {
     format!("{by} {} {}", path.unwrap_or("-"), plain(body))
 }
@@ -483,7 +482,7 @@ pub fn render(f: &Finding, id: &str) -> String {
     lines.join("\n")
 }
 
-/// A finding as its ticket carries it under its harness trailer: a `finding:` line, its fields indented under it, its body quoted.
+/// a `finding:` line, its fields indented under it, its body quoted
 pub fn entry(f: &Finding, id: &str, round: u64) -> String {
     let mut lines = vec![
         format!("finding: {id} {} round {round}", f.source),
@@ -510,7 +509,7 @@ pub fn entry(f: &Finding, id: &str, round: u64) -> String {
     lines.join("\n")
 }
 
-/// The thread id a block carries from the moment `append` wrote it, or none for a block with no origin thread.
+/// the origin thread id `append` wrote into a block, if any
 pub fn thread_of(block: &block::Block) -> Option<String> {
     block
         .body
@@ -544,7 +543,7 @@ fn failed(args: &[&str], reason: String) -> ReviewError {
         reason,
     }
 }
-/// Replies `body` on the thread; returns the reply's URL.
+/// returns the reply's URL
 pub fn reply(token: Option<&str>, thread: &str, body: &str) -> Result<String, ReviewError> {
     let out = write(
         token,
@@ -583,22 +582,21 @@ pub fn resolve(token: Option<&str>, thread: &str) -> Result<(), ReviewError> {
     .map(drop)
 }
 
-/// Replies `body` on the thread and resolves it; returns the reply's URL.
+/// replies `body` on the thread and resolves it; returns the reply's URL
 pub fn settle(token: Option<&str>, thread: &str, body: &str) -> Result<String, ReviewError> {
     reply(token, thread, body).and_then(|url| resolve(token, thread).map(|_| url))
 }
 
-/// Asks `who` to review the pull request again.
 pub fn rereview(token: Option<&str>, pr: &str, who: &str) -> Result<(), ReviewError> {
     write(token, &["pr", "edit", pr, "--add-reviewer", who]).map(drop)
 }
 
-/// Comments `body` on the pull request; returns the comment's URL.
+/// returns the comment's URL
 pub fn comment(token: Option<&str>, pr: &str, body: &str) -> Result<String, ReviewError> {
     write(token, &["pr", "comment", pr, "--body", body])
 }
 
-/// The blocks the findings become, given the queue's tickets; the caller appends them through the tracker.
+/// the blocks the findings become, given the queue's tickets; the caller appends them
 pub fn append(
     blocks: &[block::Block],
     decisions: &str,
@@ -691,7 +689,7 @@ mod bots {
     }
 
     impl Who {
-        /// The vendor for a bot the table holds, else the login with `[bot]` dropped; a deleted account is GitHub's `ghost`.
+        /// the table bot's vendor, else the login without `[bot]`; a deleted account is GitHub's `ghost`
         pub(super) fn name(&self) -> String {
             let Some(a) = &self.author else {
                 return "ghost".to_string();
@@ -705,7 +703,7 @@ mod bots {
         }
     }
 
-    /// A summary's marker and count, when `by` is a table bot and `body` carries its marker.
+    /// a summary's marker and count, when `by` is a table bot and `body` carries its marker
     pub(super) fn summary(by: &str, body: &str) -> Option<(&'static str, Option<u64>)> {
         let b = BOTS
             .iter()

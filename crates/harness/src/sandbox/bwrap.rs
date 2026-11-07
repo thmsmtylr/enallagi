@@ -1,4 +1,4 @@
-//! Linux: bwrap, a private netns bridged to the launcher over Unix sockets, and a seccomp filter.
+//! Linux: bwrap, a private netns bridged to the launcher over Unix sockets, and a seccomp filter
 
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -9,7 +9,7 @@ use std::sync::Arc;
 use super::Policy;
 use crate::proxy::pump;
 
-/// Host side: one Unix socket per port under the run's dir, each relayed to `127.0.0.1:<port>`.
+/// host side: one Unix socket per port under the run's dir, each relayed to `127.0.0.1:<port>`
 pub(super) struct Relays {
     socks: Vec<PathBuf>,
     stop: Arc<AtomicBool>,
@@ -54,7 +54,7 @@ impl Drop for Relays {
     }
 }
 
-/// A `bwrap` on PATH that is not inside the product, where a lane could have planted one.
+/// a `bwrap` on PATH that is not inside the product, where a lane could have planted one
 pub(super) fn find(root: &Path) -> Option<PathBuf> {
     let root = super::canon(root);
     std::env::split_paths(&std::env::var_os("PATH")?)
@@ -62,8 +62,7 @@ pub(super) fn find(root: &Path) -> Option<PathBuf> {
         .find(|p| p.is_file() && !super::canon(p).starts_with(&root))
 }
 
-/// The binary that runs `sandbox bridge`: this one when it is enallagi, else `ENALLAGI_BIN`, else
-/// the `enallagi` cargo builds beside a test binary's `deps/`, else a path that cannot exec.
+/// the `sandbox bridge` binary: this one if enallagi, else `ENALLAGI_BIN`, else cargo's built one
 pub(super) fn exe() -> PathBuf {
     let own = std::env::current_exe().ok();
     if let Some(own) = own
@@ -183,7 +182,7 @@ pub(super) fn argv(
     out
 }
 
-/// Inside the namespace: listen on each loopback port, forward to its socket, run argv filtered.
+/// inside the namespace: listen on each loopback port, forward to its socket, run argv filtered
 pub fn bridge(dir: &Path, ports: &[u16], argv: &[String]) -> i32 {
     // the lane's same-uid parent, unfiltered: undumpable, so it cannot be ptraced or read
     #[cfg(target_os = "linux")]

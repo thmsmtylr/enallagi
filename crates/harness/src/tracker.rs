@@ -1,11 +1,11 @@
-//! The queue: one file per ticket under `specs/<slug>/issues/`, read back as blocks.
+//! the queue: one file per ticket under `specs/<slug>/issues/`, read back as blocks
 
 use crate::block::{self, Block, QueueError};
 use crate::git;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// The instance directory the queue lives under.
+/// the instance directory the queue lives under
 pub const SPECS: &str = "specs";
 
 // `__TRACKER__`: stands in for what `/setup-matt-pocock-skills` would write into the client repo
@@ -17,7 +17,7 @@ const CRITERIA: &str = "## Acceptance criteria";
 const COMMENTS: &str = "## Comments";
 const HARNESS: &str = "## Harness";
 
-/// Every key a gate or role reads from `## Harness`; the ticket reference names each.
+/// every key a gate or role reads from `## Harness`
 pub const HARNESS_KEYS: &[&str] = &[
     "scope",
     "widened",
@@ -43,17 +43,17 @@ pub const HARNESS_KEYS: &[&str] = &[
     "respond",
 ];
 
-/// The specs directory.
+/// the specs directory
 pub struct Tracker(pub PathBuf);
 
 pub fn state(b: &Block) -> Option<String> {
     block::field(b, "status")
 }
 
-/// A ticket ready for anyone.
+/// a ticket ready for anyone
 pub const READY: [&str; 2] = ["ready-for-agent", "ready-for-human"];
 
-/// The ids whose state is one of `states`, in queue order.
+/// ids whose state is one of `states`, in queue order
 pub fn ids_in(blocks: &[Block], states: &[&str]) -> Vec<String> {
     blocks
         .iter()
@@ -62,12 +62,12 @@ pub fn ids_in(blocks: &[Block], states: &[&str]) -> Vec<String> {
         .collect()
 }
 
-/// The first `ready-for-agent` ticket, in the order given, whose blockers are all `done` or `open`; `pr` stacks on an open blocker's branch.
+/// first `ready-for-agent` ticket with every blocker `done` or `open`; `pr` stacks on an open one
 pub fn takeable(blocks: &[Block]) -> Option<String> {
     takeable_by(blocks, |_| true)
 }
 
-/// `takeable` among the tickets `ok` admits; blockers are still read from every ticket.
+/// `takeable` among the tickets `ok` admits; blockers are still read from every ticket
 pub fn takeable_by(blocks: &[Block], ok: impl Fn(&Block) -> bool) -> Option<String> {
     let states: HashMap<&str, Option<String>> =
         blocks.iter().map(|b| (b.id.as_str(), state(b))).collect();
@@ -110,7 +110,7 @@ pub fn file_name(id: &str, title: &str) -> String {
     format!("{id}-{}.md", slug(title))
 }
 
-/// One ticket file read as a block: `**Status:**`, `**Blocked by:**`, the criteria list, `## Comments` and the `## Harness` trailer become `key: value` fields.
+/// status, blockers, criteria, `## Comments` and `## Harness` become `key: value` fields
 pub fn parse_ticket(text: &str) -> Result<Block, String> {
     let mut lines = text.split('\n').enumerate();
     let (id, title) = lines
@@ -221,7 +221,7 @@ fn field_start(line: &str) -> Option<(&str, &str)> {
     ok.then_some((key, rest))
 }
 
-/// A block as the ticket file it becomes. Every line the gates read survives: the fields with a Pocock home move there, everything else stays verbatim in `## Harness`.
+/// every line the gates read survives; fields without a Pocock home stay in `## Harness`
 pub fn ticket_text(b: &Block) -> String {
     let mut fields: Vec<(String, Vec<String>)> = Vec::new();
     for (_, line) in &b.body {
@@ -311,7 +311,7 @@ pub fn ticket_text(b: &Block) -> String {
     out.join("\n")
 }
 
-/// A ticket's `verdict:` line in `## Harness`.
+/// a ticket's `verdict:` line in `## Harness`
 #[derive(Debug, PartialEq)]
 pub enum Verdict {
     Verified,
@@ -329,14 +329,14 @@ impl std::fmt::Display for Verdict {
     }
 }
 
-/// Every form a `verdict:` line takes; the role prompts name each.
+/// every form a `verdict:` line takes; the role prompts name each
 pub const VERDICT_FORMS: [&str; 3] = [
     "verified by verifier",
     "rejected by verifier: <reason>",
     "answered by implementer",
 ];
 
-/// A `verdict:` line, the `spec:`/`standards:` review axes and `ran:`/`exit:` pairs directly under it.
+/// a `verdict:` line, its `spec:`/`standards:` axes and the `ran:`/`exit:` pairs under it
 #[derive(Debug, PartialEq)]
 pub struct Ruling {
     pub verdict: Verdict,
@@ -345,7 +345,7 @@ pub struct Ruling {
     pub runs: Vec<(String, i32)>,
 }
 
-/// The ticket's ruling. A verdict value outside `VERDICT_FORMS` reads as none.
+/// a value outside `VERDICT_FORMS` reads as none
 pub fn verdict(b: &Block) -> Option<Ruling> {
     // `## Comments` comes last, opening at `notes:`; a verdict quoted there is prose
     let lines: Vec<&str> = b
@@ -405,10 +405,10 @@ pub fn verdict(b: &Block) -> Option<Ruling> {
     Some(r)
 }
 
-/// Where a kill is recorded: one file per concept, in the format of Pocock's `triage`.
+/// where a kill is recorded: one file per concept, in the format of Pocock's `triage`
 pub const OUT_OF_SCOPE: &str = ".out-of-scope";
 
-/// The indented lines under the ticket's `finding: <id> ` entry, trimmed.
+/// the indented lines under the ticket's `finding: <id> ` entry, trimmed
 pub fn finding_lines<'b>(b: &'b Block, id: &str) -> Vec<&'b str> {
     let head = format!("finding: {id} ");
     b.body
@@ -421,7 +421,7 @@ pub fn finding_lines<'b>(b: &'b Block, id: &str) -> Vec<&'b str> {
         .collect()
 }
 
-/// The first of those lines starting `prefix` (`url:`, `>`), without it.
+/// the first of those lines starting `prefix` (`url:`, `>`), without it
 pub fn finding_field(b: &Block, id: &str, prefix: &str) -> Option<String> {
     finding_lines(b, id)
         .into_iter()
@@ -429,7 +429,7 @@ pub fn finding_field(b: &Block, id: &str, prefix: &str) -> Option<String> {
         .map(|v| v.trim().to_string())
 }
 
-/// Every line under a `## Prior requests` heading in `.out-of-scope/`: a rejected request, by URL.
+/// each line under `## Prior requests` in `.out-of-scope/`: a rejected request, by URL
 pub fn prior_requests(dir: &Path) -> std::io::Result<Vec<String>> {
     let Ok(entries) = std::fs::read_dir(dir.join(OUT_OF_SCOPE)) else {
         return Ok(Vec::new());
@@ -451,8 +451,7 @@ pub fn prior_requests(dir: &Path) -> std::io::Result<Vec<String>> {
     Ok(out)
 }
 
-/// The dated kill lines under the harness dir `dir`: every `.out-of-scope/*.md`'s, then those of
-/// DECISIONS.md `## Rejected findings`, which is read-only history.
+/// dated kills from every `.out-of-scope/*.md`, then DECISIONS.md `## Rejected findings`
 pub fn kill_lines(dir: &Path) -> std::io::Result<Vec<String>> {
     let dated = |l: &str| {
         l.strip_prefix("- [")
@@ -500,7 +499,7 @@ pub fn kill_lines(dir: &Path) -> std::io::Result<Vec<String>> {
     Ok(out)
 }
 
-/// The spec a new ticket lands in: the product repository's directory name.
+/// the product repository's directory name, the spec a new ticket lands in
 pub fn repo_slug(root: &Path) -> String {
     let name = root
         .file_name()
@@ -512,7 +511,7 @@ pub fn repo_slug(root: &Path) -> String {
     }
 }
 
-/// The default spec, relative to the root: `layout.spec` when set, else the first `specs/<slug>/spec.md` holding `layout.rows_heading`, else the one a new install seeds.
+/// `layout.spec`, else the first spec holding `layout.rows_heading`, else the one init seeds
 pub fn spec_rel(root: &Path, cfg: &crate::config::Config) -> String {
     let dir = &cfg.layout.harness_dir;
     if !cfg.layout.spec.is_empty() {
@@ -530,7 +529,7 @@ pub fn spec_rel(root: &Path, cfg: &crate::config::Config) -> String {
         .unwrap_or(seed)
 }
 
-/// Every spec the exit criteria are read from, relative to the root: `layout.spec` first, then each other `specs/<slug>/spec.md`.
+/// specs the exit criteria come from: `layout.spec` first, then each other `specs/<slug>/spec.md`
 pub fn spec_files(root: &Path, cfg: &crate::config::Config) -> Vec<String> {
     let mut out = vec![cfg.layout.spec.clone()];
     for p in spec_paths(root, &cfg.layout.harness_dir) {
@@ -575,7 +574,7 @@ fn ticket_files(specs: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// The accepted specs with no ticket yet, by slug: `spec.md` at `**Status:** ready-for-agent`, no `T-NNN-*.md` in `issues/`.
+/// slugs whose `spec.md` is `ready-for-agent` with no `T-NNN-*.md` in `issues/`
 pub fn undecomposed(root: &Path, harness_dir: &str) -> Vec<String> {
     let accepted = format!("{STATUS} ready-for-agent");
     spec_paths(root, harness_dir)
@@ -597,13 +596,13 @@ pub fn undecomposed(root: &Path, harness_dir: &str) -> Vec<String> {
         .collect()
 }
 
-/// A `to-tickets` draft, `issues/NN-<slug>.md`, before the `tickets` gate numbers it.
+/// a `to-tickets` draft, `issues/NN-<slug>.md`, before the `tickets` gate numbers it
 pub struct Draft {
     pub path: PathBuf,
     pub num: Option<u32>,
     pub title: String,
     pub status: bool,
-    /// `NN` for a draft, `T-NNN` for a ticket; None without a `**Blocked by:**` line.
+    /// `NN` for a draft, `T-NNN` for a ticket; None without a `**Blocked by:**` line
     pub blockers: Option<Vec<String>>,
     pub what: bool,
     pub criteria: Vec<String>,
@@ -659,7 +658,7 @@ pub fn parse_draft(path: &Path, text: &str) -> Draft {
     d
 }
 
-/// What `enallagi tasks check` and the `tickets` gate refuse in a spec's drafts, one line each.
+/// what `enallagi tasks check` and the `tickets` gate refuse in a spec's drafts, one line each
 pub fn check(root: &Path, cfg: &crate::config::Config, slug: &str) -> Vec<String> {
     let dir = &cfg.layout.harness_dir;
     let t = Tracker::open(root, dir);
@@ -851,7 +850,7 @@ impl Tracker {
         })
     }
 
-    /// The spec directory a ticket's file sits under.
+    /// the spec directory a ticket's file sits under
     pub fn spec_of(&self, id: &str) -> Option<String> {
         let path = self.path_of(id)?;
         let spec = path.parent()?.parent()?.file_name()?;
@@ -890,7 +889,7 @@ impl Tracker {
         Ok(())
     }
 
-    /// Sets `key: value` in `## Harness`, replacing the key's first line or appending one.
+    /// replaces the key's first line in `## Harness`, or appends one
     pub fn set_field(&self, id: &str, key: &str, value: &str) -> Result<(), QueueError> {
         let path = self
             .path_of(id)
@@ -910,7 +909,7 @@ impl Tracker {
         }
     }
 
-    /// Appends `text` at the end of `## Harness`, which ends the file.
+    /// appends at the end of `## Harness`, which ends the file
     pub fn add_lines(&self, id: &str, text: &str) -> Result<(), QueueError> {
         let path = self
             .path_of(id)
@@ -925,7 +924,7 @@ impl Tracker {
         Ok(())
     }
 
-    /// Appends a block as a ticket file under `specs/<spec>/issues/`, and returns the path written.
+    /// writes a block as a ticket file under `specs/<spec>/issues/`; returns the path
     pub fn append(&self, spec: &str, text: &str) -> Result<PathBuf, QueueError> {
         let b = block::parse(text)?
             .into_iter()
@@ -949,7 +948,7 @@ impl Tracker {
         Ok(path)
     }
 
-    /// A spec's drafts in file-name order; none when it has no `issues/`.
+    /// in file-name order; none when the spec has no `issues/`
     pub fn drafts(&self, slug: &str) -> std::io::Result<Vec<Draft>> {
         let Ok(files) = std::fs::read_dir(self.0.join(slug).join("issues")) else {
             return Ok(Vec::new());
@@ -966,7 +965,7 @@ impl Tracker {
             .collect()
     }
 
-    /// The `tickets` gate's rewrite: drafts in `NN` order become `T-NNN-<slug>.md` from `first`, local blockers mapped, at `needs-triage` with `probe: decompose`. Returns the ids.
+    /// drafts become `T-NNN-<slug>.md` from `first` at `needs-triage`, `probe: decompose`; returns ids
     pub fn number_drafts(&self, slug: &str, first: u64) -> std::io::Result<Vec<String>> {
         let mut drafts = self.drafts(slug)?;
         drafts.sort_by_key(|d| d.num);
@@ -1037,7 +1036,7 @@ impl Tracker {
         Ok(block::next_id(&self.blocks()?, archived))
     }
 
-    /// Renames each of this queue's ticket files whose id `parent` holds at another path to the next free id, rewriting the id in every ticket of this queue. Returns (old, new) pairs.
+    /// moves tickets whose id `parent` holds elsewhere to the next free id; returns (old, new) pairs
     pub fn renumber(
         &self,
         parent: &Tracker,
@@ -1096,12 +1095,12 @@ impl Tracker {
     }
 }
 
-/// Every ticket as the instance repository held it at `rev`.
+/// every ticket as the instance repository held it at `rev`
 pub fn blocks_at(root: &Path, harness_dir: &str, rev: &str) -> Option<Vec<Block>> {
     read_at(root, harness_dir, rev, None)
 }
 
-/// One ticket at `rev`, reading only its own file.
+/// one ticket at `rev`, reading only its own file
 pub fn get_at(root: &Path, harness_dir: &str, id: &str, rev: &str) -> Option<Block> {
     read_at(root, harness_dir, rev, Some(id))?
         .into_iter()
@@ -1113,7 +1112,7 @@ fn read_at(root: &Path, harness_dir: &str, rev: &str, id: Option<&str>) -> Optio
     let (repo, inner, _) = git::locate(root, harness_dir, &specs);
     let names = git::git(&repo, &["ls-tree", "-r", "--name-only", rev, "--", &inner]).ok()?;
     let mine = |n: &&str| id.is_none_or(|id| n.contains(&format!("/issues/{id}-")));
-    // ponytail: one `git show` per ticket; a `cat-file --batch` read if a 1000-ticket queue makes gates slow
+    // ponytail: one `git show` per ticket; `cat-file --batch` if a 1000-ticket queue slows gates
     let mut found = Vec::new();
     for name in names
         .lines()
@@ -1126,7 +1125,7 @@ fn read_at(root: &Path, harness_dir: &str, rev: &str, id: Option<&str>) -> Optio
     sorted(found).ok()
 }
 
-/// The commits in `range` that touched `id`'s ticket, oldest first.
+/// commits in `range` that touched `id`'s ticket, oldest first
 pub fn ticket_revs(root: &Path, harness_dir: &str, id: &str, range: &str) -> Option<Vec<String>> {
     let specs = crate::config::instance_rel(harness_dir, SPECS);
     let (repo, specs, _) = git::locate(root, harness_dir, &specs);
@@ -1139,7 +1138,7 @@ pub fn ticket_revs(root: &Path, harness_dir: &str, id: &str, range: &str) -> Opt
     Some(revs.lines().map(String::from).collect())
 }
 
-/// The commit that queued a ticket: the one that added its file. None when none did, which a caller may never pass to `git show`: an empty revision reads the index.
+/// the commit that added the ticket's file; an empty revision would make `git show` read the index
 pub fn queued_commit(root: &Path, harness_dir: &str, id: &str) -> Result<Option<String>, String> {
     let specs = crate::config::instance_rel(harness_dir, SPECS);
     let (repo, inner, _) = git::locate(root, harness_dir, &specs);

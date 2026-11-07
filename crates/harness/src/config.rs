@@ -1,4 +1,4 @@
-//! The answers substituted into roles, gates and probes.
+//! the answers substituted into roles, gates and probes
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -16,7 +16,7 @@ pub const DIR_TOKEN: &str = "__ENALLAGI_DIR__";
 // the names installs and templates written before the rename still carry
 pub const LEGACY_CONFIG: &str = "harness.toml";
 pub const LEGACY_DIR_TOKEN: &str = "__HARNESS_DIR__";
-// what a seeded document says in place of an unset check, never an empty pair a resync would match everywhere
+// a seeded document's stand-in for an unset check; an empty pair would match everywhere on resync
 pub const UNSET_CHECK: &str = "check.command is unset";
 pub const UNSET_FORCE: &str = "check.force is unset";
 
@@ -157,7 +157,7 @@ pub struct SandboxConfig {
     pub ports: Vec<u16>,
     pub write: Vec<String>,
     pub env: Vec<String>,
-    /// Runner cache variable to its per-install dir; never the operator's own cache.
+    /// runner cache variable to its per-install dir; never the operator's own cache
     pub caches: std::collections::BTreeMap<String, String>,
 }
 
@@ -196,19 +196,18 @@ pub struct AgentOverride {
 #[serde(default, deny_unknown_fields)]
 pub struct CheckConfig {
     pub command: String,
-    /// The check with its cache defeated. Follows `command` unless pinned.
+    /// the check with its cache defeated; follows `command` unless pinned
     pub force: String,
     pub fail_name: String,
-    /// A regex over each output line whose named groups `passed` and `failed` are summed into the
-    /// tally; empty reads cargo's `test result:` lines.
+    /// regex whose `passed`/`failed` groups sum into the tally; empty reads cargo's `test result:` lines
     pub tally: String,
-    /// `<n>s`, `<n>m` or `<n>h`; empty means `DEFAULT_CHECK_TIMEOUT`.
+    /// `<n>s`, `<n>m` or `<n>h`; empty means `DEFAULT_CHECK_TIMEOUT`
     pub timeout: String,
-    /// Command prefixes the `claims` gate may re-run from a verdict's `ran:` lines; a command with a shell operator never runs.
+    /// prefixes `claims` may re-run from a verdict's `ran:` lines; one with a shell operator never runs
     pub claims_allow: Vec<String>,
 }
 
-/// The bound on `command` and `force` when `[check] timeout` is unset.
+/// the bound on `command` and `force` when `[check] timeout` is unset
 pub const DEFAULT_CHECK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 impl CheckConfig {
@@ -221,7 +220,7 @@ impl CheckConfig {
     }
 }
 
-// `18446744073709551615h` is a config typo, not a duration.
+// `18446744073709551615h` is a config typo, not a duration
 fn parse_timeout(value: &str) -> Option<Duration> {
     // char, not byte: a multibyte last char must be refused, not split mid-scalar
     let unit = value.chars().last()?;
@@ -238,13 +237,13 @@ fn parse_timeout(value: &str) -> Option<Duration> {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct QueueConfig {
-    /// Standing `proposed` blocks one adjudicate stage is handed, oldest first.
+    /// standing `proposed` blocks one adjudicate stage is handed, oldest first
     pub drain: usize,
-    /// Turns added to that stage for each block it is handed.
+    /// turns added to that stage for each block it is handed
     pub turns_per_block: u32,
-    /// State commits a `proposed` block may stand for before it expires.
+    /// state commits a `proposed` block may stand for before it expires
     pub proposed_rounds: usize,
-    /// The first block id the 72-character title cap applies to; earlier titles are the record as written.
+    /// the first block id the 72-character title cap applies to; earlier titles stay as written
     pub title_cap_from: u32,
 }
 
@@ -263,7 +262,7 @@ impl Default for QueueConfig {
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PrConfig {
-    /// `enallagi run` opens one pull request per landed task, as `--pr-per-task` does.
+    /// `enallagi run` opens one pull request per landed task, as `--pr-per-task` does
     pub per_task: bool,
     pub merge: MergeMode,
 }
@@ -271,13 +270,13 @@ pub struct PrConfig {
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RespondConfig {
-    /// New in-scope findings past this many rounds hand the ticket to a person.
+    /// new in-scope findings past this many rounds hand the ticket to a person
     pub max_rounds: u64,
-    /// `<n>s`, `<n>m` or `<n>h` after a push before the poll judges the pull request.
+    /// `<n>s`, `<n>m` or `<n>h` after a push before the poll judges the pull request
     pub quiet: String,
-    /// Reviewers asked again on each push, as `gh pr edit --add-reviewer` takes them.
+    /// reviewers asked again on each push, as `gh pr edit --add-reviewer` takes them
     pub rereview: Vec<String>,
-    /// The variable whose value replies and resolves pass to gh as `GH_TOKEN`; unset is gh's own auth.
+    /// the variable replies and resolves pass to gh as `GH_TOKEN`; unset is gh's own auth
     pub token_env: String,
 }
 
@@ -287,7 +286,7 @@ impl RespondConfig {
     }
 }
 
-/// Who merges a ticket's pull request: a person, or the launcher on green (ADR 0002).
+/// who merges a ticket's pull request: a person, or the launcher on green
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MergeMode {
@@ -299,7 +298,7 @@ pub enum MergeMode {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ParallelConfig {
-    /// How many writer lanes `enallagi worktree` runs at once; 0 is refused by the type.
+    /// how many writer lanes `enallagi worktree` runs at once; 0 is refused by the type
     pub writers: std::num::NonZeroU32,
 }
 
@@ -315,7 +314,7 @@ impl Default for ParallelConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct Layout {
     pub harness_dir: String,
-    /// None means the agent preset's own skills directory.
+    /// none means the agent preset's own skills directory
     pub skills_dir: Option<String>,
     pub spec: String,
     pub rows_heading: String,
@@ -333,7 +332,7 @@ pub struct Layout {
     pub harness_files: Vec<String>,
     pub harness_globs: Vec<String>,
     pub allowed_prefixes: Vec<String>,
-    /// `litter` reports every tracked path outside `allowed_prefixes`, not only the disposable ones.
+    /// `litter` reports every tracked path outside `allowed_prefixes`, not only the disposable ones
     pub strict_prefixes: bool,
     pub docs: Vec<String>,
     pub harness_allow: Vec<String>,
@@ -393,7 +392,7 @@ impl Stage {
     }
 }
 
-// the digest and the turns-exhausted probe both read a cap through this, so one run never reads two ways
+// the digest and the turns-exhausted probe both read a cap here, so one run never reads it two ways
 pub fn spent_turn_cap(cap: u32, turns: u64) -> bool {
     turns >= u64::from(cap)
 }
@@ -409,7 +408,7 @@ pub struct SkillDecl {
     pub why: String,
 }
 
-/// A role prompt fetched and pinned like a skill; `<path>/<name>.md` in the source lands at `<harness_dir>/roles/<name>.md`.
+/// a role prompt pinned like a skill; `<path>/<name>.md` lands at `<harness_dir>/roles/<name>.md`
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RoleDecl {
@@ -486,7 +485,7 @@ pub fn stop_files(root: &Path, harness_dir: &str) -> Vec<PathBuf> {
     files
 }
 
-// honoured only inside the root, so a fixture or other repository a lane's child process opens never inherits it
+// honoured only inside the root, so a fixture or other repo a lane's child opens never inherits it
 fn env_harness_dir(root: &Path) -> Option<String> {
     let dir = std::env::var_os("ENALLAGI_DIR")?;
     let root = std::fs::canonicalize(root).ok()?;
@@ -506,7 +505,7 @@ fn unconfigured_harness_dir(root: &Path) -> Result<String, ConfigError> {
         .to_string())
 }
 
-// a refused config falls back to the default directory, never the root, or the default layout's guards go dark
+// a refused config falls back to the default dir, never the root, or the default guards go dark
 pub fn harness_dir(root: &Path) -> String {
     load(root)
         .map(|cfg| cfg.layout.harness_dir)
@@ -542,7 +541,7 @@ pub fn load(root: &Path) -> Result<Config, ConfigError> {
         {
             return Err(ConfigError::SkipPermissions);
         }
-        // check.force follows check.command, so overriding the check without pinning force can't leave the old tool behind
+        // force follows command, so overriding the check without pinning force can't keep the old tool
         let user_check = user.get("check");
         if let (Some(command), None) = (
             user_check.and_then(|c| c.get("command")),
@@ -582,11 +581,11 @@ fn parse_toml(text: &str, path: &str) -> Result<toml::Value, ConfigError> {
     })
 }
 
-/// The one line a written enallagi.toml carries above its keys.
+/// the one line a written enallagi.toml carries above its keys
 pub const DEFAULTS_NOTE: &str =
     "# Keys left out take their value from harness.default.toml, the embedded defaults.\n";
 
-/// Drops every key that already equals the embedded default and names each one it dropped.
+/// drops every key that already equals the embedded default and names each one it dropped
 pub fn prune_defaults(text: &str) -> Result<(String, Vec<String>), ConfigError> {
     let default = parse_toml(DEFAULT_TOML, "harness.default.toml")?;
     let mut user: toml::Value = parse_toml(text, CONFIG)?;
@@ -599,7 +598,7 @@ pub fn prune_defaults(text: &str) -> Result<(String, Vec<String>), ConfigError> 
     } else {
         DEFAULTS_NOTE
     };
-    // a key the line walk cannot place (an inline table, a quoted dotted key) falls back to the serializer
+    // a key the line walk cannot place (inline table, quoted dotted key) falls back to the serializer
     if parse_toml(&body, CONFIG).ok().as_ref() == Some(&user) {
         return Ok((format!("{note}{body}"), dropped));
     }
@@ -610,7 +609,7 @@ pub fn prune_defaults(text: &str) -> Result<(String, Vec<String>), ConfigError> 
     Ok((format!("{DEFAULTS_NOTE}{body}"), dropped))
 }
 
-// removes each dropped key's lines and the comment lines directly above it, so every other line survives
+// removes each dropped key's lines and the comments right above, so every other line survives
 fn drop_lines(text: &str, dropped: &[String]) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let mut keep = vec![true; lines.len()];
@@ -652,7 +651,7 @@ fn drop_lines(text: &str, dropped: &[String]) -> String {
     }
     drop_empty_tables(&lines, &mut keep);
     let mut out = String::new();
-    // a blank run collapses only where a cut sat inside it, so an operator's own spacing survives; the head of the file counts as a cut, which is what drops a leading blank line
+    // a blank run collapses only where a cut sat; the file head counts as a cut, dropping a leading blank
     let mut blank = true;
     let mut cut_above = true;
     for (line, kept) in lines.iter().zip(&keep) {
@@ -803,7 +802,7 @@ pub fn validate(
         if !declared.insert(sk.id.as_str()) {
             errs.push(ConfigError::DuplicateSkill(sk.id.clone()));
         }
-        // both become filesystem paths in skills::resolve, so checked here before anything is fetched or written
+        // both become paths in skills::resolve, so checked here before anything is fetched or written
         if !crate::skills::valid_id(&sk.id) {
             errs.push(ConfigError::BadSkillId(sk.id.clone()));
         }
@@ -904,7 +903,7 @@ pub fn validate(
         } else {
             match presets.get(&preset) {
                 None => errs.push(ConfigError::UnknownPreset(preset)),
-                // TurnCap::Time is grouped with None: it spends its {timeout} word on the stage's timeout, so without one there's nothing to substitute
+                // TurnCap::Time spends {timeout} on the stage's timeout, so without one nothing is substituted
                 Some(p)
                     if matches!(p.turn_cap, TurnCap::None | TurnCap::Time)
                         && st.timeout.is_none() =>
@@ -926,7 +925,7 @@ pub fn validate(
     }
 }
 
-/// The keys a repository must set before a lane runs that still have no value.
+/// the keys a repository must set before a lane runs that still have no value
 pub fn unset_keys(cfg: &Config) -> Vec<&'static str> {
     let (c, l) = (&cfg.check, &cfg.layout);
     [
@@ -957,8 +956,7 @@ pub fn subst(text: &str, cfg: &Config) -> String {
     };
     let check = or(&cfg.check.command, UNSET_CHECK);
     let force = or(&cfg.check.force, UNSET_FORCE);
-    // quoted one by one: the verifier pastes the value into a shell command, and a pathspec may
-    // hold an apostrophe, which ends the quoting unless it is closed, escaped and reopened
+    // quoted one by one for the verifier's shell; an apostrophe is closed, escaped and reopened
     let test_glob = l
         .test_glob
         .iter()
@@ -980,7 +978,7 @@ pub fn subst(text: &str, cfg: &Config) -> String {
         ("__LEARNINGS_CAP__", &cap),
         ("__TEST_GLOB__", &test_glob),
     ];
-    // unset means the preset's own directory, which only skills::skills_dir knows -- leave the token standing, not empty
+    // unset is the preset's own dir, which only skills::skills_dir knows; leave the token, not empty
     if let Some(dir) = l.skills_dir.as_deref() {
         tokens.push(("__SKILLS_DIR__", dir));
     }
@@ -1064,7 +1062,7 @@ pub fn migrate_json(json: &str) -> Result<(String, Vec<String>), ConfigError> {
             _ => {
                 let snake = snake_case(key);
                 let line = json_to_toml(value).map(|v| format!("{snake} = {v}"));
-                // a key with no Layout field would make the migrated file unloadable now unknown keys are refused; report it dropped instead
+                // a key with no Layout field would make the migrated file unloadable; report it dropped instead
                 match line.filter(|l| toml::from_str::<Layout>(l).is_ok()) {
                     Some(line) => {
                         layout.push(line);
@@ -1148,7 +1146,7 @@ fn fail_name_from_sed(sed: &str) -> Option<String> {
             (false, c) => out.push(c),
         }
     }
-    // no group in the sed pattern means it deleted the prefix and kept the rest; the regex must capture that rest instead
+    // a sed pattern with no group deleted the prefix and kept the rest; the regex must capture that rest
     if !pattern.contains("\\(") {
         out.push_str("(.+)$");
     }
@@ -1511,7 +1509,7 @@ mod tests {
         assert_eq!(c.pipeline[4].end_after_dry_rounds, 2);
     }
 
-    // tables merge key by key; an array of tables replaces the list whole, so a user's one [[stage]] is the only stage
+    // tables merge per key; an array of tables replaces whole, so a user's one [[stage]] is the only one
     #[test]
     fn tables_merge_arrays_replace() {
         let d = tempfile::tempdir().unwrap();

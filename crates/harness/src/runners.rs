@@ -1,4 +1,4 @@
-//! Test-runner detection: one preset per runner, matched against the files the repository already carries.
+//! test-runner detection: one preset per runner, matched against the files the repository carries
 
 use std::path::Path;
 
@@ -16,12 +16,12 @@ const PRESET_FILES: &[(&str, &str)] = &[
 #[serde(deny_unknown_fields)]
 pub struct Runner {
     pub name: String,
-    /// Read in order; the first one that exists and matches `detect_re` names the runner.
+    /// read in order; the first one that exists and matches `detect_re` names the runner
     pub detect_files: Vec<String>,
-    /// Empty means the file need only exist.
+    /// empty means the file need only exist
     pub detect_re: String,
     pub test_command: String,
-    /// What a CI `run:` step looks like when it runs the tests.
+    /// what a CI `run:` step looks like when it runs the tests
     pub run_re: String,
     pub fail_name: String,
     pub test_file_suffix_re: String,
@@ -29,11 +29,11 @@ pub struct Runner {
     pub source_ext: Vec<String>,
     pub source_roots: Vec<String>,
     pub test_only_glob: Vec<String>,
-    /// A skip that states no reason.
+    /// a skip that states no reason
     pub skip_patterns: Vec<String>,
-    /// Registries the check fetches from, seeded into `[sandbox] hosts`.
+    /// registries the check fetches from, seeded into `[sandbox] hosts`
     pub hosts: Vec<String>,
-    /// Cache variables the check reads, each seeded into `[sandbox] caches` with a per-install dir.
+    /// cache variables the check reads, each seeded into `[sandbox] caches` with a per-install dir
     pub caches: Vec<String>,
 }
 
@@ -44,7 +44,7 @@ pub fn presets() -> Vec<Runner> {
         .collect()
 }
 
-/// One key init writes, with the `file:line` that decided it.
+/// one key init writes, with the `file:line` that decided it
 #[derive(Debug, Clone)]
 pub struct Detected {
     pub key: String,
@@ -52,7 +52,7 @@ pub struct Detected {
     pub origin: String,
 }
 
-/// A runner whose detection matched, and the `file:line` that matched it.
+/// a runner whose detection matched, and the `file:line` that matched it
 #[derive(Debug, Clone)]
 pub struct Candidate {
     pub name: String,
@@ -62,11 +62,11 @@ pub struct Candidate {
 #[derive(Debug, Default)]
 pub struct Detection {
     pub candidates: Vec<Candidate>,
-    /// Empty unless exactly one runner matched: two candidates are a report, never a guess.
+    /// empty unless exactly one runner matched: two candidates are a report, never a guess
     pub keys: Vec<Detected>,
 }
 
-/// The runners the tree matches, and — when exactly one does — the keys init writes for it.
+/// the runners the tree matches, and the keys init writes when exactly one does
 pub fn detect(root: &Path) -> Detection {
     let mut found = Detection::default();
     let mut matched: Vec<(Runner, String)> = Vec::new();
@@ -87,9 +87,7 @@ pub fn detect(root: &Path) -> Detection {
     found
 }
 
-// no runner matched, so the tree alone answers the two layout keys a lane cannot run without: the
-// conventional source directory, and the test files a git pathspec over the conventional test
-// directory reaches; the check itself is the operator's to name
+// no runner matched: the tree answers the source dir and test globs; the check is the operator's
 fn layout_from_tree(root: &Path) -> Vec<Detected> {
     let paths = tracked(root);
     let first_under = |dir: &str| {
@@ -207,7 +205,7 @@ fn keys(root: &Path, runner: &Runner, origin: &str) -> Vec<Detected> {
     out
 }
 
-/// Every path git tracks, sorted; empty where the tree is no repository or holds no commit yet.
+// every tracked path, sorted; empty where the tree is no repository or holds no commit yet
 fn tracked(root: &Path) -> Vec<String> {
     let mut out: Vec<String> = crate::git::git(root, &["ls-files"])
         .unwrap_or_default()
@@ -219,7 +217,7 @@ fn tracked(root: &Path) -> Vec<String> {
     out
 }
 
-/// One pathspec per top-level directory holding a tracked test file, with the first such file.
+// one pathspec per top-level directory holding a tracked test file, with the first such file
 fn test_globs(runner: &Runner, paths: &[String]) -> Option<(Vec<String>, String)> {
     let is_test = regex::Regex::new(&runner.test_file_suffix_re).ok()?;
     let mut out: Vec<String> = Vec::new();
@@ -285,7 +283,7 @@ fn source_root(runner: &Runner, dirs: &[(String, String)]) -> Option<(String, St
         .cloned()
 }
 
-/// Every top-level directory holding a source or test file, each with the first such file under it.
+// every top-level directory holding a source or test file, each with its first such file
 fn source_dirs(root: &Path, runner: &Runner) -> Vec<(String, String)> {
     let is_test = regex::Regex::new(&runner.test_file_suffix_re).ok();
     let mut out: Vec<(String, String)> = Vec::new();
@@ -377,7 +375,7 @@ fn check_command(root: &Path, runner: &Runner) -> Option<(String, String)> {
     None
 }
 
-/// Each job's own lines, with the count of lines before it. A file with no `jobs:` is one job.
+// each job's lines with the count of lines before it; a file with no `jobs:` is one job
 fn jobs(text: &str) -> Vec<(usize, String)> {
     let head = regex::Regex::new(r"^  [A-Za-z_][A-Za-z0-9_-]*:\s*$").expect("literal pattern");
     let lines: Vec<&str> = text.lines().collect();
@@ -404,7 +402,7 @@ fn jobs(text: &str) -> Vec<(usize, String)> {
     out
 }
 
-/// Every `run:` step in a workflow, with the 1-based line it starts on; a block scalar is one step per line.
+// every `run:` step with its 1-based line; a block scalar is one step per line
 fn run_steps(text: &str) -> Vec<(usize, String)> {
     let open = regex::Regex::new(r"^(\s*)(?:-\s+)?run:\s*(.*)$").expect("literal pattern");
     let lines: Vec<&str> = text.lines().collect();
@@ -439,7 +437,7 @@ fn run_steps(text: &str) -> Vec<(usize, String)> {
     out
 }
 
-/// Writes each detected key into `text`; a text that does not parse is returned for init to report.
+/// writes each detected key into `text`; a text that does not parse is returned for init to report
 pub fn apply(text: &str, keys: &[Detected]) -> String {
     let Ok(mut doc) = toml::from_str::<toml::Value>(text) else {
         return text.to_string();
@@ -459,7 +457,7 @@ pub fn apply(text: &str, keys: &[Detected]) -> String {
     toml::to_string(&doc).unwrap_or_else(|_| text.to_string())
 }
 
-/// One line per detected value, or per candidate when the tree does not name exactly one runner.
+/// one line per detected value, or per candidate when the tree does not name exactly one runner
 pub fn notes(found: &Detection) -> Vec<String> {
     let detected = found
         .keys

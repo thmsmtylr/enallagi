@@ -1,9 +1,9 @@
-//! `enallagi worktree`: the lane it creates is named on stderr before the lane's first stage runs.
+//! `enallagi worktree`: the lane it creates is named on stderr before the lane's first stage runs
 
 use enallagi::fixture::{exec, git, Repo};
 use std::path::Path;
 
-// the stub agent and the stub skills live outside the repository, so the lane's run makes no network call
+// the stub agent and skills live outside the repository, so the lane's run makes no network call
 fn stub_config(tools: &Path) -> String {
     let agent = exec(&tools.join("agent.sh"), "echo '{\"total_cost_usd\":0}'\n");
     let check = exec(&tools.join("check.sh"), "exit 0\n");
@@ -68,8 +68,7 @@ fn lane_repo(tools: &Path) -> Repo {
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
     std::fs::write(r.root.join(".enallagi/enallagi.toml"), stub_config(tools)).expect("config");
-    // the rendered files name the configured check, so the install is rebuilt on the stub one or
-    // the lane's run refuses before its first stage
+    // the rendered files name the check, so the install is rebuilt on the stub or the lane refuses
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
     let state = r.root.join(".enallagi");
@@ -135,8 +134,7 @@ fn the_lane_worktree_is_named_for_watch() {
     remove_lanes(&r);
 }
 
-// the lane worktree is removed when the lane ends and the log is ignored, so a log the lane wrote
-// inside it is a run nobody can read back
+// the lane's worktree goes when it ends and the log is ignored: a log written inside is unreadable
 #[test]
 fn a_lanes_events_land_in_the_parents_log() {
     let tools = tempfile::tempdir().expect("tools");

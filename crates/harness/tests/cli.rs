@@ -127,7 +127,7 @@ fn events_json_echoes_the_file_line_verbatim() {
     let dir = tempfile::tempdir().unwrap();
     let harness_dir = dir.path().join(".enallagi");
     std::fs::create_dir_all(&harness_dir).unwrap();
-    // keys out of order plus an undeclared field: both legal JSONL, and --json must echo them raw, not re-serialize
+    // keys out of order plus an undeclared field: legal JSONL that --json must echo raw
     let line = r#"{"kind":"halt","reason":"boom","extra_field":"unexpected","seq":1,"iter":0,"run":"r","ts":"2026-09-07T00:00:00Z","halt":"stop"}"#;
     std::fs::write(harness_dir.join("events.jsonl"), format!("{line}\n")).unwrap();
 
@@ -478,7 +478,7 @@ fn skills_cost_counts_loads_against_uses() {
     );
 }
 
-// T-470 splits the log at the swap: a stage counts in the window it started in
+// the log splits at the swap: a stage counts in the window it started in
 #[test]
 fn skills_cost_by_period() {
     let row = |report: &str, id: &str| -> Vec<String> {
@@ -1122,8 +1122,7 @@ fn gate_scope_grown_baseline() {
         "{out:?}"
     );
 
-    // init's own state commit records the revision it installed at, so an unrecorded one is a
-    // product commit the state never saw
+    // init's state commit records its revision, so an unrecorded one is a product commit
     r.write("b.txt", "later\n");
     r.commit_all("unrelated");
     let unrecorded = git(&r.root, &["rev-parse", "HEAD"]);
@@ -1135,8 +1134,7 @@ fn gate_scope_grown_baseline() {
     );
 }
 
-// a nested install with T-900 verified done and `demo` locked at the base; `at_base` writes the
-// vendored skill before the base commit, so the vendor commit rewrites it instead of adding it
+// T-900 verified, `demo` locked at base; `at_base` vendors early, so the vendor commit rewrites it
 fn vendored_demo(at_base: bool) -> (enallagi::fixture::Repo, String) {
     let r = enallagi::fixture::Repo::new();
     let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
@@ -1212,8 +1210,7 @@ fn gate_scope_rejects_a_rewritten_vendored_skill() {
     );
 }
 
-// a nested install with T-900 verified done; `product` rides the work commit and `state` the
-// verify commit, the way the launcher's state commit carries a STOP written mid-run
+// T-900 verified; `product` rides the work commit and `state` the verify commit, like a mid-run STOP
 fn verified_install(product: &[&str], state: &[&str]) -> (enallagi::fixture::Repo, String) {
     verified_install_as(product, state, "scope: a.txt\nstatus: done\n")
 }
@@ -1481,7 +1478,7 @@ const DOC_UNRUNNABLE: [(&str, &str); 10] = [
     ),
 ];
 
-// A fence that is not commands, named by its first line, never by its tag.
+// a fence that is not commands, named by its first line, never by its tag
 const DOC_DATA_FENCES: [(&str, &str); 3] = [
     (
         "# T-001: the date parser drops a timezone",
@@ -1497,10 +1494,10 @@ const DOC_DATA_FENCES: [(&str, &str); 3] = [
     ),
 ];
 
-// The documents whose fences run, in order, in one fixture repository each.
+// the documents whose fences run, in order, in one fixture repository each
 const RUN_DOCS: [&str; 2] = ["README.md", "docs/setup.md"];
 
-// A fence is commands whatever its tag, so `sh`, `text` and an untagged fence all run.
+// a fence is commands whatever its tag, so `sh`, `text` and an untagged fence all run
 fn readme_commands(readme: &str) -> Vec<String> {
     let mut fenced: Vec<String> = Vec::new();
     let mut inside = false;

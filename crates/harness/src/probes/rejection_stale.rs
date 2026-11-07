@@ -1,4 +1,4 @@
-//! A rejection nothing has answered, or a ticket parked at `needs-info`.
+//! a rejection nothing has answered, or a ticket parked at `needs-info`
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};

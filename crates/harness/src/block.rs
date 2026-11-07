@@ -1,4 +1,4 @@
-//! The `## [T-NNN] title` block; a heading in a fenced code block is not one.
+//! the `## [T-NNN] title` block; a heading in a fenced code block is not one
 
 use std::collections::HashMap;
 
@@ -101,7 +101,7 @@ pub fn parse(text: &str) -> Result<Vec<Block>, QueueError> {
     Ok(blocks)
 }
 
-/// A field's whole first line and the line it sits on.
+/// a field's whole first line and the line it sits on
 pub fn field_at(b: &Block, key: &str) -> Option<(usize, String)> {
     let prefix = format!("{key}:");
     b.body.iter().find_map(|(at, line)| {
@@ -130,12 +130,12 @@ pub fn blockers(b: &Block) -> Vec<String> {
         .collect()
 }
 
-/// What an import writes where only the adjudicator can decide: the scope a fix touches, and its criteria.
+/// what an import writes where only the adjudicator can decide: a fix's scope and criteria
 pub const SCOPE_PLACEHOLDER: &str = "<written by the adjudicator at promotion>";
 pub const CRITERIA_PLACEHOLDER: &str =
     "<objective, and naming the command whose output changes when it is done>";
 
-/// The `ready` blocks whose scope or criteria are still an import's placeholder.
+/// the `ready` blocks whose scope or criteria are still an import's placeholder
 pub fn unfilled_ready(blocks: &[Block]) -> Vec<String> {
     blocks
         .iter()
@@ -151,8 +151,7 @@ pub fn unfilled_ready(blocks: &[Block]) -> Vec<String> {
         .collect()
 }
 
-// an id a finished block took is never free again: `archived` is DECISIONS.md, and leaving it out
-// hands a live task the id of an archived one
+// a finished block's id is never free again: without DECISIONS.md a live task takes an archived id
 pub fn next_id(blocks: &[Block], archived: &[Block]) -> String {
     let high = blocks
         .iter()

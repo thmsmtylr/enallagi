@@ -1,4 +1,4 @@
-//! `enallagi eval [names]` -- runs the suite, or one gate's cases, exiting 1 on a failure and 2 when it could not run.
+//! `enallagi eval [names]` -- the suite or one gate's cases; exit 1 on a failure, 2 when it cannot run
 
 use crate::eval;
 

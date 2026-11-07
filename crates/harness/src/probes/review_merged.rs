@@ -1,4 +1,4 @@
-//! A block still at `status: review` whose id a product commit on the remote's default branch names: merged, and nothing moved it on.
+//! a block still at `status: review` that a commit on the remote's default branch names: merged
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};

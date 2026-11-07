@@ -1,4 +1,4 @@
-//! The checkout's branch and its upstream each carry commits the other lacks, so one change exists as two.
+//! the checkout's branch and its upstream each carry commits the other lacks, so one change is two
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};

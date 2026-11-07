@@ -1,4 +1,4 @@
-//! The security gate's scanners: pinned per platform in this binary, fetched once into the user cache.
+//! the security gate's scanners: pinned per platform in this binary, fetched once into the user cache
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -59,7 +59,7 @@ pub fn tool_path(pin: &ToolPin, cache: &Path) -> PathBuf {
         .join(&pin.id)
 }
 
-/// The pinned binary for `id`, fetched into `<cache>/tools/` on a miss.
+/// the pinned binary for `id`, fetched into `<cache>/tools/` on a miss
 pub fn tool(pins: &[ToolPin], id: &str, platform: &str, cache: &Path) -> Result<PathBuf, String> {
     let pin = pins
         .iter()
@@ -112,8 +112,7 @@ pub fn tool(pins: &[ToolPin], id: &str, platform: &str, cache: &Path) -> Result<
     Ok(bin)
 }
 
-/// The pinned gitleaks run from `root` with `--redact`, `args` after `git`, its JSON report at
-/// `report`. Exit 0 or 1 with a readable report is a result; anything else is an error.
+/// the pinned gitleaks over `git <args>` from `root`, redacted; exit 0 or 1 with a report is a result
 pub fn gitleaks(
     root: &Path,
     dir: &str,
@@ -163,8 +162,7 @@ pub const LOCKFILES: &[&str] = &[
     "conan.lock",
 ];
 
-/// `(package, version, advisory id)` for each advisory the pinned osv-scanner reports on `lockfile`,
-/// which it reads by file name.
+/// `(package, version, advisory id)` per advisory osv-scanner reports on `lockfile`, read by name
 pub fn osv(
     root: &Path,
     dir: &str,

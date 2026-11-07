@@ -1,4 +1,4 @@
-//! The launcher: runs pipelines from `enallagi.toml` with halts and gates.
+//! the launcher: runs pipelines from `enallagi.toml` with halts and gates
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -20,7 +20,7 @@ use crate::skills::{self, ResolveOpts};
 use crate::tracker::{self, Tracker};
 use crate::{archive, audit, git, pr, review};
 
-// A lane running ps to check for competing writers must ignore its parent.
+// a lane running ps to check for competing writers must ignore its parent
 const LANE: &str = "You are this loop's own lane, spawned by the harness. There is no human in this session
 and no answer will come, so never end a turn on a question -- decide and act. A running harness
 or agent process in ps is your PARENT process, not a competing writer: LEARNINGS.md's one-checkout-one-writer
@@ -187,8 +187,7 @@ pub struct Learnings {
     pub removed: Vec<String>,
 }
 
-// an empty promoted/killed pair means nothing to decide only if the stage both spawned and ended
-// cleanly; a stage that halted or exited nonzero decided nothing because it could not
+// empty promoted/killed means nothing to decide only if the stage spawned and ended cleanly
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Adjudication {
     #[default]
@@ -204,7 +203,7 @@ pub struct Refused(pub String);
 // the two probes that answer "would this lane be told the wrong check?"
 const PREFLIGHT: [&str; 2] = ["check-unnamed", "install-stale"];
 
-/// Refuses a `ready` block whose scope or criteria an import left for the adjudicator to write.
+/// refuses a `ready` block whose scope or criteria an import left for the adjudicator
 pub fn refuse_unfilled(root: &Path, cfg: &Config) -> Result<(), Refused> {
     let unfilled = block::unfilled_ready(&queue_blocks(root, cfg));
     if unfilled.is_empty() {
@@ -217,15 +216,14 @@ pub fn refuse_unfilled(root: &Path, cfg: &Config) -> Result<(), Refused> {
     )))
 }
 
-/// Refuses before the first stage when the installed files or the context file have drifted from
-/// the configured check. A probe that could not run refuses too: its zero is not a pass.
+/// refuses on drift from the configured check; a probe that could not run refuses too
 pub fn preflight(root: &Path) -> anyhow::Result<()> {
     let cfg = config::load(root).map_err(|e| Refused(e.to_string()))?;
     if let Some(reason) = crate::sandbox::refusal(root, &cfg) {
         return Err(Refused(reason).into());
     }
     refuse_unfilled(root, &cfg)?;
-    // Some(..) keeps run_all from running the check itself; neither of these probes reads it
+    // a set outcome keeps run_all from running the check; neither probe reads it
     let check = CheckOutcome {
         ran: false,
         red: false,
@@ -404,7 +402,7 @@ pub fn plan(root: &Path, cfg: &Config, pipelines: &[String]) -> Result<String, C
 
     if scouting {
         out.push_str("  probes, which are the scout's whole input:\n");
-        // ENALLAGI_DRIVER only here and the scout stage -- it installs throwaway repos and costs wall clock elsewhere
+        // ENALLAGI_DRIVER only here and in scout: it installs throwaway repos and costs wall clock
         let check = check_outcome(&sandbox, root, cfg);
         let ctx = ProbeCtx {
             root,
@@ -489,7 +487,7 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
     looper.go()
 }
 
-// every reason `merge = "auto"` may not start, so the operator fixes them in one pass (ADR 0002)
+// every reason `merge = "auto"` may not start, so the operator fixes them in one pass
 fn auto_refusals(root: &Path, cfg: &Config, opts: &RunOpts) -> Vec<String> {
     if cfg.pr.merge != config::MergeMode::Auto {
         return Vec::new();
@@ -535,7 +533,7 @@ fn auto_refusals(root: &Path, cfg: &Config, opts: &RunOpts) -> Vec<String> {
     out
 }
 
-// answers "is a loop running in this checkout?" for archive_done and the one-writer hook; removed on every exit via Drop
+// "is a loop running here?" for archive_done and the one-writer hook; Drop removes it
 struct PidFile(PathBuf);
 
 impl Drop for PidFile {
@@ -565,8 +563,7 @@ struct Loop<'a> {
     decisions_at_start: String,
     dry_rounds: u32,
     dry_pipeline: Option<String>,
-    // pipelines whose end_after_dry_rounds this run has spent; `choose` passes over them until a
-    // round leaves takeable work again
+    // pipelines whose dry rounds are spent; `choose` skips them until takeable work returns
     spent: Vec<String>,
     // scope and holdout refusals per (gate, task) this run: a second is one no lane will answer
     refusals: std::collections::HashMap<(String, String), u32>,
@@ -577,7 +574,7 @@ struct Loop<'a> {
     noted: std::cell::RefCell<Option<String>>,
 }
 
-/// Vendors every declared skill and role in the parent, so parallel lanes never both write `harness.lock`.
+/// vendors in the parent, so parallel lanes never both write `harness.lock`
 pub fn vendor_lanes(root: &Path, cfg: &Config) -> Result<(), String> {
     let presets = agent::presets();
     let preset = presets.get(&cfg.agent.preset);
@@ -592,7 +589,7 @@ pub fn vendor_lanes(root: &Path, cfg: &Config) -> Result<(), String> {
     commit_vendored(root, cfg, &skills, &roles)
 }
 
-// a fetched skill or role and its lock entry are new to the tree; committed so a gate never reads them as left work
+// a fetched skill or role is new to the tree; committed so a gate never reads it as left work
 fn commit_vendored(
     root: &Path,
     cfg: &Config,
@@ -628,7 +625,7 @@ fn commit_vendored(
         .map_err(|err| format!("vendored skills could not be committed: {err}"))
 }
 
-// "fetched" is the ordinary signal; porcelain also catches a vendored path an earlier run left untracked
+// porcelain also catches a vendored path an earlier run left untracked
 fn vendored_dirty(root: &Path, cfg: &Config, vendored: &[(&str, &Path, &str)]) -> bool {
     if vendored.iter().any(|(_, _, result)| *result == "fetched") {
         return true;
@@ -915,8 +912,7 @@ impl<'a> Loop<'a> {
             return false;
         };
 
-        // dry rounds are consecutive rounds of one pipeline: a task round that empties the queue is
-        // not a discovery round, and only the pipeline holding end_after_dry_rounds spends it
+        // dry rounds are consecutive rounds of one pipeline; a task round emptying the queue is not one
         if self.dry_pipeline.as_deref() != Some(pipeline.name.as_str()) {
             self.dry_rounds = 0;
             self.dry_pipeline = Some(pipeline.name.clone());
@@ -971,8 +967,7 @@ impl<'a> Loop<'a> {
             let bases = (iter_base.clone(), state_base.clone());
             match self.stage(&stage, task.clone(), bases) {
                 Flow::Go => {}
-                // no stage after this one runs, but the round's own outcome is still recorded, and
-                // the boundary the skipped stages would have checked is owed here instead
+                // the skipped stages' boundary check is owed here instead
                 Flow::SkipRest => {
                     self.boundary(false);
                     break;
@@ -1018,9 +1013,7 @@ impl<'a> Loop<'a> {
         if pipeline.end_after_dry_rounds == 0 || self.dry_rounds < pipeline.end_after_dry_rounds {
             return true;
         }
-        // a spent ceiling closes this pipeline, not the run: the run goes on while a later
-        // pipeline's `when` still holds, so a block the adjudicator cannot decide hands the next
-        // round to discover rather than holding every round at triage
+        // a spent ceiling closes this pipeline, not the run, so an undecidable block can't hold triage
         self.spent.push(pipeline.name.clone());
         let next = self.choose();
         if let Some(next) = &next {
@@ -1115,7 +1108,7 @@ impl<'a> Loop<'a> {
             task: task.clone(),
         });
 
-        // stash create snapshots the tree without touching it, so uncommitted edits from an earlier stage stay out of this one's diff
+        // stash create snapshots without touching the tree, keeping earlier edits out of this diff
         let snapshot = |repo: &Path| {
             git::git(repo, &["stash", "create"])
                 .ok()
@@ -1133,7 +1126,7 @@ impl<'a> Loop<'a> {
         ) {
             Ok(result) => result,
             Err(err) => {
-                // Stopped means the operator ended a rate-limit wait, which is their halt and not a stage that could not start
+                // Stopped is the operator ending a rate-limit wait: their halt, not a failed start
                 let stopped =
                     matches!(err, agent::AgentError::Stopped) && self.halt_operator_stop();
                 if !stopped {
@@ -1148,7 +1141,7 @@ impl<'a> Loop<'a> {
         if let Some(role) = &role {
             *self.digest.role_seconds.entry(role.clone()).or_default() += result.seconds;
         }
-        // an agent ran out of turns only if the preset spawned was handed this number: None passes no cap, Config reads one from the agent's own file and Time spends a clock
+        // out of turns only when the preset takes the cap as a flag; None, Config and Time do not
         if matches!(spawn.preset.turn_cap, TurnCap::Flag)
             && result
                 .usage
@@ -1168,12 +1161,12 @@ impl<'a> Loop<'a> {
         if let Some(cost) = result.usage.cost {
             self.digest.cost = round4(self.digest.cost + cost);
         }
-        // the provider bills cached reads and cache writes as their own lanes, disjoint from input_tokens
+        // cache reads and writes are billed apart from input_tokens
         let spent_tokens = result.usage.input_tokens.unwrap_or(0)
             + result.usage.output_tokens.unwrap_or(0)
             + result.usage.cache_creation_input_tokens.unwrap_or(0)
             + result.usage.cache_read_input_tokens.unwrap_or(0);
-        // cost_missing is read by over_budget() at the next boundary; a budget over unreported cost can't be enforced
+        // a budget over unreported cost can't be enforced; over_budget() halts at the next boundary
         if role.is_some() {
             if self.opts.budget_usd.is_some() && result.usage.cost.is_none() {
                 self.cost_missing = true;
@@ -1303,8 +1296,7 @@ impl<'a> Loop<'a> {
                 self.stopped = true;
                 return Flow::Stop;
             }
-            // the first refusal hands the task back to the implementer with the reason; a second
-            // in the same run means no lane will answer it, and the run is not spent finding out
+            // a second scope or holdout refusal in one run means no lane will answer it
             if matches!(gate.as_str(), "scope" | "holdout") && !outcome.pass {
                 if let Some(task) = &task {
                     let key = (gate.clone(), task.clone());
@@ -1351,10 +1343,9 @@ impl<'a> Loop<'a> {
             }
         };
 
-        // the CI-implies-frozen decision is the CLI's, so a test's RunOpts is not overruled by the
-        // environment it happens to run in
+        // CI-implies-frozen is the CLI's call, so a test's RunOpts ignores the CI env
         let frozen = self.opts.frozen;
-        // a declared role is vendored to the path role_source reads first, so the fallback below stays as is
+        // a declared role is vendored where role_source reads first, so the fallback stays as is
         let mut resolved_roles = Vec::new();
         if self.cfg.role.iter().any(|r| r.name == role) {
             resolved_roles = match roles::resolve(
@@ -1673,8 +1664,7 @@ impl<'a> Loop<'a> {
             let dir = lane.dir.to_string_lossy();
             let _ = git::git(self.root, &["worktree", "remove", "--force", &dir]);
         }
-        // the entry is all the next iteration inherits, so the launcher writes the facts it has
-        // rather than warning that a role left none -- a verify-only round has no other record
+        // the entry is all the next iteration inherits; a verify-only round has no other record
         if file_len(&self.file("PROGRESS.md")) <= progress_before {
             self.progress_stub(task, pipeline, status.as_deref());
         }
@@ -1837,7 +1827,7 @@ impl<'a> Loop<'a> {
         if let Some(why) = pr::blocked(&head, id, &default, tip, found.open.len()) {
             return Err(why);
         }
-        // GitHub's head and origin's tip agree after a third party's push; the launcher's own push does not
+        // GitHub's head and origin's tip agree after a third party's push, not after our own
         let own = match pushed.and_then(|p| p.split_whitespace().next()) {
             Some(sha) => sha.to_string(),
             None => git::git(self.root, &["rev-parse", "-q", "--verify", &rev]).unwrap_or_default(),
@@ -2486,8 +2476,7 @@ impl<'a> Loop<'a> {
         )
     }
 
-    // a commit naming the task the implementer is about to take is an attempt no verdict accepted:
-    // an accepted one leaves the task `done`, which no implementer takes
+    // a commit naming a task still takeable is an attempt no verdict accepted
     fn prior_attempts(&self, task: &str) -> Option<String> {
         let log = git::git(
             self.root,
@@ -2520,8 +2509,7 @@ impl<'a> Loop<'a> {
         ))
     }
 
-    // a rejection the verifier just wrote is already queued as the task's own work; a block promoted
-    // over the top of it is a second copy of one job
+    // a fresh rejection is already the task's own work; a block promoted over it duplicates the job
     fn refuse_restated(&mut self, task: Option<&str>, ready_before: &[String]) {
         let Some(task) = task else {
             return;
@@ -2600,8 +2588,7 @@ impl<'a> Loop<'a> {
     }
 }
 
-// shared by the no-TUI path (finish, above) and the TUI path (cli::run, after the view is left),
-// so the two never drift into printing different things for the same run.
+// shared by the no-TUI path and cli::run, so the two never print different digests
 pub fn digest_text(digest: &Digest) -> String {
     let mut out = format!("\n=== digest: {} iteration(s) ===\n", digest.iterations);
     let cost = if digest.cost > 0.0 {
@@ -2702,9 +2689,7 @@ fn rejection_text(b: &block::Block) -> Option<String> {
     }
 }
 
-// a verdict is a paragraph and a promotion copies one claim of it, never the whole thing. A run
-// under five words recurs by chance, and one quoting a command or a path is boilerplate two blocks
-// share without either restating the other.
+// a claim under five words recurs by chance; a quoted command or path is shared boilerplate
 fn claims(verdict: &str) -> Vec<String> {
     verdict
         .split(['.', '\n'])
@@ -2769,7 +2754,7 @@ fn holds(
     match when {
         Predicate::Not(inner) => !holds(sandbox, root, cfg, inner, pin, warnings),
         Predicate::QueueTakeable => taken(&queue_blocks(root, cfg), pin).is_some(),
-        // an unreadable or unparseable queue is not evidence of a task at review, so this fails closed like `takeable`
+        // an unreadable queue is no evidence of a task at review: fails closed like `takeable`
         Predicate::QueueReviewing => match queue_read(root, cfg) {
             Ok(blocks) => reviewed(&blocks, pin).is_some(),
             Err(err) => {
@@ -2779,7 +2764,7 @@ fn holds(
                 false
             }
         },
-        // an unreadable or unparseable queue is not evidence of a block waiting on the adjudicator, so this fails closed like `takeable`
+        // an unreadable queue is no evidence of a block awaiting triage: fails closed like `takeable`
         Predicate::QueueProposed => match queue_read(root, cfg) {
             Ok(blocks) => {
                 !tracker::ids_in(&blocks, &["needs-triage"]).is_empty()
@@ -2792,7 +2777,7 @@ fn holds(
                 false
             }
         },
-        // an unreadable or unparseable queue is not evidence the queue is empty, so this fails closed like `takeable`
+        // an unreadable queue is no evidence the queue is empty: fails closed like `takeable`
         Predicate::QueueEmpty => match queue_read(root, cfg) {
             Ok(blocks) => blocks.is_empty(),
             Err(err) => {
@@ -2828,8 +2813,7 @@ fn holds(
     }
 }
 
-// `ran` means the check STARTED, not that it named what failed --
-// reporting ran:false there would turn a real finding into an ERROR
+// `ran` means the check STARTED; ran:false there would turn a real finding into an ERROR
 fn check_outcome(sandbox: &Sandbox, root: &Path, cfg: &Config) -> CheckOutcome {
     let mut outcome = gates::check_delta(sandbox, root, cfg, true).outcome();
     // nested under turbo the check would recurse, so it is not run at all

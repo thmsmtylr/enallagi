@@ -1,4 +1,4 @@
-//! Draws one `Model` onto one `ratatui::Frame`. Pure function of the model, so it's tested headlessly with `TestBackend`.
+//! draws one `Model` onto one `ratatui::Frame`; pure, so tested headless with `TestBackend`
 
 use std::collections::HashMap;
 

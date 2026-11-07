@@ -1,4 +1,4 @@
-//! Fetches declared skills from git or a path, vendors and pins them, and renders them into role prompts.
+//! fetches, vendors and pins declared skills, and renders them into role prompts
 
 use crate::agent::Preset;
 use crate::config::Config;
@@ -68,7 +68,7 @@ pub fn parse_lock(text: &str) -> Result<Lock, SkillError> {
     toml::from_str(text).map_err(|e| SkillError::Lock(e.to_string()))
 }
 
-// a missing lock reads as empty, but an unparseable one is an error -- silently re-fetching over a corrupt pin defeats the pin
+// a missing lock reads as empty; a corrupt one errs, since re-fetching over it defeats the pin
 pub fn read_lock(root: &Path, harness_dir: &str) -> Result<Lock, SkillError> {
     let text = match fs::read_to_string(lock_path(root, harness_dir)) {
         Ok(t) => t,
@@ -87,7 +87,7 @@ pub fn write_lock(root: &Path, harness_dir: &str, lock: &Lock) -> Result<(), Ski
     Ok(())
 }
 
-// the id becomes a filesystem path and a lock key, so a `..`, separator or shell metacharacter is refused before it can be either
+// the id becomes a path and a lock key, so `..`, separators and shell metacharacters are refused
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id
@@ -115,8 +115,7 @@ pub fn required_ids(role_text: &str) -> Vec<String> {
     ids
 }
 
-// configured dir, else the preset's own, else <harness_dir>/skills for a preset with no skills mechanism
-// None is `custom`, or any preset this build does not know: it has no directory of its own
+// configured dir, else the preset's, else <harness_dir>/skills; None preset has no dir of its own
 pub fn skills_dir(cfg: &Config, preset: Option<&Preset>) -> PathBuf {
     if let Some(dir) = cfg.layout.skills_dir.as_deref() {
         return PathBuf::from(dir);
@@ -142,7 +141,7 @@ pub fn prune(
     if gone.is_empty() {
         return Ok(Vec::new());
     }
-    // a hand-edited lock id becomes a directory to delete, so every id is checked before any directory goes
+    // a hand-edited lock id becomes a directory to delete, so all ids are checked before any goes
     for e in &gone {
         if !valid_id(&e.id) {
             return Err(SkillError::BadId { id: e.id.clone() });
@@ -173,7 +172,7 @@ impl Default for ResolveOpts {
     }
 }
 
-// CI freezes skills like --frozen: an unattended run must fail on a stale lock, not fetch new instructions
+// CI freezes skills like --frozen: an unattended run fails on a stale lock rather than fetch
 pub(crate) fn frozen_from_env(ci: Option<&OsStr>) -> bool {
     ci.is_some()
 }
@@ -182,8 +181,7 @@ pub(crate) fn frozen_from_env(ci: Option<&OsStr>) -> bool {
 pub struct ResolvedSkill {
     pub id: String,
     pub dir: PathBuf,
-    /// `cached` when the vendored copy already matched the lock, `fetched`
-    /// when it was copied in during this call.
+    /// `cached` when the vendored copy matched the lock, `fetched` when copied in by this call
     pub result: String,
     pub body: String,
 }
@@ -202,7 +200,7 @@ pub fn resolve(
     let mut dirty = false;
 
     for id in ids {
-        // validate() refuses these at load; this is the second lock on the door since the id becomes a directory name
+        // validate() refuses these at load; checked again because the id becomes a directory name
         if !valid_id(id) {
             return Err(SkillError::BadId { id: id.clone() });
         }
@@ -211,7 +209,7 @@ pub fn resolve(
             .iter()
             .find(|s| &s.id == id)
             .ok_or_else(|| SkillError::Undeclared { id: id.clone() })?;
-        // same second lock on the door as valid_id: the path becomes a filesystem join below
+        // checked again like the id: the path becomes a filesystem join below
         if !valid_path(&decl.path) {
             return Err(SkillError::BadPath {
                 id: id.clone(),
@@ -243,7 +241,7 @@ pub fn resolve(
     Ok(out)
 }
 
-/// One thing to pin: a skill or a role. `file` is the vendored file the lock's sha256 covers.
+/// a skill or a role; `file` is the vendored file the lock's sha256 covers
 pub(crate) struct Pin<'a> {
     pub id: &'a str,
     pub source: &'a str,
@@ -251,8 +249,7 @@ pub(crate) struct Pin<'a> {
     pub file: PathBuf,
 }
 
-/// The cache, fetch, vendor and lock cycle shared by skills and roles. `vendor` is given the
-/// fetched source root and returns the pinned body. Returns (`cached` | `fetched`, body).
+/// `vendor` maps the fetched source root to the pinned body; returns (`cached` | `fetched`, body)
 pub(crate) fn pin(
     root: &Path,
     p: &Pin,
@@ -372,7 +369,7 @@ fn fetch(
     Ok((dir, Some(commit)))
 }
 
-// every URL segment is kept, so two repos sharing a trailing <owner>/<repo> under different prefixes don't collide
+// every URL segment is kept, so repos sharing a trailing <owner>/<repo> never collide
 fn cache_path(cache_dir: &Path, url: &str, rev: &str) -> PathBuf {
     let rest = match url.split_once("://") {
         Some((_, r)) => r.to_string(),
@@ -397,7 +394,7 @@ fn cache_path(cache_dir: &Path, url: &str, rev: &str) -> PathBuf {
     dir
 }
 
-// a URL is attacker-supplied as far as this is concerned, and it's becoming a filesystem path
+// a URL is untrusted here, and it becomes a filesystem path
 fn segment(s: &str) -> String {
     if s.is_empty() || s.chars().all(|c| c == '.') {
         return "_".to_string();
@@ -405,7 +402,7 @@ fn segment(s: &str) -> String {
     s.to_string()
 }
 
-// cloned beside the target and renamed into place, so a directory under that name is always a complete checkout, never a half clone
+// cloned beside the target and renamed into place; the target is never a half clone
 fn clone(url: &str, rev: Option<&str>, dir: &Path) -> Result<(), SkillError> {
     if dir.exists() {
         return Ok(());
@@ -520,7 +517,7 @@ fn skills_invoked(transcript: &str) -> Vec<String> {
     ids
 }
 
-/// Per skill: its vendored bytes, the role stages whose prompt loaded it and those whose transcript invoked it.
+/// per skill: vendored bytes, the stages whose prompt loaded it and those that invoked it
 pub fn cost_report(
     skills: &[(String, Option<u64>)],
     loads: &dyn Fn(&str) -> Vec<String>,
@@ -1115,8 +1112,7 @@ mod tests {
         assert!(dir.join("skills/tdd/SKILL.md").is_file());
     }
 
-    // the shape of the dogfood record: scout and adjudicator stages load no skill, so no skill is
-    // loaded by every stage, and a skill one role loads may be invoked by another role's stage
+    // scout and adjudicator load no skill, and one role's skill may be invoked by another's stage
     #[test]
     fn cost_names_a_skill_its_loaders_never_used() {
         let stage = |n: u32, role: &str, invoked: &[&str]| {

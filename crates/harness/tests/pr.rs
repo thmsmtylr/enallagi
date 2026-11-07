@@ -1,4 +1,4 @@
-//! `enallagi pr`: a landed task becomes a branch off the upstream default branch holding only its own product change.
+//! `enallagi pr`: a landed task becomes a branch off upstream's default holding only its change
 
 use enallagi::fixture::{exec, git};
 use std::fs;
@@ -35,7 +35,7 @@ fn replace(text: &str, from: &str, to: &str) -> String {
 }
 
 impl Fixture {
-    // a bare origin at main, a round branch, and a harness directory with its own repository excluded from the product's
+    // a bare origin at main, a round branch, and a harness dir with its own repo the product excludes
     fn new(tasks: &str, check: &str) -> Fixture {
         let dir = tempfile::TempDir::new().expect("tempdir");
         let root = dir.path().join("product");
@@ -167,7 +167,7 @@ notes: implementer: doubled two
   verifier, second pass: VERIFIED. `grep -c two src/thing.txt` → 2
 ";
 
-// the done task lands in two commits around a rejected task's commit inside the second one's context, so only a three-way apply takes it
+// the done task lands in two commits around a rejected one's, so only a three-way apply takes it
 fn landed(check: &str) -> (Fixture, Vec<String>) {
     let f = Fixture::new(DONE_AND_REJECTED, check);
     write(&f.root, ".enallagi/DECISIONS.md", DECISIONS);
@@ -192,8 +192,7 @@ fn landed(check: &str) -> (Fixture, Vec<String>) {
     (f, vec![first, rejected, second])
 }
 
-// a checkout behind its upstream is refused before any replay, so a fixture that pushes upstream
-// takes that commit into the round branch first, keeping the round's own content on every conflict
+// a behind checkout is refused before replay, so the fixture merges upstream in, keeping its side
 fn absorb_upstream(f: &Fixture) {
     git(
         &f.root,
@@ -738,7 +737,7 @@ fn a_blocker_pushed_earlier_is_the_base() {
 #[test]
 fn a_conflict_skips_a_branch_off_its_files() {
     let f = same_line(SAME_LINE);
-    // T-020 forks from a main whose two read `two a`, so T-011 applies there though T-020 never touched the file
+    // T-020 forks from a main whose two reads `two a`, so T-011 applies there anyway
     git(&f.root, &["checkout", "-q", "main"]);
     commit(
         &f.root,
@@ -833,8 +832,7 @@ fn pr_commits_its_description_to_the_state_repo() {
     );
 }
 
-// `enallagi pr` runs outside a stage, where the operator may hold uncommitted queue edits; the
-// record is committed alone and those stay where they were
+// `enallagi pr` commits its record alone; the operator's uncommitted queue edits stay put
 #[test]
 fn pr_commits_the_record_and_leaves_operator_edits() {
     let (f, _) = landed("exit 0");

@@ -1,4 +1,4 @@
-//! Every git the harness runs. The repository it is pointed at decides the identity on a commit, never the process it was spawned from, and a split state repository is located rather than assumed.
+//! every git the harness runs; the repository, not the spawning process, sets commit identity
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,9 +13,7 @@ pub enum GitError {
 
 fn cmd(root: &Path, args: &[&str]) -> Command {
     let mut c = Command::new("git");
-    // a lane exports the repository's identity to the agent, and a `cargo test` under it inherits the
-    // four variables, which beat the `user.email` a repository configures. Every git the harness runs
-    // reads the repository it is pointed at, never the process it was spawned from.
+    // a lane's inherited GIT_AUTHOR_*/GIT_COMMITTER_* would beat the repository's `user.email`
     for var in [
         "GIT_AUTHOR_NAME",
         "GIT_AUTHOR_EMAIL",
@@ -132,7 +130,7 @@ pub fn diff_names(root: &Path, base: &str) -> Vec<String> {
 }
 
 pub fn commit_paths(root: &Path, paths: &[&str], msg: &str) -> Result<bool, GitError> {
-    // `git add -- a b` fails as a whole when any path is missing, so filter first or a missing path silently no-ops the rest
+    // `git add -- a b` fails whole on one missing path, so missing paths are filtered first
     for path in paths.iter().filter(|p| root.join(p).exists()) {
         git(root, &["add", "--", path])?;
     }
@@ -146,23 +144,20 @@ pub fn commit_paths(root: &Path, paths: &[&str], msg: &str) -> Result<bool, GitE
     Ok(true)
 }
 
-/// Commits `path` alone, leaving whatever else is staged uncommitted.
+/// commits `path` alone; the rest of the index stays staged
 pub fn commit_only(root: &Path, path: &str, msg: &str) -> Result<(), GitError> {
     git(root, &["add", "-A", "--", path])?;
     git_as(root, root, &["commit", "-q", "-m", msg, "--", path])?;
     Ok(())
 }
 
-/// The `.gitignore` line init adds so the product's own tools skip the harness directory.
 pub fn ignore_line(dir: &str) -> String {
     format!("/{dir}/")
 }
 
-// the same directory as the main worktree names it, or None when this already is the main worktree.
-// A linked worktree is removed when its lane ends, so a file written there goes with it.
+// None when already the main worktree; a linked worktree's files go when its lane ends
 pub fn main_worktree_path(dir: &Path) -> Option<PathBuf> {
-    // --show-prefix is empty when dir is a worktree's own top, and git() trims the trailing newline
-    // but not a leading empty line, so the prefix is asked for first or an empty one is lost
+    // prefix asked first: git() trims a trailing newline but would lose an empty leading prefix
     let out = git(dir, &["rev-parse", "--show-prefix", "--show-toplevel"]).ok()?;
     let (prefix, top) = out.split_once('\n')?;
     let listed = git(dir, &["worktree", "list", "--porcelain"]).ok()?;
@@ -178,7 +173,7 @@ pub fn main_worktree_path(dir: &Path) -> Option<PathBuf> {
     Some(path)
 }
 
-// the harness directory's own repository once it has one; until then instance files share the product's
+// the harness directory's own repository once it has one, else the product's
 pub fn state_root(root: &Path, harness_dir: &str) -> PathBuf {
     let dir = root.join(harness_dir);
     if !harness_dir.is_empty() && dir.join(".git").exists() {
@@ -197,9 +192,7 @@ pub fn locate(root: &Path, harness_dir: &str, path: &str) -> (PathBuf, String, b
     }
 }
 
-// the state repository configures no identity, so a commit there borrows the product's, and every
-// commit a round makes carries one author for the `commit-identity` gate
-/// `git args` in `dir` under `root`'s identity, never signing.
+/// `git args` in `dir` under `root`'s identity, unsigned; the state repository has none of its own
 pub fn git_as(root: &Path, dir: &Path, args: &[&str]) -> Result<String, GitError> {
     let mut all = identity_args(root);
     all.extend(["-c", "commit.gpgsign=false"].map(String::from));
@@ -218,7 +211,7 @@ pub fn identity_args(root: &Path) -> Vec<String> {
     args
 }
 
-// the subject names the product HEAD the state was committed against, which is what `enallagi base` reads back
+// the subject names the product HEAD, which `enallagi base` reads back
 thread_local! {
     // the loop's `<run>/<iteration>`, so expiry counts an iteration's state commits as one round
     pub static ITERATION: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
@@ -264,8 +257,7 @@ pub fn commit_instance(
     Ok(true)
 }
 
-// the named instance paths and nothing else, for a caller outside a stage: `enallagi pr` runs while
-// the operator may hold uncommitted queue edits, and those are not the record it is committing
+// the named paths only: `enallagi pr` must not commit the operator's uncommitted queue edits
 pub fn commit_instance_only(
     root: &Path,
     harness_dir: &str,
@@ -292,7 +284,7 @@ pub fn commit_instance_only(
     Ok(true)
 }
 
-// a product revision as the state repository's own: the first state commit recorded at it, or an Err, never a revision that repository lacks
+// the first state commit recorded at a product revision, never a revision the state repo lacks
 pub fn state_rev(root: &Path, harness_dir: &str, rev: &str) -> Result<String, String> {
     let state = state_root(root, harness_dir);
     if state == root {
@@ -336,7 +328,7 @@ pub fn task_base(root: &Path, harness_dir: &str, task: &str) -> Result<String, S
     })
 }
 
-/// The product sha `commit_instance` appends to every state commit's subject; None on a product commit.
+/// the product sha a state commit's subject ends with; None on a product commit
 pub fn recorded_sha(subject: &str) -> Option<&str> {
     subject
         .rsplit_once(" at ")
@@ -443,9 +435,7 @@ mod tests {
         assert!(commit_paths(&r.root, &["src/a.ts"], "add ignored").is_err());
     }
 
-    // a lane exports the four identity variables to the agent, a `cargo test` under it inherits them,
-    // and they beat the `user.email` the repository configures. The process is shared, so they come
-    // off the child, not off the process.
+    // the process is shared, so the identity variables come off the child, not the process
     #[test]
     fn a_git_command_carries_no_ambient_identity() {
         let c = cmd(Path::new("."), &["status"]);

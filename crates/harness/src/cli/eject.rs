@@ -1,4 +1,4 @@
-//! `enallagi eject` -- removes the install and prints every path it took, kept or moved.
+//! `enallagi eject` -- removes the install and prints every path it took, kept or moved
 
 use std::path::PathBuf;
 
@@ -13,8 +13,7 @@ pub struct Args {
 pub fn run(args: &Args) -> anyhow::Result<i32> {
     let cwd = std::env::current_dir()?;
     let root = super::root()?;
-    // the record is kept by default: the events, verdicts and PROGRESS.md are what says why a run
-    // ended where it did, and `--delete` is the one way to lose them
+    // the record says why a run ended where it did, so only `--delete` loses it
     let keep_record = match (&args.keep_record, args.delete) {
         (Some(dir), _) => Some(cwd.join(dir)),
         (None, true) => None,

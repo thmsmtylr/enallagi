@@ -1,4 +1,4 @@
-//! Refuses the retired `run <n>` form before clap sees it.
+//! refuses the retired `run <n>` form before clap sees it
 
 use clap::Parser;
 use enallagi::cli::Cli;

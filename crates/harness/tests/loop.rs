@@ -1,4 +1,4 @@
-//! The launcher: the dry plan, the halts, the run log and the budget, with stub agents in place of a coding agent.
+//! the launcher's plan, halts, run log and budget, with stub agents in place of a coding agent
 
 use enallagi::events::{Event, Kind};
 use enallagi::fixture::Repo;
@@ -142,9 +142,7 @@ post = ["commit-round", "queue-intact", "adjudicator-halt", "dry-round"]
     )
 }
 
-// Every fixture config must carry the `path:` skills `repo()` wrote: rewriting enallagi.toml with
-// base_toml alone falls back to the shipped `[[skill]]` table, whose sources are github clones, and
-// the test then reaches the network.
+// base_toml alone falls back to the shipped `[[skill]]` table, whose github clones hit the network
 fn write_toml(r: &Repo, toml: &str) {
     write_toml_at(r, ".enallagi/enallagi.toml", toml);
 }
@@ -299,7 +297,7 @@ fn go(repo: &Repo, opts: &RunOpts) -> (Digest, Vec<Event>) {
     (digest.expect("the pipeline ran"), events)
 }
 
-// installed on the shared events::Writer, so this collects the live stream in emit order, not a replay of the log
+// installed on the shared events::Writer: the live stream in emit order, not a log replay
 fn try_go(repo: &Repo, opts: &RunOpts) -> (anyhow::Result<Digest>, Vec<Event>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&seen);
@@ -905,8 +903,7 @@ fn run_without_a_tty_prints_one_line_per_event() {
     installed(&r);
     r.commit_all("stubs");
 
-    // this asserts what a tty-less run prints; CI would make the run --frozen and refuse the
-    // fixture's unvendored skills, which is `an_unresolved_skill_refuses_a_stage`
+    // CI would make the run --frozen and refuse the fixture's unvendored skills
     let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["run", "--no-tui", "--iterations", "1"])
         .current_dir(&r.root)
@@ -986,7 +983,7 @@ fn harness_run_exits_2_on_a_refused_config() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("nope"));
 }
 
-// the binary refuses a tree whose install does not match enallagi.toml, so a fixture it drives is installed
+// the binary refuses an install that does not match enallagi.toml
 fn installed(r: &Repo) {
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
@@ -1173,10 +1170,7 @@ source = \"path:vendor\"
 path = \"roles\"
 ";
 
-// reproduces the bug: skills::resolve vendors a skill and writes harness.lock but nothing commits
-// them, so the verdict gate sees the untracked vendor dir as work off the branch and forces the
-// task back to ready even though the implementer and verifier committed everything in their scope.
-// a declared role rides the same commit, and the scope gate exempts it like a fresh skill.
+// an uncommitted vendored skill or role would read to the verdict gate as work left off the branch
 #[test]
 fn a_fetched_skill_commits_before_its_stage() {
     let toml = base_toml(SKILL_DECL);
@@ -1366,7 +1360,7 @@ fn stage_output_streams_to_the_sink() {
         .find(|(_, k)| *k == "output")
         .expect("a stage.output");
     let end = seen.iter().find(|(_, k)| *k == "end").expect("a stage.end");
-    // a live sink sees output a whole sleep before its stage finishes; post-hoc forwarding would deliver both at once
+    // a live sink sees output a whole sleep before the end; post-hoc forwarding delivers both at once
     assert!(
         end.0.duration_since(output.0) > std::time::Duration::from_millis(500),
         "output arrived only {:?} before the end",
@@ -2064,8 +2058,7 @@ scope: src/thing.ts, src/other.ts\n\
 rows: none \u{2014} harness\n\
 EOF\n";
 
-// the implement round that follows a scope refusal finds its commits on the branch and answers the
-// gate: it adds the `widened:` line, commits no product change, and the task lands on the widening
+// after a scope refusal the next round adds `widened:` alone, and the task lands on it
 #[test]
 fn scope_refusal_answered() {
     let confirm = format!(
@@ -2104,8 +2097,7 @@ fn scope_refusal_answered() {
     assert!(digest.halts.is_empty(), "{:?}", digest.halts);
 }
 
-// the widening lands in the first implement round, so the second round's own bases already carry
-// it and only the queued commit still shows it; a lane that widens silently twice halts the run
+// only the queued commit still shows a first-round widening; widening silently twice halts the run
 #[test]
 fn review_reads_queued_scope() {
     let r = nested("exit 0\n", WIDENED);
@@ -2184,8 +2176,7 @@ fn landed_leaves_no_instance_path() {
     assert!(enallagi::git::porcelain(&r.root).is_empty());
 }
 
-// A drain round needs a block filed this iteration; the verifier files one when its rejection turns
-// something up, which is where every finding this session came from.
+// a drain round needs a block filed this iteration; the verifier files one on rejection
 const FILED: &str = "\n## [T-009] the fence scan reads one language only\n\nscope: src/thing.ts\nrows: none — harness\nstatus: needs-triage\ncriteria:\n  - the scan reads every fence\n";
 
 const RESTATED: &str = "\n## [T-009] the check was red at HEAD\n\nscope: src/thing.ts\nrows: none — harness\nstatus: needs-triage\ncriteria:\n  - the check was red at HEAD\n";
@@ -2235,7 +2226,7 @@ fn rejecting_verifier(r: &Repo) -> String {
     )
 }
 
-// the role prompt has the verifier edit the block and append `REJECTED` to notes; only set-status writes a `gate:` line
+// the verifier appends `REJECTED` to notes; only set-status writes a `gate:` line
 fn verifier_rejecting_in_notes(r: &Repo) -> String {
     script(
         r,
@@ -2353,8 +2344,7 @@ fn a_verdict_filing_nothing_skips_adjudicate() {
     assert_eq!(digest.landed, vec!["T-001".to_string()]);
 }
 
-// one fixture, every arm: what the verifier files decides whether the stage spawns at all, and the
-// adjudicator's body decides how it ended
+// what the verifier files decides whether the stage spawns; the adjudicator's body, how it ends
 fn adjudicating_with(filed: &str, body: &str) -> Digest {
     let r = repo("", "");
     draining(&r, filed, body);
@@ -5165,7 +5155,7 @@ fn the_audit_runs_once_after_the_last_iteration() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
-    // `[agent]` answers every role without its own command, and only the auditor's prompt carries its role
+    // `[agent]` serves every role without its own command; only the auditor's prompt names its role
     script(
         &r,
         "src/fakeagent.sh",
@@ -5621,7 +5611,7 @@ fn dry_run_plans_decompose() {
     );
 }
 
-// T-460: a compound check reaches a host service only once its port is declared
+// a compound check reaches a host service only once its port is declared
 #[test]
 fn check_reaches_declared_port() {
     if std::env::var_os("ENALLAGI_SANDBOX").is_some() {

@@ -1,4 +1,4 @@
-//! A proposed learning waits in `DECISIONS.md` for the adjudicator, and expires after `queue.proposed_rounds` rounds undecided.
+//! a proposed learning waits in `DECISIONS.md`, expiring after `queue.proposed_rounds` rounds
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};

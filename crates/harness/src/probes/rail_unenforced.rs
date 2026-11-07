@@ -1,4 +1,4 @@
-//! A rail whose `Enforced by` column names something that does not exist, or that exists and nothing runs.
+//! a rail whose `Enforced by` column names something that does not exist, or that nothing runs
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
@@ -126,7 +126,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
                 continue;
             }
             if let Some(rest) = token.strip_prefix("harness ") {
-                // a rail naming a subcommand the binary doesn't have is the same failure as a missing script
+                // a rail naming a subcommand the binary lacks fails like a missing script
                 let sub = rest.split_whitespace().next().unwrap_or("");
                 if !subcommands().iter().any(|s| s == sub) {
                     found.push(common::finding(

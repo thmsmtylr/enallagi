@@ -1,4 +1,4 @@
-//! `enallagi probe [names]` -- exits 2 when one of them could not run, never because a finding was reported.
+//! `enallagi probe [names]` -- exit 2 when one could not run, never because of a finding
 
 use crate::config;
 use crate::probes::{self, ProbeCtx, ProbeResult};

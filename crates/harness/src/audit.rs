@@ -1,4 +1,4 @@
-//! audit: review findings, frictions and rejections the repository already holds, handed to the `auditor` role, which names each class that recurs. The binary writes a learning only when every citation it carries resolves.
+//! audit: recurring findings go to the `auditor` role; a learning lands only if its cites resolve
 
 use crate::block::{self, QueueError};
 use crate::config::{self, Config};
@@ -297,7 +297,7 @@ fn words(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// Two texts overlap when they share two or more words and those make half of the smaller word set.
+/// two or more shared words that make half of the smaller word set
 pub fn overlaps(a: &str, b: &str) -> bool {
     let (a, b) = (words(a), words(b));
     let shared = a.intersection(&b).count();
@@ -461,7 +461,7 @@ fn source(root: &Path, cfg: &Config) -> String {
     config::subst(&text, cfg)
 }
 
-// an agent CLI reads a prompt that starts with `-` as an option, and the frontmatter starts with `---`
+// an agent CLI reads a leading `-` as an option, and the frontmatter starts with `---`
 fn body(role: &str) -> &str {
     role.strip_prefix("---\n")
         .and_then(|rest| rest.split_once("\n---\n"))
@@ -596,8 +596,7 @@ fn class_of(entry: &str) -> Option<String> {
     rest.split_once('`').map(|(class, _)| class.to_string())
 }
 
-// a class can be proposed again after its last proposal left, so count from the newest commit that added it;
-// if that commit removed it instead, this entry is uncommitted and as new as an entry gets
+// count from the newest commit adding the class; if it removed it, the entry is uncommitted
 fn age(root: &Path, cfg: &Config, rel: &str, needle: &str) -> usize {
     let (repo, inner, _) = git::locate(root, &cfg.layout.harness_dir, rel);
     let commits = git::git(&repo, &["log", "--format=%H"]).unwrap_or_default();
@@ -615,7 +614,7 @@ fn age(root: &Path, cfg: &Config, rel: &str, needle: &str) -> usize {
     .unwrap_or(0)
 }
 
-/// Each proposed learning no `killed:` line has decided, with its age in rounds.
+/// each proposed learning no `killed:` line has decided, with its age in rounds
 pub fn waiting(root: &Path, cfg: &Config) -> Result<Vec<Waiting>, AuditError> {
     let rel = config::instance_rel(&cfg.layout.harness_dir, "DECISIONS.md");
     let text = read(root, &rel)?;
@@ -630,7 +629,7 @@ pub fn waiting(root: &Path, cfg: &Config) -> Result<Vec<Waiting>, AuditError> {
         .collect())
 }
 
-/// Of the classes that were waiting, those with an `## Earned rules` entry `was` lacked, and those with a kill it lacked.
+/// of the waiting classes, those newly earned and those newly killed against `was`
 pub fn decided(
     root: &Path,
     cfg: &Config,
@@ -669,7 +668,7 @@ pub fn decided(
     (promoted, killed)
 }
 
-/// Moves each learning waiting `queue.proposed_rounds` rounds or more out of `## Proposed learnings`, as a dated line under `## Expired findings`.
+/// moves learnings waiting `queue.proposed_rounds` rounds to dated `## Expired findings` lines
 pub fn expire(root: &Path, cfg: &Config, today: &str) -> Result<Vec<String>, AuditError> {
     let stale: Vec<Waiting> = waiting(root, cfg)?
         .into_iter()
@@ -756,7 +755,7 @@ pub struct Ineffective {
     pub adopted: Vec<String>,
 }
 
-// ponytail: a sha cite never reads as recurred; judging one needs commit order across both repositories
+// ponytail: a sha cite never reads as recurred; judging one needs cross-repo commit order
 fn recurred(root: &Path, cfg: &Config, sha: &str, cite: &str) -> bool {
     let Some((file, line)) = cite.rsplit_once(':') else {
         return false;
@@ -807,13 +806,13 @@ fn recurring(root: &Path, cfg: &Config, text: &str) -> Vec<Ineffective> {
         .collect()
 }
 
-/// Each earned rule an instance recurred against after the commit its `promoted:` line names.
+/// earned rules an instance recurred against after the commit their `promoted:` line names
 pub fn ineffective(root: &Path, cfg: &Config) -> Result<Vec<Ineffective>, AuditError> {
     let rel = config::instance_rel(&cfg.layout.harness_dir, "DECISIONS.md");
     Ok(recurring(root, cfg, &read(root, &rel)?))
 }
 
-// `old` and `new` are one file before and after an edit: each `instances:` cite into it moves to its line's same copy in `new`
+// `old`/`new` are one file around an edit; each `instances:` cite moves to its line's copy in `new`
 fn rehome(old: &str, new: &str, rel: &str) -> String {
     let old: Vec<&str> = old.split('\n').collect();
     let now: Vec<&str> = new.split('\n').collect();
@@ -867,7 +866,7 @@ fn stamp(root: &Path, cfg: &Config, rel: &str, text: &str) -> String {
     lines.join("\n")
 }
 
-// a rule whose last revision was promoted under `## Earned rules` gives way to it, which carries its adoptions on
+// a rule whose last revision is earned gives way to that entry, which carries its adoptions on
 fn supersede(text: &str) -> String {
     let mut text = text.to_string();
     'again: loop {
@@ -919,7 +918,7 @@ fn refusal(root: &Path, body: &str, learning: &Learning) -> Option<String> {
     })
 }
 
-/// Hands the signal to the auditor role, and writes each learning whose citations resolve, merged into an entry it overlaps.
+/// hands the signal to the auditor; writes each learning whose cites resolve, merged on overlap
 pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, AuditError> {
     let dir = &cfg.layout.harness_dir;
     let decisions_rel = config::instance_rel(dir, "DECISIONS.md");
@@ -1096,7 +1095,7 @@ pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, Aud
     Ok(report)
 }
 
-/// A class two or more installs earned and none killed, with each install's dated line.
+/// a class two or more installs earned and none killed, with each install's dated line
 #[derive(Debug)]
 pub struct Shared {
     pub class: String,
@@ -1146,7 +1145,7 @@ fn seed(text: &str) -> String {
     lines.join("\n")
 }
 
-/// Each class earned under `## Earned rules` in two or more of the installs' DECISIONS.md and killed in none. Reads only.
+/// classes earned in two or more installs' DECISIONS.md and killed in none; reads only
 pub fn shared(dirs: &[PathBuf]) -> Result<Vec<Shared>, AuditError> {
     let mut rules = Vec::new();
     for (install, dir) in dirs.iter().enumerate() {

@@ -1,4 +1,4 @@
-//! The agent lifecycle hooks (PreToolUse, Stop, UserPromptSubmit), all fail-open.
+//! the agent lifecycle hooks (PreToolUse, Stop, UserPromptSubmit), all fail-open
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -73,8 +73,7 @@ fn normalize(root: &Path, rel: &str) -> PathBuf {
     realpath_like(&joined)
 }
 
-// resolves symlinks on the longest existing ancestor only: a nonexistent tail (a file about to be
-// created) has nothing on disk to canonicalize, so it is appended to the resolved ancestor as-is
+// symlinks resolve on the longest existing ancestor; a not-yet-created tail is appended as-is
 fn realpath_like(p: &Path) -> PathBuf {
     let normalized = lexical_normalize(p);
     let mut existing = normalized.clone();

@@ -1,4 +1,4 @@
-//! `enallagi issue <ref>` -- appends the block one GitHub issue becomes, or prints it and writes nothing under --dry-run.
+//! `enallagi issue <ref>` -- appends the block a GitHub issue becomes; --dry-run only prints it
 
 use crate::config;
 use crate::issue::{self, IssueError};

@@ -1,5 +1,4 @@
-//! A rendered role prompt still carrying a `__TOKEN__`, or naming a test pathspec that matches no tracked file, sends a lane a command that reads nothing.
-//!
+//! a rendered role prompt with a `__TOKEN__` left, or a test pathspec matching no tracked file
 //! ponytail: the verifier is the only role naming `__TEST_GLOB__`; read init's role list once a second role does.
 
 use super::common::{self, Res};

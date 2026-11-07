@@ -1,4 +1,4 @@
-//! One lane runs in its own git worktree. Its product work is fast-forwarded back onto the parent branch, or, under `[pr] per_task`, left on the branch `enallagi pr` pushes. A state parent that moved under the lane is merged.
+//! one lane per git worktree, fast-forwarded onto the parent or left on its branch for `enallagi pr`
 
 use std::path::{Path, PathBuf};
 
@@ -31,11 +31,11 @@ pub enum WorktreeError {
 pub struct LaneReport {
     pub merged: bool,
     pub left: Option<PathBuf>,
-    // the lane's worktree of the harness directory's own repository, inside `left` at the harness directory's path
+    // the lane's worktree of the harness directory's own repository, nested inside `left`
     pub state: Option<PathBuf>,
     pub reason: String,
     pub branch: String,
-    // recorded but never used to decide whether the lane merges: only the worktree's committed state does that
+    // never decides whether the lane merges; only the worktree's committed state does
     pub run_error: Option<String>,
     // the checkout did not follow its upstream: the lane's own work may still have merged
     pub follow_error: Option<String>,
@@ -43,7 +43,7 @@ pub struct LaneReport {
     pub task: Option<String>,
 }
 
-// (parent repository, lane worktree) pairs, the state repository first: it sits inside the product worktree
+// (parent, lane worktree) pairs, state repository first: it sits inside the product worktree
 type Pairs = Vec<(PathBuf, PathBuf)>;
 
 fn create_worktree(
@@ -114,8 +114,7 @@ fn create_worktree(
     Err(WorktreeError::Create(last_dir))
 }
 
-// a resumed lane takes in what HEAD gained since it branched, or it runs on an old tree; a merge
-// that conflicts is abandoned and the lane keeps its own work, as before
+// a resumed lane merges what HEAD gained since it branched; a conflicting merge is abandoned
 fn catch_up(root: &Path, dir: &Path, start: &str) {
     let Ok(head) = git::git(root, &["rev-parse", "HEAD"]) else {
         return;
@@ -136,15 +135,12 @@ fn catch_up(root: &Path, dir: &Path, start: &str) {
     }
 }
 
-// under `[pr] per_task` the operator reviews the branch `enallagi pr` pushed, so the lane's product
-// commits never reach the checkout's own branch. With no separate state repository the merge is also
-// the only way a verdict lands, so there it stays.
+// without a separate state repository the merge is the only way a verdict lands
 pub fn by_branch(root: &Path, cfg: &Config) -> bool {
     cfg.pr.per_task && git::state_root(root, &cfg.layout.harness_dir) != root
 }
 
-// the checkout's branch carries what its own tracking ref carries and nothing else, so a branch
-// named for neither its remote nor its upstream still follows the ref `enallagi pr` builds onto
+// follows the tracking ref, so a branch named unlike its upstream still gets what `enallagi pr` uses
 fn follow_upstream(root: &Path, branch: &str) -> Result<String, String> {
     // the caller decides what a failure costs, so each step names itself rather than returning prose
     let step = |what: &str, r: Result<String, git::GitError>| {
@@ -162,8 +158,7 @@ fn follow_upstream(root: &Path, branch: &str) -> Result<String, String> {
     Ok(format!("{branch} follows {upstream}: {out}"))
 }
 
-// under `[pr] per_task` the checkout's branch never carries the lane's product commits, so a task
-// left unfinished lives on the last lane branch, and the next lane starts there rather than at HEAD
+// an unfinished task lives on the last lane branch, so the next lane starts there, not at HEAD
 fn resumable_base(root: &Path, cfg: &Config) -> Option<String> {
     let blocks = crate::tracker::Tracker::open(root, &cfg.layout.harness_dir)
         .blocks()
@@ -184,8 +179,7 @@ fn resumable_base(root: &Path, cfg: &Config) -> Option<String> {
         ],
     )
     .ok()?;
-    // a lane branch is resumed while a commit HEAD lacks names a task not yet done; a pull request
-    // lands a task as a rebuilt commit, so a finished lane still carries commits HEAD does not
+    // a merged pull request is a rebuilt commit, so only a commit naming an undone task resumes
     listed
         .lines()
         .map(str::trim)
@@ -202,7 +196,7 @@ fn resumable_base(root: &Path, cfg: &Config) -> Option<String> {
         .map(str::to_string)
 }
 
-// the commits the parent gained while the lane ran, which a merge takes in and a fast-forward never meets
+// commits the parent gained while the lane ran, which a merge takes in and a fast-forward never sees
 fn absorbed_by(repo: &Path, branch: &str) -> String {
     git::git(repo, &["log", "--format=%h %s", &format!("{branch}..HEAD")])
         .unwrap_or_default()
@@ -211,13 +205,13 @@ fn absorbed_by(repo: &Path, branch: &str) -> String {
         .join("; ")
 }
 
-// a merge git refused before it began has nothing to abort, and its stderr names what stood in the way
+// a merge refused before it began has nothing to abort; its stderr names what stood in the way
 struct Unmerged {
     err: git::GitError,
     aborted: bool,
 }
 
-// a merge commit needs an identity the state repository rarely configures, so it borrows the product's
+// a merge commit needs an identity the state repository rarely has, so it borrows the product's
 fn merge_into(repo: &Path, root: &Path, branch: &str, ff: bool) -> Result<String, Unmerged> {
     if ff {
         return git::git(repo, &["merge", "--ff-only", branch]).map_err(|err| Unmerged {
@@ -226,8 +220,7 @@ fn merge_into(repo: &Path, root: &Path, branch: &str, ff: bool) -> Result<String
         });
     }
     git::git_as(root, repo, &["merge", "--no-ff", "--no-edit", branch]).map_err(|err| {
-        // git leaves the conflict in the index and the tree, and a parent left mid-merge is worse than
-        // an unmerged lane; `--abort` itself says whether a merge had started
+        // a parent left mid-merge is worse than an unmerged lane; `--abort` says if one had started
         let aborted = git::git(repo, &["merge", "--abort"]).is_ok();
         Unmerged { err, aborted }
     })
@@ -301,7 +294,7 @@ fn with_claims<T>(
     Ok(out)
 }
 
-/// The live claims under `harness`'s main worktree, read without the lock, so a watch never writes the file.
+/// live claims read without the lock, so a watch never writes the file
 pub fn peek(harness: &Path) -> Vec<Claim> {
     live(&std::fs::read_to_string(run_file(harness, "", "claims.json")).unwrap_or_default())
 }
@@ -316,7 +309,7 @@ pub fn claims(root: &Path, harness_dir: &str) -> Vec<Claim> {
     with_claims(root, harness_dir, |c| c.clone()).unwrap_or_default()
 }
 
-/// Claims the lowest-id takeable ticket in `root`'s queue, outside `skip`, that no live claim holds and whose scope overlaps no live writer's, for the lane at `wt`.
+/// claims the lowest-id takeable ticket outside `skip` whose scope no live writer overlaps
 pub fn claim(
     root: &Path,
     cfg: &Config,
@@ -374,7 +367,7 @@ fn take(
     })?
 }
 
-/// Claims the lowest-id `review` ticket outside `skip` that no live claim holds, for a reader at `wt`; `None` only looks.
+/// claims the lowest-id unclaimed `review` ticket outside `skip`; a `None` `wt` only looks
 pub fn read_claim(
     root: &Path,
     cfg: &Config,
@@ -548,11 +541,11 @@ fn share(env: &[(String, String)]) -> (f64, u64) {
     (usd, tokens)
 }
 
-/// Runs the lane's round in `wt`: pinned to a ticket as writer or reader, or unpinned, with these variables set.
+/// runs the lane's round in `wt`, pinned to a ticket as writer or reader, or unpinned
 pub type Spawn<'a> =
     &'a (dyn Fn(&Path, Option<(&str, Hold)>, &[(String, String)]) -> anyhow::Result<()> + Sync);
 
-/// `writers > 1`: up to `writers` pinned lanes at once, plus a reader per unheld `review` ticket, each landing as it finishes; an unpinned lane when nothing can be claimed.
+/// up to `writers` pinned lanes plus a reader per unheld `review` ticket, else one unpinned lane
 pub fn launch(root: &Path, cfg: &Config, spawn: Spawn) -> Result<Vec<LaneReport>, WorktreeError> {
     let dir = &cfg.layout.harness_dir;
     let writers = cfg.parallel.writers.get();
@@ -561,7 +554,7 @@ pub fn launch(root: &Path, cfg: &Config, spawn: Spawn) -> Result<Vec<LaneReport>
     let before = log.read().map(|e| e.len()).unwrap_or(0);
     let budget = crate::pipeline::RunOpts::default().with_env_budgets();
     let stops = crate::config::stop_files(root, dir);
-    // ponytail: a ticket is taken once per launch, so a rejected one waits for the next `enallagi worktree`
+    // ponytail: a ticket is taken once per launch; a rejected one waits for the next launch
     let mut tried: Vec<String> = Vec::new();
     let mut read: Vec<String> = Vec::new();
     let mut reports = Vec::new();
@@ -580,7 +573,7 @@ pub fn launch(root: &Path, cfg: &Config, spawn: Spawn) -> Result<Vec<LaneReport>
                     .get(before..)
                     .unwrap_or_default(),
             );
-            // ponytail: a live lane's spend counts twice, spent and held, so a lane waits rather than overshoot; readers in one pass still take a share each
+            // ponytail: a live lane's spend counts as spent and held, so lanes wait rather than overshoot
             let used = (usd, tokens);
             let env = lane_budget(
                 (budget.budget_usd, budget.budget_tokens),
@@ -756,8 +749,7 @@ fn landed(
         eprintln!("{}", untracked_notice(&untracked));
     }
 
-    // before the worktree, never after: a lane branched from a checkout behind its upstream builds
-    // a pull request `enallagi pr` then refuses, and no later fast-forward reaches that lane
+    // before the worktree: a lane off a checkout behind upstream builds a pull `enallagi pr` refuses
     let by_branch = by_branch(root, cfg);
     let (followed, follow_error) = match by_branch.then(|| follow_upstream(root, &parent_branch)) {
         None => (None, None),
@@ -812,7 +804,7 @@ fn landed(
         None => left(reason),
     };
 
-    // Uncommitted work in the lane is the lane's to finish, not ours to throw away.
+    // uncommitted work in the lane is the lane's to finish, not ours to throw away
     if let Some((_, wt)) = pairs.iter().find(|(_, wt)| !git::porcelain(wt).is_empty()) {
         return Ok(left(format!(
             "{branch} has uncommitted work in {}",
@@ -820,7 +812,7 @@ fn landed(
         )));
     }
 
-    // ponytail: one landing at a time in flock order, not finish order, held before the ancestry check; a merge queue pays off once the check is slow
+    // ponytail: one landing at a time in flock order; a merge queue once the check is slow
     let _landing = match parallel {
         true => Some(lock_file(&run_file(
             root,
@@ -836,8 +828,7 @@ fn landed(
         .cloned()
         .collect();
 
-    // checked before any merge, so a product branch that cannot fast-forward merges neither. The
-    // state repository's lane commits name product shas, so the product side never merges a commit
+    // before any merge: state commits name product shas, so a stuck product merges neither
     let stuck: Vec<String> = merging
         .iter()
         .filter(|(repo, _)| repo.as_path() == root)
@@ -924,8 +915,7 @@ fn landed(
             }
         }
     }
-    // `git branch -d` refuses an unmerged branch, so a lane delivered by branch keeps its own until
-    // `enallagi pr` has replayed it
+    // `git branch -d` refuses an unmerged branch, so a by-branch lane keeps it until `enallagi pr`
     for (repo, wt) in &pairs {
         let _ = git::git(repo, &["worktree", "remove", &wt.to_string_lossy()]);
         let _ = git::git(repo, &["branch", "-d", &branch]);
@@ -1017,7 +1007,7 @@ mod tests {
         land_at(wt, id, file, "done");
     }
 
-    // the parent decides the same block the lane decides, so the state merge conflicts rather than applying
+    // the parent decides the lane's block too, so the state merge conflicts rather than applies
     fn decide_in_the_parent(state: &Path, status: &str) {
         let root = state.parent().expect("the product root");
         Tracker::open(root, ".enallagi")
@@ -1562,7 +1552,7 @@ mod tests {
         }
     }
 
-    // a reviewer caught this: a checkout that did not follow its upstream reported success
+    // a checkout that did not follow its upstream once reported success
     #[test]
     fn a_follow_that_fails_is_carried_to_the_caller() {
         let r = per_task_repo();
@@ -1930,8 +1920,7 @@ mod tests {
         remove_left(&r, &report);
     }
 
-    // the run a lane could not merge is the one its log is most needed for, so the log is not in the
-    // worktree the operator is told to remove
+    // a stuck lane's log stays out of the worktree the operator is told to remove
     #[test]
     fn stuck_lane_events() {
         let r = nested_repo();
@@ -2195,7 +2184,7 @@ mod tests {
         let report = lane(&r.root, &cfg, &mut |wt| {
             std::fs::write(wt.join("lane-work.txt"), "x").expect("write");
             commit_all_in(wt, "feat: lane work");
-            // The parent moves under the lane: a second writer, so the merge can't fast-forward.
+            // a second writer moves the parent, so the merge can't fast-forward
             r.write("moved.txt", "y");
             r.commit_all("a second writer moved the parent");
             Ok(())

@@ -1,4 +1,4 @@
-//! The one seam every spawn of lane-written code goes through (ADR 0004).
+//! the one seam every spawn of lane-written code goes through
 
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -72,13 +72,13 @@ enum Kind {
     Bwrap,
 }
 
-/// What a role's frontmatter grants its spawns; the default keeps the run's policy.
+/// what a role's frontmatter grants its spawns; the default keeps the run's policy
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RolePolicy {
-    /// Checkout-relative; `Some` replaces the checkout and both git dirs as the writable set.
+    /// checkout-relative; `Some` replaces the checkout and both git dirs as the writable set
     pub writes: Option<Vec<String>>,
     pub hosts: Vec<String>,
-    /// The holdout runner's one exception to the hidden rule (spec 6); never a role's.
+    /// the holdout runner's one exception to the hidden rule; never a role's
     pub holdouts: bool,
 }
 
@@ -118,7 +118,7 @@ pub struct Wrapped {
 struct Policy {
     write: Vec<PathBuf>,
     deny: Vec<PathBuf>,
-    // neither readable nor writable; kept apart so the holdout runner (spec 6) can lift it alone
+    // neither readable nor writable; kept apart so the holdout runner can lift it alone
     holdouts: Vec<PathBuf>,
     secrets: Vec<PathBuf>,
     // ancestors of a denied or hidden path in a writable root: a rename would carry the path out
@@ -198,12 +198,12 @@ impl Sandbox {
         }
     }
 
-    /// The argv and env that spawn `argv` in `cwd` confined; `write` is the preset's own state paths.
+    /// the argv and env that spawn `argv` in `cwd` confined; `write` is the preset's own state paths
     pub fn wrap<S: AsRef<str>>(&self, argv: &[S], cwd: &Path, write: &[String]) -> Wrapped {
         self.wrap_as(argv, cwd, write, &RolePolicy::default())
     }
 
-    /// `wrap`, narrowed or widened by a role's `writes:` and `hosts:`.
+    /// `wrap`, narrowed or widened by a role's `writes:` and `hosts:`
     pub fn wrap_as<S: AsRef<str>>(
         &self,
         argv: &[S],
@@ -507,7 +507,7 @@ fn seatbelt(policy: &Policy, proxy: u16, ports: &[u16], argv: Vec<String>) -> Ve
     out
 }
 
-/// Why `mode = "native"` cannot confine on this host, naming the fix; None when it can.
+/// why `mode = "native"` cannot confine on this host, naming the fix; None when it can
 pub fn refusal(root: &Path, cfg: &Config) -> Option<String> {
     if cfg.sandbox.mode == SandboxMode::Off || std::env::var_os(VAR).is_some() {
         return None;
@@ -529,7 +529,7 @@ pub fn refusal(root: &Path, cfg: &Config) -> Option<String> {
     ))
 }
 
-/// The base hosts, every configured preset's `hosts`, then `[sandbox] hosts`.
+/// the base hosts, every configured preset's `hosts`, then `[sandbox] hosts`
 pub fn allowlist(cfg: &Config) -> Vec<String> {
     let presets = crate::agent::presets();
     let named = std::iter::once(&cfg.agent.preset)

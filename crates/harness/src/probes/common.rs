@@ -1,4 +1,4 @@
-//! Helpers the text probes share: table parsers, the queue/learnings readers, and tree lookups.
+//! helpers the text probes share: table parsers, the queue/learnings readers, and tree lookups
 
 use super::{Finding, ProbeCtx, ProbeResult};
 use crate::block::Block;
@@ -64,7 +64,7 @@ pub fn tracked(root: &Path) -> Res<Vec<String>> {
     listed(root, &["ls-files"], "")
 }
 
-// a harness directory that is its own repository is outside the product's index; list what the launcher's `git add -A` there commits
+// a harness that is its own repo sits outside the product's index: list what `git add -A` commits
 pub fn tracked_with_state(root: &Path) -> Res<Vec<String>> {
     let mut paths = tracked(root)?;
     let dir = crate::config::harness_dir(root);
@@ -183,7 +183,7 @@ pub fn spec_rows(ctx: &ProbeCtx) -> Res<Vec<SpecRow>> {
     Ok(rows)
 }
 
-/// One spec's exit-criteria rows; None when it has no rows heading.
+/// one spec's exit-criteria rows; None when it has no rows heading
 pub fn spec_table(cfg: &Config, spec: &str, text: &str) -> Res<Option<Vec<SpecRow>>> {
     match text.find(&format!("\n{}", cfg.layout.rows_heading)) {
         Some(start) => table_rows(cfg, spec, text, start).map(Some),
@@ -296,7 +296,7 @@ pub fn learning_entries(ctx: &ProbeCtx) -> Res<Vec<(usize, String)>> {
     Ok(entries_of(numbered(&lines)))
 }
 
-// a rule the loop earned sits under `## Earned rules` in DECISIONS.md, and `## Rejected findings` below it is not one
+// earned rules sit under `## Earned rules`; `## Rejected findings` below are not
 pub fn earned_rules(ctx: &ProbeCtx) -> Res<Vec<(usize, String)>> {
     let decisions = instance(ctx, "DECISIONS.md");
     if !is_file(ctx.root, &decisions) {
@@ -355,7 +355,7 @@ pub fn rel(ctx: &ProbeCtx, path: &Path) -> String {
         .to_string()
 }
 
-/// The file a finding about ticket `id` cites: the ticket's own file.
+/// the file a finding about ticket `id` cites: the ticket's own file
 pub fn cite(ctx: &ProbeCtx, tracker: &Tracker, id: &str) -> String {
     tracker
         .path_of(id)
@@ -363,7 +363,7 @@ pub fn cite(ctx: &ProbeCtx, tracker: &Tracker, id: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Every ticket, with the file a finding about it cites.
+/// every ticket, with the file a finding about it cites
 pub fn tickets(ctx: &ProbeCtx) -> Res<Vec<(String, Block)>> {
     let tracker = tracker(ctx)?;
     let blocks = tracker.blocks().map_err(|e| e.to_string())?;

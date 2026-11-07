@@ -1,4 +1,4 @@
-//! `enallagi worktree [n]` -- runs a round in a lane of its own, and reports what came back to the parent branch.
+//! `enallagi worktree [n]` -- a round in a lane of its own, reporting what came back to the parent
 
 use std::path::Path;
 use std::process::Command;
@@ -34,8 +34,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         Ok(())
     })?;
 
-    // a checkout that did not follow its upstream is a failure even when the lane's own work landed:
-    // the next lane starts behind its upstream and every `enallagi pr` replay conflicts there
+    // a checkout left behind upstream fails even if the lane landed: the next lane and `pr` start behind
     if let Some(err) = &report.follow_error {
         eprintln!("worktree: {err}");
         if report.merged {

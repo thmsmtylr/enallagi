@@ -55,7 +55,7 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-// truncated at #[cfg(test)] so a fixture string in a test module isn't mistaken for real launcher code
+// truncated at #[cfg(test)] so a fixture string in a test module isn't read as launcher code
 fn crate_sources() -> Vec<(PathBuf, String)> {
     let src = repo_root().join("crates/harness/src");
     let sources: Vec<(PathBuf, String)> = walk(&src)
@@ -466,7 +466,7 @@ fn matrix_os(block: &str) -> Vec<String> {
     out
 }
 
-// `^[^#]*` excludes commented-out lines; skips `name:` so a step label isn't mistaken for an invocation
+// `^[^#]*` skips commented-out lines; skipping `name:` keeps a step label from reading as a call
 fn invokes_floor(block: &str) -> bool {
     block.lines().any(|l| {
         let before_comment = l.split('#').next().unwrap_or("");
@@ -506,8 +506,7 @@ fn ci_runs_the_floor_on_a_gnu_and_a_bsd_userland() {
     );
     assert!(!invokes_floor(&job_block(&ci(), "no-such-job")));
 
-    // ablation self-checks: a matrix with one OS must not read as both userlands, and an `if:`
-    // on the job must be caught by switched_off -- the same checks the neighbouring test makes.
+    // ablation: one OS must not read as both userlands, and a job `if:` must trip switched_off
     let one_os = "jobs:\n  rust:\n    strategy:\n      matrix:\n        os:\n          - ubuntu-latest\n    steps:\n      - run: cargo test --workspace\n";
     assert_ne!(
         matrix_os(&job_block(one_os, "rust")),
@@ -548,8 +547,7 @@ fn ci_runs_the_driver_against_the_artifact() {
     assert_eq!(reading(soft), (true, true, true, 1));
 }
 
-// A fixture that inherits the shipped `[[skill]]` table clones github from a test: it passed on a
-// warm cache and raced itself in CI. Only harness.default.toml may name a remote source.
+// only harness.default.toml may name a remote source; a fixture that does races github in CI
 #[test]
 fn no_fixture_declares_a_fetched_skill() {
     let root = repo_root();
@@ -733,8 +731,7 @@ fn no_shipped_file_carries_rhetorical_filler() {
 
 #[test]
 fn no_shipped_document_calls_the_binary_harness() {
-    // `harness` survives as a common noun, a path the tree holds and a key the source reads; the
-    // binary, the config and the prompt token are `enallagi`
+    // `harness` survives as a noun, a tree path and a source key; binary, config, token are `enallagi`
     let old = re(
         r"harness (init|eject|run|watch|probe|pr|base|gate|hook|skills|tasks|eval|events|worktree)\b|harness\.toml|__HARNESS_DIR__|HARNESS_[A-Z]",
     );
@@ -840,9 +837,7 @@ fn no_identifier_names_a_task_or_a_step() {
     assert!(scanned > 50, "{scanned} sources scanned");
 }
 
-// `//!` is the only comment `cargo doc` renders onto the module's own page, so a summary written as
-// `//` or `///` does not count. No module is exempt, dispatchers included, and a header that only
-// repeats the path it sits at says nothing the reader did not already have.
+// `//!` alone renders on the module page; every module needs one saying more than its path
 fn module_summary(rel: &Path, text: &str) -> Result<(), String> {
     let Some(header) = text.lines().next().and_then(|l| l.strip_prefix("//!")) else {
         return Err("no `//!` summary line".to_string());
@@ -1021,7 +1016,7 @@ fn the_driver_reports_shortfalls_as_findings() {
         .collect();
     assert_eq!(stray, Vec::<&str>::new());
 
-    // every sha printed must resolve in this repo -- drive() works in a mktemp dir removed before it prints
+    // every printed sha must resolve here; drive() works in a mktemp dir removed before it prints
     let sha = re(r"^FINDING [^:]*: ([0-9a-f]+) ");
     for line in out.lines() {
         let Some(caps) = sha.captures(line) else {
@@ -1055,8 +1050,7 @@ fn the_licence_is_mit() {
     let manifest = read(&root.join("crates/harness/Cargo.toml"));
     assert!(manifest.contains("license = \"MIT\""), "{manifest}");
 
-    // the declared skills are other people's MIT work; NOTICE carries their notices, which is what
-    // MIT asks of anyone who ships or builds on a copy
+    // the declared skills are others' MIT work, so NOTICE must carry their notices
     let notice = read(&root.join("NOTICE"));
     for (source, holder) in [
         ("obra/superpowers", "Jesse Vincent"),
@@ -1083,8 +1077,7 @@ fn crate_version_in(manifest: &str) -> String {
         .expect("a version line in the manifest")
 }
 
-// a tag is the release; one that does not name the crate version ships a binary printing a version
-// its own release page does not carry
+// a tag not naming the crate version ships a binary whose version its release page lacks
 fn tag_mismatch(tag: &str, version: &str) -> Option<String> {
     match tag.strip_prefix('v') {
         Some(rest) if rest == version => None,
@@ -1310,8 +1303,7 @@ fn the_release_job_checks_the_tag_version() {
     assert_eq!(switched_off(steps), 0, "{block}");
 }
 
-// RELEASE_TAG is set only in the release job, and a check that cannot read what it compares fails
-// rather than passes
+// RELEASE_TAG is set only in the release job; a check that cannot read it fails, not passes
 #[test]
 #[ignore = "release only: release.yml runs it on the tag it releases"]
 fn the_tag_equals_the_crate_version() {
@@ -1350,7 +1342,7 @@ fn the_release_publishes_only_a_complete_draft() {
 
 const FAKE_BINARY: &str = "#!/bin/sh\necho enallagi 9.9.9\n";
 
-// every asset name carries the same fake binary, so the test needs no copy of install.sh's target table
+// every asset carries the same fake binary, so no copy of install.sh's target table is needed
 fn fake_release(sum: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut sums = String::new();
@@ -1618,7 +1610,7 @@ fn no_default_names_a_runner() {
 
 #[test]
 fn every_harness_dir_path_has_a_store() {
-    // a path the product writes under the harness directory that the records table does not name has no store, so the first tidy-up takes it
+    // a harness-dir path the records table does not name has no store; the first tidy-up takes it
     let joined = re(
         r#"(?:\.join\(\s*&?(?:self\.)?(?:ctx\.)?(?:cfg\.layout\.)?(?:harness_dir|dir)\s*\)|\bharness_dir)\s*\.join\(\s*"([^"]+)"\s*\)"#,
     );
@@ -1647,8 +1639,7 @@ fn every_harness_dir_path_has_a_store() {
     assert_eq!(missing, Vec::<String>::new());
 }
 
-// string literals blanked to spaces, newlines kept, so a `//` line inside a raw-string fixture is
-// source and not a comment; a comment's own quotes are left alone
+// strings blanked, newlines kept, so a `//` in a raw string is source; a comment's quotes stay
 fn without_strings(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let at = |k: usize| chars.get(k).copied();
@@ -1723,8 +1714,7 @@ fn without_strings(text: &str) -> String {
 
 #[test]
 fn no_comment_cites_an_issue_number() {
-    // ponytail: whole-line comments only, which is the shape the rule has been broken in; a
-    // trailing comment after code is still unread
+    // ponytail: whole-line comments only, the shape the rule broke in; a trailing comment is unread
     let cited = re(r"(?m)^[ \t]*//[^\n]*#[0-9]+");
     assert!(
         cited.is_match(&without_strings(
@@ -1744,8 +1734,7 @@ fn no_comment_cites_an_issue_number() {
     );
 
     let root = repo_root();
-    // the rule is the citation's form and names no repository: an upstream citation in a fixture
-    // and a slug passed to a function are both accepted
+    // the rule is the citation's form, no repository: a fixture's upstream cite and a slug both pass
     for (rel, marker) in [
         (
             "crates/harness/tests/fixtures/harness.default.json",
@@ -1808,13 +1797,10 @@ fn rustdoc_reports_no_warning() {
     );
 }
 
-// the citation floor above catches a comment, not a fixture, and a fixture is where the foreign name
-// was. A manifest a fixture writes names one of a few neutral words, so putting a real repository's
-// name back in one fails here.
+// a fixture manifest names a neutral word, so a real repository's name in one fails here
 #[test]
 fn no_fixture_manifest_names_another_repository() {
-    // ponytail: the two manifests a fixture writes, package.json and Cargo.toml, inside a Rust string
-    // literal, which is the shape the rule has been broken in
+    // ponytail: only package.json and Cargo.toml in a Rust string literal, the shape it broke in
     let json = re(r#"\\"name\\":\s*\\"([a-z0-9][a-z0-9._-]*)\\""#);
     let cargo = re(r#"\[package\]\\n\s*name = \\"([a-z0-9][a-z0-9._-]*)\\""#);
     let sample = String::from("let t = \"{\\\"name\\\": \\\"") + "ad" + "hd\\\"}\";";
@@ -1855,7 +1841,7 @@ fn no_fixture_manifest_names_another_repository() {
     assert!(scanned > 50, "{scanned} sources scanned");
 }
 
-// the fixture T-281 named: a `//` line inside a raw string is source, and the citation scan leaves it
+// a `//` line inside a raw string is source, and the citation scan leaves it
 #[allow(dead_code)]
 const PROBE_FIXTURE: &str = r#"
 // a seeded note the fixture carries #12

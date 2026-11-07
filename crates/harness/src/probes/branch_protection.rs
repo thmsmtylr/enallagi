@@ -1,4 +1,4 @@
-//! What a checkout can establish about the branch its remote calls default, and what a host tool says about it.
+//! what a checkout can establish about its remote's default branch, and what a host tool says of it
 
 use super::common;
 use super::{Finding, ProbeCtx, ProbeResult};
@@ -13,8 +13,7 @@ const TOOLS: [(&str, &str); 1] = [("github", "gh")];
 
 const JQ: &str = "[.[].type] | join(\", \")";
 
-// how long the host tool gets to answer before the leg reports unknown; a stuck tool would
-// otherwise hold a scout stage, an init and a pipeline predicate open with no ceiling
+// how long the host tool gets before the leg reports unknown; a stuck tool would hold stages open
 const HOST_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
@@ -87,8 +86,7 @@ fn direct_commits(root: &Path, default: &str) -> Vec<Finding> {
     )]
 }
 
-// a repository the operator cannot administer is one whose protection they cannot change, so it
-// reports nothing; any answer but a plain `false` leaves the probe as it was
+// a repo the operator cannot administer reports nothing; only a plain `false` changes the probe
 fn may_administer(root: &Path, host: &str) -> bool {
     let Some((_, tool)) = TOOLS.iter().find(|(named, _)| host.contains(named)) else {
         return true;
@@ -142,8 +140,7 @@ fn host_answer(root: &Path, host: &str, default: &str) -> Vec<Finding> {
     )]
 }
 
-// the tool runs in its own process group and is given HOST_WAIT; `None` is a tool that never
-// answered, killed with everything it spawned, so the line the leg prints is the same on every run
+// HOST_WAIT in its own process group; `None` is a tool that never answered, killed with its children
 fn bounded(
     root: &Path,
     tool: &str,

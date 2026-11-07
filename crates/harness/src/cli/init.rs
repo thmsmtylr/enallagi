@@ -1,4 +1,4 @@
-//! `enallagi init` -- installs in one pass: answers, files, adapter, skills, the state commit and a probe; or prunes the defaulted keys out of enallagi.toml.
+//! `enallagi init` -- installs in one pass, or prunes the defaulted keys out of enallagi.toml
 
 use crate::config;
 use crate::init::{self, Answers, InitOpts};
@@ -136,8 +136,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         }
     }
 
-    // the skills a lane loads, vendored now rather than at the first stage; a stdin that is not a
-    // terminal is a fixture or a pipeline, where a fetch mid-install is a surprise, so it needs --sync
+    // a non-terminal stdin is a fixture or pipeline, where a mid-install fetch surprises: needs --sync
     let fetch = !args.frozen
         && !crate::skills::frozen_from_env(std::env::var_os("CI").as_deref())
         && (args.sync || std::io::stdin().is_terminal());
@@ -193,10 +192,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         }
     }
 
-    // what the tree says about itself, printed as `enallagi probe` prints it; a finding is a report,
-    // not a failed install, since a re-run over a repository with standing findings is still installed.
-    // The check is not run here: it is the repository's own suite and takes as long as it takes, so
-    // `check-red`, the one probe that reads it, is left to `enallagi probe`
+    // a finding is a report, not a failed install; the slow check waits for `enallagi probe`
     let unrun = crate::probes::CheckOutcome {
         ran: false,
         red: false,

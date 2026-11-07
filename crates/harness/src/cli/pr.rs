@@ -1,4 +1,4 @@
-//! `enallagi pr <tasks>` -- builds the branch and the description, and prints a refusal or a conflict instead of raising it.
+//! `enallagi pr <tasks>` -- builds branch and body; a refusal or conflict prints, never raises
 
 use crate::pr::{self, PrError, PrOpts};
 

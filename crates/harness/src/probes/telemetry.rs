@@ -1,4 +1,4 @@
-//! Five probes that read the event log and report findings.
+//! five probes over the event log
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -33,7 +33,7 @@ fn no_events(log: &Log) -> String {
     format!("no events.jsonl under {dir}")
 }
 
-// idxs double as 1-based line numbers: true only while the log has no blank/unparseable lines ahead, which a run's own writer never emits
+// idxs double as 1-based line numbers, true while the log holds no blank or unparseable line
 fn cite(log: &Log, events: &[Event], idxs: &[usize], message: &str) -> Finding {
     let run = &events[idxs[0]].run;
     let seqs: Vec<String> = idxs.iter().map(|&i| events[i].seq.to_string()).collect();
@@ -274,8 +274,7 @@ pub fn turns_exhausted(log: &Log, cfg: &Config) -> ProbeResult {
     };
     let mut findings = Vec::new();
     let presets = crate::agent::presets();
-    // a cap binds only where the preset spawned was handed the number: None passes no cap, Config reads
-    // one from the agent's own file and Time spends a clock, as the digest decides at pipeline.rs
+    // a cap binds only when handed: None passes none, Config reads the agent's file, Time spends a clock
     let flag_capped = |stage: &str| {
         cfg.stage
             .iter()
@@ -303,7 +302,7 @@ pub fn turns_exhausted(log: &Log, cfg: &Config) -> ProbeResult {
             if !flag_capped(stage) {
                 continue;
             }
-            // the cap a handed adjudicator ran under is the recorded one; config is read only for a log written before the field
+            // a handed adjudicator's recorded cap wins; config is read only for a log older than the field
             let cap =
                 turn_cap.or_else(|| cfg.stage.iter().find(|s| &s.name == stage).map(|s| s.turns));
             if cap.is_some_and(|cap| crate::config::spent_turn_cap(cap, *t)) {
@@ -605,7 +604,7 @@ mod tests {
         let (dir, mut w) = writer();
         for cost in [1.0, 1.1, 1.2, 5.0] {
             w.emit(start("implement"));
-            // seconds flat: no seconds-outlier should fire alongside this.
+            // seconds flat: no seconds-outlier should fire alongside this
             w.emit(end("implement", 100, Some(cost), None));
         }
 
@@ -681,7 +680,7 @@ mod tests {
     fn turns_exhausted_does_not_fire_short_of_the_ceiling() {
         let (dir, mut w) = writer();
         w.emit(start("implement"));
-        // one turn short of the configured cap: the agent chose to stop.
+        // one turn short of the configured cap: the agent chose to stop
         w.emit(end("implement", 60, None, Some(119)));
 
         let log = Log::open(dir.path());

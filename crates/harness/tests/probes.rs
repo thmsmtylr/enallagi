@@ -1,4 +1,4 @@
-//! The probe assertions, one test per assertion and named after it.
+//! the probe assertions, one test per assertion and named after it
 
 use enallagi::block::{self, Block};
 use enallagi::config::{self, Config};
@@ -7,7 +7,7 @@ use enallagi::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
 use enallagi::tracker::Tracker;
 use std::fs;
 
-// install is the seed: docs, rails and roles all come from the binary, so a probe reads the tree an operator would get
+// install is the seed: docs, rails and roles come from the binary, as an operator gets them
 fn seeded_with(overrides: &str) -> (Repo, Config) {
     let repo = Repo::new();
     repo.init_harness(overrides);
@@ -82,7 +82,7 @@ fn errors(results: &[(String, ProbeResult)]) -> Vec<&str> {
         .collect()
 }
 
-/// Never the literal, or the fixture reports itself when this repo is probed.
+/// never the literal, or the fixture reports itself when this repo is probed
 fn marker() -> String {
     format!("{}{}", "ponytail", ":")
 }
@@ -416,13 +416,13 @@ fn conventional_with(layout_extra: &str) -> (Repo, Config) {
         repo.write(name, "x\n");
     }
 
-    // docs/ and bench/ are this repository's own, so they are named per repository and not by the defaults
+    // docs/ and bench/ are this repo's own, so they are named per repository, not by the defaults
     let mut toml = String::from(
         "[check]\ncommand = \"true\"\n\n[layout]\nallowed_prefixes = [\"src/\", \"docs/\", \"bench/\", \".enallagi/\", \".claude/\", \".github/\"]\n",
     );
     toml.push_str(layout_extra);
     toml.push_str(&vendored_skills(&repo));
-    // a tracked harness directory keeps the install in the product's history, so what it writes is tracked
+    // a tracked harness directory keeps the install in the product's history, so its writes are tracked
     repo.write(".enallagi/enallagi.toml", &toml);
     repo.commit_all("conventions");
 
@@ -502,7 +502,7 @@ fn a_tracked_file_the_ignore_rules_cover_is_litter() {
     );
 }
 
-// the harness directory as its own repository: what its ignore rules cover and git tracks anyway is litter too
+// the harness dir as its own repo: what its ignore rules cover and git tracks anyway is litter too
 #[test]
 fn a_state_repo_ignored_path_is_litter() {
     let repo = Repo::new();
@@ -588,7 +588,7 @@ fn no_adapter_install_reports_its_own_files() {
 fn a_traceless_install_leaves_no_litter() {
     for name in enallagi::agent::presets().keys() {
         let repo = Repo::new();
-        // no harness directory in the product's history, so the install is excluded and read as untracked or ignored
+        // no harness dir in the product's history, so the install is excluded, read as untracked or ignored
         repo.write("src/main.rs", "fn main() {}\n");
         repo.commit_all("product");
         enallagi::init::install(
@@ -744,7 +744,7 @@ fn a_learnings_file_over_its_cap_is_reported() {
     );
 }
 
-// two rewordings of one friction, plus a near-miss pair that opens with the same words but isn't a repeat; both are asserted because either alone passes a broken probe
+// two rewordings of one friction plus a same-opening near miss; either alone passes a broken probe
 
 const FRICTION_FIXTURE: &str = "
 ## fixture — a friction
@@ -792,7 +792,7 @@ fn and_a_repeat_a_dated_kill_line_names_is_covered() {
     assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
 }
 
-// the adjudicator writes the rule a repeat owes under `## Earned rules`, and LEARNINGS.md only holds the seeds
+// the adjudicator writes a repeat's rule under `## Earned rules`; LEARNINGS.md holds only seeds
 #[test]
 fn and_a_repeat_an_earned_rule_names_is_covered() {
     let (repo, cfg) = seeded();
@@ -854,7 +854,7 @@ fn a_longer_rewrite_of_one_friction_is_reported() {
     );
 }
 
-// two unrelated frictions whose only shared long words are connective prose: `because`, `expected`, `nobody`, `which`
+// two unrelated frictions sharing only connective words: `because`, `expected`, `nobody`, `which`
 const PROSE_SHARE_FIXTURE: &str = "
 friction: the build failed because clippy flagged an unused import which nobody expected
 friction: the fixture date drifted because the clock changed, which nobody expected
@@ -934,7 +934,7 @@ fn an_unreachable_artifact_is_an_error() {
 
 #[test]
 fn every_declared_skill_names_its_enforcing_gate() {
-    // asserts the COUNT, not just emptiness: an entry deleted to make this pass is the thing that fails it
+    // asserts the COUNT, not emptiness: an entry deleted to make this pass is what fails it
     let (repo, cfg) = seeded();
     assert_eq!(cfg.skill.len(), 13);
     let results = run(&repo, &cfg);
@@ -968,7 +968,7 @@ fn a_skill_with_no_enforcement_is_reported() {
     assert_eq!(count(&run(&repo, &cfg), "skill-ungated"), Some(0));
 }
 
-// three markers: killed in place, killed at a moved line, and killed by neither of two near-miss shapes
+// three markers: killed in place, killed at a moved line, and killed by neither of two near misses
 fn ceilings() -> (Repo, Config) {
     let (repo, cfg) = seeded();
     let m = marker();
@@ -1915,7 +1915,7 @@ fn protection(repo: &Repo, cfg: &Config) -> ProbeResult {
         .1
 }
 
-// the same bare clone, re-pointed at a URL that names a host, so the probe reads real refs and calls nothing
+// the bare clone re-pointed at a host URL, so the probe reads real refs and calls nothing
 fn hosted_origin(repo: &Repo, url: &str) -> (tempfile::TempDir, String) {
     let (dir, branch) = tracked_clone(repo);
     git(&repo.root, &["remote", "set-head", "origin", &branch]);
@@ -2051,9 +2051,7 @@ fn a_host_tool_error_reads_unknown() {
     );
 }
 
-// a host tool that never answers is killed with what it spawned after the bound, and the leg
-// reports the bound rather than an elapsed reading; the test polls the binary against a ceiling of
-// its own so a lost bound fails instead of hanging
+// a silent host tool dies with its children at the bound; the test's own ceiling catches a lost bound
 #[test]
 fn a_hung_host_tool_reads_unknown_after_the_bound() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
@@ -2101,8 +2099,7 @@ fn a_hung_host_tool_reads_unknown_after_the_bound() {
     assert!(status.success(), "{out}");
     assert!(out.contains("-> unknown, no answer in 10s"), "{out}");
     let pid = pid().expect("the stub wrote its pid");
-    // the sandbox refuses a process listing, so the stub's own pid is polled
-    // killed is not yet reaped: a zombie the container's init has not collected still answers kill 0
+    // no process listing in the sandbox, so the stub's pid is polled; a zombie still answers kill 0
     let alive = || {
         let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
         let zombie = stat

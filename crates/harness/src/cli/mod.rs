@@ -1,4 +1,4 @@
-//! The parser and the dispatcher: one clap `Command` variant per subcommand, and `run` hands each to the sibling module of the same name.
+//! the parser and dispatcher: one clap variant per subcommand, each run by its sibling module
 
 mod audit;
 mod base;
@@ -216,8 +216,7 @@ pub enum Command {
         /// Which operation to perform
         #[arg(required_unless_present = "cost")]
         cmd: Option<SkillsCmd>,
-        // `check` is this flag: `sync --frozen` and `check` take the same arm. Hidden here, and
-        // accepted for one release so a caller written against the old spelling still runs.
+        // `check` is this flag: `sync --frozen` and `check` share an arm; hidden, kept for old callers
         #[arg(long, hide = true)]
         frozen: bool,
         /// Print each skill's bytes and the stages that loaded it against the stages that used it
@@ -522,10 +521,7 @@ mod tests {
         found
     }
 
-    // the job id, then only the step-level `name:` and `run:` lines under its `steps:`. The job's
-    // own `name:`, a `uses:` path, a `with:` value and a comment are all left out, so nothing but
-    // what the job runs can stand in for the id. Step keys are the two indents a step writes them
-    // at: `      - ` for the first key of a step and `        ` for the rest.
+    // job id plus step `name:`/`run:` lines (step keys at 6 or 8 spaces), so only what runs stands in
     fn job_steps(workflow: &str) -> Vec<(String, String)> {
         let mut jobs = Vec::new();
         let mut in_jobs = false;
@@ -561,7 +557,7 @@ mod tests {
         jobs
     }
 
-    // `grep -w`'s boundary: `rust` inside `rustfmt` is not the word, `build` in `cross-build` is.
+    // `grep -w`'s boundary: `rust` inside `rustfmt` is not the word, `build` in `cross-build` is
     fn says_word(steps: &str, word: &str) -> bool {
         steps
             .split(|c: char| !c.is_alphanumeric() && c != '_')

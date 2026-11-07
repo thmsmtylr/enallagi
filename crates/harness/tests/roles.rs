@@ -1,4 +1,4 @@
-//! Roles declared and fetched like skills: `[[role]]` in enallagi.toml, pinned in harness.lock.
+//! roles declared and fetched like skills: `[[role]]` in enallagi.toml, pinned in harness.lock
 
 use enallagi::agent::presets;
 use enallagi::config;
@@ -145,7 +145,7 @@ fn a_drifted_role_is_refused_under_frozen() {
     assert_eq!(fs::read_to_string(&vendored).expect("restored"), BODY);
 }
 
-// one implement stage on a stub agent; the run renders <harness_dir>/run/roles/implementer.md before spawning
+// one implement stage on a stub agent; the run renders run/roles/implementer.md before spawning
 fn pipeline_repo() -> Repo {
     let repo = Repo::new();
     repo.write(
@@ -397,7 +397,7 @@ fn implementer_updates_stated_doc() {
     }
 }
 
-// T-455: a stub agent's result alone passed a writer the real run broke
+// a stub agent's result alone passed a writer the real run broke
 #[test]
 fn verifier_copies_writers() {
     let text = role("verifier");
@@ -425,7 +425,7 @@ fn adjudicator_takes_decomposed() {
     assert!(!text.contains("append the same line to `## Rejected findings`"));
 }
 
-// T-481: docs move with code only when the ticket's scope names the doc
+// docs move with code only when the ticket's scope names the doc
 #[test]
 fn adjudicator_scopes_stated_doc() {
     let text = role("adjudicator");
@@ -437,7 +437,7 @@ fn adjudicator_scopes_stated_doc() {
     }
 }
 
-// ruling G: every rule the decomposer stated is a gate, so the role is the skill plus the check
+// every rule the decomposer stated is a gate, so the role is the skill plus the check
 #[test]
 fn decomposer_skill_only() {
     let text = role("decomposer");

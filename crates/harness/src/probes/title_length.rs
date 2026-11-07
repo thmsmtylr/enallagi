@@ -1,4 +1,4 @@
-//! A block title past 72 characters: a pull request subject is cut at 72, and a title that runs to a sentence reads as an essay.
+//! a block title past 72 characters, where a pull request subject is cut
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
@@ -11,7 +11,7 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 }
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
-    // titles written before the cap are the record they were written as; every citation names them verbatim
+    // titles written before the cap stand as written; every citation names them verbatim
     let from = ctx.cfg.queue.title_cap_from;
     let mut found = Vec::new();
     for (tasks, b) in common::tickets(ctx)? {

@@ -1,4 +1,4 @@
-//! `enallagi init`, then every read-only subcommand, against one fresh install: the binary an operator actually types, not a module call.
+//! `enallagi init`, then every read-only subcommand, against one fresh install through the binary
 
 use enallagi::fixture::Repo;
 
@@ -58,8 +58,7 @@ fn run_dry_run_prints_the_plan_and_exits_0() {
     let repo = installed();
     let out = run(&repo, &["run", "--iterations", "1", "--dry-run"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
-    // init seeds no task, so the plan is discovery; discover's `when` negates task's, so exactly
-    // one of the pair is ever planned
+    // init seeds no task, so the plan is discovery; discover's `when` negates task's
     assert!(
         out.stdout
             .contains("=== pipeline discover (!queue.takeable) ==="),

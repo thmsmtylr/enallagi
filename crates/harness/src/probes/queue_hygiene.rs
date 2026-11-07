@@ -1,4 +1,4 @@
-//! The queue read against itself: a repeated id, a killed id reused, a missing status, an undefined blocker, a block in review whose scope matches nothing, or a scope entry naming a bare directory.
+//! the queue against itself: repeated or reused ids, missing status, undefined blockers, bad scopes
 
 use super::common::{self, Res};
 use super::ponytail_ceiling::kill_lines;

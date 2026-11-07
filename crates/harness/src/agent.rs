@@ -1,4 +1,4 @@
-//! Adapter presets: one static TOML file per supported coding agent, embedded into the binary and parsed on demand.
+//! adapter presets: one embedded TOML file per supported coding agent, parsed on demand
 
 use crate::config::{AgentConfig, Layout};
 use crate::events::{Kind, Writer};
@@ -108,7 +108,7 @@ pub fn presets() -> Presets {
         .collect()
 }
 
-/// A model and an effort as one block reads them; the first level `resolve_task` looks at.
+/// a model and an effort as one block reads them; the first level `resolve_task` looks at
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Levels {
     pub model: Option<String>,
@@ -121,7 +121,7 @@ pub struct Resolved {
     pub levels: Levels,
 }
 
-// a hand-written command's cap is read back off its argv, never inherited from a preset it no longer matches
+// a hand-written command's cap is read off its argv, never inherited from a preset it left
 fn cap_of(argv: &[String]) -> TurnCap {
     if argv.iter().any(|w| w.contains("{timeout}")) {
         TurnCap::Time
@@ -142,10 +142,10 @@ fn drop_token(argv: &mut Vec<String>, token: &str) {
     }
 }
 
-// the name init.rs gives the plugin it writes for `--plugin-dir`; disabling it would take the harness's own hooks with it
+// the plugin init.rs writes for `--plugin-dir`; disabling it would drop the harness's own hooks
 const ADAPTER_PLUGIN: &str = "harness@inline";
 
-// `--settings` layers over the operator's own file rather than displacing it, so a plugin enabled there loads into every lane unless it is named false here
+// `--settings` layers over the operator's file, so a plugin enabled there loads unless named false
 fn plugins_off(file: &str) -> String {
     let path = match file.strip_prefix("~/") {
         Some(rest) => match std::env::var_os("HOME") {
@@ -169,7 +169,7 @@ fn plugins_off(file: &str) -> String {
     serde_json::Value::Object(off).to_string()
 }
 
-// the settings path rides in the token rather than a preset key, so only a preset that asks for the override names a vendor's file
+// the settings path rides in the token, so only a preset asking for the override names a vendor file
 fn fill_plugins_off(argv: &[String]) -> Vec<String> {
     static TOKEN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let re = TOKEN.get_or_init(|| {
@@ -187,7 +187,7 @@ pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resol
     resolve_task(cfg, role, presets, &Levels::default())
 }
 
-/// `resolve` with the task's own levels, which outrank `[agent.<role>]` and `[agent]` in that order.
+/// `resolve` with the task's own levels, outranking `[agent.<role>]` then `[agent]`
 pub fn resolve_task(
     cfg: &AgentConfig,
     role: &str,
@@ -287,7 +287,7 @@ pub fn fill_layout(argv: &[String], layout: &Layout) -> Vec<String> {
     argv.iter().map(|w| fill_word(w, layout)).collect()
 }
 
-/// A preset's `env` with the same layout tokens its `argv` takes.
+/// a preset's `env` with the same layout tokens its `argv` takes
 pub fn fill_env(env: &BTreeMap<String, String>, layout: &Layout) -> BTreeMap<String, String> {
     env.iter()
         .map(|(k, v)| (k.clone(), fill_word(v, layout)))
@@ -339,7 +339,7 @@ pub fn extract_usage(output: &str, paths: &UsagePaths) -> UsageValues {
 fn reset_pattern() -> &'static Regex {
     static RESET: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     RESET.get_or_init(|| {
-        // the minutes are optional too: a live notice read `resets 2am` and the hour-only form must still wait
+        // minutes are optional too: a live notice read `resets 2am`, and the hour-only form must still wait
         Regex::new(
             r"(?i)resets\s+(?:([a-z]{3,9})\s+(\d{1,2})\s+at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)\s*\(([^)]+)\)",
         )
@@ -356,7 +356,7 @@ fn month_number(name: &str) -> Option<i8> {
     i8::try_from(index + 1).ok()
 }
 
-/// The dated part of a reset notice, `Sep 20 at 4am (Australia/Melbourne)`, in the notice's own words.
+/// the notice's dated part, `Sep 20 at 4am (Australia/Melbourne)`, in its own words
 pub fn dated_reset(notice: &str) -> Option<String> {
     let caps = reset_pattern().captures(notice)?;
     let month = caps.get(1)?;
@@ -365,7 +365,7 @@ pub fn dated_reset(notice: &str) -> Option<String> {
     Some(notice[month.start()..caps.get(0)?.end()].to_string())
 }
 
-// without this a session-limit notice reads as a finished iteration and burns the rest of the run doing nothing
+// else a session-limit notice reads as a finished iteration and burns the rest of the run
 pub fn seconds_until_reset(notice: &str, now: jiff::Zoned) -> Option<u64> {
     let caps = reset_pattern().captures(notice)?;
     let hour: i8 = caps.get(3)?.as_str().parse().ok()?;
@@ -438,7 +438,7 @@ pub struct StageResult {
     pub output: String,
     pub usage: UsageValues,
     pub timed_out: bool,
-    /// The dated reset of a notice further out than the wait ceiling, once the stage has run.
+    /// a reset further out than the wait ceiling, once the stage has run
     pub reset_beyond_wait: Option<String>,
 }
 
@@ -463,7 +463,7 @@ extern "C" fn note_signal(signum: i32) {
     unsafe { signal(signum, SIG_DFL) };
 }
 
-/// Take SIGINT and SIGTERM, so a stop reaches the agent the launcher spawned instead of orphaning it.
+/// takes SIGINT and SIGTERM, so a stop reaches the spawned agent instead of orphaning it
 pub fn catch_stop_signals() {
     let handler = note_signal as extern "C" fn(i32) as usize;
     unsafe {
@@ -472,7 +472,6 @@ pub fn catch_stop_signals() {
     }
 }
 
-/// The name of the signal a stop arrived on, once one has.
 pub fn stop_signal() -> Option<&'static str> {
     match SIGNALLED.load(Ordering::Relaxed) {
         SIGINT => Some("SIGINT"),
@@ -500,8 +499,7 @@ fn stage_now() -> jiff::Zoned {
         .unwrap_or_else(jiff::Zoned::now)
 }
 
-// only the run's own verdict line, never a file the agent read or a command it wrote: both quote the
-// notice while working on this scan, and each cost a round a multi-hour sleep on 2026-09-16
+// only the run's verdict line: a file the agent read or a command it wrote can quote the notice
 fn notice_of(line: &str) -> Option<String> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         // a preset that prints plain text has no envelope to read, so the line stands as itself
@@ -587,7 +585,7 @@ fn run_once(
 ) -> Result<(i32, String, bool), AgentError> {
     let turns = s.turns.to_string();
     let timeout = s.timeout.map(|t| t.as_secs().to_string());
-    // the layout is reloaded here because StageSpawn carries the filled argv, not the layout that filled it
+    // reloaded because StageSpawn carries the filled argv, not the layout that filled it
     let cfg = crate::config::load(s.cwd).ok();
     // unconfined, the CLI's own permission prompt is the only boundary left
     let dropped = s
@@ -600,7 +598,7 @@ fn run_once(
         .iter()
         .filter(|word| Some(*word) != dropped)
         .map(|word| {
-            // prompt substituted last, one pass each: a prompt that quotes {turns} or {prompt} must reach the agent verbatim
+            // prompt substituted last, one pass each, so a prompt quoting {turns} or {prompt} stays verbatim
             let word = word.replace("{turns}", &turns);
             let word = match &timeout {
                 Some(t) => word.replace("{timeout}", t),
@@ -622,8 +620,7 @@ fn run_once(
     let mut command = sandbox
         .wrap_as(&argv, s.cwd, &s.preset.write, &s.role)
         .command();
-    // a lane commits as the repository's configured identity; left to itself it invents one from
-    // whatever the agent's own session knows, and that identity lands in the operator's history
+    // a lane commits as the repo's configured identity, not one the agent's session invents
     for (var, key) in [
         ("GIT_AUTHOR_NAME", "user.name"),
         ("GIT_COMMITTER_NAME", "user.name"),
@@ -647,7 +644,7 @@ fn run_once(
         .spawn()?;
     let pgid = child.id();
 
-    // stdout and stderr interleave into one buffer: most presets put progress on stderr and gates read one stream
+    // stdout and stderr share one buffer: most presets log progress on stderr, gates read one stream
     let buffer = Arc::new(Mutex::new(String::new()));
     let mut readers = Vec::new();
     if let Some(out) = child.stdout.take() {
@@ -680,7 +677,7 @@ fn run_once(
         }
         std::thread::sleep(POLL);
     };
-    // a killed child can leave a grandchild holding the pipe, so the readers are joined only on a clean exit
+    // a killed child's grandchild can hold the pipe, so the readers are joined only on a clean exit
     if !timed_out && !stopped {
         for reader in readers {
             let _ = reader.join();
@@ -703,7 +700,7 @@ fn run_once(
     Ok((exit, output, timed_out))
 }
 
-// at most one stage.output a second, or a chatty agent writes more event lines than the TUI can redraw off
+// at most one stage.output a second, or a chatty agent outruns the TUI's redraw
 fn flush(buffer: &Mutex<String>, sent: &mut usize, stage: &str, events: &mut Writer) {
     let chunk = match buffer.lock() {
         Ok(text) => {
@@ -826,7 +823,7 @@ mod tests {
         let argv = claude_with_plugins_file(&file.to_string_lossy());
         let plugins = settings_word(&argv)["enabledPlugins"].clone();
         assert_eq!(plugins["caveman@caveman"], serde_json::json!(false));
-        // a plugin no preset names still reaches the lane unless the list is read from the operator's own file
+        // a plugin no preset names still reaches the lane unless the list is read from the operator's file
         assert_eq!(plugins["never-seen@shop"], serde_json::json!(false));
         // the adapter arrives by --plugin-dir and must survive the override
         assert_eq!(plugins.get("harness@inline"), None);
@@ -977,7 +974,7 @@ mod tests {
 
     #[test]
     fn cost_after_result() {
-        // claude 2.1.300 tail, recorded 2026-11-07, result line trimmed
+        // claude 2.1.300 tail, result line trimmed
         let out = concat!(
             "{\"duration_api_ms\":28921,\"stop_reason\":\"end_turn\",\"session_id\":\"f830a49b-de54-4dcd-aad4-dcc68588d064\",\"total_cost_usd\":0.34952540000000004,\"usage\":{\"input_tokens\":24,\"cache_creation_input_tokens\":27608,\"cache_read_input_tokens\":375627,\"output_tokens\":2672},\"is_error\":false,\"num_turns\":15,\"subtype\":\"success\",\"type\":\"result\"}\n",
             "{\"type\":\"system\",\"subtype\":\"session_state_changed\",\"state\":\"idle\",\"uuid\":\"c8c9eade-667f-4529-ab3c-c29c12ddb480\",\"session_id\":\"f830a49b-de54-4dcd-aad4-dcc68588d064\"}\n",
@@ -1291,7 +1288,7 @@ mod tests {
     #[test]
     fn an_out_of_range_reset_hour_does_not_sleep() {
         let r = crate::fixture::Repo::new();
-        // the stop file and the fixed instant together: an hour read as 1am would be inside MAX_WAIT and sleep
+        // stop file plus fixed instant: an hour misread as 1am would fall inside MAX_WAIT and sleep
         std::fs::create_dir_all(stop_file(&r.root).parent().unwrap()).unwrap();
         std::fs::write(stop_file(&r.root), "").unwrap();
         fix_now(
@@ -1319,8 +1316,7 @@ mod tests {
             .any(|e| matches!(e.kind, Kind::Limit { .. })));
     }
 
-    // reset computed at run time, not fixed: a fixed timestamp would be in the past by the second retry
-    // BSD `date` first, GNU second, so this runs on both macOS and Linux
+    // computed at run time, as a fixed reset is past by the second retry; BSD `date`, then GNU
     fn limit_notice(bsd: &str, gnu: &str) -> String {
         const FMT: &str = "'+hit your session limit resets %I:%M%p (UTC)'";
         format!("date -u -v+{bsd} {FMT} 2>/dev/null || date -u -d '{gnu}' {FMT}")
@@ -1366,10 +1362,10 @@ mod tests {
     fn a_limit_notice_the_agent_quoted_is_not_a_limit() {
         let r = crate::fixture::Repo::new();
         let runs = r.root.join("runs");
-        // both shapes seen on 2026-09-16: a file the agent read, and a command the agent wrote
+        // both shapes seen live: a file the agent read, and a command the agent wrote
         let read = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"assert!(seconds_until_reset(\"You've hit your session limit · resets 12:40am (Australia/Melbourne)\").is_some());"}]}}"#;
         let wrote = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"printf '%s' \"You've hit your session limit · resets 12:40am (Australia/Melbourne)\" > stub"}}]}}"#;
-        // the notice carries an apostrophe, and an unescaped one ends the shell string and hangs the stage on the syntax error it prints
+        // the notice's apostrophe, unescaped, ends the shell string and hangs the stage on its syntax error
         let argv = r.stub_agent(&format!(
             "echo x >> {}; printf '%s\\n%s\\n' '{}' '{}'",
             runs.display(),

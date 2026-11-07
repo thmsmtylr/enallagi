@@ -1,4 +1,4 @@
-//! Every exit-criteria row whose test does not exist.
+//! every exit-criteria row whose test does not exist
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
@@ -15,7 +15,7 @@ pub fn untested_rows(ctx: &ProbeCtx) -> Res<Vec<Untested>> {
     let src = &ctx.cfg.layout.source_root;
     let mut out = Vec::new();
     for row in common::spec_rows(ctx)? {
-        // spec.md §12: rows live under source_root, so a name with a slash is tried there first
+        // rows live under source_root, so a name with a slash is tried there first
         let under_root = format!("{src}/{}", row.name);
         let path = if row.name.contains('/') && !common::exists(ctx.root, &under_root) {
             row.name.clone()

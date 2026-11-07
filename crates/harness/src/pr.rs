@@ -1,4 +1,4 @@
-//! Builds a pull-request branch off the upstream default branch from the product commits whose subject names a landed task.
+//! builds a pull-request branch off upstream's default branch from the commits naming a landed task
 
 use crate::probes::{contribution_policy, Finding};
 use crate::tracker::{self, Tracker};
@@ -11,17 +11,17 @@ use std::process::Command;
 pub struct PrOpts {
     pub push: bool,
     pub policy_read: bool,
-    /// Tasks whose branch this run already built, in build order; an unmerged blocker among them is the base, not a refusal.
+    /// tasks this run already built, in order; an unmerged blocker among them is the base, not a refusal
     pub stack_on: Vec<String>,
 }
 
 #[derive(Debug)]
 pub struct PrReport {
     pub branch: String,
-    /// The branch the pull request merges into: the default branch, or a blocker's `task/` branch.
+    /// the default branch, or a blocker's `task/` branch
     pub base: String,
     pub description: PathBuf,
-    /// The pull request's URL, or why none was opened, when `--push` ran.
+    /// the pull request's URL, or why none was opened, when `--push` ran
     pub opened: Option<String>,
     pub policy: Vec<Finding>,
 }
@@ -179,7 +179,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     let attempt = |rev: &str| try_build(root, &dir, &branch, rev, &cfg, &tasks, &picked);
     let mut on = stacked.map(|at| &stacks[at]);
     let mut built = attempt(on.map_or(base.as_str(), |s| s.rev.as_str()));
-    // a change on an earlier unmerged task's lines builds on that task's branch; none taking it keeps the first conflict
+    // an edit to an unmerged task's lines builds on its branch; else the first conflict stands
     if let (None, Err(PrError::Conflict { files, .. })) = (on, &built) {
         let files = files.clone();
         let touching = |s: &&Stack| {
@@ -247,7 +247,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
 
 struct Stack {
     id: String,
-    /// The ref the branch is built from: `task/<id>`, or `origin/task/<id>` for one an earlier run pushed.
+    /// the ref the branch is built from: `task/<id>`, or `origin/task/<id>` for one an earlier run pushed
     rev: String,
 }
 
@@ -257,7 +257,7 @@ impl Stack {
     }
 }
 
-// the branches a task may build on, newest first: this run's in reverse build order, then the remote's
+// branches a task may build on, newest first: this run's in reverse, then the remote's
 fn stacks(root: &Path, opts: &PrOpts, stem: &str, landed: &str) -> Result<Vec<Stack>, PrError> {
     let mut out: Vec<Stack> = opts
         .stack_on
@@ -301,8 +301,7 @@ fn try_build(
     tasks: &[Task],
     picked: &[(String, String)],
 ) -> Result<(), PrError> {
-    // under the repository, as a lane's is: a runner that resolves its tools from a parent directory,
-    // as node does node_modules, finds the checkout's own; a system temp directory has none
+    // under the repository, as a lane's is: a runner resolving tools upward finds the checkout's own
     let worktrees = root.join(dir).join("worktrees");
     fs::create_dir_all(&worktrees).map_err(io(worktrees.display()))?;
     let scratch = tempfile::Builder::new()
@@ -332,7 +331,7 @@ fn try_build(
     built
 }
 
-// a branch built without --push is pushed as it stands; its base is the task branch its parent tips, else the default
+// pushed as built; its base is the task branch its parent tips, else the default
 fn push_built(
     root: &Path,
     dir: &str,
@@ -404,7 +403,7 @@ fn push(root: &Path, dir: &str, stem: &str, report: &mut PrReport) -> Result<(),
     Ok(())
 }
 
-// the description is the only record of the contribution-policy decision and the push, so it is committed rather than left for the next tidy-up
+// the description alone records the policy decision and the push, so it is committed now
 fn record(root: &Path, dir: &str, stem: &str) -> Result<(), PrError> {
     let record = format!("pr/{stem}.md");
     // the record alone: an operator's uncommitted queue edits are not this command's to commit
@@ -421,11 +420,11 @@ pub struct Landed {
     pub id: String,
     pub title: String,
     pub commits: Vec<String>,
-    /// `no branch`, `built <branch>`, or `pushed <url>`.
+    /// `no branch`, `built <branch>`, or `pushed <url>`
     pub state: String,
 }
 
-/// Every done or open task, archived ones first, with the product commits naming it and its pull-request state.
+/// every done or open task, archived first, with the product commits naming it and its PR state
 pub fn landed(root: &Path) -> Result<Vec<Landed>, PrError> {
     let cfg = config::load(root).map_err(|e| PrError::Refused(vec![e.to_string()]))?;
     let dir = cfg.layout.harness_dir.clone();
@@ -626,9 +625,7 @@ fn apply_and_commit(
     Ok(())
 }
 
-// the task's last commit subject with its id dropped: `feat(scope): T-### x` -> `feat(scope): x`.
-// A block title is the finding in the finding's own words and runs long; a pull request wants the
-// one line the commit already wrote. The block's title is the body's heading, not the subject.
+// the last commit subject minus its id: a PR wants the commit's one line, not the long block title
 const SUBJECT_MAX: usize = 72;
 
 fn subject(tasks: &[Task], picked: &[(String, String)]) -> String {
@@ -741,7 +738,7 @@ fn open(root: &Path, report: &PrReport) -> Result<String, PrError> {
     }
 }
 
-/// A pull request as the merge step reads it.
+/// a pull request as the merge step reads it
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Head {
@@ -752,7 +749,7 @@ pub struct Head {
     pub status_check_rollup: Vec<serde_json::Value>,
 }
 
-/// `gh args` with `token` as `GH_TOKEN`: its stdout, or why it failed.
+/// `gh args` with `token` as `GH_TOKEN`: its stdout, or why it failed
 pub(crate) fn gh(
     root: Option<&Path>,
     token: Option<&str>,
@@ -781,7 +778,7 @@ pub fn view(root: &Path, url: &str) -> Result<Head, String> {
     serde_json::from_str(&out).map_err(|e| format!("gh pr view {url}: {e}"))
 }
 
-/// Why a pull request is not merged yet, or None when it is green.
+/// why a pull request is not merged yet, or None when it is green
 pub fn blocked(
     head: &Head,
     id: &str,

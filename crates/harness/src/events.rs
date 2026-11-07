@@ -1,4 +1,4 @@
-//! The append-only JSONL event log written during a run and read back by `enallagi watch`/`events` and the probes.
+//! the append-only JSONL event log a run writes and `watch`, `events` and the probes read
 
 use std::fs;
 use std::io::{self, Write};
@@ -63,7 +63,7 @@ pub enum Kind {
         #[serde(default)]
         cache_read_input_tokens: Option<u64>,
         turns: Option<u64>,
-        // the cap this stage ran under, which a handed adjudicator raises; a log written before the field reads as None
+        // the cap this stage ran under, raised for a handed adjudicator; None in a log older than the field
         #[serde(default)]
         turn_cap: Option<u32>,
     },
@@ -162,8 +162,7 @@ pub struct Log {
 }
 
 impl Log {
-    // a lane runs in a linked worktree that is removed when the lane ends, and an ignored file cannot
-    // ride a fast-forward, so the log resolves to the main worktree and every reader finds it there
+    // a lane's worktree is removed and an ignored log rides no fast-forward, so it lives in the main one
     pub fn open(harness_dir: &Path) -> Log {
         let dir = crate::git::main_worktree_path(harness_dir)
             .unwrap_or_else(|| harness_dir.to_path_buf());
@@ -184,8 +183,7 @@ impl Log {
             .create(true)
             .append(true)
             .open(&self.path)?;
-        // lanes of one run append to the same log, and an append is atomic only per write, so the
-        // newline rides the record: `writeln!` emits it separately and another lane splits the line
+        // lanes share the log and only one write is atomic, so the newline rides in the record's own write
         f.write_all(line.as_bytes())
     }
 
@@ -346,7 +344,7 @@ pub struct PrefixRow<'a> {
     pub handed_bytes: Option<u64>,
 }
 
-/// One row per role stage in the log: its usage lanes, rendered as text or one JSON object per line.
+/// one row of usage lanes per role stage, as text or one JSON object per line
 pub fn prefix_report(events: &[Event], json: bool) -> String {
     let mut roles: std::collections::HashMap<(&str, u32, &str), &str> = Default::default();
     let mut window: Option<(&str, &str)> = None;

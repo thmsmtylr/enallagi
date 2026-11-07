@@ -1,4 +1,4 @@
-//! A rule that names no file, no command and no hook. Nothing can run it, so it is advice and not enforcement.
+//! a rule naming no file, command or hook: nothing can run it, so it is advice, not enforcement
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};

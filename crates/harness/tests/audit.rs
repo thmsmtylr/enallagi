@@ -1,4 +1,4 @@
-//! `enallagi audit` over a seeded fixture and a scripted auditor: the signal it hands over, the citations it checks, and the entries it writes or merges.
+//! `enallagi audit` over a seeded fixture and a scripted auditor
 
 use enallagi::audit;
 use enallagi::config::{self, Config};
@@ -100,7 +100,7 @@ fn append(repo: &Repo, rel: &str, text: &str) {
     fs::write(path, body).expect("append");
 }
 
-// the rejected entry sits under its heading, and the archived blocks after it, as `enallagi run` leaves them
+// the rejected entry under its heading, the archived blocks after it, as `enallagi run` leaves them
 fn with_signal(repo: &Repo) {
     append(repo, ".enallagi/PROGRESS.md", PROGRESS);
     let rel = ".enallagi/DECISIONS.md";

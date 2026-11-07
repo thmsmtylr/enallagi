@@ -1,4 +1,4 @@
-//! Real commands under the host's real sandbox, through `Sandbox::wrap` (ADR 0004).
+//! real commands under the host's real sandbox, through `Sandbox::wrap`
 
 use enallagi::config::{Config, SandboxMode};
 use enallagi::fixture::{git, Repo};

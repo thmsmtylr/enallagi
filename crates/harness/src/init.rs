@@ -1,4 +1,4 @@
-//! Seeds a repo with the harness's files: its own files are rewritten every run, the project's documents are seeded once.
+//! seeds a repo: the harness's own files rewritten every run, the project's documents seeded once
 
 use crate::agent::{self, Preset};
 use crate::config::{self, Config};
@@ -72,8 +72,7 @@ const EVALS_README: &str = include_str!("../../../templates/evals.README.md");
 const CLAUDE_PLUGIN: &str = "adapters/claude";
 const CLAUDE_HOOKS: &str = include_str!("../../../adapters/claude/hooks/hooks.json");
 
-// scoped to the harness dir, never touches the repo's own .gitignore
-// vendored skills are committed (controller ruling), so skills/ is not ignored here
+// harness-dir scoped; skills/ is not ignored since vendored skills are committed
 const GITIGNORE: &str =
     "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\nholdouts/\nSTOP\n";
 // two lanes each append a PROGRESS.md entry; union is a built-in driver, so no git config is written
@@ -83,13 +82,13 @@ const GITATTRIBUTES: &str = "PROGRESS.md merge=union\n";
 pub struct InitOpts {
     pub adapter: Option<String>,
     pub dry_run: bool,
-    /// Answers given on the command line; each skips its question.
+    /// answers given on the command line; each skips its question
     pub answers: Answers,
-    /// Take every default without asking; a stdin that is not a terminal is the same.
+    /// take every default without asking; a stdin that is not a terminal is the same
     pub yes: bool,
 }
 
-/// The four keys detection cannot always decide, answered by a flag, a prompt, or the default.
+/// the four keys detection cannot always decide, answered by a flag, a prompt, or the default
 #[derive(Debug, Default, Clone)]
 pub struct Answers {
     pub preset: Option<String>,
@@ -98,7 +97,7 @@ pub struct Answers {
     pub source_root: Option<String>,
 }
 
-/// The questions init asks on a fresh install, in the order it asks them.
+/// the questions init asks on a fresh install, in the order it asks them
 pub const QUESTIONS: [(&str, &str); 4] = [
     ("agent.preset", "the agent CLI the lanes run"),
     ("check.command", "the one command that means done"),
@@ -111,18 +110,17 @@ pub const QUESTIONS: [(&str, &str); 4] = [
 
 #[derive(Debug, Default)]
 pub struct InitReport {
-    /// Relative paths this run wrote, or would write under `--dry-run`.
+    /// relative paths this run wrote, or would write under `--dry-run`
     pub wrote: Vec<String>,
-    /// Relative paths that already had content and were left alone.
+    /// relative paths that already had content and were left alone
     pub kept: Vec<String>,
-    /// `"<old> -> <new>"` for every key lifted out of a `harness.json`.
+    /// `"<old> -> <new>"` for every key lifted out of a `harness.json`
     pub migrated_keys: Vec<String>,
-    /// The top-level paths of everything above, for the `git add` line.
+    /// the top-level paths of everything above, for the `git add` line
     pub track: Vec<String>,
-    /// Everything else the operator has to read: advice on a kept file, and the
-    /// adapters that write nothing.
+    /// everything else the operator has to read: advice on a kept file, adapters that write nothing
     pub notes: Vec<String>,
-    /// Paths outside the harness directory that the product does not track, hidden in its info/exclude.
+    /// untracked paths outside the harness directory, hidden in the product's info/exclude
     pub excluded: Vec<String>,
 }
 
@@ -321,8 +319,7 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         seed(root, &mut plan, &mut report, &spec, sub(SPEC_SECTION));
     }
 
-    // --adapter overrides; otherwise the configured preset names the tool, so one init writes
-    // its hook and instruction files without a second flag
+    // --adapter overrides; else the configured preset names the tool, so one init needs no second flag
     let tool = match &opts.adapter {
         Some(name) => Some(
             presets
@@ -345,7 +342,7 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         }
     }
 
-    // without a manifest claude names the plugin after its directory, and every skill invocation says harness:<id>
+    // without a manifest claude names the plugin after its dir, and each skill call says harness:<id>
     let plugin = format!("{dir}/{CLAUDE_PLUGIN}");
     if skills_dir.starts_with(&plugin) || tool.is_some_and(|t| t.name == "claude") {
         let manifest = json!({
@@ -378,7 +375,7 @@ fn own_repository(root: &Path, dir: &str) -> bool {
     !dir.is_empty() && git::git(root, &["ls-files", "--", dir]).is_ok_and(|out| out.is_empty())
 }
 
-// a tracked file is never excluded: exclude does not hide it, and `git add` on an excluded path exits 1
+// a tracked file is never excluded: exclude can't hide it, and `git add` on an excluded path exits 1
 fn untracked_entry_points(
     root: &Path,
     dir: &str,
@@ -428,7 +425,7 @@ fn state_repository(root: &Path, dir: &str, entries: &[String]) -> Result<(), In
             _ => kept.push(line),
         }
     }
-    // ponytail: entry paths are written unescaped, so a configured name holding `*`, `?`, `[` or `!` matches as a pattern
+    // ponytail: paths written unescaped; a name holding `*`, `?`, `[` or `!` matches as a pattern
     let block = std::iter::once(bare)
         .chain(entries.iter().map(|e| format!("/{e}")))
         .fold(String::new(), |acc, line| acc + &line + "\n");
@@ -459,8 +456,7 @@ fn untrack_stop(root: &Path, dir: &str) -> Result<Option<String>, InitError> {
     )))
 }
 
-// linters and formatters read .gitignore and never info/exclude, and a lane checks out HEAD, so the
-// line is committed: uncommitted, the lane's tools still scan the harness directory's vendored code
+// linters read .gitignore, not info/exclude, and lanes check out HEAD, so the line is committed
 fn ignore_in_product(root: &Path, dir: &str) -> Result<Option<String>, InitError> {
     let path = root.join(".gitignore");
     let text = fs::read_to_string(&path).unwrap_or_default();
@@ -594,9 +590,7 @@ fn seed_config(
     Ok(Some(text))
 }
 
-// the four keys a fresh install may still have to be told: a flag answers without asking, a
-// question defaults to what detection found or the shipped default, and `--yes` or a stdin that is
-// not a terminal takes every default so an unattended init never blocks
+// a flag answers, a prompt defaults to detection; `--yes` or a non-tty stdin takes every default
 fn answer(
     detected_toml: &str,
     detected: &[runners::Detected],
@@ -688,7 +682,7 @@ fn audit_config(root: &Path, path: &Path, report: &mut InitReport) -> Result<(),
     Ok(())
 }
 
-/// Drops every key in enallagi.toml that equals its embedded default, and names each one.
+/// drops every key in enallagi.toml that equals its embedded default, and names each one
 pub fn prune(root: &Path, dry_run: bool) -> Result<Vec<String>, InitError> {
     let path = config::config_path(root);
     if !has_content(&path) {
@@ -733,7 +727,7 @@ fn seed_context(
     resync_kept(root, plan, report, cfg, path);
 }
 
-// a document the project owns keeps every word it wrote; only the check command it names follows the config
+// a project-owned document keeps every word; only the check command it names follows the config
 fn resync_kept(
     root: &Path,
     plan: &mut Vec<Planned>,

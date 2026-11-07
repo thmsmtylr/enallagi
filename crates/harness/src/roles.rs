@@ -1,4 +1,4 @@
-//! Roles declared in `[[role]]`: fetched, cached and pinned through the skills machinery, vendored to `<harness_dir>/roles/<name>.md`.
+//! roles declared in `[[role]]`, pinned like skills and vendored to `<harness_dir>/roles/<name>.md`
 
 use crate::config::Config;
 use crate::events::Writer;
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 pub struct ResolvedRole {
     pub name: String,
     pub path: PathBuf,
-    /// `cached` when the vendored file already matched the lock, `fetched` when it was copied in.
+    /// `cached` when the vendored file already matched the lock, `fetched` when it was copied in
     pub result: String,
     pub body: String,
 }
@@ -92,7 +92,7 @@ pub(crate) fn frontmatter(text: &str) -> &str {
         .map_or("", |(front, _)| front)
 }
 
-/// The `writes:` and `hosts:` a role's frontmatter declares, comma-separated.
+/// the `writes:` and `hosts:` a role's frontmatter declares, comma-separated
 pub fn policy(text: &str) -> RolePolicy {
     let list = |key: &str| {
         frontmatter(text).lines().find_map(|l| {

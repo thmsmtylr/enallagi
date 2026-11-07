@@ -1,4 +1,4 @@
-//! The queue against the spec, both directions: neither spec-untested nor queue-hygiene asks whether the two agree.
+//! the queue against the spec, in both directions
 
 use super::common::{self, Res};
 use super::spec_untested::untested_rows;
@@ -100,7 +100,7 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     Ok(found)
 }
 
-// a name absent from the tree is quiet unless the history once held it, so a test its own task has yet to write is not reported
+// a name absent from the tree is quiet unless history held it, so an unwritten test is not reported
 fn stale_criteria(
     ctx: &ProbeCtx,
     block: &Block,
@@ -185,7 +185,7 @@ fn code_spans(text: &str) -> String {
         .join("\n")
 }
 
-// the positional filter of a `cargo test ... --test <file> <filter>` invocation, when the line carries one
+// the positional filter of a `cargo test ... --test <file> <filter>` line, when it carries one
 fn test_filter(text: &str) -> Option<String> {
     let spans = code_spans(text);
     let words: Vec<&str> = spans

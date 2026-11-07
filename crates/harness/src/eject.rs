@@ -1,11 +1,11 @@
-//! Removes what `enallagi init` put into a repository: the harness directory, the entry points it excluded, and the exclude block.
+//! removes what `enallagi init` put in: the harness directory, its excluded entry points, the block
 
 use crate::{config, git};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-// init.rs writes this block; the eject tests round-trip init through eject, so the two cannot drift silently
+// init.rs writes this block; the eject tests round-trip init through eject, so the two cannot drift
 const EXCLUDE_OPEN: &str = "# >>> harness";
 const EXCLUDE_CLOSE: &str = "# <<< harness";
 
@@ -17,13 +17,13 @@ pub struct EjectOpts {
 
 #[derive(Debug, Default)]
 pub struct EjectReport {
-    /// Paths relative to the root, removed or, under `--dry-run`, to be removed.
+    /// relative to the root; under `--dry-run`, to be removed
     pub removed: Vec<String>,
-    /// Excluded paths the product tracks since init wrote them, left alone.
+    /// excluded paths the product tracks since init wrote them
     pub kept: Vec<String>,
-    /// The git path of the exclude file, when it held the block.
+    /// the git path of the exclude file, when it held the block
     pub exclude: Option<String>,
-    /// Whether `.gitignore` held the line init added.
+    /// whether `.gitignore` held the line init added
     pub unignored: bool,
 }
 
@@ -122,9 +122,7 @@ pub fn eject(root: &Path, opts: &EjectOpts) -> Result<EjectReport, EjectError> {
     Ok(report)
 }
 
-/// Where `eject` keeps the record when no `--keep-record` is given:
-/// `$XDG_DATA_HOME/enallagi/ejected/<repository>-<stamp>`, `~/.local/share` when the variable is
-/// unset. The parent is created; the leaf must not exist, which `eject` refuses on its own.
+/// `<data dir>/enallagi/ejected/<repository>-<stamp>`, the record's home without `--keep-record`
 pub fn default_record(root: &Path) -> Result<PathBuf, EjectError> {
     let data = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
@@ -158,7 +156,7 @@ fn lanes(root: &Path, dir: &str) -> Result<Vec<String>, EjectError> {
         .collect())
 }
 
-// not archive::loop_live, which exempts the loop's own descendants: a lane inside the loop must not delete it
+// not archive::loop_live, which exempts the loop's descendants: a lane in the loop must not delete it
 fn loop_pid(root: &Path, dir: &str) -> Option<u32> {
     let pid: u32 = fs::read_to_string(root.join(dir).join("loop.pid"))
         .ok()?

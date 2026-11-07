@@ -1,4 +1,4 @@
-//! `enallagi run [n]` -- the launcher, in the TUI when there is one to draw in.
+//! `enallagi run [n]` -- the launcher, in the TUI when there is one to draw in
 
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -81,7 +81,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             Err(payload) => std::panic::resume_unwind(payload),
         };
         drawn?;
-        // the TUI path never printed one; the no-TUI path gets its from pipeline::run itself
+        // the TUI path never printed one; the no-TUI path gets one from pipeline::run itself
         if let Ok(digest) = &ran {
             print!("{}", pipeline::digest_text(digest));
         }
@@ -112,7 +112,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     }
 }
 
-// dry-round's rejection is a routing decision, not a verdict: a round with nothing takeable is how a run ends well
+// dry-round's rejection routes, not judges: a round with nothing takeable is how a run ends well
 fn counts_as_failure(e: &Event) -> bool {
     match &e.kind {
         Kind::Halt { .. } => true,

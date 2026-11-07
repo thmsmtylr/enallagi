@@ -1,4 +1,4 @@
-//! `enallagi audit` -- prints each learning it proposed, each it merged into a standing entry, and each it refused with the reason. With `--harness`, prints each rule two installs earned as a `[seed]` line.
+//! `enallagi audit` -- learnings proposed, merged, refused; `--harness` prints `[seed]` rules
 
 use crate::{audit, config, events};
 

@@ -1,4 +1,4 @@
-//! The eval runner and the three-condition admission gate for a candidate rule.
+//! the eval runner and the three-condition admission gate for a candidate rule
 
 use crate::agent;
 use crate::config;
@@ -43,8 +43,7 @@ fn eval_dir(pkg: &Path, name: &str) -> PathBuf {
 }
 
 fn needs_agent(pkg: &Path, name: &str) -> bool {
-    // presence, not readability: a prompt.txt that is a directory or a broken symlink is a broken
-    // fixture, and reading it fails below, where is_file() would have silently skipped the agent
+    // presence, not readability: a prompt.txt that is a directory or broken link fails the read below
     eval_dir(pkg, name)
         .join("prompt.txt")
         .symlink_metadata()
@@ -212,20 +211,20 @@ fn run_one(pkg: &Path, name: &str, agent_argv: &[String], ablate: bool) -> Outco
         agents_follow_roles(&repo.root);
     }
 
-    // committed before setup.sh, so a setup that leaves work uncommitted on purpose is what the agent sees
+    // committed before setup.sh, so work setup leaves uncommitted is what the agent sees
     let _ = git::commit_paths(&repo.root, &["."], "fixture");
 
     if !run_script(&dir.join("setup.sh"), &repo.root, Some(pkg)) {
         return Outcome::FixtureError;
     }
 
-    // no prompt.txt is an eval that asks a role nothing, so no agent is spawned and none need be configured
+    // no prompt.txt asks a role nothing, so no agent is spawned and none need be configured
     if needs_agent(pkg, name) {
         let prompt = match std::fs::read_to_string(dir.join("prompt.txt")) {
             Ok(p) => p,
             Err(_) => return Outcome::FixtureError,
         };
-        // An agent that did not run is not a role that disobeyed.
+        // an agent that did not run is not a role that disobeyed
         if !run_agent(agent_argv, &prompt, &repo.root) {
             return Outcome::AgentError;
         }

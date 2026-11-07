@@ -1,4 +1,4 @@
-//! What the tree says about itself. A probe REPORTS, never gates; one that could not run says ERROR, not a claim of zero.
+//! what the tree says about itself: a probe reports, never gates; one that could not run says ERROR
 
 pub mod common;
 pub mod contribution_policy;
@@ -56,7 +56,7 @@ pub struct CheckOutcome {
 pub struct ProbeCtx<'a> {
     pub root: &'a Path,
     pub cfg: &'a Config,
-    /// `None` makes `run_all` run the check itself.
+    /// `None` makes `run_all` run the check itself
     pub check: Option<&'a CheckOutcome>,
     pub driver: bool,
 }

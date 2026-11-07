@@ -1,4 +1,4 @@
-//! Asks the configured agent for the check when no runner preset matches the tree, or for its tally when one other than cargo does, and writes it only once the check proves it.
+//! asks the agent for a check or tally no preset settles, and writes it once the check proves it
 
 use crate::config::{self, Config};
 use crate::runners::{self, Detected};
@@ -84,11 +84,11 @@ impl TallyProposal {
 
 pub enum Outcome {
     Written(Vec<Detected>),
-    /// Each attempt's proposal and the step it failed.
+    /// each attempt's proposal and the step it failed
     Refused(Vec<(Vec<Detected>, String)>),
 }
 
-/// Asks, verifies, and writes enallagi.toml only when every step passes; a refusal is sent back once.
+/// asks, verifies, and writes enallagi.toml only when every step passes; a refusal is sent back once
 pub fn run(root: &Path, cfg: &Config) -> anyhow::Result<Outcome> {
     crate::agent::catch_stop_signals();
     let mut refused: Vec<(Vec<Detected>, String)> = Vec::new();
@@ -120,8 +120,7 @@ pub fn run(root: &Path, cfg: &Config) -> anyhow::Result<Outcome> {
     Ok(Outcome::Refused(refused))
 }
 
-/// Whether init asks for `check.tally` alone: the check is named, its tally is not, and exactly
-/// one runner preset other than cargo, whose `test result:` lines need no pattern, matched the tree.
+/// whether init asks for `check.tally` alone: check named, tally not, one non-cargo preset matched
 pub fn wants_tally(root: &Path, cfg: &Config) -> bool {
     if cfg.check.command.is_empty() || !cfg.check.tally.is_empty() {
         return false;
@@ -129,8 +128,7 @@ pub fn wants_tally(root: &Path, cfg: &Config) -> bool {
     matches!(runners::detect(root).candidates.as_slice(), [one] if one.name != "cargo")
 }
 
-/// Runs the check once on the clean tree, asks for a `tally` that counts it, and writes it only
-/// when it counts some passed and none failed; a refusal is sent back once with the lines it saw.
+/// asks for a `tally` counting the clean run; writes it only when some pass and none fail
 pub fn run_tally(root: &Path, cfg: &Config) -> anyhow::Result<Outcome> {
     crate::agent::catch_stop_signals();
     let clean = step(
@@ -305,7 +303,7 @@ fn ask_as<T: serde::de::DeserializeOwned>(
     })
 }
 
-/// The last marked block in the output that parses; a JSON event line is read for the strings it carries.
+/// the last marked block that parses; a JSON event line is read for the strings it carries
 pub fn parse(output: &str) -> Option<Proposal> {
     parse_as(output)
 }
@@ -390,7 +388,7 @@ impl Drop for Planted {
     }
 }
 
-/// The first step the proposal fails and whether its command was green on the clean tree.
+// the first step the proposal fails, and whether its command was green on the clean tree
 fn verify(
     root: &Path,
     cfg: &Config,

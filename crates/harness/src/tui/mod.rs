@@ -1,4 +1,4 @@
-//! Renders a run from the event log, live or attached; `Model` folds events, `view` draws onto any `ratatui` backend.
+//! renders a run from the event log; `Model` folds events, `view` draws onto any `ratatui` backend
 
 mod stream;
 mod view;
@@ -270,8 +270,7 @@ fn loop_running(pid_path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-// restores on drop only the steps that succeeded, including on panic (Drop runs during unwinding);
-// run_live/run_attached also catch_unwind so the terminal is restored before the panic resumes
+// restores on drop only the steps that succeeded, so a panic restores them too
 struct TerminalGuard {
     raw_mode: bool,
     alt_screen: bool,
@@ -288,7 +287,7 @@ impl Drop for TerminalGuard {
     }
 }
 
-// unlike TerminalGuard, tries both steps unconditionally and ignores errors -- idempotent, safe to call more than once
+// unlike TerminalGuard, tries both steps and ignores errors, so it is safe to call twice
 fn restore_terminal() {
     let _ = execute!(std::io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
     let _ = disable_raw_mode();
@@ -310,7 +309,7 @@ fn enter_terminal() -> anyhow::Result<(Terminal<CrosstermBackend<std::io::Stdout
 
 type PanicHook = dyn Fn(&PanicHookInfo<'_>) + Send + Sync + 'static;
 
-// pulled out of install_restore_hook so a test can supply a fake restore/prev without touching a real terminal
+// split out so a test can pass a fake restore and previous hook without a real terminal
 fn build_hook<R>(restore: R, prev: Arc<PanicHook>) -> Box<PanicHook>
 where
     R: Fn() + Send + Sync + 'static,
@@ -321,7 +320,7 @@ where
     })
 }
 
-// restores the terminal before forwarding to the previous hook, so a panic's message prints on the normal screen
+// restores the terminal before the previous hook, so a panic's message prints on the normal screen
 fn install_restore_hook() -> Arc<PanicHook> {
     let prev: Arc<PanicHook> = Arc::from(std::panic::take_hook());
     std::panic::set_hook(build_hook(restore_terminal, Arc::clone(&prev)));
@@ -332,7 +331,7 @@ fn restore_hook(prev: Arc<PanicHook>) {
     std::panic::set_hook(Box::new(move |info| (*prev)(info)));
 }
 
-// `q` writes the STOP file and keeps drawing until rx disconnects -- the loop decides when to end, the TUI just asks
+// `q` writes STOP and keeps drawing until rx disconnects: the loop decides when to end
 pub fn run_live(rx: Receiver<Event>, tracker: &Tracker, stop: &Path) -> anyhow::Result<()> {
     let (mut terminal, guard) = enter_terminal()?;
     let prev_hook = install_restore_hook();
@@ -347,9 +346,7 @@ pub fn run_live(rx: Receiver<Event>, tracker: &Tracker, stop: &Path) -> anyhow::
     }
 }
 
-// `q` means STOP while the run is live; once it's finished nothing is left to stop, so the same
-// key means leave instead -- distinguished here rather than in Model::handle_key, which has no
-// notion of "leave" and stays a plain state fold.
+// `q` stops a live run and leaves a finished one; Model::handle_key stays a plain fold
 fn is_leave_key(finished: bool, key: &KeyEvent) -> bool {
     finished && key.kind == KeyEventKind::Press && key.code == KeyCode::Char('q')
 }

@@ -1,4 +1,4 @@
-//! A commit subject, a task note or a printed line that comments on the change instead of recording it.
+//! a commit subject, task note or printed line that comments on the change instead of recording it
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
@@ -125,7 +125,7 @@ fn notes(ctx: &ProbeCtx, rules: &Rules, found: &mut Vec<Finding>) -> Res<()> {
                 fenced = !fenced;
                 continue;
             }
-            // a note is required to paste its command and its output, so only the prose around them is read
+            // a note pastes its command and its output, so only the prose around them is read
             if fenced {
                 continue;
             }
@@ -134,7 +134,7 @@ fn notes(ctx: &ProbeCtx, rules: &Rules, found: &mut Vec<Finding>) -> Res<()> {
             } else if author.is_match(text) || text.trim().is_empty() {
                 rejected = false;
             }
-            // the verifier wrote the rejection and the paragraph under it; an implementer cannot clear someone else's words
+            // the verifier wrote the rejection and its paragraph; an implementer cannot clear another's words
             if rejected {
                 continue;
             }

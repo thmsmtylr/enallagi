@@ -1,4 +1,4 @@
-//! issue: one GitHub issue, read with gh, becomes one `proposed` block. No model writes it.
+//! one GitHub issue, read with gh, becomes one `proposed` block; no model writes it
 
 use crate::block::{self, QueueError};
 
@@ -115,7 +115,7 @@ pub fn render(issue: &Issue, id: &str) -> String {
     lines.join("\n")
 }
 
-// an archived stub carries no notes:, so a landed finding is found in DECISIONS.md; an expired one may return
+// an archived stub has no notes:, so a landed finding is in DECISIONS.md; an expired one may return
 pub(crate) fn expired_at(decisions: &str) -> usize {
     decisions
         .split('\n')
@@ -138,7 +138,7 @@ pub(crate) fn carrier<'a>(
         .map(|b| b.id.clone())
 }
 
-/// The block an issue becomes, given the queue's tickets; the caller appends it through the tracker.
+/// the block an issue becomes, given the queue's tickets; the caller appends it through the tracker
 pub fn append(
     blocks: &[block::Block],
     decisions: &str,

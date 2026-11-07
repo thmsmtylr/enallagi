@@ -1,4 +1,4 @@
-//! A `gh` served from one JSON state file that pushes, replies and merges mutate.
+//! a `gh` served from one JSON state file that pushes, replies and merges mutate
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -96,10 +96,7 @@ pub struct Finding {
     pub text: String,
 }
 
-/// A review bot's recorded shape: `thread` renders each finding as a review thread, and `summary`
-/// (with `{count}` and `{rows}`, one `row` per finding) is the issue comment it edits in place.
-/// `posts` is where its marker sits: `comment` or `thread`. `recorded` is false for a shape taken
-/// from the marker table rather than a `gh api` response.
+/// a review bot's shape; `recorded` is false when taken from the marker table, not a `gh api` reply
 #[derive(Debug, Clone, Deserialize)]
 pub struct Recording {
     pub bot: String,
@@ -132,7 +129,7 @@ pub struct Response {
 }
 
 impl Response {
-    /// The canned answer `stdout` to the call `args`.
+    /// a response answering `stdout` to the call `args`
     pub fn to<S: AsRef<str>>(args: &[S], stdout: &str) -> Response {
         Response {
             args: args.iter().map(|a| a.as_ref().to_string()).collect(),
@@ -171,7 +168,7 @@ pub fn save(path: &Path, state: &State) {
     fs::rename(&tmp, path).unwrap_or_else(|e| panic!("twin: place {}: {e}", path.display()));
 }
 
-/// Writes `state` and a `gh` shim execing `bin twin gh` into `dir`; returns the `PATH` to use and the state path.
+/// writes `state` and a `gh` shim into `dir`; returns the `PATH` to use and the state path
 pub fn install(dir: &Path, bin: &str, state: &State) -> (OsString, PathBuf) {
     fs::create_dir_all(dir).expect("twin: create the shim dir");
     let path = dir.join("twin.json");
@@ -197,7 +194,7 @@ pub fn install(dir: &Path, bin: &str, state: &State) -> (OsString, PathBuf) {
     (std::env::join_paths(dirs).expect("twin: PATH"), path)
 }
 
-/// `enallagi twin gh <args>`: one call against the state file `ENALLAGI_TWIN` names.
+/// `enallagi twin gh <args>`: one call against the state file `ENALLAGI_TWIN` names
 pub fn gh(args: &[String]) -> i32 {
     let Some(path) = std::env::var_os(ENV) else {
         eprintln!("twin: {ENV} is not set");
@@ -674,7 +671,7 @@ fn page(nodes: Vec<Value>) -> Value {
     json!({"pageInfo": {"hasNextPage": false}, "nodes": nodes})
 }
 
-/// The `ReviewThreads` read of one pull.
+/// the `ReviewThreads` read of one pull
 pub fn threads(pull: &Pull) -> Value {
     let reviews = notes(&pull.reviews).as_array().cloned().unwrap_or_default();
     let comments = notes(&pull.comments)

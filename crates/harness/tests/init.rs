@@ -1,4 +1,4 @@
-//! The install assertions, one test per assertion and named after it.
+//! install assertions, one test per assertion and named after it
 
 use enallagi::fixture::Repo;
 use enallagi::init::{self, InitOpts, InitReport};
@@ -1254,9 +1254,7 @@ fn harness_init(repo: &Repo, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).to_string()
 }
 
-// the verdict gate wants the instance committed, and init does it: the nested state repository
-// holds one commit naming the version, its tree is clean, the product's porcelain is empty, and
-// a re-run with nothing changed commits nothing more
+// init commits the instance: one commit naming the version, clean trees, a no-op re-run
 #[test]
 fn init_commits_state() {
     let repo = Repo::new();
@@ -1428,7 +1426,7 @@ fn init_writes_the_keys_the_runner_decides() {
         Some(node.test_file_suffix_re.as_str())
     );
     assert!(layout.get("test_decl_patterns").is_some(), "{layout:?}");
-    // src/ equals the default, so T-021's pruning leaves the key out and the load resolves it
+    // src/ equals the default, so pruning leaves the key out and the load resolves it
     let loaded = enallagi::config::load(&repo.root).expect("load");
     assert_eq!(loaded.layout.source_root, "src");
     let prefixes = layout["allowed_prefixes"].as_array().expect("array");
@@ -1685,8 +1683,7 @@ fn a_fresh_install_leaves_no_unmatched_glob() {
     assert_eq!(found, Vec::new(), "{found:?}");
 }
 
-// one pass over a tree no runner preset matches: the check comes from a flag, the layout from the
-// tree, every rendered copy names them, and the probes that fired on every cold start are silent
+// no runner preset matches: check from a flag, layout from the tree, cold-start probes silent
 #[test]
 fn one_init_leaves_no_stale_copy_and_names_the_check() {
     let repo = Repo::new();
@@ -1729,8 +1726,7 @@ fn one_init_leaves_no_stale_copy_and_names_the_check() {
     assert!(read(&repo, ".enallagi/AGENTS.md").contains("`sh check.sh`"));
 }
 
-// a stdin that is not a terminal asks nothing and takes the defaults, printing each one; a flag
-// answers one question, and an existing enallagi.toml keeps its answers over a flag
+// a non-tty stdin takes printed defaults; a flag answers one; an existing enallagi.toml beats a flag
 #[test]
 fn a_non_terminal_init_takes_the_defaults() {
     let repo = Repo::new();
@@ -2052,8 +2048,7 @@ fn a_fail_name_matching_a_pass_is_refused() {
     }
 }
 
-// a suite a runner preset detects, its check already named, and a scripted agent that logs each
-// prompt it is given and answers with one `tally`
+// a detected suite with its check named, and an agent that logs each prompt and says `tally`
 fn detected_suite(manifest: &str, tally: &str) -> Repo {
     let repo = Repo::new();
     repo.write(manifest, "module fixture\n");

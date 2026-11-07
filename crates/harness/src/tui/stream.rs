@@ -1,4 +1,4 @@
-//! Turns one `stage.output` chunk into the lines the output pane shows: a recognised JSON shape renders as `tool`/`text`, anything else shows raw.
+//! one `stage.output` chunk as output-pane lines: a known JSON shape renders `tool`/`text`, else raw
 
 use serde_json::Value;
 
@@ -36,7 +36,7 @@ fn parse_object(line: &str) -> Option<Value> {
     serde_json::from_str::<Value>(line).ok()
 }
 
-// A recognised message with nothing to show renders as nothing, never as raw JSON.
+// a recognised message with nothing to show renders as nothing, never as raw JSON
 fn render_line(line: &str) -> Option<String> {
     let Some(v) = parse_object(line) else {
         return Some(line.to_string());

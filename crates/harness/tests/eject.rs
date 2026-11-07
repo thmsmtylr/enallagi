@@ -1,4 +1,4 @@
-//! `enallagi eject`: a repository the harness was brought into, ran in and left looks as it did before.
+//! `enallagi eject`: a repository the harness was brought into, ran in and left looks as before
 
 use enallagi::fixture::{exec, git, Repo};
 use std::path::{Path, PathBuf};
@@ -334,8 +334,7 @@ fn eject_keep_record() {
     assert!(!exclude(&r.root).contains("# >>> harness"));
 }
 
-// the record outlives the install: the events, verdicts and progress are what says why a run
-// ended where it did, and only --delete removes them
+// the record outlives the install: it says why a run ended, and only --delete removes it
 #[test]
 fn eject_keeps_the_record_in_the_data_directory() {
     let r = Repo::new();

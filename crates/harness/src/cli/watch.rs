@@ -1,4 +1,4 @@
-//! `enallagi watch` -- attaches the TUI to the live round, which is the newest lane's log when the parent is not running one.
+//! `enallagi watch` -- the TUI on the live round: the newest lane's log when the parent runs none
 
 use std::path::{Path, PathBuf};
 
@@ -11,7 +11,7 @@ pub fn run() -> anyhow::Result<i32> {
     Ok(0)
 }
 
-// a lane started by `enallagi worktree` writes loop.pid inside its own worktree, so the parent's log is a finished round
+// a worktree lane writes loop.pid in its own worktree, so the parent's log is a finished round
 fn live_root(root: &Path, harness_dir: &str) -> PathBuf {
     if crate::archive::loop_live(root, harness_dir).is_some() {
         return root.to_path_buf();

@@ -1,4 +1,4 @@
-//! The lanes' one egress: an HTTP CONNECT proxy on loopback holding a domain allowlist (ADR 0004).
+//! the lanes' one egress: an HTTP CONNECT proxy on loopback holding a domain allowlist
 
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
@@ -28,7 +28,7 @@ impl Proxy {
         Proxy::with(allow, resolve)
     }
 
-    /// A second proxy allowing `more` too, logging its refusals with this one's.
+    /// a second proxy allowing `more` too, logging its refusals with this one's
     pub fn beside(&self, more: &[String]) -> io::Result<Proxy> {
         let allow = self.allow.iter().chain(more).cloned().collect();
         Proxy::sharing(allow, resolve, Arc::clone(&self.denials))
@@ -136,7 +136,7 @@ fn read_head(client: &mut TcpStream) -> Option<String> {
     Some(String::from_utf8_lossy(&head).into_owned())
 }
 
-/// A stream whose two halves can be pumped from two threads.
+/// a stream whose two halves can be pumped from two threads
 pub trait Duplex: Read + Write + Send + Sized + 'static {
     fn dup(&self) -> io::Result<Self>;
     fn close_write(&self);
@@ -160,7 +160,7 @@ impl Duplex for std::os::unix::net::UnixStream {
     }
 }
 
-/// Copies both ways until each side closes.
+/// copies both ways until each side closes
 pub fn pump<A: Duplex, B: Duplex>(client: A, server: B) {
     let (Ok(mut c2), Ok(mut s2)) = (client.dup(), server.dup()) else {
         return;
@@ -197,8 +197,7 @@ fn judge(allow: &[String], host: &str, port: u16) -> Result<(), String> {
     Ok(())
 }
 
-/// An entry is `name`, `*.suffix` or `*`, with an optional `:port` defaulting to 443; `*.suffix`
-/// matches subdomains, never the apex; `*` matches any name.
+/// `name`, `*.suffix` (subdomains, never the apex) or `*`, with an optional `:port`, default 443
 pub fn listed(entry: &str, host: &str, port: u16) -> bool {
     let (name, want) = match entry.rsplit_once(':') {
         Some((name, p)) => match p.parse::<u16>() {

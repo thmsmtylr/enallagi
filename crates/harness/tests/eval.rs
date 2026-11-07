@@ -1,4 +1,4 @@
-//! The eval runner and the write-path gate on a candidate rule, driven with a stub agent so no real agent is spawned.
+//! the eval runner and the write-path gate on a candidate rule, driven by a stub agent
 
 use enallagi::fixture::exec;
 use std::fs;
@@ -428,7 +428,7 @@ fn a_prompt_that_is_not_a_file_is_a_fixture_error() {
     );
 }
 
-// T-452: the ablation holds the filing rule only, so the eval measures that rule
+// the ablation holds the filing rule only, so the eval measures that rule
 #[test]
 fn filing_ablate_strips_rule() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

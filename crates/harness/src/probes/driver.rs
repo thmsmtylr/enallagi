@@ -1,4 +1,4 @@
-//! The one probe that drives the built artifact instead of reading text. Off unless `layout.driver_command` is set and `ENALLAGI_DRIVER=1`.
+//! the one probe driving the built artifact; needs `layout.driver_command` and `ENALLAGI_DRIVER=1`
 
 use super::{common, ProbeCtx, ProbeResult};
 

@@ -1,4 +1,4 @@
-//! `enallagi tasks <verb>` -- the queue read and written from a shell, one verb per question a role asks of it.
+//! `enallagi tasks <verb>` -- the queue from a shell, one verb per question a role asks of it
 
 use crate::block::{self, QueueError};
 use crate::tracker::{self, Tracker};

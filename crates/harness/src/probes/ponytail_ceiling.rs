@@ -1,4 +1,4 @@
-//! A ponytail marker is not re-reported once a kill line names its TEXT (quoted, or via `path:line`) — text not line number, since a moved marker is still the same marker.
+//! a ponytail marker whose text a kill line names, quoted or by `path:line`, stays settled when moved
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};

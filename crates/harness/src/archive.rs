@@ -1,4 +1,4 @@
-//! Expires untriaged tickets and rolls PROGRESS.md over past a size cap.
+//! expires untriaged tickets and rolls PROGRESS.md over past a size cap
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -137,7 +137,7 @@ pub fn archive_done(
     )
 }
 
-// split out so tests can pin PROGRESS_MAX/PROGRESS_KEEP as arguments instead of process env vars, which parallel tests would race on
+// split out so tests pin PROGRESS_MAX/PROGRESS_KEEP as arguments; env vars race across tests
 pub fn archive_done_with(
     root: &Path,
     cfg: &Config,
@@ -155,7 +155,7 @@ pub fn archive_done_with(
         });
     }
 
-    // An uncommitted verdict folded into an archive commit loses its author and its message.
+    // an uncommitted verdict folded into an archive commit loses its author and its message
     let dir = &cfg.layout.harness_dir;
     let (repo, inner, _) = git::locate(root, dir, &config::instance_rel(dir, tracker::SPECS));
     // untracked too: a filed ticket or a halted decompose's drafts
