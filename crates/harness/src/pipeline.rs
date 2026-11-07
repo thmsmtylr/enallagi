@@ -1776,8 +1776,8 @@ fn listing(out: &mut String, heading: &str, items: &[String]) {
 
 // the verifier's reason, else the newest gate's: set_status writes it first
 fn rejection_text(b: &block::Block) -> Option<String> {
-    match tracker::verdict(b) {
-        Some((tracker::Verdict::Rejected(reason), _)) if !reason.is_empty() => Some(reason),
+    match tracker::verdict(b).map(|r| r.verdict) {
+        Some(tracker::Verdict::Rejected(reason)) if !reason.is_empty() => Some(reason),
         _ => block::field(b, "gate").filter(|v| !v.trim().is_empty()),
     }
 }

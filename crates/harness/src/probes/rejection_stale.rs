@@ -17,7 +17,9 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         };
         // the whole value: `ready-for-agent -- a reason` was never an answer
         let ready = tracker::READY.contains(&status.as_str());
-        if matches!(tracker::verdict(&block), Some((Verdict::Rejected(_), _))) && !ready {
+        if tracker::verdict(&block).is_some_and(|r| matches!(r.verdict, Verdict::Rejected(_)))
+            && !ready
+        {
             found.push(common::finding(
                 &tasks,
                 line,

@@ -383,3 +383,16 @@ fn implementer_updates_stated_doc() {
         assert!(text.contains(want), "roles/implementer.md wants {want:?}");
     }
 }
+
+// T-455: a stub agent's result alone passed a writer the real run broke
+#[test]
+fn verifier_copies_writers() {
+    let text = role("verifier");
+    for want in [
+        "writes files or calls a model",
+        "cp -R __ENALLAGI_DIR__",
+        "never the live __ENALLAGI_DIR__",
+    ] {
+        assert!(text.contains(want), "roles/verifier.md wants {want:?}");
+    }
+}

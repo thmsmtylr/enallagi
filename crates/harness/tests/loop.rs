@@ -277,9 +277,15 @@ fn verifier(repo: &Repo) -> String {
 }
 
 // a stub's verdict, written as a role writes it: one line, replacing the last, in `## Harness`, the file's last section
+// a verified verdict carries both review axes, as the verdict gate wants
 fn verdict(line: &str) -> String {
+    let axes = if line.starts_with("verified") {
+        "spec: none\\nstandards: none\\n"
+    } else {
+        ""
+    };
     format!(
-        "f=$(ls {}/*/issues/T-001-*.md)\nsed -i.bak '/^verdict:/d' \"$f\"\nrm -f \"$f.bak\"\nprintf 'verdict: {line}\\n' >>\"$f\"\n",
+        "f=$(ls {}/*/issues/T-001-*.md)\nsed -i.bak -e '/^verdict:/d' -e '/^spec:/d' -e '/^standards:/d' \"$f\"\nrm -f \"$f.bak\"\nprintf 'verdict: {line}\\n{axes}' >>\"$f\"\n",
         queue_path()
     )
 }

@@ -669,8 +669,10 @@ fn describe(
             .take_while(|l| l.starts_with(' '))
             .collect();
         let verdict = tracker::verdict(&task.block)
-            .map(|(v, runs)| {
-                let pairs: String = runs
+            .map(|r| {
+                let v = r.verdict;
+                let pairs: String = r
+                    .runs
                     .iter()
                     .map(|(cmd, exit)| format!("\nran: {cmd}\nexit: {exit}"))
                     .collect();

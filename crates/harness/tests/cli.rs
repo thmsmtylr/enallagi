@@ -404,7 +404,7 @@ fn skills_sync_custom_preset() {
     assert!(root.join(".enallagi/harness.lock").is_file());
 }
 
-// the shipped implementer and verifier both load ponytail and caveman-commit; the implementer's
+// the shipped implementer loads ponytail, the verifier ponytail-review, and both caveman-commit; the implementer's
 // transcript invokes tdd and the verifier's invokes caveman-commit
 fn cost_in(root: &std::path::Path) -> String {
     let mut toml = String::from("[check]\ncommand = \"true\"\n\n");
@@ -464,7 +464,12 @@ fn skills_cost_counts_loads_against_uses() {
         "{report}"
     );
     assert_eq!(row("tdd"), ["tdd", "5", "1", "1"], "{report}");
-    assert_eq!(row("ponytail"), ["ponytail", "5", "2", "0"], "{report}");
+    assert_eq!(row("ponytail"), ["ponytail", "5", "1", "0"], "{report}");
+    assert_eq!(
+        row("ponytail-review"),
+        ["ponytail-review", "5", "1", "0"],
+        "{report}"
+    );
     assert_eq!(
         row("caveman-commit"),
         ["caveman-commit", "5", "2", "1"],
@@ -494,7 +499,9 @@ fn skills_cost_names_an_unused_skill_unproven() {
             "codebase-design",
             "writing-for-agents",
             "domain-modeling",
+            "code-review",
             "ponytail",
+            "ponytail-review",
             "receiving-code-review",
             "verification-before-completion"
         ],

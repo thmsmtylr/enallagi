@@ -162,9 +162,9 @@ fn field_at(ctx: &GateCtx, task: &str, key: &str, rev: Option<&str>) -> Option<S
     block::field(&b, key)
 }
 
-fn verdict_of(ctx: &GateCtx, task: &str) -> Option<tracker::Verdict> {
+fn verdict_of(ctx: &GateCtx, task: &str) -> Option<tracker::Ruling> {
     let b = queue_of(ctx).get(task).ok()??;
-    tracker::verdict(&b).map(|(v, _)| v)
+    tracker::verdict(&b)
 }
 
 fn unreadable(ctx: &mut GateCtx, task: &str) -> GateOutcome {
@@ -223,7 +223,9 @@ fn implementer_not_done(ctx: &mut GateCtx) -> GateOutcome {
     match status_of(ctx, &task) {
         Err(_) => unreadable(ctx, &task),
         Ok(status) if status.as_deref() == Some("review") => {
-            if !matches!(verdict_of(ctx, &task), Some(tracker::Verdict::Rejected(_))) {
+            if !verdict_of(ctx, &task)
+                .is_some_and(|r| matches!(r.verdict, tracker::Verdict::Rejected(_)))
+            {
                 return pass("the implementer left it at review");
             }
             let mut out = force_back(
@@ -407,7 +409,8 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
     };
-    let line = verdict_of(ctx, &task);
+    let ruling = verdict_of(ctx, &task);
+    let line = ruling.as_ref().map(|r| &r.verdict);
     match status_of(ctx, &task) {
         Err(_) => return unreadable(ctx, &task),
         Ok(status) if status.as_deref() == Some("ready-for-agent") => {
@@ -427,7 +430,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
             );
         }
         Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
-        Ok(_) if line != Some(tracker::Verdict::Verified) => {
+        Ok(_) if line != Some(&tracker::Verdict::Verified) => {
             return force_back(
                 ctx,
                 "verdict",
@@ -438,7 +441,29 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
                 &format!("{task} went back to review: done with no verified verdict."),
             );
         }
-        Ok(_) => {}
+        Ok(_) => {
+            let r = ruling.as_ref().expect("verified");
+            let missing: Vec<&str> = [("`spec:`", &r.spec), ("`standards:`", &r.standards)]
+                .iter()
+                .filter(|(_, v)| v.is_none())
+                .map(|(k, _)| *k)
+                .collect();
+            if !missing.is_empty() {
+                let reason = format!(
+                    "done without a {} line under the verdict: each review axis names its findings or `none`",
+                    missing.join(" or ")
+                );
+                return force_back(
+                    ctx,
+                    "verdict",
+                    &task,
+                    "ready-for-agent",
+                    &reason,
+                    &format!("chore({task}): enallagi gate refused a done missing a review axis"),
+                    &format!("{task} was forced back to ready: done missing a review axis."),
+                );
+            }
+        }
     }
 
     // STOP is the harness's own marker, never a lane's work, so it's excluded from the uncommitted count
@@ -507,7 +532,7 @@ fn claimed_runs(ctx: &GateCtx, task: &str) -> Vec<(String, i32)> {
         .ok()
         .flatten()
         .and_then(|b| tracker::verdict(&b))
-        .map(|(_, runs)| runs)
+        .map(|r| r.runs)
         .unwrap_or_default()
 }
 
@@ -2138,7 +2163,7 @@ mod tests {
         // a done carries the verifier's verdict, as a lane's would
         fn queue(&self, status: &str, scope: &str, rows: &str) {
             let verdict = match status {
-                "done" => "verdict: verified by verifier\n",
+                "done" => "verdict: verified by verifier\nspec: none\nstandards: none\n",
                 _ => "",
             };
             self.write_queue(&format!(
@@ -3104,6 +3129,30 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
+    fn verdict_wants_both_axes() {
+        for (axes, missing) in [
+            ("standards: none\n", "spec:"),
+            ("spec: none\n", "standards:"),
+            ("spec:\nstandards: none\n", "spec:"),
+        ] {
+            let mut env = Env::new("exit 0\n");
+            env.write_queue(&format!(
+                "## [T-001] first\nstatus: done\nverdict: verified by verifier\n{axes}"
+            ));
+            env.repo.commit_all("verify");
+            let out = run("verdict", &mut env.ctx(Some("T-001"), None));
+            assert!(!out.pass, "{axes}");
+            assert!(
+                out.reason.contains(&format!("`{missing}`")),
+                "{}",
+                out.reason
+            );
+            let text = env.tasks_text();
+            assert!(text.contains("status: ready-for-agent"), "{text}");
+        }
+    }
+
+    #[test]
     fn rejected_needs_reason() {
         for (line, refused) in [
             ("", true),
@@ -3170,7 +3219,7 @@ echo '{{"results":[]}}' > "$out"
             );
             self.cfg = crate::config::load(&self.repo.root).expect("load enallagi.toml");
             self.write_queue(&format!(
-                "## [T-001] first\nscope: src/a.ts\nrows: none — harness\nblockedBy: none\nstatus: done\nverdict: verified by verifier\n{runs}notes: IMPLEMENTER: did it.\n"
+                "## [T-001] first\nscope: src/a.ts\nrows: none — harness\nblockedBy: none\nstatus: done\nverdict: verified by verifier\nspec: none\nstandards: none\n{runs}notes: IMPLEMENTER: did it.\n"
             ));
             self.repo.commit_all("verdict");
         }

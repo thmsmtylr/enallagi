@@ -56,7 +56,7 @@ case "$1" in
     ;;
   *"roles/verifier.md"*)
     "$ENALLAGI_BIN" tasks set-status T-001 done 'the demo lane verified it' >/dev/null
-    printf 'verdict: verified by verifier\n' >> .enallagi/specs/*/issues/T-001-*.md
+    printf 'verdict: verified by verifier\nspec: none\nstandards: none\n' >> .enallagi/specs/*/issues/T-001-*.md
     ;;
 esac
 echo '{"total_cost_usd": 0.01}'

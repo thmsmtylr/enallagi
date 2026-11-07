@@ -87,7 +87,7 @@ fn stub_config(tools: &Path) -> String {
         &tools.join("verify.sh"),
         &format!(
             "{bin} tasks set-status T-001 done 'stub verified'\n\
-             printf 'verdict: verified by verifier\\n' >>.enallagi/specs/*/issues/T-001-*.md\n{quiet}"
+             printf 'verdict: verified by verifier\\nspec: none\\nstandards: none\\n' >>.enallagi/specs/*/issues/T-001-*.md\n{quiet}"
         ),
     );
     let mut toml = format!(
