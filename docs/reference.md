@@ -82,7 +82,7 @@ or halts the run. The names are matched in `crates/harness/src/gates.rs`.
 | `verdict` | a `done` without `verdict: verified by verifier`, a rejection without `verdict: rejected by verifier: <reason>`, or a `done` whose work is uncommitted or whose check is red on delta | verify |
 | `claims` | a `done` whose `ran:`/`exit:` pairs under the `verdict:` line claim an exit that two re-runs both contradict, for commands `[check] claims_allow` names | verify |
 | `skip-added` | a `done` whose commits add a `[layout] skip_patterns` match to a test file, named by `file:line` | verify |
-| `security` | a `done` whose commits carry a secret gitleaks finds (run with `--redact`); the ticket goes to `ready-for-human` naming `RuleID file:line commit` per finding, and the run halts. A missing pin, a failed fetch or an exit other than 0 or 1 also halts | verify |
+| `security` | a `done` whose commits carry a secret gitleaks finds (run with `--redact`) that `security/gitleaks-baseline.json` does not hold; the ticket goes to `ready-for-human` naming `RuleID file:line commit` per finding, and the run halts. A missing pin or baseline, a failed fetch or an exit other than 0 or 1 also halts | verify |
 | `red-first` | a `done` whose `[layout] test_only_glob` files pass the check with every other changed file at the iteration base, run in a temporary worktree | verify |
 | `scope` | a file outside the task's `scope:` globs, or a product task editing the harness | verify |
 | `queue-intact` | a ticket id at the iteration's base commit whose file is gone; a kill is `wontfix`, never a deletion | implement, verify, adjudicate |

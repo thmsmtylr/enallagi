@@ -1305,11 +1305,13 @@ fn security(ctx: &mut GateCtx) -> GateOutcome {
 // only rule, file, line and commit leave the report: events.jsonl and the ticket are committed
 fn gitleaks(ctx: &GateCtx, base: &str) -> Result<Vec<String>, String> {
     let dir = &ctx.cfg.layout.harness_dir;
-    let pins = crate::skills::read_lock(ctx.root, dir)
-        .map_err(|e| e.to_string())?
-        .tool;
-    let platform = crate::security::platform();
-    let bin = crate::security::tool(&pins, "gitleaks", &platform, &ctx.cache)?;
+    let baseline = crate::config::instance_path(ctx.root, dir, crate::security::BASELINE);
+    if !baseline.is_file() {
+        return Err(format!(
+            "no secrets baseline at {}; run `enallagi init` to record one",
+            baseline.display()
+        ));
+    }
     let reports = ctx.cache.join("security");
     let io = |e: std::io::Error| format!("{}: {e}", reports.display());
     std::fs::create_dir_all(&reports).map_err(io)?;
@@ -1317,35 +1319,13 @@ fn gitleaks(ctx: &GateCtx, base: &str) -> Result<Vec<String>, String> {
         .prefix("run-")
         .tempdir_in(&reports)
         .map_err(io)?;
+    let args = [
+        format!("--log-opts={base}..HEAD"),
+        "--baseline-path".to_string(),
+        baseline.display().to_string(),
+    ];
     let report = scratch.path().join("gitleaks.json");
-    let at = |name: &str| crate::config::instance_path(ctx.root, dir, name);
-    let out = Command::new(&bin)
-        .current_dir(ctx.root)
-        .arg("git")
-        .arg(format!("--log-opts={base}..HEAD"))
-        .args(["--redact", "--report-format", "json", "--report-path"])
-        .arg(&report)
-        .arg("--config")
-        .arg(at("gitleaks.toml"))
-        .arg("--gitleaks-ignore-path")
-        .arg(at("gitleaksignore"))
-        .output()
-        .map_err(|e| format!("{}: {e}", bin.display()))?;
-    let findings = std::fs::read_to_string(&report)
-        .ok()
-        .and_then(|t| serde_json::from_str::<Vec<serde_json::Value>>(&t).ok());
-    let findings = match (out.status.code(), findings) {
-        (Some(0 | 1), Some(findings)) => findings,
-        (code, _) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let tail: Vec<&str> = stderr.lines().rev().take(5).collect();
-            return Err(format!(
-                "gitleaks exited {} with no readable report: {}",
-                code.map_or("on a signal".to_string(), |c| c.to_string()),
-                tail.into_iter().rev().collect::<Vec<_>>().join(" / ")
-            ));
-        }
-    };
+    let findings = crate::security::gitleaks(ctx.root, dir, &ctx.cache, &args, &report)?;
     Ok(findings
         .iter()
         .map(|f| {
@@ -2400,8 +2380,7 @@ mod tests {
 
     const LEAK: &str = r#"[{"RuleID":"aws-access-token","File":"src/key.txt","StartLine":1,"Commit":"abc123","Secret":"AKIAHIDDEN0SECRET99","Match":"key = AKIAHIDDEN0SECRET99"}]"#;
 
-    // a done task with the default pins locked; the stub gitleaks records its argv and copies
-    // <cache>/gitleaks.json to --report-path, then exits `exit`
+    // a done task with the default pins locked and an empty baseline committed
     fn leak_env(report: &str, exit: i32) -> (Env, String) {
         let env = Env::new("exit 0\n");
         let lock = crate::skills::Lock {
@@ -2409,21 +2388,9 @@ mod tests {
             ..Default::default()
         };
         crate::skills::write_lock(&env.repo.root, ".enallagi", &lock).expect("lock");
-        let cache = env.cache.path();
-        crate::fixture::seed_scanners(cache);
-        std::fs::write(cache.join("gitleaks.json"), report).expect("report");
-        let pin = crate::security::default_pins()
-            .into_iter()
-            .find(|p| p.id == "gitleaks" && p.platform == crate::security::platform())
-            .expect("a gitleaks pin for this platform");
-        std::fs::write(
-            crate::security::tool_path(&pin, cache),
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > {c}/gitleaks.argv\nwhile [ $# -gt 0 ]; do [ \"$1\" = --report-path ] && cp {c}/gitleaks.json \"$2\"; shift; done\necho scanner-stderr >&2\nexit {exit}\n",
-                c = cache.display()
-            ),
-        )
-        .expect("stub gitleaks");
+        crate::fixture::stub_gitleaks(env.cache.path(), report, exit);
+        env.repo
+            .write(".enallagi/security/gitleaks-baseline.json", "[]\n");
         env.queue("done", "src/*", "§11 row 1");
         env.repo.commit_all("verdict");
         let base = env.head();
@@ -2483,6 +2450,32 @@ mod tests {
             Path::new(report).starts_with(env.cache.path().join("security")),
             "{report}"
         );
+    }
+
+    #[test]
+    fn security_baselined_leak() {
+        let (mut env, base) = leak_env(LEAK, 1);
+        let baseline = env
+            .repo
+            .root
+            .join(".enallagi/security/gitleaks-baseline.json");
+        std::fs::write(&baseline, LEAK).expect("baseline");
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        let argv = std::fs::read_to_string(env.cache.path().join("gitleaks.argv")).expect("argv");
+        assert!(
+            argv.contains(&format!("--baseline-path\n{}\n", baseline.display())),
+            "{argv}"
+        );
+    }
+
+    #[test]
+    fn missing_baseline_halts() {
+        let (mut env, base) = leak_env("[]", 0);
+        std::fs::remove_dir_all(env.repo.root.join(".enallagi/security")).expect("rm");
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass && out.halt, "{}", out.reason);
+        assert!(out.reason.contains("enallagi init"), "{}", out.reason);
     }
 
     #[test]

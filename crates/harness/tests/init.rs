@@ -2051,3 +2051,64 @@ fn a_cargo_runner_is_never_asked_for_a_tally() {
     let cfg = enallagi::config::load(&repo.root).expect("config");
     assert_eq!(cfg.check.tally, "");
 }
+
+fn init_with_cache(repo: &Repo, xdg: &Path) -> String {
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .arg("init")
+        .env("XDG_CACHE_HOME", xdg)
+        .current_dir(&repo.root)
+        .output()
+        .expect("run enallagi init");
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+#[test]
+fn init_secrets_baseline() {
+    let repo = Repo::new();
+    let xdg = tempfile::tempdir().expect("xdg");
+    let cache = xdg.path().join("enallagi");
+    enallagi::fixture::stub_gitleaks(&cache, r#"[{"RuleID":"old-leak"}]"#, 1);
+    let stdout = init_with_cache(&repo, xdg.path());
+    let baseline = read(&repo, ".enallagi/security/gitleaks-baseline.json");
+    assert!(baseline.contains("old-leak"), "{stdout}");
+    let argv = fs::read_to_string(cache.join("gitleaks.argv")).expect("argv");
+    assert!(
+        argv.starts_with("git\n") && argv.contains("\n--redact\n"),
+        "{argv}"
+    );
+    assert!(!argv.contains("--log-opts"), "{argv}");
+    let tracked = enallagi::git::git(
+        &repo.root.join(".enallagi"),
+        &["ls-files", "security/gitleaks-baseline.json"],
+    )
+    .expect("ls-files");
+    assert_eq!(tracked, "security/gitleaks-baseline.json");
+}
+
+#[test]
+fn baseline_fetch_warns() {
+    let repo = Repo::new();
+    let xdg = tempfile::tempdir().expect("xdg");
+    let pins: String = enallagi::security::default_pins()
+        .iter()
+        .map(|p| {
+            format!(
+                "\n[[tool]]\nid = \"{}\"\nversion = \"0\"\nplatform = \"{}\"\nurl = \"file:///nonexistent\"\nsha256 = \"0\"\n",
+                p.id, p.platform
+            )
+        })
+        .collect();
+    repo.write(".enallagi/harness.lock", &format!("version = 1\n{pins}"));
+    let stdout = init_with_cache(&repo, xdg.path());
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("security:") && l.contains("enallagi init")),
+        "{stdout}"
+    );
+    assert!(!repo
+        .root
+        .join(".enallagi/security/gitleaks-baseline.json")
+        .exists());
+}

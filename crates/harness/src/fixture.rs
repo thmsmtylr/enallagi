@@ -52,6 +52,40 @@ pub fn seed_scanners(cache: &Path) {
     }
 }
 
+/// A gitleaks at the pinned path: it records its argv in `<cache>/gitleaks.argv`, then writes `report`
+/// to `--report-path` and exits `exit`, or writes `[]` and exits 0 when `--baseline-path` holds a finding.
+pub fn stub_gitleaks(cache: &Path, report: &str, exit: i32) {
+    seed_scanners(cache);
+    fs::write(cache.join("gitleaks.json"), report).expect("write the stub report");
+    let platform = crate::security::platform();
+    let pin = crate::security::default_pins()
+        .into_iter()
+        .find(|p| p.id == "gitleaks" && p.platform == platform)
+        .expect("a gitleaks pin for this platform");
+    let c = cache.display();
+    fs::write(
+        crate::security::tool_path(&pin, cache),
+        format!(
+            r#"#!/bin/sh
+printf '%s\n' "$@" > {c}/gitleaks.argv
+out= base=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --report-path) out=$2 ;;
+    --baseline-path) base=$2 ;;
+  esac
+  shift
+done
+echo scanner-stderr >&2
+if [ -n "$base" ] && grep -q RuleID "$base" 2>/dev/null; then echo '[]' > "$out"; exit 0; fi
+cp {c}/gitleaks.json "$out"
+exit {exit}
+"#
+        ),
+    )
+    .expect("write the stub gitleaks");
+}
+
 fn stub_cache() -> &'static Path {
     static CACHE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {

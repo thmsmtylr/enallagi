@@ -25,6 +25,8 @@ const PINS: &[(&str, &str, &str, &str, &str)] = &[
     ("osv-scanner", "2.7.0", "linux-x64", "https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_linux_amd64", "160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b"),
 ];
 
+pub const BASELINE: &str = "security/gitleaks-baseline.json";
+
 pub fn default_pins() -> Vec<ToolPin> {
     PINS.iter()
         .map(|(id, version, platform, url, sha256)| ToolPin {
@@ -108,6 +110,49 @@ pub fn tool(pins: &[ToolPin], id: &str, platform: &str, cache: &Path) -> Result<
     fs::create_dir_all(bin.parent().unwrap_or(&tools)).map_err(io)?;
     fs::rename(&unpacked, &bin).map_err(io)?;
     Ok(bin)
+}
+
+/// The pinned gitleaks run from `root` with `--redact`, `args` after `git`, its JSON report at
+/// `report`. Exit 0 or 1 with a readable report is a result; anything else is an error.
+pub fn gitleaks(
+    root: &Path,
+    dir: &str,
+    cache: &Path,
+    args: &[String],
+    report: &Path,
+) -> Result<Vec<serde_json::Value>, String> {
+    let pins = crate::skills::read_lock(root, dir)
+        .map_err(|e| e.to_string())?
+        .tool;
+    let bin = tool(&pins, "gitleaks", &platform(), cache)?;
+    let at = |name: &str| crate::config::instance_path(root, dir, name);
+    let out = Command::new(&bin)
+        .current_dir(root)
+        .arg("git")
+        .args(args)
+        .args(["--redact", "--report-format", "json", "--report-path"])
+        .arg(report)
+        .arg("--config")
+        .arg(at("gitleaks.toml"))
+        .arg("--gitleaks-ignore-path")
+        .arg(at("gitleaksignore"))
+        .output()
+        .map_err(|e| format!("{}: {e}", bin.display()))?;
+    let findings = fs::read_to_string(report)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Vec<serde_json::Value>>(&t).ok());
+    match (out.status.code(), findings) {
+        (Some(0 | 1), Some(findings)) => Ok(findings),
+        (code, _) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let tail: Vec<&str> = stderr.lines().rev().take(5).collect();
+            Err(format!(
+                "gitleaks exited {} with no readable report: {}",
+                code.map_or("on a signal".to_string(), |c| c.to_string()),
+                tail.into_iter().rev().collect::<Vec<_>>().join(" / ")
+            ))
+        }
+    }
 }
 
 fn run(cmd: &mut Command) -> Result<(), String> {

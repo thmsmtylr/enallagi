@@ -69,6 +69,7 @@ path this table does not name.
 | `__ENALLAGI_DIR__/loop.pid` | ignored — one live process, removed when it exits |
 | `__ENALLAGI_DIR__/pr` | tracked — committed into the state repository by `enallagi pr`, which writes it |
 | `__ENALLAGI_DIR__/roles` | tracked — written by `enallagi init` |
+| `__ENALLAGI_DIR__/security` | tracked — `security/gitleaks-baseline.json`, the full-history secrets baseline `enallagi init` records once and the `security` gate passes as `--baseline-path` |
 | `__ENALLAGI_DIR__/run` | ignored — the role prompts a stage renders, rebuilt at every stage |
 | `__ENALLAGI_DIR__/worktrees` | ignored — a lane's checkout, removed when the lane ends |
 

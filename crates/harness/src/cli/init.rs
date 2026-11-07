@@ -159,6 +159,14 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         }
     }
 
+    match baseline(&root, &dir) {
+        Ok(Some(n)) => println!("  security: recorded a secrets baseline, {n} finding(s)"),
+        Ok(None) => {}
+        Err(err) => println!(
+            "  security: no secrets baseline ({err}); the security gate halts until `enallagi init` records one"
+        ),
+    }
+
     // the verdict gate wants every instance edit committed; the operator should not have to know that
     let nested = crate::git::state_root(&root, &dir) != root;
     match crate::git::commit_instance(
@@ -250,6 +258,22 @@ fn vendor(root: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Vec<St
         .into_iter()
         .map(|r| format!("{}  {}", r.id, r.result))
         .collect())
+}
+
+// the full history once, so a leak already there fails no lane; a re-run keeps it, so a later leak is never baselined
+fn baseline(root: &std::path::Path, dir: &str) -> Result<Option<usize>, String> {
+    let path = config::instance_path(root, dir, crate::security::BASELINE);
+    if path.is_file() {
+        return Ok(None);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let found = crate::security::gitleaks(root, dir, &config::cache_root(), &[], &path);
+    if found.is_err() {
+        let _ = std::fs::remove_file(&path);
+    }
+    Ok(Some(found?.len()))
 }
 
 // the same append `enallagi issue` makes, then the state commit that carries it
