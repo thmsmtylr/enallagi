@@ -21,8 +21,8 @@ with the rule, fails with the rule ablated, and every other eval still passes.
 The agent comes from `EVAL_AGENT`, split into words as a shell would, quotes included, else `__ENALLAGI_DIR__/enallagi.toml`'s `[agent]`. With neither, `enallagi eval`
 refuses rather than reporting a result it did not measure.
 
-`verifier-findings` builds a JavaScript fixture and needs `bun` on `PATH`. Without it the
-`setup.sh` exits non-zero and the eval reports `ERROR`, not a result.
+`verifier-findings` and `verifier-filing` build a JavaScript fixture and need `bun` on `PATH`. Without it
+the `setup.sh` exits non-zero and the eval reports `ERROR`, not a result.
 
 ## cold-start
 

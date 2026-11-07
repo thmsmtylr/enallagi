@@ -438,3 +438,29 @@ fn a_prompt_that_is_not_a_file_is_a_fixture_error() {
         "EVAL case ERROR (the fixture could not be built — nothing was measured)"
     );
 }
+
+// T-452: the ablation holds the filing rule only, so the eval measures that rule
+#[test]
+fn filing_ablate_strips_rule() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let role = dir.path().join(".enallagi/roles/verifier.md");
+    fs::create_dir_all(role.parent().unwrap()).unwrap();
+    let shipped = fs::read_to_string(repo.join("roles/verifier.md")).expect("shipped role");
+    fs::write(&role, &shipped).unwrap();
+    let out = std::process::Command::new("bash")
+        .arg(repo.join("evals/verifier-filing/ablate.sh"))
+        .current_dir(dir.path())
+        .output()
+        .expect("run ablate.sh");
+    assert!(out.status.success(), "{out:?}");
+    let text = fs::read_to_string(&role).unwrap();
+    assert!(!text.contains("A defect outside the criteria"), "{text}");
+    assert!(!text.contains("deferred:"), "{text}");
+    assert_eq!(
+        text.matches("Reproduce every claim the diff makes").count(),
+        1
+    );
+    let (kept, cut) = (text.lines().count(), shipped.lines().count());
+    assert!(cut - kept <= 2, "{cut} -> {kept}");
+}
