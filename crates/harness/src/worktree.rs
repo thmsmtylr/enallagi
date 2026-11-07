@@ -293,8 +293,7 @@ fn with_claims<T>(
     let mut file = lock_file(&run_file(root, harness_dir, "claims.json"))?;
     let mut text = String::new();
     file.read_to_string(&mut text)?;
-    let mut claims: Vec<Claim> = serde_json::from_str(&text).unwrap_or_default();
-    claims.retain(|c| c.worktree.exists());
+    let mut claims = live(&text);
     let out = f(&mut claims);
     file.set_len(0)?;
     file.rewind()?;
@@ -304,12 +303,11 @@ fn with_claims<T>(
 
 /// The live claims under `harness`'s main worktree, read without the lock, so a watch never writes the file.
 pub fn peek(harness: &Path) -> Vec<Claim> {
-    let path = git::main_worktree_path(harness)
-        .unwrap_or_else(|| harness.to_path_buf())
-        .join("run")
-        .join("claims.json");
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    let mut claims: Vec<Claim> = serde_json::from_str(&text).unwrap_or_default();
+    live(&std::fs::read_to_string(run_file(harness, "", "claims.json")).unwrap_or_default())
+}
+
+fn live(text: &str) -> Vec<Claim> {
+    let mut claims: Vec<Claim> = serde_json::from_str(text).unwrap_or_default();
     claims.retain(|c| c.worktree.exists());
     claims
 }
@@ -325,11 +323,11 @@ pub fn claim(
     wt: &Path,
     skip: &[String],
 ) -> std::io::Result<Option<String>> {
-    take(root, cfg, Some(wt), skip)
+    take(root, cfg, Some(wt), skip, Hold::Writer)
 }
 
 pub fn claimable(root: &Path, cfg: &Config, skip: &[String]) -> bool {
-    take(root, cfg, None, skip).is_ok_and(|id| id.is_some())
+    take(root, cfg, None, skip, Hold::Writer).is_ok_and(|id| id.is_some())
 }
 
 fn take(
@@ -337,30 +335,40 @@ fn take(
     cfg: &Config,
     wt: Option<&Path>,
     skip: &[String],
+    hold: Hold,
 ) -> std::io::Result<Option<String>> {
     let dir = &cfg.layout.harness_dir;
     with_claims(root, dir, |claims| {
         let blocks = crate::tracker::Tracker::open(root, dir)
             .blocks()
             .map_err(std::io::Error::other)?;
-        let scope = |b: &crate::block::Block| {
-            crate::block::field(b, "scope")
+        let scope = |b: &crate::block::Block| match hold {
+            Hold::Reader => Vec::new(),
+            Hold::Writer => crate::block::field(b, "scope")
                 .map(|l| crate::gates::scope_globs(&l))
-                .unwrap_or_default()
+                .unwrap_or_default(),
         };
-        let id = crate::tracker::takeable_by(&blocks, |b| {
-            !skip.contains(&b.id)
-                && claims.iter().all(|c| {
-                    c.id != b.id
-                        && (c.hold == Hold::Reader || !crate::gates::overlaps(&c.scope, &scope(b)))
-                })
-        });
+        let free = |id: &str| !skip.iter().any(|s| s == id) && claims.iter().all(|c| c.id != id);
+        let id = match hold {
+            Hold::Reader => crate::tracker::ids_in(&blocks, &["review"])
+                .into_iter()
+                .find(|id| free(id)),
+            Hold::Writer => crate::tracker::takeable_by(&blocks, |b| {
+                free(&b.id)
+                    && claims.iter().all(|c| {
+                        c.hold == Hold::Reader || !crate::gates::overlaps(&c.scope, &scope(b))
+                    })
+            }),
+        };
         if let (Some(id), Some(wt)) = (&id, wt) {
             let b = blocks
                 .iter()
                 .find(|b| &b.id == id)
                 .expect("taken from blocks");
-            claims.push(held_at(wt, id, scope(b)));
+            claims.push(Claim {
+                hold,
+                ..held_at(wt, id, scope(b))
+            });
         }
         Ok(id)
     })?
@@ -373,22 +381,7 @@ pub fn read_claim(
     wt: Option<&Path>,
     skip: &[String],
 ) -> std::io::Result<Option<String>> {
-    let dir = &cfg.layout.harness_dir;
-    with_claims(root, dir, |claims| {
-        let blocks = crate::tracker::Tracker::open(root, dir)
-            .blocks()
-            .map_err(std::io::Error::other)?;
-        let id = crate::tracker::ids_in(&blocks, &["review"])
-            .into_iter()
-            .find(|id| !skip.contains(id) && claims.iter().all(|c| &c.id != id));
-        if let (Some(id), Some(wt)) = (&id, wt) {
-            claims.push(Claim {
-                hold: Hold::Reader,
-                ..held_at(wt, id, Vec::new())
-            });
-        }
-        Ok(id)
-    })?
+    take(root, cfg, wt, skip, Hold::Reader)
 }
 
 fn held_at(wt: &Path, id: &str, scope: Vec<String>) -> Claim {
@@ -716,7 +709,7 @@ fn landed(
         return Err(WorktreeError::Detached);
     }
 
-    // setup and landing both write the parent's repositories, so a lane's setup waits out another's landing
+    // setup and landing both write the parent's repositories, so setup waits out a landing
     let setup = match cfg.parallel.writers.get() > 1 {
         true => Some(lock_file(&run_file(
             root,

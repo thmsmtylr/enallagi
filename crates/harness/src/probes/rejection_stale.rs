@@ -1,4 +1,4 @@
-//! A rejection nothing has answered: the `verdict:` line reads `rejected` and the status is not ready. A ticket parked at `needs-info` is reported too.
+//! A rejection nothing has answered, or a ticket parked at `needs-info`.
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};

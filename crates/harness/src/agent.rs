@@ -304,7 +304,7 @@ pub struct UsageValues {
     pub turns: Option<u64>,
 }
 
-// totals sit in the last object; claude 2.1.300 prints a system line after its result, so a result line wins
+// totals sit in the last object; a result line wins, as claude prints a system line after it
 pub fn extract_usage(output: &str, paths: &UsagePaths) -> UsageValues {
     let mut values = UsageValues::default();
     let objects: Vec<serde_json::Value> = output

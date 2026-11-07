@@ -8,7 +8,7 @@ use crate::proxy::{Denial, Proxy};
 
 pub mod bwrap;
 
-// the security gate's scanners download from GitHub releases, which redirect to release-assets (ADR 0009)
+// scanners download from GitHub releases, which redirect to release-assets
 pub const BASE_HOSTS: &[&str] = &[
     "github.com",
     "api.github.com",
@@ -121,7 +121,7 @@ struct Policy {
     // neither readable nor writable; kept apart so the holdout runner (spec 6) can lift it alone
     holdouts: Vec<PathBuf>,
     secrets: Vec<PathBuf>,
-    // ancestors of a denied or hidden path inside a writable root: renaming one would carry the path out from under its rule
+    // ancestors of a denied or hidden path in a writable root: a rename would carry the path out
     pinned: Vec<PathBuf>,
 }
 
@@ -337,8 +337,7 @@ fn home(path: &str) -> PathBuf {
     }
 }
 
-// Seatbelt matches real paths only, so `/var/..` must be written `/private/var/..`; a path not yet
-// made is its canonical parent plus its name
+// seatbelt matches real paths only (`/private/var`); a missing path is its canonical parent + name
 fn canon(path: &Path) -> PathBuf {
     if let Ok(real) = std::fs::canonicalize(path) {
         return real;

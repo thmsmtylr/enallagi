@@ -1,4 +1,4 @@
-//! twin: a `gh` served from one JSON state file that pushes, replies and merges mutate (ADR 0010).
+//! A `gh` served from one JSON state file that pushes, replies and merges mutate.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -86,8 +86,7 @@ pub struct Round {
     pub resolve: Vec<String>,
 }
 
-// one finding a review bot posts, rendered through that bot's recording; with no `path` it is a
-// row in the bot's summary only
+// one bot finding, rendered through its recording; with no `path`, a summary row only
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Finding {

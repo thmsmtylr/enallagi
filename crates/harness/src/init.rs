@@ -224,7 +224,7 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         None => config::load(root)?,
     };
     let dir = cfg.layout.harness_dir.clone();
-    // config_from resolves an unset context file and spec in a scratch directory, whose name is not the repository's
+    // config_from resolves unset paths in a scratch dir, whose name is not the repository's
     let unset = |key: &str| {
         pending.as_deref().is_some_and(|text| {
             toml::from_str::<Value>(text)

@@ -66,7 +66,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     let mut refusals = Vec::new();
     let mut tasks = Vec::new();
     for id in ids {
-        // a ticket archived before the migration is a stub carrying the live status; DECISIONS.md holds the full block
+        // a ticket archived before the migration is a stub with the live status; the full block is elsewhere
         let found = queued.iter().find(|b| b.id == *id);
         let Some(full) = archived.iter().find(|b| b.id == *id).or(found) else {
             refusals.push(format!("{id} is in neither the queue nor DECISIONS.md"));

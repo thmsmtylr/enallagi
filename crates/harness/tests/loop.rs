@@ -276,8 +276,7 @@ fn verifier(repo: &Repo) -> String {
     )
 }
 
-// a stub's verdict, written as a role writes it: one line, replacing the last, in `## Harness`, the file's last section
-// a verified verdict carries both review axes, as the verdict gate wants
+// a role's verdict line, replacing the last in `## Harness`, with both review axes
 fn verdict(line: &str) -> String {
     verdict_for("T-001", line)
 }
@@ -4519,8 +4518,7 @@ fn returned_with(commit: &str, answers: &str, runs: &str, extra: &str) -> Pulls 
     lane_on(RETURNED, commit, &answer, runs, extra, "")
 }
 
-// `ticket` is T-900, its pull request's branch `task/T-900` on the origin; `answer` is shell
-// run in the lane with `$f` the ticket's file; `gates` are verify's beyond the base three
+// T-900 on origin `task/T-900`; `answer` runs in the lane with `$f` the ticket file
 fn lane_on(
     ticket: &str,
     commit: &str,
@@ -4646,8 +4644,7 @@ fn rejection_out_of_scope() {
     assert!(enallagi::git::porcelain(&state).is_empty(), "{out}");
 }
 
-// T-900's pull in the twin, F-1 its thread and F-2 its comment, answered one each way;
-// the twin's round after the push resolves `resolved`
+// T-900's pull: F-1 a thread, F-2 a comment; the round after the push resolves `resolved`
 fn answered(resolved: &[&str]) -> Pulls {
     answered_with(resolved, "")
 }
@@ -4921,8 +4918,7 @@ pr: https://github.com/owner/repo/pull/9
 branch: task/T-900
 ";
 
-// round one writes `one_kept` and later rounds `two_kept`, so a round-one accept names a test no
-// later round touched; F-2 is rejected, every other finding accepted, each answered once
+// round one writes `one_kept`, later rounds `two_kept`; F-2 rejected, the rest accepted
 const ANSWERING: &str = "word=one_kept; grep -q '^settled:' \"$f\" && word=two_kept
 echo \"$word\" >src/thing.ts
 for id in $(sed -n 's/^finding: \\(F-[0-9]*\\) .*/\\1/p' \"$f\"); do
@@ -5507,7 +5503,7 @@ fn claims_after_verdict() {
 
 const ACCEPTED: &str = "# spec\n\n**Status:** ready-for-agent\n";
 
-// a stub decomposer's shell lines writing two drafts beside the accepted spec, the second blocked by the first
+// a stub decomposer writing two drafts beside the spec, the second blocked by the first
 fn drafts(r: &Repo, second_blocked: &str) -> String {
     let draft = |num: &str, blocked: &str| {
         format!("# {num}: Step {num}\n\n**What to build:** step {num}.\n\n**Blocked by:** {blocked}\n\n**Status:** ready-for-agent\n\n- [ ] step {num} shows\n")

@@ -165,7 +165,7 @@ fn frictions(root: &Path, cfg: &Config, rel: &str) -> Result<Vec<Signal>, AuditE
     Ok(out)
 }
 
-// a block `enallagi review` queued carries its comment's permalink; `rel` names the file each block is in
+// a block `enallagi review` queued carries its comment's permalink; `rel` names its file
 fn reviewed(blocks: Vec<block::Block>, rel: impl Fn(&str) -> String) -> Vec<Signal> {
     let permalink = Regex::new(r"/pull/\d+#(discussion_r|pullrequestreview)").expect("pattern");
     blocks

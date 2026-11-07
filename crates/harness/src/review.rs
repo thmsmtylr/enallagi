@@ -1,11 +1,9 @@
-//! review: a pull request's review threads, review bodies, comments and failed checks, read with gh, become findings in one shape. No model writes them.
+//! A pull request's threads, reviews, comments and failed checks, read with gh, as findings.
 
 use crate::block::{self, QueueError};
 use crate::issue;
 
-// ponytail: first:100 on each list; a longer pull request is reported short rather than read, and
-// `hasNextPage` is what says so. Follow the cursors when one repository needs it.
-// `{who}` is the bot table's account selection, the one place that names it
+// ponytail: first:100 per list, a longer pull is reported short; follow the cursors when needed
 const QUERY: &str = concat!(
     "query ReviewThreads($owner:String!,$repo:String!,$number:Int!){",
     "repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid ",
@@ -624,8 +622,7 @@ pub fn append(
     Ok(out)
 }
 
-// The bot table: the crate's only vendor-specific code. Nothing outside this module names a
-// vendor or an account field; a bot not in it is read under its own name.
+// the only vendor-specific code; a bot not in it is read under its own name
 mod bots {
     pub(super) const WHO: &str = "author{login __typename}";
 
@@ -725,7 +722,6 @@ mod bots {
         Some((b.summary, count))
     }
 }
-// end of the bot table
 
 #[cfg(test)]
 mod tests {

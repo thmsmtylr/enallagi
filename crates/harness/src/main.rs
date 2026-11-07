@@ -1,4 +1,4 @@
-//! The binary. Refuses the retired `run <n>` form before clap sees it, then exits with the code `cli::run` returns.
+//! Refuses the retired `run <n>` form before clap sees it.
 
 use clap::Parser;
 use enallagi::cli::Cli;

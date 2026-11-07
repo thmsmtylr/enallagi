@@ -164,7 +164,7 @@ pub struct SpecRow {
 
 const SEPARATOR: &str = r"^\|[\s:|-]+\|\s*$";
 
-// every spec's table; a spec with no rows heading holds none, and only all of them lacking one is an error
+// every spec's table; a spec with no rows heading holds none; all lacking one is an error
 pub fn spec_rows(ctx: &ProbeCtx) -> Res<Vec<SpecRow>> {
     let cfg: &Config = ctx.cfg;
     let heading = &cfg.layout.rows_heading;

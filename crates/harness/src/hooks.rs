@@ -7,8 +7,7 @@ use crate::config;
 use crate::gates::{self, CheckReport};
 use crate::skills;
 
-// this can be bypassed via Bash sed -i or a heredoc: the real authority is the verifier reading the diff
-// task is ENALLAGI_TASK, which only a lane sets: an interactive session gets no scope exemption
+// bypassable through Bash; the verifier reading the diff is the real check
 pub fn immutable(root: &Path, input: &str, task: Option<&str>) -> (i32, String) {
     let Some(target) = tool_input_path(root, input) else {
         return (0, String::new());
@@ -40,7 +39,7 @@ pub fn immutable(root: &Path, input: &str, task: Option<&str>) -> (i32, String) 
     (0, String::new())
 }
 
-// RAILS.md `harness-lane`: a hashed file on the ticket's own scope: line is the lane's to edit and re-cut
+// a hashed file on the ticket's own scope: line is the lane's to edit and re-cut
 fn own_scope(root: &Path, dir: &str, target: &Path, task: Option<&str>) -> bool {
     if normalize(root, &config::instance_rel(dir, "test-hashes.json")) == *target {
         return false;

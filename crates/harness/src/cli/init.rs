@@ -256,7 +256,7 @@ fn vendor(root: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Vec<St
         .collect())
 }
 
-// the full history once, so a leak already there fails no lane; a re-run keeps it, so a later leak is never baselined
+// full history once, so an old leak fails no lane; a re-run keeps it, never baselining a new one
 fn baseline(root: &std::path::Path, dir: &str) -> Result<Option<usize>, String> {
     let path = config::instance_path(root, dir, crate::security::BASELINE);
     if path.is_file() {

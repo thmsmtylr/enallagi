@@ -123,7 +123,7 @@ pub(crate) fn expired_at(decisions: &str) -> usize {
         .map_or(usize::MAX, |i| i + 1)
 }
 
-// an expired ticket stays in its file under the files layout, and may return like one in `## Expired findings`
+// an expired ticket stays in its file, and may return like one in `## Expired findings`
 pub(crate) fn carrier<'a>(
     blocks: impl Iterator<Item = &'a block::Block>,
     url: &str,

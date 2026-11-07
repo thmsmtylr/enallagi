@@ -272,8 +272,7 @@ fn parent_stop_halts_lane() {
     remove_lanes(&r);
 }
 
-// two writers, a task and a review pipeline, and a stub agent that implements the pinned ticket
-// and verifies the pinned ticket, or whatever is at review; `wait` runs before the implementer commits
+// two writers, a stub implementing and verifying the pinned ticket; `wait` runs before its commit
 fn writers_repo(tools: &Path, queue: &str, wait: &str) -> Repo {
     let r = lane_repo(tools);
     let state = r.root.join(".enallagi");

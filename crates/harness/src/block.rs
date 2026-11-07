@@ -1,4 +1,4 @@
-//! The `## [T-NNN] title` block: the form DECISIONS.md archives a ticket in, and the `key: value` form the tracker hands a ticket back in. A heading inside a fenced code block is documentation, not a block; an unterminated fence or duplicate id is refused, not silently resolved.
+//! The `## [T-NNN] title` block; a heading in a fenced code block is not one.
 
 use std::collections::HashMap;
 

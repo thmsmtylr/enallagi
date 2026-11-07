@@ -63,7 +63,7 @@ pub struct Model {
     pub help: bool,
     // set once the event channel disconnects; the view then stays up (nothing more will change) until `q`
     pub finished: bool,
-    // each pane's inner height and furthest offset, recorded by the last draw so keys page and stop at the top
+    // each pane's inner height and furthest offset, from the last draw, so keys page and stop at the top
     heights: Cell<[usize; 3]>,
     max_scroll: Cell<[usize; 3]>,
 }
@@ -387,7 +387,7 @@ fn run_live_loop<B: Backend>(
     Ok(())
 }
 
-// read-only: tails the log and the queue rather than owning a channel; `q` never touches STOP since watch doesn't own the run
+// read-only: tails the log and queue; `q` never touches STOP, as watch does not own the run
 pub fn run_attached(harness_dir: &Path, tracker: &Tracker) -> anyhow::Result<()> {
     let (mut terminal, guard) = enter_terminal()?;
     let prev_hook = install_restore_hook();

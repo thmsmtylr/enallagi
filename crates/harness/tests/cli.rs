@@ -400,8 +400,7 @@ fn skills_sync_custom_preset() {
     assert!(root.join(".enallagi/harness.lock").is_file());
 }
 
-// the shipped implementer loads ponytail, the verifier ponytail-review, and both caveman-commit; the implementer's
-// transcript invokes tdd and the verifier's invokes caveman-commit
+// implementer transcript invokes tdd, verifier transcript caveman-commit
 fn cost_in(root: &std::path::Path, window: &[&str]) -> String {
     let mut toml = String::from("[check]\ncommand = \"true\"\n\n");
     for id in enallagi::fixture::SKILL_IDS {

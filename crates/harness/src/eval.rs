@@ -78,7 +78,7 @@ fn resolve_agent(pkg: &Path) -> Option<Vec<String>> {
         .map(|r| r.argv)
 }
 
-// quotes group and a backslash escapes, as sh reads a word, with no expansion; an unclosed quote runs to the end
+// sh word splitting with quotes and backslashes, no expansion; an unclosed quote runs to the end
 fn shell_words(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut word: Option<String> = None;
@@ -112,7 +112,7 @@ fn shell_words(s: &str) -> Vec<String> {
     out
 }
 
-// the fixture was installed by this binary, so a script's or an agent's `enallagi` must be this binary too, not an older one on PATH
+// this binary installed the fixture, so a script's `enallagi` must be it, not an older one on PATH
 fn bin_first(cmd: &mut Command) {
     if let Some(bin) = std::env::current_exe()
         .ok()

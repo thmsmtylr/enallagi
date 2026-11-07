@@ -2459,7 +2459,7 @@ fn a_rule_not_recurring_after_promotion_is_silent() {
     );
 }
 
-// a kill is a `.out-of-scope/<concept>.md` file in Pocock's format; its prior requests are the kill lines
+// a kill is a `.out-of-scope/<concept>.md` file; its prior requests are the kill lines
 fn out_of_scope(repo: &Repo, concept: &str, kill: &str) {
     let dir = config::instance_path(
         &repo.root,

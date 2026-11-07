@@ -858,7 +858,7 @@ impl<'a> Loop<'a> {
             self.dry_pipeline = Some(pipeline.name.clone());
         }
 
-        // fires only after a discovery round already found nothing takeable; ready-for-human tickets alone are the ordinary human-wait state
+        // only after discovery found nothing takeable; ready-for-human alone is the ordinary wait
         if takeable.is_none() && self.dry_rounds >= 1 {
             if let Some(id) = self.first_attended_ready() {
                 self.halt(
@@ -871,8 +871,7 @@ impl<'a> Loop<'a> {
             }
         }
 
-        // the review pipeline verifies a task stranded at review, not the ordinary ready-and-unattended one
-        // the decompose pipeline takes a spec, which its decompose stage picks, not a ticket
+        // review takes a ticket stranded at review; decompose takes a spec, not a ticket
         let task = match config::parse_when(&pipeline.when) {
             Ok(Predicate::QueueReviewing) => self.first_at_review(),
             Ok(Predicate::SpecUndecomposed) => None,
@@ -1213,8 +1212,7 @@ impl<'a> Loop<'a> {
         output: String,
     ) -> Flow {
         for gate in &stage.post {
-            // commit-verdict judges only what the verifier wrote, not the implementer's notes from the same iteration;
-            // verdict reads the status the verifier was handed
+            // verdict gates read the verifier's own commit and the status it was handed
             let (base, state_base) = if matches!(gate.as_str(), "commit-verdict" | "verdict") {
                 &stage_bases
             } else {
@@ -1726,7 +1724,7 @@ impl<'a> Loop<'a> {
         text
     }
 
-    // each `open` ticket's pull request: merged is `done`, closed is `wontfix`, and only a changed one is read
+    // each `open` ticket's pull: merged is `done`, closed `wontfix`; only a changed one is read
     fn poll(&mut self) {
         let t = Tracker::open(self.root, &self.cfg.layout.harness_dir);
         let spec = tracker::repo_slug(self.root);
@@ -1889,8 +1887,7 @@ impl<'a> Loop<'a> {
         quiet.checked_sub(since).filter(|left| !left.is_zero())
     }
 
-    // a finding inside the ticket's scope, or with no anchor, goes back to the ticket; any other is a new
-    // `needs-triage` ticket, its thread answered and resolved so the pull request can come clean
+    // in scope or unanchored returns to the ticket; else a new needs-triage ticket, thread resolved
     fn route(
         &mut self,
         t: &Tracker,
@@ -2081,8 +2078,7 @@ impl<'a> Loop<'a> {
             .map_err(|e| e.to_string())
     }
 
-    // a returned ticket works its pull request's branch in a worktree of its own, and the round's
-    // stages and gates run there; the checkout's branch never carries it
+    // a returned ticket's round runs in its own worktree on the pull's branch, never the checkout's
     fn open_lane(&mut self, task: &str) -> Result<Option<Lane<'a>>, String> {
         let state_root = self.state_root();
         let branch = self
@@ -2140,7 +2136,7 @@ impl<'a> Loop<'a> {
         }))
     }
 
-    // the lane's state commits are the round's record, so they come back to the checkout's state repository
+    // the lane's state commits are the round's record, so they return to the checkout's state repo
     fn close_lane(&mut self, lane: &Lane<'a>) {
         self.root = lane.checkout;
         let state_root = self.state_root();
@@ -2214,8 +2210,7 @@ impl<'a> Loop<'a> {
         self.commit_state(&format!("queue: {task} pushed"));
     }
 
-    // one marked reply per finding answered since the last push: on its thread, or in one
-    // comment listing the rest by URL; each reply's URL is the finding's `settled:`
+    // one marked reply per answered finding, on its thread or in one listing; its URL is `settled:`
     fn reply(&mut self, task: &str, sha: &str) {
         let Some(b) = self.blocks().into_iter().find(|b| b.id == task) else {
             return;

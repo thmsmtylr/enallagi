@@ -944,7 +944,7 @@ fn push_on_a_built_branch_updates_the_pushed_line() {
     assert_eq!(git(&state, &["status", "--porcelain", "--", "pr"]), "");
 }
 
-// in-tree: the harness directory is the product's own, so a state commit naming the ticket sits beside its product commit
+// in-tree: a state commit naming the ticket sits beside its product commit
 #[test]
 fn pr_skips_state_commits() {
     let f = Fixture::new(

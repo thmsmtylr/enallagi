@@ -184,6 +184,29 @@ fn the_launcher_parses_no_task_blocks_itself() {
     );
 }
 
+// statuses are bare strings, so a misspelt one would never match
+#[test]
+fn status_literals_known() {
+    let known = [
+        "needs-triage",
+        "needs-info",
+        "ready-for-agent",
+        "ready-for-human",
+    ];
+    let re = regex::Regex::new(r"\b(needs|ready-for)-[a-z]+").expect("regex");
+    let odd: Vec<String> = crate_sources()
+        .into_iter()
+        .flat_map(|(rel, text)| {
+            re.find_iter(&text)
+                .map(|m| m.as_str().to_string())
+                .filter(|m| !known.contains(&m.as_str()))
+                .map(|m| format!("{}: {m}", rel.display()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(odd, Vec::<String>::new());
+}
+
 // a path to a file named gh, other than a read of whether one exists
 fn names_gh(line: &str) -> bool {
     (line.contains("join(\"gh\")") || line.contains("/gh\""))

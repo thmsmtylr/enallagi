@@ -628,8 +628,7 @@ fn claims(ctx: &mut GateCtx) -> GateOutcome {
     pass(parts.join(". "))
 }
 
-// every finding a returned ticket carries is answered once: an accept names a test the round's
-// test files hold, a reject names a command the verdict ran
+// each finding answered once: an accept's test in a changed test file, a reject's command ran
 fn findings(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -1082,7 +1081,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     )
 }
 
-// a test switched off passes every other gate, since the hashes guard only files already hashed (T-486)
+// a test switched off passes every other gate: the hashes guard only files already hashed
 fn skip_added(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -1158,7 +1157,7 @@ fn skip_added(ctx: &mut GateCtx) -> GateOutcome {
     )
 }
 
-// a detached worktree at rev under `under`, removed on drop so a hang or a panic leaves the lane clean
+// a detached worktree at rev, removed on drop so a hang or a panic leaves the lane clean
 struct Scratch {
     root: PathBuf,
     dir: tempfile::TempDir,
@@ -1271,7 +1270,6 @@ fn red_first(ctx: &mut GateCtx) -> GateOutcome {
     }
 }
 
-/// A spec's holdouts: the executable regular files in `holdouts/<slug>/`, sorted.
 // a respond lane's state worktree lacks the ignored set; the main worktree holds it
 fn holdout_root(root: &Path, cfg: &Config) -> PathBuf {
     let dir = &cfg.layout.harness_dir;
@@ -1280,6 +1278,7 @@ fn holdout_root(root: &Path, cfg: &Config) -> PathBuf {
         .unwrap_or_else(|| crate::config::instance_path(root, dir, "holdouts"))
 }
 
+/// A spec's holdouts: the executable regular files in `holdouts/<slug>/`, sorted.
 pub fn holdout_set(root: &Path, cfg: &Config, slug: &str) -> Vec<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
     let dir = holdout_root(root, cfg).join(slug);
@@ -1854,8 +1853,7 @@ pub fn in_scope(path: &str, globs: &[String]) -> bool {
     })
 }
 
-// conservative only because in_scope lets `*` cross `/`: two globs overlap unless their literal prefixes
-// diverge, and a byte prefix counts across a path component (`src/a` vs `src/ab.rs`)
+// globs overlap unless literal prefixes diverge, by bytes, since in_scope lets `*` cross `/`
 pub fn overlaps(a: &[String], b: &[String]) -> bool {
     let prefix = |g: &String| g[..g.find(['*', '?', '[', '{']).unwrap_or(g.len())].to_string();
     a.is_empty()

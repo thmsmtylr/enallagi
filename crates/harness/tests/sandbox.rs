@@ -640,7 +640,7 @@ fn secrets_unreadable() {
     }
 }
 
-// the unfiltered bridge is the lane's parent at its uid: readable, it could be driven to a host socket
+// the unfiltered bridge is the lane's parent at its uid; readable, it could reach a host socket
 #[cfg(target_os = "linux")]
 #[test]
 fn bridge_not_dumpable() {

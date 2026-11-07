@@ -47,8 +47,7 @@ fn state_commits(root: &Path, dir: &str) -> (PathBuf, Vec<(String, String)>) {
     (repo, commits)
 }
 
-// rounds since the commit that queued the ticket, one per loop iteration or hand commit, and
-// whether a root commit queued it; an id no commit carries is one a hand edit just wrote
+// rounds since the queuing commit, and whether a root commit queued it; no commit is a hand edit
 fn aged(root: &Path, cfg: &Config, ids: &[String]) -> BTreeMap<String, (usize, bool)> {
     let dir = &cfg.layout.harness_dir;
     let (repo, commits) = state_commits(root, dir);

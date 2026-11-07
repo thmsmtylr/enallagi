@@ -1,4 +1,4 @@
-//! The queue behind one interface: one file per ticket under `specs/<slug>/issues/` in Pocock's local-tracker format, handed back as `block::Block`s in the `key: value` form.
+//! The queue: one file per ticket under `specs/<slug>/issues/`, read back as blocks.
 
 use crate::block::{self, Block, QueueError};
 use crate::git;

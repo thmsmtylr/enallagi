@@ -239,8 +239,7 @@ fn filter(_: &mut std::process::Command) -> Result<(), String> {
     Err("the seccomp filter is Linux only".into())
 }
 
-// fails socket(AF_UNIX, ..) and io_uring_setup (whose ops can open sockets) with EPERM; a foreign
-// arch or an x32 syscall number is refused outright
+// AF_UNIX sockets and io_uring_setup fail EPERM; a foreign arch or x32 number is refused
 #[cfg(target_os = "linux")]
 fn filter(cmd: &mut std::process::Command) -> Result<(), String> {
     use libc::{

@@ -592,7 +592,7 @@ fn model_disabled(body: &str) -> bool {
         .any(|l| l.trim() == "disable-model-invocation: true")
 }
 
-// unresolved {{skill:<id>}} tokens are left alone; inline presets and model-disabled skills get the body appended, others get the invocation
+// unresolved {{skill:<id>}} stay; inline and model-disabled skills get the body, others the call
 pub fn render(
     role_text: &str,
     resolved: &[ResolvedSkill],

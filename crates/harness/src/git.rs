@@ -251,7 +251,7 @@ pub fn commit_instance(
         let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
         return commit_paths(root, &paths, &msg);
     }
-    // an install whose .gitignore predates the STOP line would commit the operator's halt into every later lane
+    // an old .gitignore lacks the STOP line, which would commit the operator's halt into every lane
     git(&state, &["add", "-A"])?;
     git(
         &state,
