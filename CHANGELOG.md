@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- under `[parallel] writers = N` (N > 1), `enallagi worktree` runs up to N lanes at once, each pinned to a ticket its claim holds (`run/claims.json`, no two overlapping scopes), with the budget left split across the slots, and falls back to one unpinned lane when nothing can be claimed
 - under `writers > 1` lanes land one at a time: a lane whose parent moved is rebased and its check re-run, and a conflict or a red check sends its ticket back to `ready-for-agent` with an `integrate` gate event
 - `enallagi run --task T-NNN` takes only that ticket, ends once it is neither takeable nor at review, skips the scout, adjudicator and decomposer stages, and names the ticket in the implementer prompt
 - `init` writes `.enallagi/.gitattributes` with `PROGRESS.md merge=union`, so two lanes appending progress entries merge without conflict

@@ -576,12 +576,12 @@ mod tests {
         let cfg = config::load(&r.root).expect("config");
         // a second lane's claim is not this checkout's
         let other = tempfile::TempDir::new().expect("tempdir");
-        crate::worktree::claim(&r.root, &cfg, other.path()).expect("claim");
+        crate::worktree::claim(&r.root, &cfg, other.path(), &[]).expect("claim");
         r.queue(
             ".enallagi",
             "## [T-001] x\nstatus: review\nblockedBy: none\n\n## [T-002] y\nscope: y.rs\nstatus: ready-for-agent\n\n## [T-003] z\nscope: z.rs\nstatus: ready-for-agent\n",
         );
-        crate::worktree::claim(&r.root, &cfg, &r.root).expect("claim");
+        crate::worktree::claim(&r.root, &cfg, &r.root, &[]).expect("claim");
         let child = StdCommand::new("sleep")
             .arg("30")
             .spawn()

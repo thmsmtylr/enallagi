@@ -271,3 +271,146 @@ fn parent_stop_halts_lane() {
 
     remove_lanes(&r);
 }
+
+// two writers, a task and a review pipeline, and a stub agent that implements the pinned ticket
+// and verifies whatever is at review; `wait` runs before the implementer commits
+fn writers_repo(tools: &Path, queue: &str, wait: &str) -> Repo {
+    let r = lane_repo(tools);
+    let state = r.root.join(".enallagi");
+    let log = tools.join("log");
+    exec(
+        &tools.join("agent.sh"),
+        &format!(
+            r#"bin='{bin}'
+case "$1" in
+  *"Complete exactly ONE ticket: T-"*)
+    id=$(printf '%s' "$1" | grep -o 'ONE ticket: T-[0-9]*' | grep -o 'T-[0-9]*')
+    echo "start $id $(ls src 2>/dev/null | tr '\n' ' ')" >> '{log}'
+    {wait}
+    mkdir -p src; echo "$id" > "src/$id.txt"
+    git add -- "src/$id.txt"; git -c commit.gpgsign=false commit -qm "$id: work"
+    "$bin" tasks set-status "$id" review 'stub implemented'
+    ;;
+  *"Verify every ticket at review"*)
+    for id in $("$bin" tasks ids-at review); do "$bin" tasks set-status "$id" done 'stub verified'; done
+    ;;
+esac
+echo '{{"total_cost_usd":0}}'
+"#,
+            bin = env!("CARGO_BIN_EXE_enallagi"),
+            log = log.display(),
+        ),
+    );
+    let toml = std::fs::read_to_string(state.join("enallagi.toml")).expect("config")
+        + r#"
+[parallel]
+writers = 2
+
+[[pipeline]]
+name = "review"
+when = "queue.reviewing"
+stages = ["verify"]
+
+[[pipeline]]
+name = "task"
+when = "queue.takeable"
+stages = ["implement", "verify"]
+
+[[stage]]
+name = "implement"
+role = "implementer"
+turns = 1
+
+[[stage]]
+name = "verify"
+role = "verifier"
+turns = 1
+"#;
+    std::fs::write(state.join("enallagi.toml"), toml).expect("config");
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+    r.queue(".enallagi", queue);
+    git(&state, &["add", "-A"]);
+    git(
+        &state,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "writers",
+        ],
+    );
+    r
+}
+
+fn status_of(r: &Repo, id: &str) -> Option<String> {
+    let t = enallagi::tracker::Tracker::open(&r.root, ".enallagi");
+    enallagi::tracker::state(&t.get(id).expect("queue")?)
+}
+
+#[test]
+fn disjoint_writers_land() {
+    let tools = tempfile::tempdir().expect("tools");
+    let marks = tools.path().join("marks");
+    std::fs::create_dir_all(&marks).expect("marks");
+    // each implementer waits for its sibling's mark, so a pass means both ran at once
+    let wait = format!(
+        "touch '{m}/'$id; for i in $(seq 1 300); do [ $(ls '{m}' | wc -l) -ge 2 ] && break; sleep 0.1; done; [ $(ls '{m}' | wc -l) -ge 2 ] || echo \"alone $id\" >> '{log}'",
+        m = marks.display(),
+        log = tools.path().join("log").display()
+    );
+    let r = writers_repo(
+        tools.path(),
+        "## [T-001] one\nscope: src/T-001.txt\nstatus: ready-for-agent\n\n## [T-002] two\nscope: src/T-002.txt\nstatus: ready-for-agent\n",
+        &wait,
+    );
+
+    let (code, out) = harness(&r.root, &["worktree", "1"]);
+
+    let log = std::fs::read_to_string(tools.path().join("log")).unwrap_or_default();
+    assert!(!log.contains("alone"), "{log}\n{out}");
+    for id in ["T-001", "T-002"] {
+        assert_eq!(status_of(&r, id).as_deref(), Some("done"), "{id}\n{out}");
+        assert!(r.root.join(format!("src/{id}.txt")).exists(), "{id}\n{out}");
+    }
+    assert_eq!(code, 0, "{out}");
+    remove_lanes(&r);
+}
+
+#[test]
+fn overlapping_tickets_serialize() {
+    let tools = tempfile::tempdir().expect("tools");
+    let r = writers_repo(
+        tools.path(),
+        "## [T-001] one\nscope: src/**\nstatus: ready-for-agent\n\n## [T-002] two\nscope: src/T-002.txt\nstatus: ready-for-agent\n",
+        "",
+    );
+
+    let (code, out) = harness(&r.root, &["worktree", "1"]);
+
+    let log = std::fs::read_to_string(tools.path().join("log")).unwrap_or_default();
+    let second = log
+        .lines()
+        .find(|l| l.starts_with("start T-002"))
+        .unwrap_or_else(|| panic!("T-002 never started:\n{log}\n{out}"));
+    assert!(second.contains("T-001.txt"), "{log}\n{out}");
+    for id in ["T-001", "T-002"] {
+        assert_eq!(status_of(&r, id).as_deref(), Some("done"), "{id}\n{out}");
+    }
+    assert_eq!(code, 0, "{out}");
+    remove_lanes(&r);
+}
+
+#[test]
+fn one_writer_unclaimed() {
+    let tools = tempfile::tempdir().expect("tools");
+    let r = lane_repo(tools.path());
+
+    let (code, out) = harness(&r.root, &["worktree", "1"]);
+
+    assert_eq!(code, 0, "{out}");
+    assert!(!r.root.join(".enallagi/run/claims.json").exists(), "{out}");
+    remove_lanes(&r);
+}

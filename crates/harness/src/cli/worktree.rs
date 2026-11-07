@@ -17,6 +17,9 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     let n = args.n.unwrap_or(3);
     let parent_branch = git::git(root, &["rev-parse", "--abbrev-ref", "HEAD"])
         .unwrap_or_else(|_| "HEAD".to_string());
+    if cfg.parallel.writers.get() > 1 {
+        return writers(root, &cfg, n);
+    }
 
     let report = worktree::lane(root, &cfg, &mut |wt| {
         eprintln!("worktree: cd {} && enallagi watch", wt.display());
@@ -62,6 +65,39 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         left_message(root, &cfg.layout.harness_dir, &parent_branch, &report)
     );
     Ok(1)
+}
+
+fn writers(root: &Path, cfg: &config::Config, n: u32) -> anyhow::Result<i32> {
+    // a stop reaches every lane's run, and the launcher still lands what came back
+    crate::agent::catch_stop_signals();
+    let n = n.to_string();
+    let reports = worktree::launch(root, cfg, &|wt, task, env| {
+        eprintln!("worktree: cd {} && enallagi watch", wt.display());
+        let mut args = vec!["run", "--iterations", &n, "--no-tui"];
+        if let Some(task) = task {
+            args.extend(["--task", task, "--pipeline", "task", "--pipeline", "review"]);
+        }
+        let status = Command::new(std::env::current_exe()?)
+            .args(args)
+            .env("ENALLAGI_DIR", wt.join(&cfg.layout.harness_dir))
+            .envs(env.iter().map(|(k, v)| (k, v)))
+            .current_dir(wt)
+            .status()?;
+        if !status.success() {
+            anyhow::bail!("lane run exited with {status}");
+        }
+        Ok(())
+    })?;
+    for r in &reports {
+        let task = r.task.as_deref().unwrap_or("unpinned");
+        let outcome = match (&r.left, r.merged) {
+            (_, true) => "landed".to_string(),
+            (Some(dir), false) => format!("left in {}", dir.display()),
+            (None, false) => "sent back".to_string(),
+        };
+        eprintln!("worktree: {task} {outcome} -- {}", r.reason);
+    }
+    Ok(i32::from(!reports.iter().all(|r| r.merged)))
 }
 
 fn left_message(

@@ -319,8 +319,26 @@ pub fn claims(root: &Path, harness_dir: &str) -> Vec<Claim> {
     with_claims(root, harness_dir, |c| c.clone()).unwrap_or_default()
 }
 
-/// Claims the lowest-id takeable ticket in `root`'s queue that no live claim holds and whose scope overlaps no live writer's, for the lane at `wt`.
-pub fn claim(root: &Path, cfg: &Config, wt: &Path) -> std::io::Result<Option<String>> {
+/// Claims the lowest-id takeable ticket in `root`'s queue, outside `skip`, that no live claim holds and whose scope overlaps no live writer's, for the lane at `wt`.
+pub fn claim(
+    root: &Path,
+    cfg: &Config,
+    wt: &Path,
+    skip: &[String],
+) -> std::io::Result<Option<String>> {
+    take(root, cfg, Some(wt), skip)
+}
+
+pub fn claimable(root: &Path, cfg: &Config, skip: &[String]) -> bool {
+    take(root, cfg, None, skip).is_ok_and(|id| id.is_some())
+}
+
+fn take(
+    root: &Path,
+    cfg: &Config,
+    wt: Option<&Path>,
+    skip: &[String],
+) -> std::io::Result<Option<String>> {
     let dir = &cfg.layout.harness_dir;
     with_claims(root, dir, |claims| {
         let blocks = crate::tracker::Tracker::open(root, dir)
@@ -332,27 +350,39 @@ pub fn claim(root: &Path, cfg: &Config, wt: &Path) -> std::io::Result<Option<Str
                 .unwrap_or_default()
         };
         let id = crate::tracker::takeable_by(&blocks, |b| {
-            claims.iter().all(|c| {
-                c.id != b.id
-                    && (c.hold == Hold::Reader || !crate::gates::overlaps(&c.scope, &scope(b)))
-            })
+            !skip.contains(&b.id)
+                && claims.iter().all(|c| {
+                    c.id != b.id
+                        && (c.hold == Hold::Reader || !crate::gates::overlaps(&c.scope, &scope(b)))
+                })
         });
-        if let Some(id) = &id {
+        if let (Some(id), Some(wt)) = (&id, wt) {
             let b = blocks
                 .iter()
                 .find(|b| &b.id == id)
                 .expect("taken from blocks");
-            claims.push(Claim {
-                id: id.clone(),
-                scope: scope(b),
-                branch: git::git(wt, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default(),
-                worktree: wt.to_path_buf(),
-                base: git::head(wt).unwrap_or_default(),
-                hold: Hold::Writer,
-            });
+            claims.push(held_at(wt, id, scope(b)));
         }
         Ok(id)
     })?
+}
+
+fn held_at(wt: &Path, id: &str, scope: Vec<String>) -> Claim {
+    Claim {
+        id: id.to_string(),
+        scope,
+        branch: git::git(wt, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default(),
+        worktree: wt.to_path_buf(),
+        base: git::head(wt).unwrap_or_default(),
+        hold: Hold::Writer,
+    }
+}
+
+// the unpinned lane writes the queue anywhere, so its empty scope overlaps every ticket
+fn claim_all(root: &Path, harness_dir: &str, wt: &Path) -> std::io::Result<()> {
+    with_claims(root, harness_dir, |claims| {
+        claims.push(held_at(wt, "", Vec::new()))
+    })
 }
 
 pub fn release(root: &Path, harness_dir: &str, wt: &Path) -> std::io::Result<()> {
@@ -427,6 +457,146 @@ fn send_back(
     Ok(())
 }
 
+// cost and tokens summed from the stage ends in `events`
+fn spent(events: &[crate::events::Event]) -> (f64, u64) {
+    events
+        .iter()
+        .fold((0.0, 0), |(usd, tokens), e| match &e.kind {
+            crate::events::Kind::StageEnd {
+                cost,
+                input_tokens,
+                output_tokens,
+                cache_creation_input_tokens,
+                cache_read_input_tokens,
+                ..
+            } => (
+                usd + cost.unwrap_or(0.0),
+                tokens
+                    + [
+                        input_tokens,
+                        output_tokens,
+                        cache_creation_input_tokens,
+                        cache_read_input_tokens,
+                    ]
+                    .iter()
+                    .map(|t| t.unwrap_or(0))
+                    .sum::<u64>(),
+            ),
+            _ => (usd, tokens),
+        })
+}
+
+// each writer slot gets an equal share of what is left; None once a budget is spent
+fn lane_budget(
+    usd: Option<f64>,
+    tokens: Option<u64>,
+    spent: (f64, u64),
+    writers: u32,
+) -> Option<Vec<(String, String)>> {
+    let mut env = Vec::new();
+    if let Some(usd) = usd {
+        let left = usd - spent.0;
+        if left <= 0.0 {
+            return None;
+        }
+        env.push((
+            "BUDGET_USD".to_string(),
+            (left / f64::from(writers)).to_string(),
+        ));
+    }
+    if let Some(tokens) = tokens {
+        let left = tokens.checked_sub(spent.1).filter(|l| *l > 0)?;
+        env.push((
+            "BUDGET_TOKENS".to_string(),
+            (left / u64::from(writers)).max(1).to_string(),
+        ));
+    }
+    Some(env)
+}
+
+/// Runs the lane's round in `wt`: pinned to a ticket, or unpinned, with these variables set.
+pub type Spawn<'a> =
+    &'a (dyn Fn(&Path, Option<&str>, &[(String, String)]) -> anyhow::Result<()> + Sync);
+
+/// `writers > 1`: up to `writers` pinned lanes at once, each landing as it finishes; an unpinned lane when nothing can be claimed.
+pub fn launch(root: &Path, cfg: &Config, spawn: Spawn) -> Result<Vec<LaneReport>, WorktreeError> {
+    let dir = &cfg.layout.harness_dir;
+    let writers = cfg.parallel.writers.get();
+    let parent = git::git(root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let log = crate::events::Log::open(&root.join(dir));
+    let before = log.read().map(|e| e.len()).unwrap_or(0);
+    let budget = crate::pipeline::RunOpts::default().with_env_budgets();
+    let stops = crate::config::stop_files(root, dir);
+    // ponytail: a ticket is taken once per launch, so a rejected one waits for the next `enallagi worktree`
+    let mut tried: Vec<String> = Vec::new();
+    let mut reports = Vec::new();
+    let mut unpinned = false;
+    std::thread::scope(|s| -> Result<(), WorktreeError> {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let mut live = 0;
+        loop {
+            let used = spent(
+                log.read()
+                    .unwrap_or_default()
+                    .get(before..)
+                    .unwrap_or_default(),
+            );
+            let env = lane_budget(budget.budget_usd, budget.budget_tokens, used, writers)
+                .filter(|_| {
+                    !stops.iter().any(|p| p.exists()) && crate::agent::stop_signal().is_none()
+                })
+                .map(|mut env| {
+                    env.push(("ENALLAGI_PARENT".to_string(), parent.clone()));
+                    env
+                });
+            while let Some(env) = env
+                .clone()
+                .filter(|_| live < writers && claimable(root, cfg, &tried))
+            {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let (done, skip) = (done_tx.clone(), tried.clone());
+                s.spawn(move || {
+                    let report = lane(root, cfg, &mut |wt| {
+                        let id = claim(root, cfg, wt, &skip)?;
+                        let _ = tx.send(id.clone());
+                        match id {
+                            Some(id) => spawn(wt, Some(&id), &env),
+                            None => Ok(()),
+                        }
+                    });
+                    let _ = done.send(report);
+                });
+                live += 1;
+                // another launcher may have taken it between the look and the claim
+                match rx.recv() {
+                    Ok(Some(id)) => {
+                        tried.push(id);
+                        unpinned = false;
+                    }
+                    _ => break,
+                }
+            }
+            if live == 0 {
+                let Some(env) = env.filter(|_| !unpinned) else {
+                    return Ok(());
+                };
+                unpinned = true;
+                reports.push(lane(root, cfg, &mut |wt| {
+                    claim_all(root, dir, wt)?;
+                    spawn(wt, None, &env)
+                })?);
+                continue;
+            }
+            let report = done_rx.recv().expect("a live lane reports")?;
+            live -= 1;
+            if report.task.is_some() {
+                reports.push(report);
+            }
+        }
+    })?;
+    Ok(reports)
+}
+
 // what happens next is decided by the worktrees' own committed state, never run's exit status
 pub fn lane(
     root: &Path,
@@ -458,6 +628,16 @@ fn landed(
     if parent_branch == "HEAD" {
         return Err(WorktreeError::Detached);
     }
+
+    // setup and landing both write the parent's repositories, so a lane's setup waits out another's landing
+    let setup = match cfg.parallel.writers.get() > 1 {
+        true => Some(lock_file(&run_file(
+            root,
+            &cfg.layout.harness_dir,
+            "land.lock",
+        ))?),
+        false => None,
+    };
 
     // a lane branches from the parent's HEAD, so tracked work uncommitted there is work it never sees
     let state_root = git::state_root(root, &cfg.layout.harness_dir);
@@ -510,6 +690,7 @@ fn landed(
     let (branch, dir, pairs) = create_worktree(root, cfg, &base)?;
     let state = (pairs.len() > 1).then(|| pairs[0].1.clone());
 
+    drop(setup);
     let run_error = run(&dir).err().map(|e| e.to_string());
     let parallel = cfg.parallel.writers.get() > 1;
     let held = if parallel {
@@ -827,8 +1008,8 @@ mod tests {
             tempfile::TempDir::new().unwrap(),
         );
 
-        let first = claim(&r.root, &cfg, one.path()).expect("claim");
-        let second = claim(&r.root, &cfg, two.path()).expect("claim");
+        let first = claim(&r.root, &cfg, one.path(), &[]).expect("claim");
+        let second = claim(&r.root, &cfg, two.path(), &[]).expect("claim");
 
         assert_eq!(first.as_deref(), Some("T-001"));
         assert_eq!(second.as_deref(), Some("T-003"));
@@ -844,12 +1025,14 @@ mod tests {
         let r = scoped_repo();
         let cfg = cfg(&r);
         let one = tempfile::TempDir::new().unwrap();
-        claim(&r.root, &cfg, one.path()).expect("claim");
+        claim(&r.root, &cfg, one.path(), &[]).expect("claim");
         drop(one);
 
         let two = tempfile::TempDir::new().unwrap();
         assert_eq!(
-            claim(&r.root, &cfg, two.path()).expect("claim").as_deref(),
+            claim(&r.root, &cfg, two.path(), &[])
+                .expect("claim")
+                .as_deref(),
             Some("T-001")
         );
         let held: Vec<PathBuf> = claims(&r.root, ".enallagi")
@@ -879,10 +1062,12 @@ mod tests {
             tempfile::TempDir::new().unwrap(),
             tempfile::TempDir::new().unwrap(),
         );
-        claim(&r.root, &cfg, one.path()).expect("claim");
+        claim(&r.root, &cfg, one.path(), &[]).expect("claim");
         release(&r.root, ".enallagi", one.path()).expect("release");
         assert_eq!(
-            claim(&r.root, &cfg, two.path()).expect("claim").as_deref(),
+            claim(&r.root, &cfg, two.path(), &[])
+                .expect("claim")
+                .as_deref(),
             Some("T-001")
         );
     }
@@ -904,7 +1089,10 @@ mod tests {
     }
 
     fn claimed(r: &Repo, cfg: &Config, wt: &Path, id: &str) {
-        assert_eq!(claim(&r.root, cfg, wt).expect("claim").as_deref(), Some(id));
+        assert_eq!(
+            claim(&r.root, cfg, wt, &[]).expect("claim").as_deref(),
+            Some(id)
+        );
     }
 
     // lane B's run lands lane A first, so B's parent moved under it
@@ -1040,6 +1228,40 @@ mod tests {
         assert!(gate_line(&r, "T-001").contains("conflicts with"));
         assert!(!r.root.join("one.txt").exists());
         kept(&r, &report);
+    }
+
+    #[test]
+    fn lane_budget_splits_remainder() {
+        let end = |cost| crate::events::Event {
+            ts: String::new(),
+            run: String::new(),
+            iter: 0,
+            seq: 0,
+            sha: None,
+            kind: crate::events::Kind::StageEnd {
+                stage: "implement".into(),
+                task: None,
+                seconds: 1,
+                exit: 0,
+                cost: Some(cost),
+                input_tokens: Some(100),
+                output_tokens: Some(50),
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+                turns: None,
+                turn_cap: None,
+            },
+        };
+        let used = spent(&[end(1.0), end(2.0)]);
+        assert_eq!(used, (3.0, 300));
+        let env = lane_budget(Some(10.0), Some(1000), used, 2).expect("budget left");
+        let pair = |k: &str, v: &str| (k.to_string(), v.to_string());
+        assert_eq!(
+            env,
+            [pair("BUDGET_USD", "3.5"), pair("BUDGET_TOKENS", "350")]
+        );
+        assert_eq!(lane_budget(Some(3.0), None, used, 2), None);
+        assert_eq!(lane_budget(None, Some(300), used, 2), None);
     }
 
     #[test]
