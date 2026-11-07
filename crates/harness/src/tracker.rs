@@ -364,6 +364,58 @@ pub fn verdict(b: &Block) -> Option<Ruling> {
     Some(r)
 }
 
+/// Where a kill is recorded: one file per concept, in the format of Pocock's `triage`.
+pub const OUT_OF_SCOPE: &str = ".out-of-scope";
+
+/// The dated kill lines under the harness dir `dir`: every `.out-of-scope/*.md`'s, then those of
+/// DECISIONS.md `## Rejected findings`, which is read-only history.
+pub fn kill_lines(dir: &Path) -> std::io::Result<Vec<String>> {
+    let dated = |l: &str| {
+        l.strip_prefix("- [")
+            .and_then(|r| r.get(..11))
+            .map(str::as_bytes)
+            .is_some_and(|d| {
+                d[10] == b']'
+                    && (0..10).all(|i| match i {
+                        4 | 7 => d[i] == b'-',
+                        _ => d[i].is_ascii_digit(),
+                    })
+            })
+    };
+    let absent = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
+    let mut files: Vec<PathBuf> = match std::fs::read_dir(dir.join(OUT_OF_SCOPE)) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "md"))
+            .collect(),
+        Err(e) if absent(&e) => vec![],
+        Err(e) => return Err(e),
+    };
+    files.sort();
+    let mut out = Vec::new();
+    for f in files {
+        out.extend(
+            std::fs::read_to_string(f)?
+                .lines()
+                .filter(|l| dated(l))
+                .map(String::from),
+        );
+    }
+    let decisions = match std::fs::read_to_string(dir.join("DECISIONS.md")) {
+        Err(e) if absent(&e) => String::new(),
+        text => text?,
+    };
+    let mut inside = false;
+    for line in decisions.lines() {
+        if line.starts_with("## ") {
+            inside = line.trim() == "## Rejected findings";
+        } else if inside && dated(line) {
+            out.push(line.to_string());
+        }
+    }
+    Ok(out)
+}
+
 /// The spec a new ticket lands in: the product repository's directory name.
 pub fn repo_slug(root: &Path) -> String {
     let name = root

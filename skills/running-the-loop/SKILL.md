@@ -53,7 +53,7 @@ Stopping with `BLOCKED` and a written reason is a success, not a failure.
 Every iteration's `__ENALLAGI_DIR__/PROGRESS.md` entry ends with `friction:` — one thing that cost time and a rule or
 a check could prevent, or `none`. The first occurrence is evidence and stays there. The **second**
 occurrence of the same thing is decided: a line in `__ENALLAGI_DIR__/LEARNINGS.md`, which `enallagi eval --gate` must
-admit, or a dated kill line in `__ENALLAGI_DIR__/DECISIONS.md` quoting the `--gate` run that refused the rule.
+admit, or a dated kill line in a `__ENALLAGI_DIR__/.out-of-scope/` file quoting the `--gate` run that refused the rule.
 `enallagi probe` → `friction-repeat` keeps emitting it until one of the two is written.
 
 ## The rails

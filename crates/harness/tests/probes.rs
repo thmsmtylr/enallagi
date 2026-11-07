@@ -2426,3 +2426,64 @@ fn a_rule_not_recurring_after_promotion_is_silent() {
         found[0].message
     );
 }
+
+// a kill is a `.out-of-scope/<concept>.md` file in Pocock's format; its prior requests are the kill lines
+fn out_of_scope(repo: &Repo, concept: &str, kill: &str) {
+    let dir = config::instance_path(
+        &repo.root,
+        &config::harness_dir(&repo.root),
+        ".out-of-scope",
+    );
+    fs::create_dir_all(&dir).expect("mkdir");
+    fs::write(
+        dir.join(format!("{concept}.md")),
+        format!("# {concept}\n\nThis project does not do it.\n\n## Why this is out of scope\n\nA re-run refutes it.\n\n## Prior requests\n\n{kill}"),
+    )
+    .expect("write");
+}
+
+#[test]
+fn out_of_scope_settles_ceiling() {
+    let (repo, cfg) = ceilings();
+    out_of_scope(
+        &repo,
+        "first-marker",
+        "- [2026-11-07] T-009 claimed the marker at `src/a.sh:2` — refuted by a re-run: settled.\n",
+    );
+    let results = run(&repo, &cfg);
+    assert_eq!(
+        count(&results, "ponytail-ceiling"),
+        Some(2),
+        "{}",
+        render(&results)
+    );
+}
+
+#[test]
+fn out_of_scope_kill_reused() {
+    let (repo, cfg) = seeded();
+    out_of_scope(
+        &repo,
+        "a-thing",
+        "- [2026-09-01] T-002 claimed a thing — refuted by `x`: y\n",
+    );
+    queue(&repo, "\n## [T-002] a later finding under the killed number\nscope: src/a.rs\nblockedBy: none\nstatus: ready-for-agent\n");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "queue-hygiene");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(found[0]
+        .message
+        .contains("T-002 reuses the id of a killed finding"));
+}
+
+#[test]
+fn out_of_scope_covers_friction() {
+    let (repo, cfg) = seeded();
+    append(&repo, "PROGRESS.md", FRICTION_FIXTURE);
+    out_of_scope(
+        &repo,
+        "prose-check",
+        "- [2026-09-13] the same friction is recorded 2 times: FIFTH sighting of a check firing on the prose that documents it - and the first where the \u{2014} refuted by `enallagi eval --gate prose-check`: `GATE prose-check REJECT the case passes with the rule ablated, so the rule changed no outcome`; PROGRESS.md keeps the evidence\n",
+    );
+    assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
+}

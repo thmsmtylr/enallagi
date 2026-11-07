@@ -62,6 +62,7 @@ path this table does not name.
 
 | Path | Store |
 | --- | --- |
+| `__ENALLAGI_DIR__/.out-of-scope` | tracked — one file per killed concept, written by the adjudicator and committed by `enallagi run` at the end of every stage |
 | `__ENALLAGI_DIR__/.git` | the state repository, created by `enallagi init` when the harness directory is its own repository |
 | `__ENALLAGI_DIR__/specs` | tracked — committed by `enallagi run` at the end of every stage |
 | `__ENALLAGI_DIR__/events.jsonl` | ignored — one run's log, read with `enallagi events` while the run is live |
@@ -81,7 +82,7 @@ path this table does not name.
 - **The scout proposes and the adjudicator promotes or kills.** `needs-triage` is the scout's output and
   the verifier's filing — one ticket per `FINDING` line from `enallagi probe`, carrying `probe:`, the
   command and its output — and the adjudicator either writes runnable criteria and sets
-  `ready-for-agent`, or sets `wontfix` with a line in `## Rejected findings` in __ENALLAGI_DIR__/DECISIONS.md.
+  `ready-for-agent`, or sets `wontfix` with a kill line recorded in __ENALLAGI_DIR__/.out-of-scope/<concept>.md.
   A `needs-triage` ticket is inert to the loop, and no ticket file is deleted.
 - `rows:` names the exit-criteria rows the task turns green, copied character for character. A task
   with no rows writes `rows: none` and says whether it is harness or measurement.

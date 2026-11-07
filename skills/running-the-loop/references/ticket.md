@@ -40,7 +40,8 @@ queue. No line under `## Comments` opens with `## `: that ends the section.
 
 A lane edits only its own ticket file. The one other file it may add is a new ticket at
 `needs-triage`; the scope gate rejects any other change under `__ENALLAGI_DIR__/specs/`. A killed
-ticket is set to `wontfix` with its reason, never deleted.
+ticket is set to `wontfix` with its reason, never deleted, and its kill line is recorded in
+`__ENALLAGI_DIR__/.out-of-scope/<concept>.md`.
 
 A new ticket takes one past the highest id ever used, over every ticket file and every id
 __ENALLAGI_DIR__/DECISIONS.md names: `{ ls __ENALLAGI_DIR__/specs/*/issues; cat __ENALLAGI_DIR__/DECISIONS.md; } | grep -o 'T-[0-9]*' | sort -t- -k2 -n | tail -1`.

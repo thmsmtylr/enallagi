@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- the adjudicator triages with Pocock's `triage`: a kill records its line in `.out-of-scope/<concept>.md` instead of DECISIONS.md `## Rejected findings`, which stays read-only history the probes still honour; a `probe: decompose` ticket is judged against its spec; a ticket needing a person goes to `ready-for-human`
 - new eval `verifier-filing`: the verifier files a defect outside the criteria as one `needs-triage` ticket; its ablation removes only that rule
 - the verifier reviews along `code-review`'s Spec and Standards axes and runs `ponytail-review`; the `verdict` gate sends a `done` back to `ready-for-agent` unless `spec:` and `standards:` lines sit under its verdict; a new command that writes files or calls a model is verified in a copy of the harness directory
 - the implementer loads `codebase-design` by its own token, `writing-for-agents` and `domain-modeling` when its scope names a doc, skill, role, glossary or ADR, and updates the doc stating a changed behaviour in the same commit

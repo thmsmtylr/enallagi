@@ -19,6 +19,7 @@ pub(crate) const BOOKKEEPING: &[&str] = &[
     "PROGRESS.archive.md",
     "DECISIONS.md",
     "LEARNINGS.md",
+    ".out-of-scope",
 ];
 
 pub struct GateCtx<'a> {

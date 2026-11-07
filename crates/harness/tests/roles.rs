@@ -396,3 +396,30 @@ fn verifier_copies_writers() {
         assert!(text.contains(want), "roles/verifier.md wants {want:?}");
     }
 }
+
+#[test]
+fn adjudicator_takes_decomposed() {
+    let text = role("adjudicator");
+    for want in [
+        "{{skill:triage}}",
+        "A `probe: decompose` ticket is anchored by its spec",
+        "set it to `needs-info` and halt",
+        "`ready-for-human`",
+        "__ENALLAGI_DIR__/.out-of-scope/<concept>.md",
+    ] {
+        assert!(text.contains(want), "roles/adjudicator.md wants {want:?}");
+    }
+    assert!(!text.contains("append the same line to `## Rejected findings`"));
+}
+
+// T-481: docs move with code only when the ticket's scope names the doc
+#[test]
+fn adjudicator_scopes_stated_doc() {
+    let text = role("adjudicator");
+    for want in [
+        "makes a doc, skill or role file wrong, add that file to `scope:`",
+        "name the line that states it under `## Comments`",
+    ] {
+        assert!(text.contains(want), "roles/adjudicator.md wants {want:?}");
+    }
+}
