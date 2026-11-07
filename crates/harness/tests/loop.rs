@@ -486,7 +486,7 @@ fn backticked_marker_runs() {
 }
 
 #[test]
-fn every_stage_appends_a_run_log_record() {
+fn stages_append_log_record() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -499,7 +499,7 @@ fn every_stage_appends_a_run_log_record() {
 }
 
 #[test]
-fn the_verdict_gate_records_the_check_tally() {
+fn verdict_records_tally() {
     let r = repo("", "");
     script(
         &r,
@@ -538,7 +538,7 @@ fn the_verdict_gate_records_the_check_tally() {
 }
 
 #[test]
-fn a_check_with_no_count_warns_in_the_digest() {
+fn countless_check_warns() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -570,7 +570,7 @@ fn a_check_with_no_count_warns_in_the_digest() {
 }
 
 #[test]
-fn the_record_carries_role_seconds_cost() {
+fn record_carries_cost() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -603,7 +603,7 @@ fn the_record_carries_role_seconds_cost() {
 }
 
 #[test]
-fn the_loop_stops_before_the_budget() {
+fn stops_before_budget() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -840,7 +840,7 @@ turns = 1
 }
 
 #[test]
-fn stop_file_halts_at_the_next_boundary() {
+fn stop_halts_at_boundary() {
     let r = repo("", "");
     let implement = implementer(&r, &format!("touch {}\n", instance("STOP")));
     let verify = verifier(&r);
@@ -894,7 +894,7 @@ fn two_dry_rounds_end() {
 }
 
 #[test]
-fn run_without_a_tty_prints_one_line_per_event() {
+fn piped_run_prints_lines() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -920,7 +920,7 @@ fn run_without_a_tty_prints_one_line_per_event() {
 }
 
 #[test]
-fn run_names_its_binary_and_each_event_its_head() {
+fn run_names_event_heads() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -1172,7 +1172,7 @@ path = \"roles\"
 
 // an uncommitted vendored skill or role would read to the verdict gate as work left off the branch
 #[test]
-fn a_fetched_skill_commits_before_its_stage() {
+fn fetched_skill_commits_first() {
     let toml = base_toml(SKILL_DECL);
     let r = repo(&toml, SKILL_TASKS);
     r.write("vendor/tdd/SKILL.md", "# tdd\n\nWrite the test first.\n");
@@ -1254,7 +1254,7 @@ fn a_fetched_skill_commits_before_its_stage() {
 }
 
 #[test]
-fn an_unnamed_red_check_is_a_finding() {
+fn unnamed_red_finding() {
     let r = repo(&base_toml(""), "");
     script(&r, "src/fakecheck.sh", "echo boom\nexit 1\n");
     queue(&r, "# queue\n");
@@ -1266,7 +1266,7 @@ fn an_unnamed_red_check_is_a_finding() {
 }
 
 #[test]
-fn a_check_past_its_timeout_halts_the_run() {
+fn check_timeout_halts() {
     let toml = base_toml(&role_commands("./src/fakeimpl.sh", "./src/fakeverify.sh")).replace(
         "command = \"./src/fakecheck.sh\"",
         "command = \"./src/fakecheck.sh\"\ntimeout = \"2s\"",
@@ -1369,7 +1369,7 @@ fn stage_output_streams_to_the_sink() {
 }
 
 #[test]
-fn an_implementer_done_skips_verify() {
+fn implementer_done_skips_verify() {
     let r = repo("", "");
     let implement = implementer(
         &r,
@@ -1398,7 +1398,7 @@ fn an_implementer_done_skips_verify() {
 }
 
 #[test]
-fn short_of_review_skips_verify() {
+fn unreviewed_skips_verify() {
     let r = repo("", "");
     let implement = implementer(
         &r,
@@ -1435,7 +1435,7 @@ fn with_verifier(r: &Repo, verify: &str) {
 }
 
 #[test]
-fn a_stranded_review_verifies_next_run() {
+fn stranded_review_verifies() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = verifier(&r);
     with_verifier(&r, &verify);
@@ -1610,7 +1610,7 @@ fn verifier_noting(r: &Repo, note: &str, proposed: &str) -> String {
 }
 
 #[test]
-fn a_deferred_finding_with_no_block_is_refused() {
+fn blockless_deferral_refused() {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = deferring_verifier(&r, "");
     with_verifier(&r, &verify);
@@ -1697,7 +1697,7 @@ fn a_test_named_minor_is_not_the_verdict() {
     a_verdict_noting("VERIFIED. `a_minor_case` and the_minor_path_is_covered pass.");
 }
 
-fn a_verdict_refused_for(note: &str) -> String {
+fn verdict_refusal(note: &str) -> String {
     let r = repo(&base_toml(""), REVIEW_TASK);
     let verify = verifier_noting(&r, note, "");
     with_verifier(&r, &verify);
@@ -1716,9 +1716,8 @@ fn a_verdict_refused_for(note: &str) -> String {
 
 #[test]
 fn a_deferred_line_with_no_block_names_the_field() {
-    let reason = a_verdict_refused_for(
-        "VERIFIED.\\ndeferred: the test never removes the entry it registers",
-    );
+    let reason =
+        verdict_refusal("VERIFIED.\\ndeferred: the test never removes the entry it registers");
     assert!(
         reason.starts_with("the verdict's `deferred:` line"),
         "{reason}"
@@ -1731,7 +1730,7 @@ fn a_deferred_line_with_no_block_names_the_field() {
 
 #[test]
 fn a_prose_deferral_is_told_the_field() {
-    let reason = a_verdict_refused_for("VERIFIED. Minor: the fixture leaks a file.");
+    let reason = verdict_refusal("VERIFIED. Minor: the fixture leaks a file.");
     assert!(reason.contains("\"minor\""), "{reason}");
     assert!(reason.contains("`deferred:`"), "{reason}");
 }
@@ -1743,7 +1742,7 @@ fn implementer_note(r: &Repo) -> String {
     )
 }
 
-fn a_clean_verdict_after_the_implementer(r: &Repo, implement: &str) {
+fn clean_verdict_after(r: &Repo, implement: &str) {
     let verify = verifier(r);
     write_toml(r, &base_toml(&role_commands(implement, &verify)));
     queue(r, TASKS);
@@ -1761,10 +1760,10 @@ fn a_clean_verdict_after_the_implementer(r: &Repo, implement: &str) {
 }
 
 #[test]
-fn an_implementer_minor_is_not_the_verdict() {
+fn implementer_minor_not_verdict() {
     let r = repo("", "");
     let implement = implementer(&r, &implementer_note(&r));
-    a_clean_verdict_after_the_implementer(&r, &implement);
+    clean_verdict_after(&r, &implement);
 }
 
 #[test]
@@ -1783,7 +1782,7 @@ fn uncommitted_minor() {
             note = implementer_note(&r),
         ),
     );
-    a_clean_verdict_after_the_implementer(&r, &implement);
+    clean_verdict_after(&r, &implement);
 }
 
 #[test]
@@ -1900,7 +1899,7 @@ fn install_lands_task() {
 }
 
 #[test]
-fn claude_install_no_dot_claude() {
+fn install_skips_dot_claude() {
     let r = Repo::new();
     enallagi::init::install(
         &r.root,
@@ -2138,7 +2137,7 @@ fn review_reads_queued_scope() {
 }
 
 #[test]
-fn landed_leaves_no_instance_path() {
+fn landed_no_instance_path() {
     let r = nested("exit 0\n", "");
     let before = in_dir(&r.root, &["rev-parse", "HEAD"]);
 
@@ -2301,7 +2300,7 @@ fn stages_started(events: &[Event]) -> Vec<String> {
 }
 
 #[test]
-fn adjudicate_follows_a_rejection_in_one_round() {
+fn adjudicate_follows_rejection() {
     let r = repo("", "");
     draining(&r, FILED, &promotes("T-009"));
 
@@ -2320,7 +2319,7 @@ fn adjudicate_follows_a_rejection_in_one_round() {
 }
 
 #[test]
-fn a_verdict_filing_nothing_skips_adjudicate() {
+fn empty_verdict_skips_adjudicate() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -2392,7 +2391,7 @@ fn a_nonzero_adjudicator_is_not_a_decision() {
 }
 
 #[test]
-fn a_stage_at_its_turn_cap_is_named_in_the_digest() {
+fn turn_cap_named() {
     let r = repo(&base_toml(""), "");
     queue(&r, "# queue\n");
     script(
@@ -2408,7 +2407,7 @@ fn a_stage_at_its_turn_cap_is_named_in_the_digest() {
 }
 
 #[test]
-fn digest_and_probe_agree_past_the_turn_cap() {
+fn agree_past_turn_cap() {
     use enallagi::probes::telemetry::{turns_exhausted, ProbeResult};
     let r = repo(&base_toml(""), "");
     queue(&r, "# queue\n");
@@ -2431,7 +2430,7 @@ fn digest_and_probe_agree_past_the_turn_cap() {
 }
 
 #[test]
-fn digest_and_probe_agree_on_an_uncapped_stage() {
+fn agree_on_uncapped() {
     use enallagi::probes::telemetry::{turns_exhausted, ProbeResult};
     let toml = base_toml("").replacen(
         "command = [\"./src/fakeagent.sh\", \"{prompt}\", \"{turns}\"]",
@@ -2508,7 +2507,7 @@ fn a_handed_adjudicator_reads_one_turn_cap() {
 }
 
 #[test]
-fn an_uncapped_stage_is_not_named_as_a_turn_cap() {
+fn uncapped_stage_unnamed() {
     let toml = base_toml("").replace(
         r#"command = ["./src/fakeagent.sh", "{prompt}", "{turns}"]"#,
         r#"command = ["./src/fakeagent.sh", "{prompt}"]"#,
@@ -2528,7 +2527,7 @@ fn an_uncapped_stage_is_not_named_as_a_turn_cap() {
 }
 
 #[test]
-fn a_timed_out_stage_is_named_as_a_timeout() {
+fn timed_out_stage_named() {
     let toml = base_toml("")
         .replace(
             r#"command = ["./src/fakeagent.sh", "{prompt}", "{turns}"]"#,
@@ -2586,7 +2585,7 @@ fn the_adjudicate_gates_run_in_a_task_round() {
 }
 
 #[test]
-fn a_promotion_repeating_a_rejection_is_refused() {
+fn rejected_repeat_refused() {
     let r = repo("", "");
     draining(&r, RESTATED, &promotes("T-009"));
 
@@ -2703,7 +2702,7 @@ fn triage_before_discover() {
 }
 
 #[test]
-fn an_attended_block_waits_for_a_scout_round() {
+fn attended_waits_for_scout() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -2767,7 +2766,7 @@ fn implement_prompt(r: &Repo) -> String {
 }
 
 #[test]
-fn the_implement_prompt_names_a_rejected_attempt() {
+fn prompt_names_rejection() {
     let r = repo("", "");
     implementing(&r, REJECTED_TASK);
     r.write("src/thing.ts", "first attempt\n");
@@ -2876,7 +2875,7 @@ fn pinned_run_own_ticket() {
 }
 
 #[test]
-fn a_task_round_does_not_spend_the_discovery_budget() {
+fn task_round_spares_discovery() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -2896,7 +2895,7 @@ fn a_task_round_does_not_spend_the_discovery_budget() {
 }
 
 #[test]
-fn a_promotion_repeating_a_noted_verdict_is_refused() {
+fn noted_repeat_refused() {
     let r = repo("", "");
     let verify = verifier_rejecting_in_notes(&r);
     draining_with(&r, &verify, NOTED_RESTATED, &promotes("T-009"));
@@ -2920,7 +2919,7 @@ fn standing(n: u32) -> String {
 }
 
 #[test]
-fn a_standing_pile_drains_oldest_first() {
+fn standing_drains_oldest_first() {
     let r = repo("", "");
     let verify = rejecting_verifier(&r);
     let implement = implementer(&r, "");
@@ -2981,7 +2980,7 @@ fn the_dry_plan_prints_the_adjudicate_cap() {
 }
 
 #[test]
-fn the_digest_counts_standing_and_expired() {
+fn digest_counts_standing() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -3091,7 +3090,7 @@ fn queued_issue(r: &Repo) {
 }
 
 #[test]
-fn a_proposed_block_is_adjudicated_before_scouting() {
+fn proposed_adjudicated_first() {
     let r = repo("", "");
     let scout = script(&r, "src/fakescout.sh", QUIET);
     let adj = adjudicator(&r, &promotes("T-002"));
@@ -3126,7 +3125,7 @@ fn default_pipelines_toml(extra: &str) -> String {
 }
 
 #[test]
-fn an_undecided_block_hands_the_round_to_discover() {
+fn undecided_hands_to_discover() {
     let r = repo("", "");
     let scout = script(&r, "src/fakescout.sh", QUIET);
     let adj = adjudicator(&r, "");
@@ -3893,7 +3892,7 @@ fn threaded(threads: Vec<Thread>) -> Pulls {
 }
 
 #[test]
-fn a_landed_block_answers_its_thread() {
+fn landed_block_answers_thread() {
     let p = threaded(vec![Thread {
         id: "PRRT_kwDOA1".to_string(),
         comments: vec![Remark {
@@ -3928,7 +3927,7 @@ fn a_landed_block_answers_its_thread() {
 }
 
 #[test]
-fn an_unanswered_thread_is_a_warning_not_a_halt() {
+fn unanswered_thread_warns() {
     let p = threaded(Vec::new());
     let (_, out) = p.run(&[]);
     assert!(out.contains("tasks landed: T-001"), "{out}");
@@ -3941,7 +3940,7 @@ fn an_unanswered_thread_is_a_warning_not_a_halt() {
 }
 
 #[test]
-fn pr_per_task_opens_one_from_the_launcher() {
+fn launcher_opens_pr() {
     let p = pulls("", "exit 0\n");
     let (_, out) = p.run(&["--pr-per-task"]);
     assert!(out.contains("tasks landed: T-001"), "{out}");
@@ -3988,7 +3987,7 @@ fn auto_opens_pull() {
 }
 
 #[test]
-fn a_run_without_pr_per_task_opens_nothing() {
+fn unset_pr_opens_nothing() {
     let p = pulls("", "exit 0\n");
     let (_, out) = p.run(&[]);
     assert!(out.contains("tasks landed: T-001"), "{out}");
@@ -4034,7 +4033,7 @@ fn bot_finding_read() {
 }
 
 #[test]
-fn pr_per_task_config_opens_one() {
+fn pr_config_opens_one() {
     let p = pulls("\n[pr]\nper_task = true\n", "exit 0\n");
     let (_, out) = p.run(&[]);
     assert!(!p.calls().is_empty(), "gh never ran:\n{out}");
@@ -4045,7 +4044,7 @@ fn pr_per_task_config_opens_one() {
 }
 
 #[test]
-fn a_red_task_branch_opens_no_pr() {
+fn red_branch_no_pr() {
     // green in the checkout, red in the replayed worktree: the marker is excluded, never committed
     let p = pulls("", "test -f green.marker\n");
     p.repo.write("green.marker", "");
@@ -4125,7 +4124,7 @@ fn protection(r: &Repo) -> String {
 }
 
 #[test]
-fn an_iteration_lands_under_a_protection_finding() {
+fn lands_under_protection() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -4459,7 +4458,7 @@ fn rejected_url_skipped() {
 }
 
 #[test]
-fn no_open_pull_no_host() {
+fn hostless_calls_no_gh() {
     let r = driven_repo(DONE_TASK);
     let path = recording(&r, open_pulls(), PLAIN_REVIEW);
     let out = run_with_path(&r, &path);
@@ -5098,7 +5097,7 @@ fn a_learning_killed_on_a_red_gate_is_named() {
 }
 
 #[test]
-fn a_killed_revision_of_a_rule_is_not_promoted() {
+fn killed_revision_unpromoted() {
     let rule = "- [2026-09-01] `vacuous-test`: a test passed with its logic deleted → delete it\n  revised: 2026-09-28 `vacuous-test`\n";
     let killed = format!("{LEARNING}  killed: 2026-09-29 two instances\n");
     let r = deciding_learning(&decisions(rule, &killed), "");
@@ -5151,7 +5150,7 @@ fn writable_src(r: &Repo) -> String {
 }
 
 #[test]
-fn the_audit_runs_once_after_the_last_iteration() {
+fn audit_runs_once_last() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -5201,7 +5200,7 @@ fn the_audit_runs_once_after_the_last_iteration() {
 }
 
 #[test]
-fn a_failed_audit_still_counts_its_spend() {
+fn failed_audit_counts_spend() {
     let r = repo("", "");
     let implement = implementer(&r, "");
     let verify = verifier(&r);
@@ -5232,7 +5231,7 @@ fn a_failed_audit_still_counts_its_spend() {
 }
 
 #[test]
-fn a_stop_skips_the_audit() {
+fn stop_skips_audit() {
     let r = repo("", "");
     script(
         &r,
