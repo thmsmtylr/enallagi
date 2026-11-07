@@ -1176,7 +1176,7 @@ mod tests {
     }
 
     #[test]
-    fn takes_lowest_ready_unblocked_id() {
+    fn takes_lowest_ready_id() {
         let r = Repo::new();
         let t = files(&r);
         // a higher id in a spec dir that sorts first
@@ -1335,7 +1335,7 @@ mod tests {
     }
 
     #[test]
-    fn a_duplicate_id_across_files_is_refused() {
+    fn duplicate_id_refused() {
         let r = Repo::new();
         let t = files(&r);
         r.write(
@@ -1349,7 +1349,7 @@ mod tests {
     }
 
     #[test]
-    fn queued_commit_is_the_file_add() {
+    fn queued_commit_file_add() {
         let r = Repo::new();
         let t = files(&r);
         r.commit_all("queue: the first five");

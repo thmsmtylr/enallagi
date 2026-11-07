@@ -948,7 +948,7 @@ mod tests {
     }
 
     #[test]
-    fn a_settled_thread_yields_no_comment() {
+    fn settled_thread_silent() {
         let json = include_str!("../tests/fixtures/reviews/settled.json");
         let found = collect(serde_json::from_str(json).expect("parse"));
         assert_eq!(found.settled, 2);

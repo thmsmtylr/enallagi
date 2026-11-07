@@ -509,7 +509,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn append_then_read_round_trips_and_seq_is_monotonic() {
+    fn round_trip_monotonic_seq() {
         let d = tempfile::tempdir().unwrap();
         let mut w = Writer::new(Log::open(d.path()));
         w.emit(Kind::RunStart {

@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn list_cuts_title_at_44() {
+    fn list_cuts_title() {
         let b = parse(
             "## [T-1] 0123456789012345678901234567890123456789012345678\nstatus: ready-for-agent\n",
         )

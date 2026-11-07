@@ -1008,7 +1008,7 @@ mod tests {
     }
 
     // the parent decides the lane's block too, so the state merge conflicts rather than applies
-    fn decide_in_the_parent(state: &Path, status: &str) {
+    fn decide_in_parent(state: &Path, status: &str) {
         let root = state.parent().expect("the product root");
         Tracker::open(root, ".enallagi")
             .set_status("T-001", status, "")
@@ -1332,7 +1332,7 @@ mod tests {
         let report = lane(&r.root, &cfg, &mut |wt| {
             claimed(&r, &cfg, wt, "T-001");
             land(wt, "T-001", "one.txt");
-            decide_in_the_parent(&state, "needs-info");
+            decide_in_parent(&state, "needs-info");
             Ok(())
         })
         .expect("lane");
@@ -1406,7 +1406,7 @@ mod tests {
                 .set_status("T-001", "done", "")
                 .expect("verdict");
             commit_in(&wt.join(".enallagi"), "verify T-001");
-            decide_in_the_parent(&state, "needs-info");
+            decide_in_parent(&state, "needs-info");
         });
         assert!(!report.merged, "{}", report.reason);
         assert_eq!(state_of(&r.root, "T-001").as_deref(), Some("review"));
@@ -1507,7 +1507,7 @@ mod tests {
     }
 
     #[test]
-    fn two_lanes_merge_and_both_verdicts_land() {
+    fn two_lanes_both_land() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -1532,7 +1532,7 @@ mod tests {
     }
 
     #[test]
-    fn per_task_leaves_the_checkout_unmoved() {
+    fn per_task_checkout_unmoved() {
         let r = per_task_repo();
         let cfg = cfg(&r);
         let pre_head = git::head(&r.root);
@@ -1769,7 +1769,7 @@ mod tests {
         let mut before_the_merge = None;
         let report = lane(&r.root, &cfg, &mut |wt| {
             land(wt, "T-001", "one.txt");
-            decide_in_the_parent(&state, "needs-info");
+            decide_in_parent(&state, "needs-info");
             before_the_merge = git::head(&state);
             Ok(())
         })
@@ -1796,7 +1796,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dirty_state_parent_names_the_file() {
+    fn dirty_parent_names_file() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -1861,7 +1861,7 @@ mod tests {
     }
 
     #[test]
-    fn a_moved_state_parent_merges_with_a_commit() {
+    fn moved_state_merges() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -1891,7 +1891,7 @@ mod tests {
     }
 
     #[test]
-    fn a_state_merge_rolls_back_with_the_product() {
+    fn state_merge_rolls_back() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -1934,7 +1934,7 @@ mod tests {
                 reason: "y".into(),
             });
             land(wt, "T-001", "one.txt");
-            decide_in_the_parent(&state, "needs-info");
+            decide_in_parent(&state, "needs-info");
             Ok(())
         })
         .expect("lane");
@@ -1946,7 +1946,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stuck_product_branch_merges_neither() {
+    fn stuck_branch_merges_neither() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -2022,7 +2022,7 @@ mod tests {
     }
 
     #[test]
-    fn dirty_state_parent_commits_first() {
+    fn dirty_parent_commits_first() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");
@@ -2078,7 +2078,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_product_merge_rolls_back() {
+    fn refused_merge_rolls_back() {
         let r = nested_repo();
         let cfg = cfg(&r);
         let state = r.root.join(".enallagi");

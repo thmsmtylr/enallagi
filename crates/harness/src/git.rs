@@ -491,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn unqueued_block_has_no_commit() {
+    fn unqueued_block_uncommitted() {
         let r = Repo::new();
         r.queue(
             ".enallagi",
@@ -509,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn queued_commit_is_the_first_add() {
+    fn queued_commit_first_add() {
         let r = Repo::new();
         r.write(".git/info/exclude", ".enallagi/\n");
         let block = "## [T-001] first\nscope: src/a.ts\nstatus: ready-for-agent\n";

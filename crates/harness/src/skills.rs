@@ -862,7 +862,7 @@ mod tests {
     }
 
     #[test]
-    fn an_inline_preset_appends_the_body() {
+    fn inline_preset_appends_body() {
         let repo = Repo::new();
         let rel = source_dir(&repo, "vendor/tdd");
         let cfg = config(&format!("path:{rel}"), "", None);

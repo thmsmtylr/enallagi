@@ -2710,7 +2710,7 @@ mod tests {
     }
 
     #[test]
-    fn a_commit_naming_no_task_is_refused() {
+    fn taskless_commit_refused() {
         let mut env = Env::new("exit 0\n");
         let base = head(&env.repo.root).expect("base");
         env.repo.write("src/schema.ts", "export const x = 5\n");
@@ -2740,7 +2740,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_task_fails_on_a_bad_base() {
+    fn task_bad_base_fails() {
         let mut env = Env::new("exit 0\n");
         let out = commit_task(&mut env.ctx(Some("T-001"), Some("deadbeef")));
         assert!(
@@ -2752,7 +2752,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_identity_fails_on_a_bad_base() {
+    fn identity_bad_base_fails() {
         let mut env = Env::new("exit 0\n");
         let out = commit_identity(&mut env.ctx(Some("T-001"), Some("deadbeef")));
         assert!(
@@ -2764,7 +2764,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_fails_on_a_bad_base() {
+    fn scope_bad_base_fails() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.commit_all("verdict");
@@ -2793,7 +2793,7 @@ mod tests {
     const RUN_TEST: &str = "[ -f tests/t.sh ] && sh tests/t.sh\n";
 
     #[test]
-    fn red_first_rejects_a_test_green_on_base() {
+    fn red_first_rejects_green() {
         let (mut env, base) = red_first_env("true\n", RUN_TEST, "30m");
         let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass, "{}", out.reason);
@@ -2806,7 +2806,7 @@ mod tests {
     }
 
     #[test]
-    fn red_first_passes_a_test_red_on_base() {
+    fn red_first_passes_red() {
         let (mut env, base) = red_first_env("grep -q new src/lib.txt\n", RUN_TEST, "30m");
         let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
@@ -2814,7 +2814,7 @@ mod tests {
     }
 
     #[test]
-    fn red_first_leaves_the_lane_clean() {
+    fn red_first_leaves_clean() {
         let (mut env, base) = red_first_env("true\n", "sleep 30\n", "1s");
         let trees = |env: &Env| git(&env.repo.root, &["worktree", "list"]).expect("list");
         let (status, before) = (porcelain(&env.repo.root), trees(&env));
@@ -2889,7 +2889,7 @@ mod tests {
     }
 
     #[test]
-    fn skip_added_rejects_a_bare_ignore() {
+    fn skip_rejects_bare_ignore() {
         let (mut env, base) = skip_env("#[ignore]");
         let out = run("skip-added", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass, "{}", out.reason);
@@ -3137,7 +3137,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn skip_added_passes_a_reasoned_ignore() {
+    fn skip_passes_reasoned_ignore() {
         let (mut env, base) = skip_env(r#"#[ignore = "sleeps four minutes"]"#);
         let out = run("skip-added", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
@@ -3208,7 +3208,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn red_not_on_baseline_is_a_rejection() {
+    fn unbaselined_red_rejected() {
         let env = Env::new("echo '(fail) alpha'\nexit 1\n");
         let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         assert!(r.red);
@@ -3217,7 +3217,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn red_on_baseline_is_forgiven() {
+    fn baselined_red_forgiven() {
         let env = Env::new("echo '(fail) alpha'\nexit 1\n");
         env.repo
             .write(".enallagi/.check-baseline", "# inherited\nalpha\n");
@@ -3229,7 +3229,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn one_forgiven_one_new_is_still_red() {
+    fn one_new_stays_red() {
         let env = Env::new("echo '(fail) alpha'\necho '(fail) beta [12ms]'\nexit 1\n");
         env.repo.write(".enallagi/.check-baseline", "alpha\n");
         let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
@@ -3239,7 +3239,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn red_it_cannot_name_fails_closed() {
+    fn unnamed_red_fails_closed() {
         let env = Env::new("echo boom\nexit 1\n");
         let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         assert!(r.red && r.unnamed);
@@ -3255,7 +3255,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn a_check_past_its_timeout_is_neither_red_nor_green() {
+    fn timed_out_undecided() {
         let mut env = Env::timed("sleep 10\n", "2s");
         let started = Instant::now();
         let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
@@ -3327,7 +3327,7 @@ echo '{{"results":[]}}' > "$out"
 
     // a gate that waited on the pipe would see the shell exit 0 and report no timeout
     #[test]
-    fn a_grandchild_on_the_pipe_is_bound_by_timeout() {
+    fn piped_grandchild_bound() {
         let env = Env::timed("sleep 25 & exit 0\n", "2s");
         let sandbox = unconfined(&env);
         let r = check_delta(&sandbox, &env.repo.root, &env.cfg, false);
@@ -3337,7 +3337,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn a_grandchild_outside_the_group_is_bound() {
+    fn detached_grandchild_bound() {
         let env = Env::timed(
             "perl -e 'use POSIX; setsid(); sleep 120' & echo $! >gc.pid\nexit 0\n",
             "2s",
@@ -3424,7 +3424,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn check_delta_fills_the_tally() {
+    fn delta_fills_tally() {
         let env = Env::new(&format!(
             "cat <<'EOF'\n{}EOF\nexit 0\n",
             fourteen_result_lines()
@@ -3970,7 +3970,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_rejects_another_tickets_file() {
+    fn scope_rejects_foreign_ticket() {
         let mut env = Env::new("exit 0\n");
         env.write_queue(
             "## [T-001] first\nscope: src/a.ts\nrows: §11 row 1\nstatus: review\n\n## [T-002] second\nscope: src/b.ts\nstatus: ready-for-agent\n",
@@ -4014,7 +4014,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_rejects_an_added_ticket_past_triage() {
+    fn scope_rejects_late_ticket() {
         let mut env = Env::new("exit 0\n");
         env.write_queue("## [T-001] first\nscope: src/a.ts\nrows: §11 row 1\nstatus: review\n");
         env.repo.commit_all("queue");
@@ -4130,7 +4130,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_rejects_a_grown_baseline() {
+    fn scope_rejects_grown_baseline() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", &env.instance(".check-baseline"), "none — harness");
         env.repo.write(&env.instance(".check-baseline"), "alpha\n");
@@ -4155,7 +4155,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_nets_a_baseline_line_added_then_removed() {
+    fn scope_nets_transient_line() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", &env.instance(".check-baseline"), "none — harness");
         env.repo.write(&env.instance(".check-baseline"), "alpha\n");
@@ -4173,7 +4173,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_rejects_a_baseline_add_with_a_removal() {
+    fn scope_rejects_add_removal() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", &env.instance(".check-baseline"), "none — harness");
         env.repo.write(&env.instance(".check-baseline"), "alpha\n");
@@ -4197,7 +4197,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_rejects_a_plus_prefixed_baseline_add() {
+    fn scope_rejects_plus_add() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", &env.instance(".check-baseline"), "none — harness");
         env.repo.write(&env.instance(".check-baseline"), "alpha\n");
@@ -4219,7 +4219,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_nets_a_minus_prefixed_baseline_add() {
+    fn scope_nets_minus_add() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", &env.instance(".check-baseline"), "none — harness");
         env.repo.write(&env.instance(".check-baseline"), "alpha\n");
@@ -4237,7 +4237,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_ignores_an_operator_baseline_line() {
+    fn scope_ignores_operator_baseline() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", &env.instance(".check-baseline"), "none — harness");
         env.repo.write(&env.instance(".check-baseline"), "alpha\n");
@@ -4253,7 +4253,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_exempts_an_in_scope_hash_recut() {
+    fn scope_exempts_hash_recut() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.write(
@@ -4421,7 +4421,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn unreadable_queue_fails_the_gate() {
+    fn unreadable_queue_fails() {
         let mut env = Env::new("exit 0\n");
         env.duplicate_queue("done");
         env.repo.commit_all("bad queue");
@@ -4461,7 +4461,7 @@ echo '{{"results":[]}}' > "$out"
 
     #[cfg(unix)]
     #[test]
-    fn a_queue_it_cannot_rewrite_emits_no_status_change() {
+    fn readonly_queue_no_status() {
         use std::os::unix::fs::PermissionsExt;
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
@@ -4510,7 +4510,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_exempts_a_vendored_role() {
+    fn scope_exempts_vendored_role() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/**", "§11 row 1");
         env.repo.commit_all("verdict");
@@ -4527,7 +4527,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_rejects_a_recut_role_outside_scope() {
+    fn scope_rejects_recut_role() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/**", "§11 row 1");
         env.repo.write(
@@ -4552,7 +4552,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_exempts_a_new_lock_key() {
+    fn scope_exempts_lock_key() {
         let mut env = Env::new("exit 0\n");
         env.queue(
             "done",
@@ -4575,7 +4575,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_rejects_a_sha_only_recut_outside_scope() {
+    fn scope_rejects_sha_recut() {
         let mut env = Env::new("exit 0\n");
         env.queue(
             "done",
@@ -4605,7 +4605,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_allows_a_sha_only_recut_inside_scope() {
+    fn scope_allows_sha_recut() {
         let mut env = Env::new("exit 0\n");
         env.queue(
             "done",
@@ -4625,7 +4625,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_rejects_a_removed_lock_key_outside_scope() {
+    fn scope_rejects_removed_key() {
         let mut env = Env::new("exit 0\n");
         env.queue(
             "done",
@@ -4652,7 +4652,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_exempts_a_revendored_locked_skill() {
+    fn scope_exempts_revendored_skill() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/**", "§11 row 1");
         env.repo.write(
@@ -4671,7 +4671,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     #[test]
-    fn scope_rejects_a_rewritten_vendored_skill() {
+    fn scope_rejects_rewritten_skill() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/**", "§11 row 1");
         env.repo.write(

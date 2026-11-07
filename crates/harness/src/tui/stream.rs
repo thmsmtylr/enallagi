@@ -151,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_calls_only_tool_use() {
+    fn tool_calls_filter() {
         let chunk = "not json\n{\"type\":\"other\"}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"},{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{}}]}}\n{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{}}";
         assert_eq!(tool_calls(chunk), vec!["tool  Read  {}", "tool  Bash  {}"]);
     }

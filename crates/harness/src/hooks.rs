@@ -412,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn immutable_refuses_an_edit_to_a_hashed_file() {
+    fn immutable_refuses_hashed() {
         let r = Repo::new();
         r.write("src/a.ts", "export const a = 1\n");
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
@@ -450,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn immutable_refuses_the_reference_itself() {
+    fn immutable_refuses_reference() {
         let r = Repo::new();
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         let (code, msg) = immutable(&r.root, &input(".enallagi/test-hashes.json"), None);
@@ -459,7 +459,7 @@ mod tests {
     }
 
     #[test]
-    fn immutable_refuses_a_locked_skill_file() {
+    fn immutable_refuses_locked_skill() {
         let r = Repo::new();
         r.write(
             ".enallagi/harness.lock",
@@ -475,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn immutable_allows_an_uncovered_file() {
+    fn immutable_allows_uncovered() {
         let r = Repo::new();
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         let (code, msg) = immutable(&r.root, &input("src/b.ts"), None);
@@ -484,7 +484,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn immutable_refuses_a_symlinked_alias() {
+    fn immutable_refuses_alias() {
         let r = Repo::new();
         r.write("src/a.ts", "export const a = 1\n");
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn immutable_refuses_a_symlinked_skill_dir() {
+    fn immutable_refuses_skill_symlink() {
         let r = Repo::new();
         r.write(".enallagi/adapters/claude/skills/tdd/SKILL.md", "# tdd\n");
         r.write(
@@ -515,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn immutable_normalizes_a_missing_target() {
+    fn immutable_normalizes_missing() {
         let r = Repo::new();
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         let (code, msg) = immutable(&r.root, &input("src/does-not-exist-yet.ts"), None);
@@ -523,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    fn immutable_refuses_a_workspace_manifest() {
+    fn immutable_refuses_manifest() {
         let r = Repo::new();
         r.write(
             "package.json",

@@ -1302,7 +1302,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_load_when_no_file() {
+    fn defaults_without_file() {
         let d = tempfile::tempdir().unwrap();
         let c = load(d.path()).unwrap();
         assert_eq!(c.check.command, "");
@@ -1492,7 +1492,7 @@ mod tests {
     }
 
     #[test]
-    fn the_defaults_validate() {
+    fn defaults_validate() {
         let c = load(tempfile::tempdir().unwrap().path()).unwrap();
         let roles = |_: &str| Some(String::new());
         let errs = validate(&c, &crate::agent::presets(), &roles).unwrap_err();
@@ -1773,7 +1773,7 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_json_migrates_into_a_valid_config() {
+    fn shipped_json_migrates() {
         let json = include_str!("../tests/fixtures/harness.default.json");
         let (text, renamed) = migrate_json(json).unwrap();
         assert!(renamed.iter().any(|r| r == "skills -> skill"));
@@ -1877,7 +1877,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_stage_names_and_skill_ids_are_refused() {
+    fn duplicate_ids_refused() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
         c.stage.push(c.stage[0].clone());
         c.skill.push(c.skill[0].clone());

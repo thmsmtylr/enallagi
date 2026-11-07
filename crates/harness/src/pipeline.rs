@@ -2993,7 +2993,7 @@ mod tests {
     }
 
     #[test]
-    fn lanes_read_the_earned_rules_range() {
+    fn lanes_read_earned_rules() {
         use std::io::Write as _;
         use std::process::{Command, Stdio};
         let cfg = Config::default();

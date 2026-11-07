@@ -356,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn a_standing_ticket_expires_to_wontfix() {
+    fn standing_expires_to_wontfix() {
         let r = Repo::new();
         r.queue(
             ".enallagi",

@@ -1080,7 +1080,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_directory_ends_no_wait() {
+    fn stop_dir_ignored() {
         let dir = tempfile::tempdir().expect("tempdir");
         let stop = dir.path().join("STOP");
         std::fs::create_dir(&stop).expect("mkdir");
@@ -1088,7 +1088,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_file_ends_the_wait_at_once() {
+    fn stop_file_ends_wait() {
         let dir = tempfile::tempdir().expect("tempdir");
         let stop = dir.path().join("STOP");
         std::fs::write(&stop, b"").expect("write");
@@ -1157,7 +1157,7 @@ mod tests {
     }
 
     #[test]
-    fn a_preset_env_value_takes_the_layout_tokens() {
+    fn preset_env_fills_tokens() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent("echo \"config=$CLAUDE_CONFIG_DIR\"");
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
@@ -1182,7 +1182,7 @@ mod tests {
     }
 
     #[test]
-    fn a_signalled_child_reports_128_plus_the_signal() {
+    fn signal_exits_128_plus() {
         let r = crate::fixture::Repo::new();
         // KILL, not INT: a job started with `&` from a non-interactive shell inherits SIGINT ignored
         let argv = r.stub_agent("kill -KILL $$");
@@ -1199,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    fn timeout_kills_and_reports_124() {
+    fn timeout_reports_124() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent("sleep 30");
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
@@ -1218,7 +1218,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_file_during_the_limit_wait_stops_the_run() {
+    fn stop_ends_limit_wait() {
         let r = crate::fixture::Repo::new();
         std::fs::create_dir_all(stop_file(&r.root).parent().unwrap()).unwrap();
         std::fs::write(stop_file(&r.root), "").unwrap();
@@ -1252,7 +1252,7 @@ mod tests {
     }
 
     #[test]
-    fn a_result_line_notice_sleeps_the_stage() {
+    fn result_notice_sleeps() {
         let r = crate::fixture::Repo::new();
         std::fs::create_dir_all(stop_file(&r.root).parent().unwrap()).unwrap();
         std::fs::write(stop_file(&r.root), "").unwrap();
@@ -1286,7 +1286,7 @@ mod tests {
     }
 
     #[test]
-    fn an_out_of_range_reset_hour_does_not_sleep() {
+    fn bad_reset_hour_wakes() {
         let r = crate::fixture::Repo::new();
         // stop file plus fixed instant: an hour misread as 1am would fall inside MAX_WAIT and sleep
         std::fs::create_dir_all(stop_file(&r.root).parent().unwrap()).unwrap();
@@ -1324,7 +1324,7 @@ mod tests {
 
     #[test]
     #[ignore = "sleeps up to four minutes waiting out two synthetic session limits"]
-    fn rate_limit_is_retried_at_most_twice() {
+    fn limit_retries_twice() {
         let r = crate::fixture::Repo::new();
         let runs = r.root.join("runs");
         let notice = limit_notice("1M", "+1 minute");
@@ -1359,7 +1359,7 @@ mod tests {
     }
 
     #[test]
-    fn a_limit_notice_the_agent_quoted_is_not_a_limit() {
+    fn quoted_notice_ignored() {
         let r = crate::fixture::Repo::new();
         let runs = r.root.join("runs");
         // both shapes seen live: a file the agent read, and a command the agent wrote
@@ -1394,7 +1394,7 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_is_substituted_last() {
+    fn prompt_substituted_last() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent("printf '%s|%s\\n' \"$1\" \"$2\"");
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
@@ -1413,7 +1413,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reset_more_than_six_hours_out_is_not_a_limit() {
+    fn distant_reset_ignored() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent(&limit_notice("10H", "+10 hours"));
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
@@ -1435,7 +1435,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dated_reset_past_the_ceiling_halts() {
+    fn dated_reset_halts() {
         let r = crate::fixture::Repo::new();
         fix_now(
             jiff::civil::date(2026, 9, 18)
@@ -1469,7 +1469,7 @@ mod tests {
     }
 
     #[test]
-    fn an_override_command_keeps_the_tokens_it_spells_out() {
+    fn override_keeps_tokens() {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = crate::config::load(dir.path()).unwrap().agent;
         cfg.preset = "gemini".into();
