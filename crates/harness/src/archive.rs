@@ -35,7 +35,8 @@ fn state_commits(root: &Path, dir: &str) -> (PathBuf, Vec<(String, String)>) {
     let rel = config::instance_rel(root, dir, tracker::SPECS);
     let (repo, _, _) = git::locate(root, dir, &rel);
     let format = "--format=%H %(trailers:key=Iteration,valueonly,separator=)";
-    let commits = git::git(&repo, &["log", format])
+    // a landing merge is no round; topo order lists the queuing commit after every later one
+    let commits = git::git(&repo, &["log", "--no-merges", "--topo-order", format])
         .map(|out| {
             out.lines()
                 .map(|l| l.split_once(' ').unwrap_or((l, "")))
@@ -404,6 +405,34 @@ mod tests {
         assert_eq!(aged["T-001"], 3, "{aged:?}");
         let report = archive_done(&r.root, &cfg, false).expect("archive_done");
         assert!(report.expired.is_empty(), "{:?}", report.expired);
+    }
+
+    #[test]
+    fn landing_merge_uncounted() {
+        let r = Repo::new();
+        r.queue(".enallagi", "## [T-001] a\nstatus: needs-triage\n");
+        r.commit_all("file the finding");
+        let main = git::git(&r.root, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap();
+        for n in 1..=2 {
+            git::git(&r.root, &["checkout", "-q", "-b", &format!("lane{n}")]).unwrap();
+            r.write(".enallagi/PROGRESS.md", &format!("lane {n}\n"));
+            r.commit_all(&format!("lane {n}\n\nIteration: run-{n}/1"));
+            git::git(&r.root, &["checkout", "-q", &main]).unwrap();
+            let lane = format!("lane{n}");
+            let merge = [
+                "-c",
+                "commit.gpgsign=false",
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                "land",
+                &lane,
+            ];
+            git::git(&r.root, &merge).unwrap();
+        }
+        let aged = ages(&r.root, &cfg(&r.root), &["T-001".to_string()]);
+        assert_eq!(aged["T-001"], 2, "{aged:?}");
     }
 
     #[test]

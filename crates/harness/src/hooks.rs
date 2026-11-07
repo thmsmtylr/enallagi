@@ -231,7 +231,12 @@ pub fn one_writer(root: &Path, _input: &str) -> (i32, String) {
     }
 
     let here = root.canonicalize().ok();
-    let claimed = crate::worktree::claims(root, &cfg.layout.harness_dir)
+    // under one writer nothing claims, so the hook neither writes nor reads claims
+    let claims = match cfg.parallel.writers.get() > 1 {
+        true => crate::worktree::peek(&root.join(&cfg.layout.harness_dir)),
+        false => Vec::new(),
+    };
+    let claimed = claims
         .into_iter()
         .find(|c| c.worktree.canonicalize().ok() == here)
         .map(|c| c.id);
@@ -562,6 +567,7 @@ mod tests {
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("one-writer:"), "{msg}");
         assert!(msg.contains("T-001"), "{msg}");
+        assert!(!r.root.join(".enallagi/run/claims.json").exists());
     }
 
     #[test]
@@ -571,7 +577,7 @@ mod tests {
             ".enallagi",
             "## [T-001] x\nstatus: review\nblockedBy: none\n\n## [T-002] y\nscope: y.rs\nstatus: ready-for-agent\n",
         );
-        r.write(".enallagi/enallagi.toml", "");
+        r.write(".enallagi/enallagi.toml", "[parallel]\nwriters = 2\n");
         r.commit_all("seed");
         let cfg = config::load(&r.root).expect("config");
         // a second lane's claim is not this checkout's

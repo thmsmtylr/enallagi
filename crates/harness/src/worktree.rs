@@ -470,13 +470,13 @@ fn rebase_checked(
 fn send_back(
     root: &Path,
     cfg: &Config,
-    id: &str,
+    (id, status): (&str, &str),
     pairs: &Pairs,
     reason: &str,
 ) -> Result<(), String> {
     let dir = &cfg.layout.harness_dir;
     crate::tracker::Tracker::open(root, dir)
-        .set_status(id, "ready-for-agent", reason)
+        .set_status(id, status, reason)
         .map_err(|e| e.to_string())?;
     git::commit_instance(
         root,
@@ -525,11 +525,12 @@ fn spent(events: &[crate::events::Event]) -> (f64, u64) {
 
 // each writer slot gets an equal share of what is left; None once a budget is spent
 fn lane_budget(
-    usd: Option<f64>,
-    tokens: Option<u64>,
+    (usd, tokens): (Option<f64>, Option<u64>),
     spent: (f64, u64),
+    held: (f64, u64),
     writers: u32,
 ) -> Option<Vec<(String, String)>> {
+    let spent = (spent.0 + held.0, spent.1 + held.1);
     let mut env = Vec::new();
     if let Some(usd) = usd {
         let left = usd - spent.0;
@@ -549,6 +550,31 @@ fn lane_budget(
         ));
     }
     Some(env)
+}
+
+fn errored(e: WorktreeError) -> LaneReport {
+    LaneReport {
+        merged: false,
+        left: None,
+        state: None,
+        reason: e.to_string(),
+        branch: String::new(),
+        run_error: None,
+        follow_error: None,
+        task: None,
+    }
+}
+
+// the budget a lane's variables hand it
+fn share(env: &[(String, String)]) -> (f64, u64) {
+    let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    let usd = get("BUDGET_USD")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
+    let tokens = get("BUDGET_TOKENS")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    (usd, tokens)
 }
 
 /// Runs the lane's round in `wt`: pinned to a ticket as writer or reader, or unpinned, with these variables set.
@@ -572,22 +598,32 @@ pub fn launch(root: &Path, cfg: &Config, spawn: Spawn) -> Result<Vec<LaneReport>
     std::thread::scope(|s| -> Result<(), WorktreeError> {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let (mut live, mut readers) = (0, 0);
+        // the shares live lanes were handed: spent or not, they are not this lane's to take
+        let mut held = (0.0, 0);
+        // a lane that errs starts no more lanes; the live ones still land
+        let mut broke = false;
         loop {
-            let used = spent(
+            let (usd, tokens) = spent(
                 log.read()
                     .unwrap_or_default()
                     .get(before..)
                     .unwrap_or_default(),
             );
-            // ponytail: a reader takes a writer's share on top of the writers', so readers can overshoot the budget by one share each
-            let env = lane_budget(budget.budget_usd, budget.budget_tokens, used, writers)
-                .filter(|_| {
-                    !stops.iter().any(|p| p.exists()) && crate::agent::stop_signal().is_none()
-                })
-                .map(|mut env| {
-                    env.push(("ENALLAGI_PARENT".to_string(), parent.clone()));
-                    env
-                });
+            // ponytail: a live lane's spend counts twice, spent and held, so a lane waits rather than overshoot; readers in one pass still take a share each
+            let used = (usd, tokens);
+            let env = lane_budget(
+                (budget.budget_usd, budget.budget_tokens),
+                used,
+                held,
+                writers,
+            )
+            .filter(|_| {
+                !broke && !stops.iter().any(|p| p.exists()) && crate::agent::stop_signal().is_none()
+            })
+            .map(|mut env| {
+                env.push(("ENALLAGI_PARENT".to_string(), parent.clone()));
+                env
+            });
             for hold in [Hold::Writer, Hold::Reader] {
                 loop {
                     let room = match hold {
@@ -599,6 +635,8 @@ pub fn launch(root: &Path, cfg: &Config, spawn: Spawn) -> Result<Vec<LaneReport>
                     let Some(env) = env.clone().filter(|_| room) else {
                         break;
                     };
+                    let share = share(&env);
+                    held = (held.0 + share.0, held.1 + share.1);
                     let (tx, rx) = std::sync::mpsc::channel();
                     let done = done_tx.clone();
                     let skip = match hold {
@@ -617,7 +655,7 @@ pub fn launch(root: &Path, cfg: &Config, spawn: Spawn) -> Result<Vec<LaneReport>
                                 None => Ok(()),
                             }
                         });
-                        let _ = done.send((hold, report));
+                        let _ = done.send((hold, share, report));
                     });
                     match hold {
                         Hold::Writer => live += 1,
@@ -639,20 +677,25 @@ pub fn launch(root: &Path, cfg: &Config, spawn: Spawn) -> Result<Vec<LaneReport>
                     return Ok(());
                 };
                 unpinned = true;
-                reports.push(lane(root, cfg, &mut |wt| {
+                let report = lane(root, cfg, &mut |wt| {
                     claim_all(root, dir, wt)?;
                     spawn(wt, None, &env)
-                })?);
+                });
+                broke |= report.is_err();
+                reports.push(report.unwrap_or_else(errored));
                 continue;
             }
-            let (hold, report) = done_rx.recv().expect("a live lane reports");
+            let (hold, share, report) = done_rx.recv().expect("a live lane reports");
+            held = (held.0 - share.0, held.1 - share.1);
             match hold {
                 Hold::Writer => live -= 1,
                 Hold::Reader => readers -= 1,
             }
-            let report = report?;
-            if report.task.is_some() {
-                reports.push(report);
+            // one lane's error is its report; the lanes still running land and are reported too
+            broke |= report.is_err();
+            match report {
+                Ok(report) if report.task.is_none() => {}
+                report => reports.push(report.unwrap_or_else(errored)),
             }
         }
     })?;
@@ -665,20 +708,24 @@ pub fn lane(
     cfg: &Config,
     run: &mut dyn FnMut(&Path) -> anyhow::Result<()>,
 ) -> Result<LaneReport, WorktreeError> {
-    let report = landed(root, cfg, run)?;
+    let report = landed(root, cfg, run);
     if cfg.parallel.writers.get() > 1 {
         let mut w = crate::events::Writer::new(crate::events::Log::open(
             &root.join(&cfg.layout.harness_dir),
         ));
+        let (task, pass, reason) = match &report {
+            Ok(r) => (r.task.clone(), r.merged, r.reason.clone()),
+            Err(e) => (None, false, e.to_string()),
+        };
         w.emit(crate::events::Kind::Gate {
             gate: "integrate".to_string(),
-            task: report.task.clone().unwrap_or_default(),
-            pass: report.merged,
-            reason: report.reason.clone(),
+            task: task.unwrap_or_default(),
+            pass,
+            reason,
             tally: None,
         });
     }
-    Ok(report)
+    report
 }
 
 fn landed(
@@ -762,8 +809,13 @@ fn landed(
     }
     .into_iter()
     .find(|c| c.worktree == dir)
-    .map(|c| c.id)
-    .filter(|id| !id.is_empty());
+    .filter(|c| !c.id.is_empty());
+    // a reader's ticket goes back to review: its implementation already landed
+    let again = match held.as_ref().map(|c| c.hold) {
+        Some(Hold::Reader) => "review",
+        _ => "ready-for-agent",
+    };
+    let held = held.map(|c| c.id);
     let left = |reason: String| LaneReport {
         merged: false,
         left: Some(dir.clone()),
@@ -777,7 +829,7 @@ fn landed(
     // a writer lane's failed landing goes back to the queue; an unpinned one is left as under one writer
     let back = |reason: String| match held
         .as_deref()
-        .map(|id| send_back(root, cfg, id, &pairs, &reason))
+        .map(|id| send_back(root, cfg, (id, again), &pairs, &reason))
     {
         Some(Ok(())) => LaneReport {
             left: None,
@@ -796,7 +848,7 @@ fn landed(
         )));
     }
 
-    // ponytail: one landing at a time, each paying one check, and held before the ancestry check; a merge queue pays off only once the check is slow next to a lane
+    // ponytail: one landing at a time in flock order, not finish order, held before the ancestry check; a merge queue pays off once the check is slow
     let _landing = match parallel {
         true => Some(lock_file(&run_file(
             root,
@@ -818,6 +870,8 @@ fn landed(
         .iter()
         .filter(|(repo, _)| repo.as_path() == root)
         .filter(|(repo, _)| !git::git_ok(repo, &["merge-base", "--is-ancestor", "HEAD", &branch]))
+        // a lane with no product commit of its own (a reader's) has nothing to rebase or re-check
+        .filter(|(repo, _)| !git::git_ok(repo, &["merge-base", "--is-ancestor", &branch, "HEAD"]))
         .map(|(repo, _)| format!("{branch} cannot fast-forward into {}", repo.display()))
         .collect();
     if !stuck.is_empty() && parallel {
@@ -1349,6 +1403,71 @@ mod tests {
         kept(&r, &report);
     }
 
+    // T-001 at review, read by the outer lane while T-002's writer lands two.txt under it
+    fn reading(r: &Repo, verdict: &mut dyn FnMut(&Path)) -> LaneReport {
+        Tracker::open(&r.root, ".enallagi")
+            .set_status("T-001", "review", "")
+            .expect("review");
+        commit_in(&r.root.join(".enallagi"), "review");
+        let cfg = cfg(r);
+        lane(&r.root, &cfg, &mut |wt| {
+            let read = read_claim(&r.root, &cfg, Some(wt), &[]).expect("read");
+            assert_eq!(read.as_deref(), Some("T-001"));
+            let first = lane(&r.root, &cfg, &mut |wt| {
+                claimed(r, &cfg, wt, "T-002");
+                land(wt, "T-002", "two.txt");
+                Ok(())
+            })
+            .expect("first lane");
+            assert!(first.merged, "{}", first.reason);
+            verdict(wt);
+            Ok(())
+        })
+        .expect("lane")
+    }
+
+    #[test]
+    fn lane_error_reported() {
+        let r = parallel_repo("exit 0\n");
+        let head = git::git(&r.root, &["rev-parse", "HEAD"]).expect("head");
+        git::git(&r.root, &["checkout", "-q", &head]).expect("detach");
+        let reports = launch(&r.root, &cfg(&r), &|_, _, _| Ok(())).expect("launch");
+        let reasons: Vec<&str> = reports.iter().map(|l| l.reason.as_str()).collect();
+        assert_eq!(reasons.len(), 1, "{reasons:?}");
+        assert!(!reports[0].merged);
+        assert_eq!(reasons[0], WorktreeError::Detached.to_string());
+        let failed = integrations(&r).into_iter().filter(|(_, pass, _)| !pass);
+        assert_eq!(failed.count(), 1);
+    }
+
+    #[test]
+    fn reader_lands_unchecked() {
+        let r = parallel_repo("if [ -f two.txt ]; then echo '(fail) two'; exit 1; fi\nexit 0\n");
+        let report = reading(&r, &mut |wt| {
+            Tracker::open(wt, ".enallagi")
+                .set_status("T-001", "done", "")
+                .expect("verdict");
+            commit_in(&wt.join(".enallagi"), "verify T-001");
+        });
+        assert!(report.merged, "{}", report.reason);
+        assert_eq!(state_of(&r.root, "T-001").as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn reader_back_to_review() {
+        let r = parallel_repo("exit 0\n");
+        let state = r.root.join(".enallagi");
+        let report = reading(&r, &mut |wt| {
+            Tracker::open(wt, ".enallagi")
+                .set_status("T-001", "done", "")
+                .expect("verdict");
+            commit_in(&wt.join(".enallagi"), "verify T-001");
+            decide_in_the_parent(&state, "needs-info");
+        });
+        assert!(!report.merged, "{}", report.reason);
+        assert_eq!(state_of(&r.root, "T-001").as_deref(), Some("review"));
+    }
+
     fn file_in(wt: &Path, id: &str, title: &str) {
         let t = Tracker::open(wt, ".enallagi");
         let spec = t.spec_of("T-001").expect("the fixture spec");
@@ -1421,14 +1540,18 @@ mod tests {
         };
         let used = spent(&[end(1.0), end(2.0)]);
         assert_eq!(used, (3.0, 300));
-        let env = lane_budget(Some(10.0), Some(1000), used, 2).expect("budget left");
+        let none = (0.0, 0);
+        let env = lane_budget((Some(10.0), Some(1000)), used, none, 2).expect("budget left");
         let pair = |k: &str, v: &str| (k.to_string(), v.to_string());
         assert_eq!(
             env,
             [pair("BUDGET_USD", "3.5"), pair("BUDGET_TOKENS", "350")]
         );
-        assert_eq!(lane_budget(Some(3.0), None, used, 2), None);
-        assert_eq!(lane_budget(None, Some(300), used, 2), None);
+        assert_eq!(share(&env), (3.5, 350));
+        assert_eq!(lane_budget((Some(3.0), None), used, none, 2), None);
+        assert_eq!(lane_budget((None, Some(300)), used, none, 2), None);
+        // A and B hold 5 each, A spent its 5: B's unspent share is not C's
+        assert_eq!(lane_budget((Some(10.0), None), (5.0, 0), (5.0, 0), 2), None);
     }
 
     #[test]
