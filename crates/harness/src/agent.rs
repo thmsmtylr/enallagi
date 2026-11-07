@@ -59,6 +59,9 @@ pub struct Preset {
     // the CLI's API and auth hosts, for the sandbox's allowlist
     #[serde(default)]
     pub hosts: Vec<String>,
+    // the CLI's own state paths, writable from its lanes
+    #[serde(default)]
+    pub write: Vec<String>,
 }
 
 pub type Presets = BTreeMap<String, Preset>;
@@ -230,6 +233,7 @@ pub fn resolve_task(
             effort_flag: None,
             bypass_flag: None,
             hosts: Vec::new(),
+            write: Vec::new(),
         }
     } else {
         let mut preset = presets
@@ -612,7 +616,7 @@ fn run_once(
     };
 
     use std::os::unix::process::CommandExt;
-    let mut command = sandbox.wrap(&argv, s.cwd).command();
+    let mut command = sandbox.wrap(&argv, s.cwd, &s.preset.write).command();
     // a lane commits as the repository's configured identity; left to itself it invents one from
     // whatever the agent's own session knows, and that identity lands in the operator's history
     for (var, key) in [

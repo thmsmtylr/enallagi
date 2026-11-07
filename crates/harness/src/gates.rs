@@ -1666,7 +1666,7 @@ fn run_bounded(
 ) -> std::io::Result<Run> {
     use std::os::unix::process::CommandExt;
     let mut child = sandbox
-        .wrap(&["sh", "-c", command], root)
+        .wrap(&["sh", "-c", command], root, &[])
         .command()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -2047,6 +2047,7 @@ fn install_stale(ctx: &mut GateCtx) -> GateOutcome {
                 .wrap(
                     &[&exe.to_string_lossy(), "probe", "install-stale"],
                     ctx.root,
+                    &[],
                 )
                 .command()
                 .output()

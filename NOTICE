@@ -3,6 +3,19 @@
 This harness declares skills it does not write. Each is fetched from its own repository at the
 revision `harness.lock` pins, and none is redistributed here.
 
+## openai/codex
+
+`crates/harness/src/sandbox/seatbelt_base.sbpl` and `seatbelt_network.sbpl` are Codex's
+`seatbelt_base_policy.sbpl` and `seatbelt_network_policy.sbpl` from https://github.com/openai/codex
+at `1c414e0d6525ea385aeabad32fac252467a6b836`, redistributed unmodified below a two-line provenance
+header under the Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0). They
+derive from Chromium's sandbox policies.
+
+```
+OpenAI Codex
+Copyright 2025 OpenAI
+```
+
 ## obra/superpowers
 
 `receiving-code-review` and `verification-before-completion` come from

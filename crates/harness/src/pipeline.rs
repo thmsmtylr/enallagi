@@ -212,6 +212,9 @@ pub fn refuse_unfilled(root: &Path, cfg: &Config) -> Result<(), Refused> {
 /// the configured check. A probe that could not run refuses too: its zero is not a pass.
 pub fn preflight(root: &Path) -> anyhow::Result<()> {
     let cfg = config::load(root).map_err(|e| Refused(e.to_string()))?;
+    if let Some(reason) = crate::sandbox::refusal(root, &cfg) {
+        return Err(Refused(reason).into());
+    }
     refuse_unfilled(root, &cfg)?;
     // Some(..) keeps run_all from running the check itself; neither of these probes reads it
     let check = CheckOutcome {
@@ -1991,6 +1994,7 @@ fn shell_preset() -> Preset {
         effort_flag: None,
         bypass_flag: None,
         hosts: Vec::new(),
+        write: Vec::new(),
     }
 }
 
