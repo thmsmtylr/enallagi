@@ -27,7 +27,7 @@ For each ticket at `**Status:** review` (`enallagi tasks ids-at review`):
    - Style violations that are load-bearing: `any`, non-null assertions, `class`, JSDoc, validation moved off the write path
    - **Rail erosion**, this repo's P0 class: any product rail in __ENALLAGI_DIR__/RAILS.md weakened, bypassed or left untested → REJECT. Check the update path specifically — a rail tested only on create is a rail with a hole in it.
    - Invented strategy: a business model, sequence or market claim asserted in code or notes that no human stated → REJECT (`no-invented-strategy`)
-   - An uncited claim in a comment, note or verdict → REJECT (`citable`)
+   - An uncited claim in a note or verdict, or a code comment citing an ADR, task id, pull request or date → REJECT (`citable`)
    - A live network call in a test → REJECT
    - Unmeasured claims: a number reasoned to rather than run, a figure with no fixture or revision stamp, a constant tuned so a check passes. Re-derive every number yourself and REJECT the ones that do not reproduce, even when the underlying behaviour is right (`measure-first`). A test count is checked against the `tally=` the launcher recorded on the gate event (`enallagi events --task <id>`), re-derived with `grep '^test result:' | awk '{p+=$4; f+=$6; i+=$8}'` over the check's output, never read off the first `test result:` line.
    - Litter: a scratch file, a log, a throwaway experiment left in the tree (`tidy`)

@@ -32,8 +32,8 @@ The full table is `__ENALLAGI_DIR__/RAILS.md`. The five that decide most reviews
 
 - `green` — done means `__CHECK__` passes, verified on **delta** against `__ENALLAGI_DIR__/.check-baseline`, which
   only ever shrinks. Never weaken a test or a lint rule to get there.
-- `citable` — every claim carries its source: a URL with the date, a `file:line`, or the command and
-  its output.
+- `citable` — every claim in a note, verdict or document carries its source: a URL with the date,
+  a `file:line`, or the command and its output. A code comment cites nothing.
 - `measure-first` — no number lands that was not run and stamped. Never tune a constant to pass.
 - `one-scope` — only the files the task's `scope:` names.
 - `blocked-is-allowed` — stopping with a written reason is a success. Marking done without the

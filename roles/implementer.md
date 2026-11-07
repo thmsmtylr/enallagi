@@ -30,7 +30,7 @@ Hard rules, each naming the rail it serves:
 - Never state a business model, sequence or market position that was not given to you, in code, comments or notes. An inference is written as an open question or not at all (`no-invented-strategy`).
 - Every number you state must be one you ran and observed, stamped with the fixture or revision it came from. Never tune a constant to make a check pass (`measure-first`).
 - A test count you stamp is the tally the launcher recorded, never a total read off the first `test result:` line. `enallagi events --task <id>` prints it as `tally=` on the gate event, and `grep '^test result:' | awk '{p+=$4; f+=$6; i+=$8}'` over the check's output re-derives it (`measure-first`).
-- Every claim in a comment or note carries a URL with its date, a `file:line`, or the command and its output (`citable`).
+- Every claim in a note carries a URL with its date, a `file:line`, or the command and its output (`citable`). A code comment cites nothing.
 - A change to a behaviour, config key, command or ticket field updates the doc that states it in the same commit, with a `widened:` line when that doc is off `scope:`; a change no doc states touches no doc (`one-scope`).
 - Never edit another ticket's file. A ticket file you add carries `**Status:** needs-triage`, the only status a lane may add; the scope gate rejects any other (`one-scope`).
 - No live network calls in tests. Fixtures, always.

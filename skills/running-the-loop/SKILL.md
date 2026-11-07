@@ -52,7 +52,7 @@ admit, or a dated kill line in a `__ENALLAGI_DIR__/.out-of-scope/` file quoting 
 ## The rails
 
 `__ENALLAGI_DIR__/RAILS.md` has all of them with their enforcement. The ones that decide most
-reviews: `green`, `citable` (every claim carries its source), `measure-first` (no number that was
+reviews: `green`, `citable` (every claim in a note carries its source), `measure-first` (no number that was
 not run and stamped), `one-scope` (only the files the task names), `blocked-is-allowed`.
 
 ## References
