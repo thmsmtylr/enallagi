@@ -74,7 +74,8 @@ const CLAUDE_HOOKS: &str = include_str!("../../../adapters/claude/hooks/hooks.js
 
 // scoped to the harness dir, never touches the repo's own .gitignore
 // vendored skills are committed (controller ruling), so skills/ is not ignored here
-const GITIGNORE: &str = "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\n";
+const GITIGNORE: &str =
+    "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\nholdouts/\n";
 
 #[derive(Debug, Default, Clone)]
 pub struct InitOpts {

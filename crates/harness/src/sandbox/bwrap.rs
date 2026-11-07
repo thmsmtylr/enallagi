@@ -157,6 +157,15 @@ pub(super) fn argv(
         let path = path.display().to_string();
         out.extend([flag.to_string(), path.clone(), path]);
     }
+    // a hidden dir becomes an empty read-only tmpfs, a hidden file /dev/null
+    for path in policy.hidden() {
+        let p = path.display().to_string();
+        if path.is_dir() {
+            out.extend(["--tmpfs".into(), p.clone(), "--remount-ro".into(), p]);
+        } else if path.exists() {
+            out.extend(["--ro-bind".into(), "/dev/null".into(), p]);
+        }
+    }
     out.extend([
         "--chdir".to_string(),
         super::canon(cwd).display().to_string(),

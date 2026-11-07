@@ -4527,6 +4527,20 @@ fn check_reaches_declared_port() {
     assert!(!plan.contains("FINDING check-red"), "{plan}");
 }
 
+#[test]
+fn check_cannot_read_holdouts() {
+    if std::env::var_os("ENALLAGI_SANDBOX").is_some() {
+        println!("nested: skipped");
+        return;
+    }
+    let toml = base_toml("").replace("./src/fakecheck.sh", "cat .enallagi/holdouts/s/t");
+    let r = repo(&toml, "");
+    queue(&r, "# queue\n");
+    r.write(".enallagi/holdouts/s/t", "scenario\n");
+    r.commit_all("a check reading holdouts");
+    assert!(plan_of(&r).contains("FINDING check-red"), "holdouts read");
+}
+
 // the proxy's refusals are recorded on threads with no writer; the loop logs them
 #[test]
 fn denial_emits_event() {

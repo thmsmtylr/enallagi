@@ -17,7 +17,26 @@ fn nested() -> bool {
     set
 }
 
+// the operator's secrets, planted in a home of our own: no test reads the real ones
+const SECRETS: [&str; 5] = [
+    ".ssh/id",
+    ".aws/credentials",
+    ".gnupg/key",
+    ".netrc",
+    ".config/gh/hosts.yml",
+];
+
 fn native(ports: &[u16]) -> Config {
+    static HOME: std::sync::Once = std::sync::Once::new();
+    HOME.call_once(|| {
+        let home = Path::new(env!("CARGO_TARGET_TMPDIR")).join("home");
+        for rel in SECRETS {
+            let path = home.join(rel);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            std::fs::write(path, "secret\n").expect("write");
+        }
+        std::env::set_var("HOME", home);
+    });
     let mut cfg = Config::default();
     cfg.layout.harness_dir = ".enallagi".into();
     cfg.sandbox.mode = SandboxMode::Native;
@@ -259,6 +278,126 @@ fn git_config_unwritable() {
     assert!(!r.root.join(".git/hooks/pre-commit").exists());
     assert!(r.root.join(".git/config").exists());
     assert!(!git(&r.root, &["config", "--list"]).contains("hookspath"));
+}
+
+// a product with its parent instance's holdouts, and a worktree lane with its own nested instance
+fn holdouts_repo() -> (Repo, std::path::PathBuf) {
+    let r = nested_repo();
+    r.write(".enallagi/holdouts/s/t", "scenario\n");
+    let lane = r.root.join(".enallagi/worktrees/lane-a");
+    git(
+        &r.root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "lane/a",
+            &lane.display().to_string(),
+        ],
+    );
+    let state = lane.join(".enallagi");
+    git(
+        &r.root.join(".enallagi"),
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "lane/a",
+            &state.display().to_string(),
+        ],
+    );
+    std::fs::create_dir_all(state.join("holdouts/s")).expect("mkdir");
+    std::fs::write(state.join("holdouts/s/t"), "scenario\n").expect("write");
+    (r, lane)
+}
+
+#[test]
+fn holdouts_unreadable() {
+    if nested() {
+        return;
+    }
+    let (r, lane) = holdouts_repo();
+    let sb = Sandbox::start(&r.root, &native(&[]));
+    for (cwd, path) in [
+        (&r.root, ".enallagi/holdouts/s/t"),
+        (&lane, ".enallagi/holdouts/s/t"),
+        (&lane, "../../holdouts/s/t"),
+    ] {
+        let out = sh(
+            &sb,
+            cwd,
+            &format!(
+                "cat {path}; ls {}",
+                Path::new(path).parent().unwrap().display()
+            ),
+        );
+        assert!(!text(&out).contains("scenario"), "{path}: {}", text(&out));
+        assert!(
+            !String::from_utf8_lossy(&out.stdout).contains('t'),
+            "{path}: {}",
+            text(&out)
+        );
+    }
+}
+
+#[test]
+fn holdouts_unwritable() {
+    if nested() {
+        return;
+    }
+    let (r, _) = holdouts_repo();
+    let sb = Sandbox::start(&r.root, &native(&[]));
+    for attempt in [
+        "echo x > .enallagi/holdouts/s/t",
+        "echo x > .enallagi/holdouts/s/new",
+        "rm .enallagi/holdouts/s/t",
+        "mv .enallagi/holdouts .enallagi/h",
+    ] {
+        let out = sh(&sb, &r.root, attempt);
+        assert!(!out.status.success(), "{attempt}: {}", text(&out));
+    }
+    let held = std::fs::read_to_string(r.root.join(".enallagi/holdouts/s/t")).expect("read");
+    assert_eq!(held, "scenario\n");
+    assert!(!r.root.join(".enallagi/holdouts/s/new").exists());
+}
+
+// no state repo here, so only the holdouts rule pins `.enallagi` against a rename
+#[test]
+fn holdouts_survive_parent_rename() {
+    if nested() {
+        return;
+    }
+    let r = Repo::new();
+    r.write(".enallagi/holdouts/s/t", "scenario\n");
+    let sb = Sandbox::start(&r.root, &native(&[]));
+    let out = sh(
+        &sb,
+        &r.root,
+        "mv .enallagi .x; cat .x/holdouts/s/t .enallagi/holdouts/s/t",
+    );
+    assert!(!text(&out).contains("scenario"), "{}", text(&out));
+    // bwrap's mask follows a renamed parent, so the proof is that nothing moved
+    assert!(
+        r.root.join(".enallagi/holdouts/s/t").exists(),
+        "{}",
+        text(&out)
+    );
+}
+
+#[test]
+fn secrets_unreadable() {
+    if nested() {
+        return;
+    }
+    let r = Repo::new();
+    let sb = Sandbox::start(&r.root, &native(&[]));
+    for rel in SECRETS {
+        let out = sh(&sb, &r.root, &format!("cat \"$HOME/{rel}\""));
+        assert!(!out.status.success(), "{rel}: {}", text(&out));
+        assert!(!text(&out).contains("secret"), "{rel}: {}", text(&out));
+    }
 }
 
 #[cfg(target_os = "linux")]

@@ -18,6 +18,9 @@ pub const BASE_HOSTS: &[&str] = &[
 
 const VAR: &str = "ENALLAGI_SANDBOX";
 
+// operator credentials no lane reads: the launcher, not a lane, pushes and calls GitHub (ADR 0004)
+const SECRETS: &[&str] = &[".ssh", ".aws", ".gnupg", ".netrc", ".config/gh"];
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Kind {
     Off,
@@ -52,8 +55,17 @@ pub struct Wrapped {
 struct Policy {
     write: Vec<PathBuf>,
     deny: Vec<PathBuf>,
-    // ancestors of a denied path inside a writable root: renaming one would carry the path out from under its rule
+    // neither readable nor writable; kept apart so the holdout runner (spec 6) can lift it alone
+    holdouts: Vec<PathBuf>,
+    secrets: Vec<PathBuf>,
+    // ancestors of a denied or hidden path inside a writable root: renaming one would carry the path out from under its rule
     pinned: Vec<PathBuf>,
+}
+
+impl Policy {
+    fn hidden(&self) -> impl Iterator<Item = &PathBuf> {
+        self.holdouts.iter().chain(&self.secrets)
+    }
 }
 
 impl Sandbox {
@@ -195,6 +207,8 @@ fn canon(path: &Path) -> PathBuf {
 fn policy(cwd: &Path, dir: &str, extra: impl Iterator<Item = PathBuf>) -> Policy {
     let mut write = vec![canon(cwd)];
     let mut deny = Vec::new();
+    // the lane's own instance, and the parent instance beside the product's common git dir
+    let mut instances = vec![cwd.join(dir)];
     for repo in [cwd.to_path_buf(), cwd.join(dir)] {
         let Ok(common) = crate::git::git(
             &repo,
@@ -203,6 +217,9 @@ fn policy(cwd: &Path, dir: &str, extra: impl Iterator<Item = PathBuf>) -> Policy
             continue;
         };
         let common = canon(Path::new(&common));
+        if repo == cwd {
+            instances.extend(common.parent().map(|p| p.join(dir)));
+        }
         // a missing hooks dir is one a lane could create
         let _ = std::fs::create_dir_all(common.join("hooks"));
         deny.extend([common.join("config"), common.join("hooks")]);
@@ -224,8 +241,31 @@ fn policy(cwd: &Path, dir: &str, extra: impl Iterator<Item = PathBuf>) -> Policy
     write.dedup();
     deny.sort();
     deny.dedup();
+    let mut holdouts: Vec<PathBuf> = instances
+        .iter()
+        .filter(|i| i.is_dir())
+        .map(|i| canon(i).join("holdouts"))
+        .chain(std::iter::once(
+            crate::config::cache_root().join("holdouts"),
+        ))
+        .collect();
+    holdouts.sort();
+    holdouts.dedup();
+    // made here, as hooks/ is: a lane could otherwise create one bwrap has nothing to mount over
+    for h in &holdouts {
+        let _ = std::fs::create_dir_all(h);
+    }
+    let holdouts: Vec<PathBuf> = holdouts.iter().map(|h| canon(h)).collect();
+    let secrets: Vec<PathBuf> = SECRETS
+        .iter()
+        .map(|s| home(&format!("~/{s}")))
+        .filter(|p| p.exists())
+        .map(|p| canon(&p))
+        .collect();
     let mut pinned: Vec<PathBuf> = deny
         .iter()
+        .chain(&holdouts)
+        .chain(&secrets)
         .flat_map(|d| d.ancestors().skip(1))
         .filter(|a| write.iter().any(|w| a.starts_with(w)))
         .map(Path::to_path_buf)
@@ -235,6 +275,8 @@ fn policy(cwd: &Path, dir: &str, extra: impl Iterator<Item = PathBuf>) -> Policy
     Policy {
         write,
         deny,
+        holdouts,
+        secrets,
         pinned,
     }
 }
@@ -268,6 +310,12 @@ fn seatbelt(policy: &Policy, proxy: u16, ports: &[u16], argv: Vec<String>) -> Ve
     profile.push_str("(allow network-bind network-inbound (local ip \"localhost:*\"))\n");
     for d in &policy.deny {
         profile.push_str(&format!("(deny file-write* (subpath {}))\n", param(d)));
+    }
+    for h in policy.hidden() {
+        profile.push_str(&format!(
+            "(deny file-read* file-write* (subpath {}))\n",
+            param(h)
+        ));
     }
     for a in &policy.pinned {
         profile.push_str(&format!("(deny file-write* (literal {}))\n", param(a)));

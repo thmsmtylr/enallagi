@@ -32,6 +32,7 @@ A compound check line (`cd sub && pytest`) runs whole inside it.
 - `sandbox.write`: extra writable paths, `~/` expanded. Default empty.
 
 A lane writes only to its checkout, both repositories' git dirs (never `config`, `hooks/` or worktree pointers), a per-spawn `TMPDIR`, the preset's own state paths and `sandbox.write`.
+No lane or check reads or writes `<harness_dir>/holdouts/`, its own or its parent instance's, or `~/.cache/enallagi/holdouts/`, and renaming a parent does not expose them. No lane reads `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc` or `~/.config/gh`: the launcher, not a lane, pushes and calls GitHub.
 Its only egress is the proxy, reached through `HTTPS_PROXY`; each refused host is logged as `sandbox.denied`.
 Under `native`, a run refuses to start when the sandbox is unavailable, naming the fix.
 

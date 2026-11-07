@@ -335,8 +335,22 @@ fn init_writes_the_harness_gitignore() {
             "loop.pid",
             "run/",
             "__pycache__/",
+            "holdouts/",
         ]
     );
+}
+
+#[test]
+fn init_ignores_holdouts() {
+    let repo = Repo::new();
+    install(&repo);
+    repo.write(".enallagi/holdouts/s/t", "scenario\n");
+    let status = enallagi::git::git(
+        &repo.root.join(".enallagi"),
+        &["status", "--porcelain", "--untracked-files=all"],
+    )
+    .expect("status");
+    assert!(!status.contains("holdouts"), "{status}");
 }
 
 #[test]
