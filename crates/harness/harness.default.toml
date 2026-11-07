@@ -41,10 +41,10 @@ skill_invocation = "invoke it via the Skill tool"
 # driver_command runs the built artifact in a throwaway directory and prints one `FINDING ` line per shortfall; empty is off, and ENALLAGI_DRIVER=1 is also required.
 driver_command = ""
 
-# spec is relative to harness_dir; empty is the first specs/<slug>/spec.md holding rows_heading, else the one init seeds.
+# spec is relative to harness_dir; empty is the first specs/<slug>/spec.md holding rows_heading, else the one init seeds. Exit-criteria rows are read from it and from every other specs/<slug>/spec.md.
 spec = ""
-rows_heading = "## 11. Exit criteria"
-rows_end_heading = "## 12."
+rows_heading = "### Exit criteria"
+rows_end_heading = "## Out of Scope"
 source_root = ""
 contract_file = "src/schema.ts"
 test_file_suffix_re = ""

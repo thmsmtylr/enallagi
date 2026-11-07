@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- the probes read exit-criteria rows from every `specs/*/spec.md`, each finding citing its own spec; a one-ticket stage's `__SPEC__` is that ticket's `spec.md`; the default rows heading is `### Exit criteria`, ending at `## Out of Scope`
 - a skill whose frontmatter holds `disable-model-invocation: true` renders inline in the role prompt for every preset, under `## Skill: <id>` naming its vendored directory
 - the lane prompt describes the tracker (specs layout, global ids, states, `## Comments`, `## Harness`), and a new install's context file says a lane has no user to answer
 - the default skills are thirteen, each id its upstream directory name: Pocock's `to-tickets`, `triage`, `tdd`, `diagnosing-bugs`, `codebase-design`, `writing-for-agents`, `domain-modeling` and `code-review` at v1.3.2, ponytail and `ponytail-review` at v5.3.3; `debugging`, `review-received` and `verify-before-done` are renamed, `brainstorming` and `review-requested` are gone

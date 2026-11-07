@@ -116,9 +116,9 @@ Where the documents live:
 
 The spec and its exit criteria:
 
-- `layout.spec`: the spec file, relative to the harness directory. Default `""`: the first `specs/*/spec.md` holding `layout.rows_heading`, else `specs/<repo>/spec.md`, which init seeds.
-- `layout.rows_heading`: the heading that opens the exit-criteria rows. Default `"## 11. Exit criteria"`.
-- `layout.rows_end_heading`: the heading that closes them. Default `"## 12."`.
+- `layout.spec`: the spec file, relative to the harness directory. Default `""`: the first `specs/*/spec.md` holding `layout.rows_heading`, else `specs/<repo>/spec.md`, which init seeds. The probes read exit-criteria rows from it and from every other `specs/*/spec.md`; a lane's `__SPEC__` is its ticket's own `spec.md`.
+- `layout.rows_heading`: the heading that opens the exit-criteria rows. Default `"### Exit criteria"`.
+- `layout.rows_end_heading`: the heading that closes them. Default `"## Out of Scope"`.
 - `layout.contract_file`: the file the roles name as the one home of every shared shape. Default `"src/schema.ts"`.
 
 The source and its tests, which init sets from a detected runner or a verified proposal:

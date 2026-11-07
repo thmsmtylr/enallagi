@@ -156,6 +156,7 @@ pub fn backticked(text: &str) -> Vec<String> {
 }
 
 pub struct SpecRow {
+    pub spec: String,
     pub name: String,
     pub test: String,
     pub line: usize,
@@ -163,15 +164,28 @@ pub struct SpecRow {
 
 const SEPARATOR: &str = r"^\|[\s:|-]+\|\s*$";
 
-// must slice and read cells the same way the floor's own row parser does, or the two disagree
+// every spec's table; a spec with no rows heading holds none, and only all of them lacking one is an error
 pub fn spec_rows(ctx: &ProbeCtx) -> Res<Vec<SpecRow>> {
     let cfg: &Config = ctx.cfg;
-    let spec = &cfg.layout.spec;
-    let text = read(ctx.root, spec)?;
     let heading = &cfg.layout.rows_heading;
-    let start = text
-        .find(&format!("\n{heading}"))
-        .ok_or_else(|| format!("{spec}: no \"{heading}\" heading"))?;
+    let mut rows = Vec::new();
+    let mut tables = 0;
+    for spec in crate::tracker::spec_files(ctx.root, cfg) {
+        let text = read(ctx.root, &spec)?;
+        let Some(start) = text.find(&format!("\n{heading}")) else {
+            continue;
+        };
+        tables += 1;
+        rows.extend(table_rows(cfg, &spec, &text, start)?);
+    }
+    if tables == 0 {
+        return Err(format!("{}: no \"{heading}\" heading", cfg.layout.spec));
+    }
+    Ok(rows)
+}
+
+// must slice and read cells the same way the floor's own row parser does, or the two disagree
+fn table_rows(cfg: &Config, spec: &str, text: &str, start: usize) -> Res<Vec<SpecRow>> {
     let after = text[start..]
         .find(&format!("\n{}", cfg.layout.rows_end_heading))
         .map(|at| start + at);
@@ -187,6 +201,7 @@ pub fn spec_rows(ctx: &ProbeCtx) -> Res<Vec<SpecRow>> {
         .filter_map(|m| {
             let at = m.get(0)?.start();
             Some(SpecRow {
+                spec: spec.to_string(),
                 name: m.get(1)?.as_str().to_string(),
                 test: m.get(2)?.as_str().to_string(),
                 line: base + section[..at].matches('\n').count(),
@@ -207,7 +222,7 @@ pub fn spec_rows(ctx: &ProbeCtx) -> Res<Vec<SpecRow>> {
     }
     if shaped != rows.len() {
         return Err(format!(
-            "the exit-criteria section has {shaped} row-shaped lines but {} parsed as file::test — a table went unread",
+            "{spec}: the exit-criteria section has {shaped} row-shaped lines but {} parsed as file::test — a table went unread",
             rows.len()
         ));
     }

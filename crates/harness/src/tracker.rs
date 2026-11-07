@@ -344,7 +344,7 @@ pub fn repo_slug(root: &Path) -> String {
     }
 }
 
-/// The spec the exit criteria are read from, relative to the root: `layout.spec` when set, else the first `specs/<slug>/spec.md` holding `layout.rows_heading`, else the one a new install seeds.
+/// The default spec, relative to the root: `layout.spec` when set, else the first `specs/<slug>/spec.md` holding `layout.rows_heading`, else the one a new install seeds.
 pub fn spec_rel(root: &Path, cfg: &crate::config::Config) -> String {
     let dir = &cfg.layout.harness_dir;
     if !cfg.layout.spec.is_empty() {
@@ -352,6 +352,33 @@ pub fn spec_rel(root: &Path, cfg: &crate::config::Config) -> String {
     }
     let seed =
         crate::config::instance_rel(root, dir, &format!("{SPECS}/{}/spec.md", repo_slug(root)));
+    let found = spec_paths(root, dir);
+    let heading = format!("\n{}", cfg.layout.rows_heading);
+    found
+        .iter()
+        .find(|p| std::fs::read_to_string(p).is_ok_and(|t| t.contains(&heading)))
+        .or(found.first())
+        .and_then(|p| p.strip_prefix(root).ok())
+        .map(|p| p.display().to_string())
+        .unwrap_or(seed)
+}
+
+/// Every spec the exit criteria are read from, relative to the root: `layout.spec` first, then each other `specs/<slug>/spec.md`.
+pub fn spec_files(root: &Path, cfg: &crate::config::Config) -> Vec<String> {
+    let mut out = vec![cfg.layout.spec.clone()];
+    for p in spec_paths(root, &cfg.layout.harness_dir) {
+        let Ok(rel) = p.strip_prefix(root) else {
+            continue;
+        };
+        let rel = rel.display().to_string();
+        if !out.contains(&rel) {
+            out.push(rel);
+        }
+    }
+    out
+}
+
+fn spec_paths(root: &Path, dir: &str) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = std::fs::read_dir(Tracker::open(root, dir).0)
         .into_iter()
         .flatten()
@@ -360,15 +387,7 @@ pub fn spec_rel(root: &Path, cfg: &crate::config::Config) -> String {
         .filter(|p| p.is_file())
         .collect();
     found.sort();
-    let heading = format!("\n{}", cfg.layout.rows_heading);
-    // ponytail: one spec's table is read; read every spec's when decompose queues more than one
     found
-        .iter()
-        .find(|p| std::fs::read_to_string(p).is_ok_and(|t| t.contains(&heading)))
-        .or(found.first())
-        .and_then(|p| p.strip_prefix(root).ok())
-        .map(|p| p.display().to_string())
-        .unwrap_or(seed)
 }
 
 fn ticket_files(specs: &Path) -> Vec<PathBuf> {

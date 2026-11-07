@@ -4,6 +4,7 @@ use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
 
 pub struct Untested {
+    pub spec: String,
     pub name: String,
     pub test: String,
     pub line: usize,
@@ -34,6 +35,7 @@ pub fn untested_rows(ctx: &ProbeCtx) -> Res<Vec<Untested>> {
             continue;
         };
         out.push(Untested {
+            spec: row.spec,
             name: row.name,
             test: row.test,
             line: row.line,
@@ -48,9 +50,8 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 }
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
-    let spec = &ctx.cfg.layout.spec;
     Ok(untested_rows(ctx)?
         .into_iter()
-        .map(|row| common::finding(spec, row.line, row.message))
+        .map(|row| common::finding(&row.spec, row.line, row.message))
         .collect())
 }

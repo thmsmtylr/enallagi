@@ -85,11 +85,10 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         }
     }
 
-    let spec = &ctx.cfg.layout.spec;
     for row in untested_rows(ctx)? {
         if !claimed.contains(&(row.name.clone(), row.test.clone())) {
             found.push(common::finding(
-                spec,
+                &row.spec,
                 row.line,
                 format!(
                     "{}::{} is untested and no open task names it ({})",

@@ -36,7 +36,19 @@ const VERIFIER: &str = "Read __CONTEXT_FILE__, __SPEC__ and every ticket at revi
 
 const GENERIC: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/__ROLE__.md: read that file first and follow it exactly. Then stop.";
 
-fn prompt_for(role: &str, cfg: &Config) -> String {
+// one ticket reads its own spec; any other count reads the spec beside each
+fn spec_for(root: &Path, cfg: &Config, ids: &[&str]) -> String {
+    let own = match ids {
+        [id] => Tracker::open(root, &cfg.layout.harness_dir)
+            .path_of(id)
+            .and_then(|p| Some(p.parent()?.parent()?.join("spec.md")))
+            .and_then(|p| Some(p.strip_prefix(root).ok()?.display().to_string())),
+        _ => None,
+    };
+    own.unwrap_or_else(|| "the `spec.md` beside each ticket's `issues/` directory".into())
+}
+
+fn prompt_for(role: &str, cfg: &Config, spec: &str) -> String {
     let body = match role {
         "scout" => SCOUT.to_string(),
         "adjudicator" => ADJUDICATOR.to_string(),
@@ -44,7 +56,7 @@ fn prompt_for(role: &str, cfg: &Config) -> String {
         "verifier" => VERIFIER.to_string(),
         other => GENERIC.replace("__ROLE__", other),
     };
-    config::subst(&format!("{LANE} {body}"), cfg)
+    config::subst(&format!("{LANE} {body}").replace("__SPEC__", spec), cfg)
 }
 
 // shared with cli::skills, which validates config before resolving any skill
@@ -343,7 +355,7 @@ pub fn plan(root: &Path, cfg: &Config, pipelines: &[String]) -> Result<String, C
                         level_word(&resolved.levels.model),
                         level_word(&resolved.levels.effort)
                     );
-                    for line in prompt_for(role, cfg).lines() {
+                    for line in prompt_for(role, cfg, &cfg.layout.spec).lines() {
                         let _ = writeln!(out, "    | {line}");
                     }
                 }
@@ -1541,7 +1553,11 @@ impl<'a> Loop<'a> {
 
     // the prompt carries the ids the stage was sized for, so it decides those and no others
     fn stage_prompt(&self, role: &str, ids: &[String], task: Option<&str>) -> String {
-        let mut prompt = prompt_for(role, self.cfg);
+        let ticket: Vec<&str> = match task {
+            Some(t) => vec![t],
+            None => ids.iter().map(String::as_str).collect(),
+        };
+        let mut prompt = prompt_for(role, self.cfg, &spec_for(self.root, self.cfg, &ticket));
         if role == "implementer" {
             if let Some(clause) = task.and_then(|t| self.prior_attempts(t)) {
                 prompt.push(' ');
@@ -1952,10 +1968,33 @@ mod tests {
     }
 
     #[test]
+    fn spec_token_ticket() {
+        let repo = crate::fixture::Repo::new();
+        let t = Tracker::open(&repo.root, ".enallagi");
+        t.append("b", "## [T-001] one\nstatus: ready-for-agent\n")
+            .expect("append");
+        t.append("c", "## [T-002] two\nstatus: review\n")
+            .expect("append");
+        let mut cfg = Config::default();
+        cfg.layout.harness_dir = ".enallagi".into();
+        cfg.layout.spec = ".enallagi/specs/a/spec.md".into();
+        let prompt =
+            |ids: &[&str]| prompt_for("implementer", &cfg, &spec_for(&repo.root, &cfg, ids));
+        let one = prompt(&["T-002"]);
+        assert!(one.contains(", .enallagi/specs/c/spec.md,"), "{one}");
+        assert!(!one.contains("specs/a/"), "{one}");
+        let two = prompt(&["T-001", "T-002"]);
+        assert!(
+            two.contains("the `spec.md` beside each ticket's `issues/` directory"),
+            "{two}"
+        );
+    }
+
+    #[test]
     fn lane_prompt_names_tracker() {
         let mut cfg = Config::default();
         cfg.layout.harness_dir = ".enallagi".into();
-        let prompt = prompt_for("implementer", &cfg);
+        let prompt = prompt_for("implementer", &cfg, "");
         for want in [
             "`.enallagi/specs/<spec>/issues/T-NNN-<slug>.md`",
             "global",
@@ -1981,7 +2020,7 @@ mod tests {
         use std::process::{Command, Stdio};
         let cfg = Config::default();
         let script = |role: &str| {
-            let prompt = prompt_for(role, &cfg);
+            let prompt = prompt_for(role, &cfg, "");
             let from = prompt.find("sed -n '").expect(role) + "sed -n '".len();
             let len = prompt[from..].find('\'').expect(role);
             prompt[from..from + len].to_string()

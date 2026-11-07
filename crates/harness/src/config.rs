@@ -1611,7 +1611,7 @@ mod tests {
             "only __SKILLS_DIR__ is left standing: {out}"
         );
         assert!(out.contains("__SKILLS_DIR__"));
-        assert!(out.contains("/spec.md") && out.contains("## 12.") && out.contains("|12"));
+        assert!(out.contains("/spec.md") && out.contains("## Out of Scope") && out.contains("|12"));
 
         c.layout.skills_dir = Some(".codex/skills".into());
         out = subst(text, &c);

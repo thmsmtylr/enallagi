@@ -197,6 +197,28 @@ fn seeded_row(repo: &Repo, cfg: &Config) {
 }
 
 #[test]
+fn untested_reads_specs() {
+    let (repo, cfg) = seeded();
+    seeded_row(&repo, &cfg);
+    let second = ".enallagi/specs/zz-second/spec.md";
+    repo.write(
+        second,
+        &format!(
+            "# Second\n\n{}\n\n| Behaviour | Test |\n| --- | --- |\n| b | `src/other.test.ts::another name` |\n\n{}\n",
+            cfg.layout.rows_heading, cfg.layout.rows_end_heading
+        ),
+    );
+    let results = run(&repo, &cfg);
+    for probe in ["spec-untested", "queue-uncovered"] {
+        let cites: Vec<&str> = findings(&results, probe)
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
+        assert_eq!(cites, [spec(&repo).as_str(), second], "{probe}");
+    }
+}
+
+#[test]
 fn a_missing_hash_file_unenforces_two_rails() {
     let (repo, cfg) = seeded();
     fs::remove_file(repo.root.join(".enallagi/test-hashes.json")).expect("remove the hash file");
@@ -216,7 +238,7 @@ fn an_unclaimed_row_is_uncovered() {
     assert_eq!(count(&run(&repo, &cfg), "queue-uncovered"), Some(1));
 }
 
-const COMMA_ROWS: &str = "# SPEC\n\n## 11. Exit criteria\n\n| Behaviour | Test |\n| --- | --- |\n| a | `tests/x.test.ts::the frames FRAMES held, in order` |\n| b | `tests/x.test.ts::the packs a core pack holds, named` |\n\n## 12. Notes\n";
+const COMMA_ROWS: &str = "# SPEC\n\n### Exit criteria\n\n| Behaviour | Test |\n| --- | --- |\n| a | `tests/x.test.ts::the frames FRAMES held, in order` |\n| b | `tests/x.test.ts::the packs a core pack holds, named` |\n\n## Out of Scope\n";
 
 fn claiming(repo: &Repo, rows: &str) {
     repo.write(&spec(repo), COMMA_ROWS);
@@ -259,7 +281,7 @@ fn a_claimed_row_no_criteria_row_defines_is_found() {
     );
 }
 
-const PIECE_ROWS: &str = "# SPEC\n\n## 11. Exit criteria\n\n| Behaviour | Test |\n| --- | --- |\n| a | `tests/x.test.ts::one` |\n| b | `tests/x.test.ts::two` |\n\n## 12. Notes\n";
+const PIECE_ROWS: &str = "# SPEC\n\n### Exit criteria\n\n| Behaviour | Test |\n| --- | --- |\n| a | `tests/x.test.ts::one` |\n| b | `tests/x.test.ts::two` |\n\n## Out of Scope\n";
 
 fn claiming_pieces(repo: &Repo, rows: &str) {
     claiming(repo, rows);
@@ -1078,7 +1100,7 @@ fn slashed_row_source_root() {
     );
     repo.write(
         &spec(&repo),
-        "# SPEC\n\n## 11. Exit criteria\n\n| Criterion | Test |\n| --- | --- |\n| c | `tests/x.rs::t` |\n\n## 12. Notes\n",
+        "# SPEC\n\n### Exit criteria\n\n| Criterion | Test |\n| --- | --- |\n| c | `tests/x.rs::t` |\n\n## Out of Scope\n",
     );
     let finding = format!("FINDING spec-untested {}:7 ", spec(&repo));
     let untested = |results: &[(String, ProbeResult)]| {

@@ -358,7 +358,7 @@ fn content_is_kept() {
 fn init_seeds_spec() {
     let repo = Repo::new();
     install(&repo);
-    assert!(read(&repo, &spec(&repo)).contains("\n## 11. Exit criteria"));
+    assert!(read(&repo, &spec(&repo)).contains("\n### Exit criteria"));
     assert!(!repo.root.join(".enallagi/TASKS.md").exists());
     let t = enallagi::tracker::Tracker::open(&repo.root, ".enallagi");
     assert!(t.blocks().expect("the queue").is_empty());
