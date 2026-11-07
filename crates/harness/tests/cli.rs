@@ -1976,15 +1976,6 @@ fn reference_config_links_the_guide() {
     );
 }
 
-const REVIEW_QUERY: &str = concat!(
-    "query ReviewThreads($owner:String!,$repo:String!,$number:Int!){",
-    "repository(owner:$owner,name:$repo){pullRequest(number:$number){",
-    "reviews(first:100){pageInfo{hasNextPage} nodes{body}}",
-    "reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated ",
-    "comments(first:100){pageInfo{hasNextPage} nodes{path line startLine body url}}}}",
-    "}}}",
-);
-
 const SUMMARY: &str = include_str!("fixtures/reviews/summary.json");
 const SETTLED: &str = include_str!("fixtures/reviews/settled.json");
 const GENERATED: &str = include_str!("fixtures/reviews/generated.json");
@@ -2026,24 +2017,13 @@ fn review_block_per_thread() {
 
     assert_eq!(
         f.calls(),
-        [[
-            "api",
-            "graphql",
-            "-f",
-            &format!("query={REVIEW_QUERY}"),
-            "-f",
-            "owner=owner",
-            "-f",
-            "repo=repo",
-            "-F",
-            "number=13",
-        ]]
+        [enallagi::review::gh_args("owner/repo#13").expect("args")]
     );
 
     let after = f.tasks();
     assert!(after.starts_with(&before), "the queue was rewritten");
     let blocks = enallagi::block::parse(&after).expect("parse");
-    assert_eq!(blocks.len(), 3, "{after}");
+    assert_eq!(blocks.len(), 4, "{after}");
     let first = enallagi::block::block_text(&blocks[1]);
     let want = "\
 ## [T-002] Refactor suggestion
@@ -2071,7 +2051,14 @@ notes: https://github.com/owner/repo/pull/13#discussion_r1000000001
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("  proposed: ## [T-002] "), "{stdout}");
     assert!(stdout.contains("  proposed: ## [T-003] "), "{stdout}");
-    assert!(stdout.contains("  skipped: 1 with no path"), "{stdout}");
+    assert!(
+        stdout.contains("  proposed: ## [T-004] **Actionable comments posted: 2**"),
+        "{stdout}"
+    );
+    assert_eq!(
+        enallagi::block::field(&blocks[3], "scope").as_deref(),
+        Some(enallagi::block::SCOPE_PLACEHOLDER)
+    );
     assert!(stdout.contains("  folded: 0 later in a thread"), "{stdout}");
 }
 
@@ -2245,21 +2232,55 @@ fn a_generated_and_a_plain_comment_share_a_shape() {
     assert_eq!(shapes[0][0], "scope: src/date.rs");
 }
 
-// a name in the source would be a filter on who reviewed; the command reads every open thread
+// a name outside the bot table would be a filter on who reviewed; the table maps, it never drops
 #[test]
-fn the_review_source_names_no_comment_author() {
-    const SOURCE: [(&str, &str); 2] = [
-        ("src/review.rs", include_str!("../src/review.rs")),
-        ("src/cli/review.rs", include_str!("../src/cli/review.rs")),
+fn vendors_in_bot_table() {
+    let text = include_str!("../src/review.rs");
+    let start = text.find("\nmod bots {").expect("the bot table");
+    let end = text.find("\n// end of the bot table").expect("its end");
+    let vendors = [
+        "kilo",
+        "greptile",
+        "copilot",
+        "bugbot",
+        "coderabbit",
+        "claude",
     ];
-    for (name, text) in SOURCE {
-        let tokens: Vec<&str> = text
+    let named = |part: &str| -> Vec<String> {
+        let lower = part.to_lowercase();
+        let tokens: Vec<&str> = part
             .split(|c: char| !c.is_alphanumeric() && c != '_')
             .collect();
-        for named in ["author", "login", "user", "bot", "reviewer"] {
-            assert!(!tokens.contains(&named), "{name} says `{named}`");
-        }
-    }
+        ["author", "login"]
+            .into_iter()
+            .filter(|w| tokens.contains(w))
+            .chain(vendors.into_iter().filter(|v| lower.contains(v)))
+            .map(String::from)
+            .collect()
+    };
+    // the unit tests drive the table through the twin's recordings, so they name vendors
+    let tests = text.find("\n#[cfg(test)]").unwrap_or(text.len());
+    let outside = format!("{}{}", &text[..start], &text[end..tests]);
+    assert_eq!(named(&outside), Vec::<String>::new());
+    assert_eq!(
+        named(include_str!("../src/cli/review.rs")),
+        Vec::<String>::new()
+    );
+    let mut inside = named(&text[start..end]);
+    inside.sort();
+    assert_eq!(
+        inside,
+        [
+            "author",
+            "bugbot",
+            "claude",
+            "coderabbit",
+            "copilot",
+            "greptile",
+            "kilo",
+            "login"
+        ]
+    );
 }
 
 #[test]

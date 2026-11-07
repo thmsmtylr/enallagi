@@ -288,7 +288,7 @@ fn render(template: &str, f: &Finding, url: &str) -> String {
 }
 
 // a thread per finding, then the bot's one summary rewritten in place
-fn post(pull: &mut Pull, b: &Recording, found: &[&Finding]) {
+pub fn post(pull: &mut Pull, b: &Recording, found: &[&Finding]) {
     let mut rows = Vec::new();
     for f in found {
         let n = pull.threads.len() + 1;
@@ -602,12 +602,14 @@ fn page(nodes: Vec<Value>) -> Value {
     json!({"pageInfo": {"hasNextPage": false}, "nodes": nodes})
 }
 
-fn threads(pull: &Pull) -> Value {
-    let reviews = pull
-        .reviews
-        .iter()
-        .map(|r| json!({"author": author(&r.author, &r.typename), "body": r.body}))
-        .collect();
+/// The `ReviewThreads` read of one pull.
+pub fn threads(pull: &Pull) -> Value {
+    let reviews = notes(&pull.reviews).as_array().cloned().unwrap_or_default();
+    let comments = notes(&pull.comments)
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let contexts = page(pull.checks.clone());
     let threads = pull
         .threads
         .iter()
@@ -629,7 +631,13 @@ fn threads(pull: &Pull) -> Value {
             json!({"id": t.id, "isResolved": t.resolved, "isOutdated": t.outdated, "comments": page(comments)})
         })
         .collect();
-    json!({"data": {"repository": {"pullRequest": {"reviews": page(reviews), "reviewThreads": page(threads)}}}})
+    json!({"data": {"repository": {"pullRequest": {
+        "headRefOid": pull.head_sha,
+        "comments": page(comments),
+        "reviews": page(reviews),
+        "reviewThreads": page(threads),
+        "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": contexts}}}]},
+    }}}})
 }
 
 fn settle(state: &mut State, id: &str, body: &str) -> Response {

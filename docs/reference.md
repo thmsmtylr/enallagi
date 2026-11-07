@@ -29,8 +29,11 @@ When the launcher opens a ticket's pull request, it sets the ticket `open` and w
 Before selecting a task, an iteration polls each `open` ticket's pull request with one light read (state, head sha, newest comment and review, check rollup).
 A merged pull request sets `done`, and a closed one sets `wontfix` with gate `pull request closed unmerged`.
 The full review read runs only when that key differs from the ticket's `polled:`, which then takes the new key.
-Each unresolved thread lands as one `needs-triage` ticket carrying its thread id, and the same
-finding raised twice on the same lines is one ticket.
+Every finding lands as one `needs-triage` ticket: an unresolved thread (carrying its thread id), a review body, a plain comment, or a failed check on the head.
+The same finding raised twice on the same lines is one ticket.
+A bot's summary comment is keyed by its marker, so one it edits in place is one finding; it is no finding while that bot has an unresolved thread, or when it counts zero findings.
+A comment carrying `<!-- enallagi:` is the loop's own and never a finding.
+The bot table in `crates/harness/src/review.rs` is the only vendor-specific code: it maps a `Bot` account's login, `[bot]` dropped, to its vendor, and never drops a finding for its author.
 When that ticket lands, the launcher replies on the thread with the sha and resolves it.
 No host tool or a failed host call is a warning, never a halt.
 
@@ -262,7 +265,7 @@ Served calls:
 
 - `pr create` (`--head`, `--base`, `--title`, `--body` or `--body-file`), `pr list --json` (`--state`), `pr view <url|number|branch> --json`, and `pr comment <pull> --body`.
 - `--json` takes `number`, `url`, `title`, `body`, `state`, `headRefName`, `baseRefName`, `headRefOid`, `statusCheckRollup`, `reviews` and `comments`.
-- `api graphql` dispatched on the document's operation name: `ReviewThreads` (the review read), `PullState` (the poll's light read, its check rollup derived from `checks`) and `SettleThread` (reply and resolve).
+- `api graphql` dispatched on the document's operation name: `ReviewThreads` (the review read: head sha, comments, reviews and threads with their authors, and the head's check rollup), `PullState` (the poll's light read, its check rollup derived from `checks`) and `SettleThread` (reply and resolve).
 
 Any other call, or an operation no handler names, exits 1 with `twin: no response for gh <args>`.
 
@@ -280,7 +283,8 @@ A bot whose marker sits in an issue comment also rewrites that one comment in pl
 | CodeRabbit | `coderabbitai` | `<!-- cr-comment:v1 -->` | review thread | marker table, unrecorded | 2026-11-06 |
 | Claude | `claude` | `<!-- bhfn:1:... -->` | review thread | marker table, unrecorded | 2026-11-06 |
 
-An unrecorded shape carries `"recorded": false`, and its login is a guess.
+An unrecorded shape carries `"recorded": false`.
+Its login is confirmed, 2026-11-07, as a `Bot` from public pull requests: `cursor[bot]` (CleanExpo/RestoreAssist#2510), `coderabbitai[bot]` (red-hat-data-services/RHOAI-Build-Config#38425, whose summary carries `<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) and `claude[bot]` (BrendenJones1/Bayesian-Study-Planner#145, a review body).
 
 To refresh a recording, read the bot's newest comments on a real pull request:
 
