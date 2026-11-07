@@ -10,8 +10,7 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let root = git::git(Path::new("."), &["rev-parse", "--show-toplevel"])?;
-    let root = Path::new(root.trim());
+    let root = &super::root()?;
     let cfg = config::load(root)?;
     // refused here too, so a lane is not created only for its run to refuse
     crate::pipeline::refuse_unfilled(root, &cfg)?;

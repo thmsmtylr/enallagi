@@ -393,6 +393,24 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
     }
 }
 
+// inside a nested instance repo the toplevel is the instance; the product is the repo around it
+pub(super) fn root() -> anyhow::Result<std::path::PathBuf> {
+    let top = |d: &std::path::Path| {
+        crate::git::git(d, &["rev-parse", "--show-toplevel"]).map(std::path::PathBuf::from)
+    };
+    let cwd = std::env::current_dir()?;
+    let Ok(own) = top(&cwd) else {
+        return Ok(cwd);
+    };
+    if let Some(outer) = own.parent().and_then(|p| top(p).ok()) {
+        let dir = crate::config::harness_dir(&outer);
+        if outer.join(&dir) == own {
+            return Ok(outer);
+        }
+    }
+    Ok(own)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

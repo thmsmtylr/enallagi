@@ -17,11 +17,7 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let cwd = std::env::current_dir()?;
-    let root = match crate::git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
-        Ok(top) => std::path::PathBuf::from(top),
-        Err(_) => cwd,
-    };
+    let root = super::root()?;
     let opts = InitOpts {
         adapter: args.adapter.clone(),
         dry_run: args.dry_run,

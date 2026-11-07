@@ -103,7 +103,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             }
         }
         "archive" => {
-            let root = toplevel()?;
+            let root = super::root()?;
             let cfg = crate::config::load(&root)?;
             let report = crate::archive::archive_done(&root, &cfg, false)?;
             if let Some(refused) = report.refused {
@@ -138,7 +138,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 eprintln!("{USAGE}");
                 return Ok(2);
             };
-            let root = toplevel()?;
+            let root = super::root()?;
             let cfg = crate::config::load(&root)?;
             let problems = tracker::check(&root, &cfg, slug);
             for line in &problems {
@@ -165,22 +165,6 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             Ok(2)
         }
     }
-}
-
-// inside a nested instance repo the toplevel is the instance; the product is the repo around it
-fn toplevel() -> anyhow::Result<PathBuf> {
-    let top = |d: &Path| crate::git::git(d, &["rev-parse", "--show-toplevel"]).map(PathBuf::from);
-    let cwd = std::env::current_dir()?;
-    let Ok(own) = top(&cwd) else {
-        return Ok(cwd);
-    };
-    if let Some(outer) = own.parent().and_then(|p| top(p).ok()) {
-        let dir = crate::config::harness_dir(&outer);
-        if outer.join(&dir) == own {
-            return Ok(outer);
-        }
-    }
-    Ok(own)
 }
 
 fn fail(e: &QueueError) -> i32 {

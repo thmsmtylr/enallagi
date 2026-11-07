@@ -3,7 +3,7 @@
 use std::io::Read;
 use std::path::PathBuf;
 
-use crate::{git, hooks};
+use crate::hooks;
 
 pub struct Args {
     pub name: String,
@@ -15,11 +15,7 @@ fn root() -> anyhow::Result<PathBuf> {
             return Ok(PathBuf::from(dir));
         }
     }
-    let cwd = std::env::current_dir()?;
-    Ok(match git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
-        Ok(top) => PathBuf::from(top),
-        Err(_) => cwd,
-    })
+    super::root()
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {

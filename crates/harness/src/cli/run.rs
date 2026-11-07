@@ -24,11 +24,7 @@ pub struct Args {
 pub fn run(args: &Args) -> anyhow::Result<i32> {
     // a stop is the operator's, so it ends the run through the digest rather than orphaning a lane
     agent::catch_stop_signals();
-    let cwd = std::env::current_dir()?;
-    let root = match git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
-        Ok(top) => std::path::PathBuf::from(top),
-        Err(_) => cwd,
-    };
+    let root = super::root()?;
     if !args.dry_run {
         if let Err(err) = pipeline::preflight(&root) {
             eprintln!("enallagi run: {err}");

@@ -2394,9 +2394,7 @@ fn check_refuses_trailer() {
 }
 
 // a lane's shell can sit inside a nested instance repo, whose toplevel is not the product's
-#[test]
-fn check_from_instance() {
-    let r = decompose_repo();
+fn nest(r: &enallagi::fixture::Repo) -> std::path::PathBuf {
     let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
     r.write(".git/info/exclude", ".enallagi/\n");
     let state = r.root.join(".enallagi");
@@ -2405,6 +2403,13 @@ fn check_from_instance() {
     git(&state, &["init", "-q"]);
     git(&state, &["add", "-A"]);
     git(&state, &["commit", "-qm", "instance"]);
+    state
+}
+
+#[test]
+fn check_from_instance() {
+    let r = decompose_repo();
+    let state = nest(&r);
     r.write(
         ".enallagi/specs/app/issues/01-first.md",
         &draft("01", "None", "`adds` passes"),
@@ -2414,5 +2419,17 @@ fn check_from_instance() {
         .current_dir(&state)
         .output()
         .expect("run enallagi tasks check");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+}
+
+#[test]
+fn root_from_instance() {
+    let r = decompose_repo();
+    let state = nest(&r);
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["probe", "spec-untested"])
+        .current_dir(&state)
+        .output()
+        .expect("run enallagi probe");
     assert_eq!(out.status.code(), Some(0), "{out:?}");
 }

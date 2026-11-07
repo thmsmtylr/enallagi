@@ -3,10 +3,8 @@
 use crate::agent;
 use crate::config;
 use crate::events::{Kind, Log, Writer};
-use crate::git;
 use crate::pipeline::role_source;
 use crate::skills::{self, ResolveOpts, SkillError};
-use std::path::PathBuf;
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum SkillsCmd {
@@ -24,11 +22,7 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let cwd = std::env::current_dir()?;
-    let root = match git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
-        Ok(top) => PathBuf::from(top),
-        Err(_) => cwd,
-    };
+    let root = super::root()?;
     let cfg = config::load(&root)?;
     let presets = agent::presets();
     // resolving skills runs no check, so a repository that has not set one still syncs and lists
