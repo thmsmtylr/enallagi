@@ -53,7 +53,7 @@ pub struct Preset {
     pub model_flag: Option<String>,
     #[serde(default)]
     pub effort_flag: Option<String>,
-    // kept out of argv and added to every lane, since the sandbox is the boundary (ADR 0004)
+    // kept out of argv and added to every confined lane, since the sandbox is the boundary
     #[serde(default)]
     pub bypass_flag: Option<String>,
     // the CLI's API and auth hosts, for the sandbox's allowlist
@@ -590,9 +590,16 @@ fn run_once(
     let timeout = s.timeout.map(|t| t.as_secs().to_string());
     // the layout is reloaded here because StageSpawn carries the filled argv, not the layout that filled it
     let cfg = crate::config::load(s.cwd).ok();
+    // unconfined, the CLI's own permission prompt is the only boundary left
+    let dropped = s
+        .preset
+        .bypass_flag
+        .as_ref()
+        .filter(|_| sandbox.name() == "off");
     let argv: Vec<String> = s
         .argv
         .iter()
+        .filter(|word| Some(*word) != dropped)
         .map(|word| {
             // prompt substituted last, one pass each: a prompt that quotes {turns} or {prompt} must reach the agent verbatim
             let word = word.replace("{turns}", &turns);

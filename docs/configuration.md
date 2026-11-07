@@ -17,7 +17,7 @@ The re-run rewrites this file's key in `test-hashes.json` to its new sha256 and 
 - `agent.rate_limit_pattern`: output that means the agent hit a rate limit, matched without case. Default `"hit your session limit"`.
 - `[agent.<role>]`: `preset`, `command`, `model`, `effort` and `usage` for one role. The role is one of `decomposer`, `scout`, `adjudicator`, `implementer`, `verifier` or `researcher`.
 
-Every lane carries its preset's bypass flag. The sandbox below is the boundary.
+Every confined lane carries its preset's bypass flag. The sandbox below is the boundary; under `mode = "off"` the flag is dropped and the CLI keeps its own permission prompts.
 `agent.dangerously_skip_permissions` is refused at load.
 A `claude` lane loads no MCP server: `--strict-mcp-config` keeps the operator's own out, as the settings keep their plugins out. Its preset's deny list stays.
 

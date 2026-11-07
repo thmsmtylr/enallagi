@@ -3492,6 +3492,22 @@ fn lane_carries_bypass_flag() {
     assert!(args.contains("--dangerously-skip-permissions"), "{args}");
 }
 
+// unconfined, the CLI's own permission prompt is the only boundary left
+#[test]
+fn off_keeps_permissions() {
+    let r = claude_args_repo("");
+    let config = r.root.join(".enallagi/enallagi.toml");
+    let text = std::fs::read_to_string(&config).expect("config");
+    r.write(
+        ".enallagi/enallagi.toml",
+        &format!("{text}\n[sandbox]\nmode = \"off\"\n"),
+    );
+    r.commit_all("off");
+    let _ = try_go(&r, &opts(1));
+    let args = std::fs::read_to_string(r.root.join("args.txt")).expect("the scout ran");
+    assert!(!args.contains("--dangerously-skip-permissions"), "{args}");
+}
+
 #[test]
 fn run_start_records_sandbox() {
     let r = claude_args_repo("");
