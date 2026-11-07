@@ -94,7 +94,7 @@ It only reports: it writes to no install and to no file in this repository.
 A person adds the line to `templates/LEARNINGS.md` in a pull request.
 
 A role file's frontmatter may declare two keys, which the sandbox enforces on that role's spawns (`crates/harness/src/roles.rs`).
-`writes:` lists paths relative to the lane's checkout, comma-separated, a directory covering its subpath.
+`writes:` lists paths relative to the lane's checkout, comma-separated, a directory covering its subpath; an absolute entry, a `..`, or one that resolves outside the checkout is dropped.
 Present, it replaces the checkout and both repositories' git dirs as the writable set; the preset's state paths and the spawn's `TMPDIR` stay writable.
 Present and empty, only those two are writable. Absent, the writable set is unchanged.
 `hosts:` lists proxy allowlist entries added for that role's spawns; `*` matches any name, and the proxy still refuses IP literals and names resolving to loopback, link-local or unspecified addresses.

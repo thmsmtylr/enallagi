@@ -300,6 +300,26 @@ fn role_writes_named() {
 }
 
 #[test]
+fn role_writes_contained() {
+    if nested() {
+        return;
+    }
+    let r = Repo::new();
+    let out_dir = outside();
+    let abs = std::fs::canonicalize(out_dir.path()).expect("canon");
+    let up = "../".repeat(r.root.components().count());
+    let rel = format!("{up}{}", abs.strip_prefix("/").expect("absolute").display());
+    let sb = Sandbox::start(&r.root, &native(&[]));
+    for entry in [abs.display().to_string(), rel] {
+        let role = format!("writes: {entry}\n");
+        let script = format!("echo x > '{}/f'", abs.display());
+        let out = as_role(&sb, &r.root, &role, &script);
+        assert!(!out.status.success(), "{entry}: {}", text(&out));
+    }
+    assert!(!abs.join("f").exists());
+}
+
+#[test]
 fn role_writes_absent() {
     if nested() {
         return;

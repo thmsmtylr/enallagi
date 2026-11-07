@@ -1,6 +1,6 @@
 //! The one seam every spawn of lane-written code goes through (ADR 0004).
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use crate::config::{Config, SandboxMode};
@@ -348,7 +348,18 @@ fn policy(
         write.push(common);
     }
     if let Some(own) = writes {
-        write = own.iter().map(|w| canon(&cwd.join(w))).collect();
+        let top = canon(cwd);
+        // checkout-relative only; the canonical check catches a symlink the lane planted
+        write = own
+            .iter()
+            .filter(|w| {
+                Path::new(w)
+                    .components()
+                    .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+            })
+            .map(|w| canon(&cwd.join(w)))
+            .filter(|p| p.starts_with(&top))
+            .collect();
     }
     write.extend(extra.map(|p| canon(&p)));
     write.sort();
