@@ -80,7 +80,7 @@ pub fn tool(pins: &[ToolPin], id: &str, platform: &str, cache: &Path) -> Result<
         .map_err(io)?;
     let file = tmp.path().join("download");
     run(Command::new("curl")
-        .args(["-fsSL", "-o"])
+        .args(["-fsSL", "--max-time", "300", "-o"])
         .arg(&file)
         .arg(&pin.url))?;
     let got = crate::skills::sha256(&fs::read(&file).map_err(io)?);
@@ -179,10 +179,13 @@ pub fn osv(
         .arg(lockfile)
         .args(["--format", "json", "--output"])
         .arg(report);
-    let config = crate::config::instance_path(root, dir, "osv-scanner.toml");
-    if config.is_file() {
-        cmd.arg("--config").arg(config);
+    // always a config, so osv-scanner never falls back to one it finds beside the lockfile
+    let mut config = crate::config::instance_path(root, dir, "osv-scanner.toml");
+    if !config.is_file() {
+        config = report.with_extension("toml");
+        fs::write(&config, "").map_err(|e| format!("{}: {e}", config.display()))?;
     }
+    cmd.arg("--config").arg(config);
     let out = cmd
         .output()
         .map_err(|e| format!("{}: {e}", bin.display()))?;

@@ -3036,6 +3036,23 @@ echo '{{"results":[]}}' > "$out"
         assert!(argv.contains("--format\njson\n"), "{argv}");
     }
 
+    // a client-root osv-scanner.toml the lane wrote would otherwise steer the scan
+    #[test]
+    fn security_osv_config_pinned() {
+        let (mut env, base) = osv_env("good 1.0\n", "bad 1.0\n");
+        env.repo.write(
+            "osv-scanner.toml",
+            "[[IgnoredVulns]]\nid = \"GHSA-test-0001\"\n",
+        );
+        run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        let argv = std::fs::read_to_string(env.cache.path().join("osv.argv")).expect("argv");
+        let scans = argv.matches("scan\n").count();
+        assert!(
+            scans > 0 && argv.matches("--config\n").count() == scans,
+            "{argv}"
+        );
+    }
+
     #[test]
     fn security_skips_osv_untouched() {
         let (mut env, base) = leak_env("[]", 0);
