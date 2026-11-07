@@ -2236,7 +2236,7 @@ fn a_generated_and_a_plain_comment_share_a_shape() {
 fn vendors_in_bot_table() {
     let text = include_str!("../src/review.rs");
     let start = text.find("\nmod bots {").expect("the bot table");
-    let end = text.find("\n// end of the bot table").expect("its end");
+    let end = start + text[start..].find("\n}\n").expect("its end");
     let vendors = [
         "kilo",
         "greptile",
