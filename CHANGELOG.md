@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- the claude preset declares no writable state: a lane could add a hook to `~/.claude/settings.json`, an `mcpServers` entry to `~/.claude.json` or a memory under `~/.claude/projects/`, each read unconfined by the operator's next session; `claude -p` runs with both read-only
 - a lane cannot write either instance's `enallagi.toml`, `harness.toml`, `roles/`, `gitleaks.toml`, `gitleaksignore`, `osv-scanner.toml` or `security/`, which the launcher re-reads at the next spawn or gate
 - a role's `writes:` entry that is absolute, climbs out with `..` or resolves outside the checkout is dropped, so it never widens what the lane may write
 - on Linux the unfiltered sandbox bridge marks itself undumpable, so its lane cannot ptrace it or read its `/proc` entries

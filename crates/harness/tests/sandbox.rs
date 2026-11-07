@@ -397,6 +397,32 @@ fn git_config_unwritable() {
     assert!(!git(&r.root, &["config", "--list"]).contains("hookspath"));
 }
 
+// a claude settings hook or mcpServers entry runs unconfined in the operator's next session
+#[test]
+fn claude_config_unwritable() {
+    if nested() {
+        return;
+    }
+    let r = Repo::new();
+    let sb = Sandbox::start(&r.root, &native(&[]));
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("home"));
+    std::fs::create_dir_all(home.join(".claude")).expect("mkdir");
+    std::fs::write(home.join(".claude.json"), "{}\n").expect("write");
+    let write = enallagi::agent::presets()["claude"].write.clone();
+    for attempt in [
+        "echo x >> ~/.claude.json",
+        "echo x > ~/.claude/settings.json",
+        "mkdir -p ~/.claude/projects/p/memory && echo x > ~/.claude/projects/p/memory/MEMORY.md",
+    ] {
+        let out = sb
+            .wrap(&["sh", "-c", attempt], &r.root, &write)
+            .command()
+            .output()
+            .expect("spawn");
+        assert!(!out.status.success(), "{attempt}: {}", text(&out));
+    }
+}
+
 // what the launcher re-reads at the next spawn or run: a lane edit would widen its own sandbox
 #[test]
 fn instance_config_unwritable() {
