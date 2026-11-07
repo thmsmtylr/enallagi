@@ -112,6 +112,10 @@ go test, from go1.26.2:
 
 - `parallel.writers`: how many writer lanes `enallagi worktree` runs at once. Default `1`, which takes no claim and runs as before. `0` is refused at load.
 
+## `[respond]`
+
+- `respond.token_env`: the name of the environment variable whose value the launcher passes to `gh` as `GH_TOKEN` when it replies on, comments on or resolves a ticket's pull request. Unset means `gh`'s own auth. A write refused for permissions names this key in its warning. Default `ENALLAGI_GH_TOKEN`.
+
 ## `[layout]`
 
 Where the documents live:

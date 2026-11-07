@@ -2536,21 +2536,24 @@ fn twin_serves_review_threads() {
 fn twin_settle_resolves_thread() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (_, path) = enallagi::fixture::twin::install(dir.path(), BIN, &reviewed_pull());
-    let query = format!("query={}", enallagi::review::SETTLE);
-    let out = twin_call(
-        &path,
+    let reply = format!("query={}", enallagi::review::REPLY);
+    let resolve = format!("query={}", enallagi::review::RESOLVE);
+    for args in [
         &[
             "api",
             "graphql",
             "-f",
-            &query,
+            &reply,
             "-f",
             "thread=PRRT_1",
             "-f",
             "body=fixed",
-        ],
-    );
-    assert_eq!(out.status.code(), Some(0), "{out:?}");
+        ][..],
+        &["api", "graphql", "-f", &resolve, "-f", "thread=PRRT_1"],
+    ] {
+        let out = twin_call(&path, args);
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+    }
     let state = enallagi::fixture::twin::load(&path);
     let thread = &state.pulls[0].threads[0];
     assert!(thread.resolved);
@@ -2599,6 +2602,7 @@ fn twin_push_round() {
             line: 4,
             text: "The offset is dropped".to_string(),
         }],
+        ..Default::default()
     }];
     let (_, path) = enallagi::fixture::twin::install(&dir.path().join("tools"), BIN, &state);
     let greptile = |path: &std::path::Path| {

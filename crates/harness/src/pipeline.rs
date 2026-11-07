@@ -1615,11 +1615,32 @@ impl<'a> Loop<'a> {
         .or_else(|| git::git(self.root, &["rev-parse", "HEAD"]).ok())
         .unwrap_or_default();
         let body = format!("Answered in {} by enallagi.", sha.trim());
-        if let Err(err) = review::settle(self.root, &thread, &body) {
+        if let Err(err) = review::settle(self.token().as_deref(), &thread, &body) {
+            let err = self.denied(err);
             self.digest
                 .warnings
                 .push(format!("{task}: thread {thread} was left open: {err}"));
         }
+    }
+
+    // `[respond] token_env`'s value, for the gh calls that write to a pull request
+    fn token(&self) -> Option<String> {
+        std::env::var(&self.cfg.respond.token_env)
+            .ok()
+            .filter(|t| !t.is_empty())
+    }
+
+    // a write gh's auth may not make names the key that picks another token
+    fn denied(&self, err: review::ReviewError) -> String {
+        let text = err.to_string();
+        let lower = text.to_lowercase();
+        if lower.contains("not accessible") || lower.contains("permission") {
+            return format!(
+                "{text} (set [respond] token_env, now `{}`, to a token that may)",
+                self.cfg.respond.token_env
+            );
+        }
+        text
     }
 
     // each `open` ticket's pull request: merged is `done`, closed is `wontfix`, and only a changed one is read
@@ -1690,6 +1711,21 @@ impl<'a> Loop<'a> {
         let Some(ticket) = blocks.iter().find(|b| b.id == id) else {
             return Ok(());
         };
+        // a thread answered on an earlier push, re-read now, since a bot may have resolved it itself
+        let token = self.token();
+        let answered = ticket
+            .body
+            .iter()
+            .filter_map(|(_, l)| l.strip_prefix("settled: ")?.split_whitespace().next())
+            .filter_map(|f| tracker::finding_field(ticket, f, "thread-id:"));
+        for thread in answered.filter(|th| found.open.contains(th)) {
+            if let Err(err) = review::resolve(token.as_deref(), &thread) {
+                let err = self.denied(err);
+                self.digest
+                    .warnings
+                    .push(format!("{id}: thread {thread} was left open: {err}"));
+            }
+        }
         let scope: Vec<String> = block::field(ticket, "scope")
             .unwrap_or_default()
             .split(',')
@@ -1743,7 +1779,8 @@ impl<'a> Loop<'a> {
                     "Outside {id}'s scope; filed as {filed} by enallagi.\n\n{}{filed} -->",
                     review::OWN
                 );
-                if let Err(err) = review::settle(self.root, thread, &body) {
+                if let Err(err) = review::settle(self.token().as_deref(), thread, &body) {
+                    let err = self.denied(err);
                     self.digest
                         .warnings
                         .push(format!("{filed}: thread {thread} was left open: {err}"));
@@ -1884,9 +1921,85 @@ impl<'a> Loop<'a> {
         }
         match refused {
             Some(reason) => self.digest.warnings.push(format!("{task}: {reason}")),
-            None => self.record_rejects(task),
+            None => {
+                self.record_rejects(task);
+                self.reply(task, head.trim());
+            }
         }
         self.commit_state(&format!("queue: {task} pushed"));
+    }
+
+    // one marked reply per finding answered since the last push: on its thread, or in one
+    // comment listing the rest by URL; each reply's URL is the finding's `settled:`
+    fn reply(&mut self, task: &str, sha: &str) {
+        let Some(b) = self.blocks().into_iter().find(|b| b.id == task) else {
+            return;
+        };
+        let Some(pr) = block::field(&b, "pr") else {
+            return;
+        };
+        let lines: Vec<&str> = b.body.iter().map(|(_, l)| l.as_str()).collect();
+        let settled: Vec<&str> = lines
+            .iter()
+            .filter_map(|l| l.strip_prefix("settled: ")?.split_whitespace().next())
+            .collect();
+        let token = self.token();
+        let mut done = Vec::new();
+        let mut listed = Vec::new();
+        for answer in lines.iter().filter_map(|l| l.strip_prefix("answer: ")) {
+            let Some((id, rest)) = answer.split_once(' ') else {
+                continue;
+            };
+            let text = match rest.split_once(' ') {
+                _ if settled.contains(&id) => continue,
+                Some(("accept", test)) => {
+                    format!("Fixed in {sha}; `{}` fails without the fix.", test.trim())
+                }
+                Some(("reject", why)) => match why.split_once(':') {
+                    Some((concept, cmd)) => format!(
+                        "Not changed: {}. `{}` shows why.",
+                        concept.trim(),
+                        cmd.trim()
+                    ),
+                    None => continue,
+                },
+                _ => continue,
+            };
+            let mark = format!("{}{id} -->", review::OWN);
+            let Some(thread) = tracker::finding_field(&b, id, "thread-id:") else {
+                let url = tracker::finding_field(&b, id, "url:").unwrap_or_default();
+                listed.push((id, format!("- {url}: {text} {mark}")));
+                continue;
+            };
+            match review::reply(token.as_deref(), &thread, &format!("{text}\n\n{mark}")) {
+                Ok(url) => done.push(format!("settled: {id} {url}")),
+                Err(err) => {
+                    let err = self.denied(err);
+                    self.digest
+                        .warnings
+                        .push(format!("{task}: no reply on {thread}: {err}"));
+                }
+            }
+        }
+        if !listed.is_empty() {
+            let body: Vec<&str> = listed.iter().map(|(_, l)| l.as_str()).collect();
+            match review::comment(token.as_deref(), &pr, &body.join("\n")) {
+                Ok(url) => done.extend(listed.iter().map(|(id, _)| format!("settled: {id} {url}"))),
+                Err(err) => {
+                    let err = self.denied(err);
+                    self.digest
+                        .warnings
+                        .push(format!("{task}: no reply on {pr}: {err}"));
+                }
+            }
+        }
+        if done.is_empty() {
+            return;
+        }
+        let t = Tracker::open(self.root, &self.cfg.layout.harness_dir);
+        if let Err(err) = t.add_lines(task, &done.join("\n")) {
+            self.digest.warnings.push(format!("{task}: {err}"));
+        }
     }
 
     // each verified reject, in Pocock's `.out-of-scope/` format, so the poll never routes it again
@@ -1904,22 +2017,8 @@ impl<'a> Loop<'a> {
                 continue;
             };
             let (concept, cmd) = (concept.trim(), cmd.trim());
-            // the finding's entry: its head line, then the indented lines under it
-            let entry: Vec<&str> = lines
-                .iter()
-                .skip_while(|l| !l.starts_with(&format!("finding: {id} ")))
-                .skip(1)
-                .take_while(|l| l.starts_with("  "))
-                .map(|l| l.trim())
-                .collect();
-            let url = entry
-                .iter()
-                .find_map(|l| l.strip_prefix("url: "))
-                .unwrap_or_default();
-            let said = entry
-                .iter()
-                .find_map(|l| l.strip_prefix("> "))
-                .unwrap_or_default();
+            let url = tracker::finding_field(&b, id, "url:").unwrap_or_default();
+            let said = tracker::finding_field(&b, id, ">").unwrap_or_default();
             let exit = runs
                 .iter()
                 .find(|(ran, _)| ran == cmd)

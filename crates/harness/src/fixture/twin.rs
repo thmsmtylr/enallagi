@@ -18,6 +18,8 @@ pub struct State {
     pub script: Vec<Round>,
     pub responses: Vec<Response>,
     pub calls: Vec<Vec<String>>,
+    // each call's `GH_TOKEN`, "" when unset, beside `calls`
+    pub tokens: Vec<String>,
     // pids of the sleeps `sleep` responses started, so a test can see a killed gh took them along
     pub sleepers: Vec<u32>,
 }
@@ -80,6 +82,8 @@ pub struct Round {
     pub round: u32,
     pub checks: Vec<Value>,
     pub bots: Vec<Finding>,
+    // thread ids a bot resolves itself
+    pub resolve: Vec<String>,
 }
 
 // one finding a review bot posts, rendered through that bot's recording
@@ -203,6 +207,9 @@ pub fn gh(args: &[String]) -> i32 {
     // ponytail: no lock; two gh calls at once lose one's update. Lock the file if the launcher ever calls gh in parallel.
     let mut state = load(&path);
     state.calls.push(args.to_vec());
+    state
+        .tokens
+        .push(std::env::var("GH_TOKEN").unwrap_or_default());
     pushes(&mut state);
     let reply = state
         .responses
@@ -263,6 +270,9 @@ fn apply(state: &mut State, i: usize) {
     let bots = recordings();
     for round in due {
         state.pulls[i].checks = round.checks;
+        for t in state.pulls[i].threads.iter_mut() {
+            t.resolved |= round.resolve.contains(&t.id);
+        }
         for b in &bots {
             let found: Vec<&Finding> = round.bots.iter().filter(|f| f.bot == b.bot).collect();
             if !found.is_empty() {
@@ -546,7 +556,8 @@ fn graphql(state: &mut State, args: &[String]) -> Option<Response> {
                 )),
             }
         }
-        "SettleThread" => settle(state, var("thread"), var("body")),
+        "ReplyThread" => reply(state, var("thread"), var("body")),
+        "ResolveThread" => resolve(state, var("thread")),
         _ => return None,
     })
 }
@@ -640,15 +651,29 @@ pub fn threads(pull: &Pull) -> Value {
     }}}})
 }
 
-fn settle(state: &mut State, id: &str, body: &str) -> Response {
-    let found = state.pulls.iter_mut().find_map(|p| {
-        let url = p.url.clone();
-        p.threads.iter_mut().find(|t| t.id == id).map(|t| (url, t))
-    });
-    let Some((url, thread)) = found else {
-        return Response::err(format!(
-            "GraphQL: Could not resolve to a node with the global id of '{id}'. (addPullRequestReviewThreadReply)\n"
-        ));
+fn thread<'a>(
+    state: &'a mut State,
+    id: &str,
+    op: &str,
+) -> Result<(String, &'a mut Thread), Response> {
+    state
+        .pulls
+        .iter_mut()
+        .find_map(|p| {
+            let url = p.url.clone();
+            p.threads.iter_mut().find(|t| t.id == id).map(|t| (url, t))
+        })
+        .ok_or_else(|| {
+            Response::err(format!(
+                "GraphQL: Could not resolve to a node with the global id of '{id}'. ({op})\n"
+            ))
+        })
+}
+
+fn reply(state: &mut State, id: &str, body: &str) -> Response {
+    let (url, thread) = match thread(state, id, "addPullRequestReviewThreadReply") {
+        Ok(found) => found,
+        Err(e) => return e,
     };
     let first = thread.comments.first().cloned().unwrap_or_default();
     let url = format!("{url}#discussion_{id}_{}", thread.comments.len() + 1);
@@ -661,12 +686,21 @@ fn settle(state: &mut State, id: &str, body: &str) -> Response {
         url: url.clone(),
         ..Remark::default()
     });
-    thread.resolved = true;
     Response::ok(format!(
         "{}\n",
-        json!({"data": {
-            "addPullRequestReviewThreadReply": {"comment": {"url": url}},
-            "resolveReviewThread": {"thread": {"isResolved": true}},
-        }})
+        json!({"data": {"addPullRequestReviewThreadReply": {"comment": {"url": url}}}})
     ))
+}
+
+fn resolve(state: &mut State, id: &str) -> Response {
+    match thread(state, id, "resolveReviewThread") {
+        Ok((_, t)) => {
+            t.resolved = true;
+            Response::ok(format!(
+                "{}\n",
+                json!({"data": {"resolveReviewThread": {"thread": {"isResolved": true}}}})
+            ))
+        }
+        Err(e) => e,
+    }
 }

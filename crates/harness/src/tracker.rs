@@ -39,6 +39,7 @@ pub const HARNESS_KEYS: &[&str] = &[
     "rounds",
     "finding",
     "answer",
+    "settled",
 ];
 
 /// The specs directory.
@@ -406,8 +407,19 @@ pub fn verdict(b: &Block) -> Option<Ruling> {
 /// Where a kill is recorded: one file per concept, in the format of Pocock's `triage`.
 pub const OUT_OF_SCOPE: &str = ".out-of-scope";
 
-/// The dated kill lines under the harness dir `dir`: every `.out-of-scope/*.md`'s, then those of
-/// DECISIONS.md `## Rejected findings`, which is read-only history.
+/// The indented line starting `prefix` (`url:`, `>`) under the ticket's `finding: <id> ` entry, without it.
+pub fn finding_field(b: &Block, id: &str, prefix: &str) -> Option<String> {
+    let head = format!("finding: {id} ");
+    b.body
+        .iter()
+        .map(|(_, l)| l.as_str())
+        .skip_while(|l| !l.starts_with(&head))
+        .skip(1)
+        .take_while(|l| l.starts_with("  "))
+        .find_map(|l| l.trim().strip_prefix(prefix))
+        .map(|v| v.trim().to_string())
+}
+
 /// Every line under a `## Prior requests` heading in `.out-of-scope/`: a rejected request, by URL.
 pub fn prior_requests(dir: &Path) -> std::io::Result<Vec<String>> {
     let Ok(entries) = std::fs::read_dir(dir.join(OUT_OF_SCOPE)) else {
@@ -430,6 +442,8 @@ pub fn prior_requests(dir: &Path) -> std::io::Result<Vec<String>> {
     Ok(out)
 }
 
+/// The dated kill lines under the harness dir `dir`: every `.out-of-scope/*.md`'s, then those of
+/// DECISIONS.md `## Rejected findings`, which is read-only history.
 pub fn kill_lines(dir: &Path) -> std::io::Result<Vec<String>> {
     let dated = |l: &str| {
         l.strip_prefix("- [")

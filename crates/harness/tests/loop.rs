@@ -3726,7 +3726,7 @@ fn tautologised_test_not_done() {
     assert!(role.contains("git diff $BASE -- 'src/*.rs'"), "{role}");
 }
 
-use enallagi::fixture::twin::{self, Pull, Remark, Response, State, Thread};
+use enallagi::fixture::twin::{self, Note, Pull, Remark, Response, Round, State, Thread};
 
 const BIN: &str = env!("CARGO_BIN_EXE_enallagi");
 
@@ -3789,6 +3789,10 @@ fn pulls(extra: &str, check: &str) -> Pulls {
 
 impl Pulls {
     fn run(&self, args: &[&str]) -> (u32, String) {
+        self.run_env(args, &[])
+    }
+
+    fn run_env(&self, args: &[&str], env: &[(&str, &str)]) -> (u32, String) {
         let path = format!(
             "{}:{}",
             self.tools.path().display(),
@@ -3800,6 +3804,7 @@ impl Pulls {
             .current_dir(&self.repo.root)
             .env_remove("CI")
             .env("PATH", path)
+            .envs(env.iter().copied())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -3872,14 +3877,14 @@ fn a_landed_block_answers_its_thread() {
     let (_, out) = p.run(&[]);
     assert!(out.contains("tasks landed: T-001"), "{out}");
     let calls = p.calls();
+    assert_eq!(resolves(&calls), ["PRRT_kwDOA1"], "{out}");
     let args = calls
         .iter()
-        .find(|c| c[..2] == ["api", "graphql"])
-        .unwrap_or_else(|| panic!("gh never ran:\n{out}"));
-    assert!(
-        args.iter().any(|a| a.contains("resolveReviewThread")),
-        "{args:?}"
-    );
+        .find(|c| {
+            c.iter()
+                .any(|a| a.starts_with("query=mutation ReplyThread"))
+        })
+        .unwrap_or_else(|| panic!("no reply:\n{out}"));
     assert!(args.contains(&"thread=PRRT_kwDOA1".to_string()), "{args:?}");
     assert!(twin::load(&p.twin).pulls[0].threads[0].resolved);
     let sha = args
@@ -4453,6 +4458,7 @@ pr: https://github.com/owner/repo/pull/9
 branch: task/T-900
 finding: F-1 thread round 1
   url: https://github.com/owner/repo/pull/9#discussion_r1
+  thread-id: PRRT_9
   > rename parse to read
 finding: F-2 comment round 1
   url: https://github.com/owner/repo/pull/9#issuecomment-2
@@ -4575,6 +4581,138 @@ fn rejection_out_of_scope() {
     );
     let state = p.repo.root.join(".enallagi");
     assert!(enallagi::git::porcelain(&state).is_empty(), "{out}");
+}
+
+// T-900's pull in the twin, F-1 its thread and F-2 its comment, answered one each way;
+// the twin's round after the push resolves `resolved`
+fn answered(resolved: &[&str]) -> Pulls {
+    let answers = "answer: F-1 accept fix\\nanswer: F-2 reject naming: true\\n";
+    let p = returned_with("'T-900: fix'", answers, "ran: true\\nexit: 0\\n");
+    let origin = p.origin.path().join("origin.git");
+    let head = enallagi::git::git(&origin, &["rev-parse", "task/T-900"]).expect("head");
+    let url = "https://github.com/owner/repo/pull/9";
+    let mut state = twin::load(&p.twin);
+    state.pulls.push(Pull {
+        number: 9,
+        url: url.to_string(),
+        head: "task/T-900".to_string(),
+        head_sha: head,
+        state: "OPEN".to_string(),
+        threads: vec![Thread {
+            id: "PRRT_9".to_string(),
+            comments: vec![Remark {
+                author: "pat".to_string(),
+                path: Some("src/thing.ts".to_string()),
+                line: Some(1),
+                body: "rename parse to read".to_string(),
+                url: format!("{url}#discussion_r1"),
+                ..Remark::default()
+            }],
+            ..Thread::default()
+        }],
+        comments: vec![Note {
+            author: "pat".to_string(),
+            body: "call it read instead".to_string(),
+            url: format!("{url}#issuecomment-2"),
+            ..Note::default()
+        }],
+        ..Pull::default()
+    });
+    state.script.push(Round {
+        head: "task/T-900".to_string(),
+        round: 1,
+        resolve: resolved.iter().map(|s| s.to_string()).collect(),
+        ..Round::default()
+    });
+    twin::save(&p.twin, &state);
+    p
+}
+
+fn resolves(calls: &[Vec<String>]) -> Vec<String> {
+    calls
+        .iter()
+        .filter(|c| {
+            c.iter()
+                .any(|a| a.starts_with("query=mutation ResolveThread"))
+        })
+        .filter_map(|c| c.iter().find_map(|a| a.strip_prefix("thread=")))
+        .map(String::from)
+        .collect()
+}
+
+#[test]
+fn push_replies_and_resolves() {
+    let p = answered(&[]);
+    let (_, out) = p.run(&[]);
+    p.run(&[]);
+    let pull = twin::load(&p.twin).pulls.pop().expect("pull 9");
+    let replies: Vec<&Remark> = pull.threads[0]
+        .comments
+        .iter()
+        .filter(|c| c.body.contains("<!-- enallagi:F-1 -->"))
+        .collect();
+    assert_eq!(replies.len(), 1, "{pull:?}\n{out}");
+    let head = enallagi::git::git(
+        &p.origin.path().join("origin.git"),
+        &["rev-parse", "task/T-900"],
+    )
+    .expect("head");
+    assert!(replies[0].body.contains(head.trim()), "{}", replies[0].body);
+    assert!(replies[0].body.contains("`fix`"), "{}", replies[0].body);
+    let listed: Vec<&Note> = pull
+        .comments
+        .iter()
+        .filter(|c| c.body.contains("<!-- enallagi:F-2 -->"))
+        .collect();
+    assert_eq!(listed.len(), 1, "{pull:?}");
+    assert!(
+        listed[0].body.contains("#issuecomment-2"),
+        "{}",
+        listed[0].body
+    );
+    assert!(listed[0].body.contains("`true`"), "{}", listed[0].body);
+    assert_eq!(resolves(&p.calls()), ["PRRT_9"]);
+    assert!(pull.threads[0].resolved);
+    let text = ticket_file(&p.repo, "T-900");
+    assert!(
+        text.contains(&format!("settled: F-1 {}", replies[0].url)),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("settled: F-2 {}", listed[0].url)),
+        "{text}"
+    );
+}
+
+#[test]
+fn self_resolved_skipped() {
+    let p = answered(&["PRRT_9"]);
+    let (_, out) = p.run(&[]);
+    p.run(&[]);
+    assert!(twin::load(&p.twin).pulls[0].threads[0].resolved, "{out}");
+    assert_eq!(resolves(&p.calls()), Vec::<String>::new(), "{out}");
+    assert!(
+        ticket_file(&p.repo, "T-900").contains("settled: F-1 "),
+        "{out}"
+    );
+}
+
+#[test]
+fn token_env_reaches_gh() {
+    let p = answered(&[]);
+    let (_, out) = p.run_env(&[], &[("ENALLAGI_GH_TOKEN", "tok")]);
+    let state = twin::load(&p.twin);
+    let tokens: Vec<&String> = state
+        .calls
+        .iter()
+        .zip(&state.tokens)
+        .filter(|(c, _)| {
+            c.iter()
+                .any(|a| a.starts_with("query=mutation ReplyThread"))
+        })
+        .map(|(_, t)| t)
+        .collect();
+    assert_eq!(tokens, ["tok"], "{out}");
 }
 
 const LEARNING: &str = "- [proposed] `vacuous-test`: a test passed with its logic deleted → watch it fail first\n  instances: `SPEC.md:1`, `PROGRESS.md:1`, `TASKS.md:1`\n";

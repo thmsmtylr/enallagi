@@ -34,6 +34,10 @@ merge = "human"
 [parallel]
 writers = 1
 
+[respond]
+# names the variable whose value replies and resolves pass to gh as GH_TOKEN; unset uses gh's own auth.
+token_env = "ENALLAGI_GH_TOKEN"
+
 [layout]
 # context_file is the file every role reads first, unset meaning AGENTS.md beside the queue; pointer_files are one-line pointers to it for tools that cannot take it on their command line.
 pointer_files = ["CLAUDE.md", "GEMINI.md", "QWEN.md", ".github/copilot-instructions.md"]

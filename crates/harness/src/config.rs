@@ -137,6 +137,7 @@ pub struct Config {
     pub queue: QueueConfig,
     pub pr: PrConfig,
     pub parallel: ParallelConfig,
+    pub respond: RespondConfig,
     pub layout: Layout,
     pub pipeline: Vec<Pipeline>,
     pub stage: Vec<Stage>,
@@ -259,6 +260,21 @@ pub struct PrConfig {
     /// `enallagi run` opens one pull request per landed task, as `--pr-per-task` does.
     pub per_task: bool,
     pub merge: MergeMode,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RespondConfig {
+    /// The variable whose value replies and resolves pass to gh as `GH_TOKEN`; unset is gh's own auth.
+    pub token_env: String,
+}
+
+impl Default for RespondConfig {
+    fn default() -> Self {
+        RespondConfig {
+            token_env: "ENALLAGI_GH_TOKEN".to_string(),
+        }
+    }
 }
 
 /// Who merges a ticket's pull request: a person, or the launcher on green (ADR 0002).

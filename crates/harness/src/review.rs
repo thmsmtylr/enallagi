@@ -2,7 +2,6 @@
 
 use crate::block::{self, QueueError};
 use crate::issue;
-use std::path::Path;
 use std::process::Command;
 
 // ponytail: first:100 on each list; a longer pull request is reported short rather than read, and
@@ -185,6 +184,8 @@ pub struct Found {
     /// The head the read saw.
     pub head: String,
     pub settled: usize,
+    /// Every unresolved thread's id, as the read saw it.
+    pub open: Vec<String>,
     pub folded: usize,
     // a list came back at its page limit, so what follows was never read
     pub short: bool,
@@ -317,6 +318,9 @@ fn collect(response: Response) -> Found {
     let mut threaded: Vec<String> = Vec::new();
     for thread in pull.review_threads.nodes {
         found.short |= thread.comments.short();
+        if !thread.is_resolved {
+            found.open.extend(thread.id.clone());
+        }
         if thread.is_resolved || thread.is_outdated {
             found.settled += thread.comments.nodes.len();
             continue;
@@ -507,40 +511,84 @@ pub fn thread_of(block: &block::Block) -> Option<String> {
         .map(str::to_string)
 }
 
-pub const SETTLE: &str = concat!(
-    "mutation SettleThread($thread:ID!,$body:String!){",
-    "addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$thread,body:$body}){comment{url}} ",
-    "resolveReviewThread(input:{threadId:$thread}){thread{isResolved}}",
+pub const REPLY: &str = concat!(
+    "mutation ReplyThread($thread:ID!,$body:String!){",
+    "addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$thread,body:$body}){comment{url}}",
     "}",
 );
 
-/// Replies `body` on the thread and resolves it, through the same gh the read uses.
-pub fn settle(root: &Path, thread: &str, body: &str) -> Result<(), ReviewError> {
-    let args = [
-        "api",
-        "graphql",
-        "-f",
-        &format!("query={SETTLE}"),
-        "-f",
-        &format!("thread={thread}"),
-        "-f",
-        &format!("body={body}"),
-    ];
+pub const RESOLVE: &str =
+    "mutation ResolveThread($thread:ID!){resolveReviewThread(input:{threadId:$thread}){thread{isResolved}}}";
+
+// a write runs under `token` as `GH_TOKEN` when one is set, else gh's own auth
+fn write(token: Option<&str>, args: &[&str]) -> Result<String, ReviewError> {
     let failed = |reason: String| ReviewError::Gh {
-        command: format!("gh api graphql -f thread={thread}"),
+        command: format!(
+            "gh {}",
+            args.iter().take(3).copied().collect::<Vec<_>>().join(" ")
+        ),
         reason,
     };
-    let out = Command::new("gh")
-        .args(args)
-        .current_dir(root)
-        .output()
-        .map_err(|e| failed(e.to_string()))?;
+    let mut gh = Command::new("gh");
+    if let Some(t) = token {
+        gh.env("GH_TOKEN", t);
+    }
+    let out = gh.args(args).output().map_err(|e| failed(e.to_string()))?;
     if !out.status.success() {
         return Err(failed(
             String::from_utf8_lossy(&out.stderr).trim().to_string(),
         ));
     }
-    Ok(())
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Replies `body` on the thread; returns the reply's URL.
+pub fn reply(token: Option<&str>, thread: &str, body: &str) -> Result<String, ReviewError> {
+    let out = write(
+        token,
+        &[
+            "api",
+            "graphql",
+            "-f",
+            &format!("query={REPLY}"),
+            "-f",
+            &format!("thread={thread}"),
+            "-f",
+            &format!("body={body}"),
+        ],
+    )?;
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap_or_default();
+    Ok(
+        v["data"]["addPullRequestReviewThreadReply"]["comment"]["url"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+    )
+}
+
+pub fn resolve(token: Option<&str>, thread: &str) -> Result<(), ReviewError> {
+    write(
+        token,
+        &[
+            "api",
+            "graphql",
+            "-f",
+            &format!("query={RESOLVE}"),
+            "-f",
+            &format!("thread={thread}"),
+        ],
+    )
+    .map(drop)
+}
+
+/// Replies `body` on the thread and resolves it.
+pub fn settle(token: Option<&str>, thread: &str, body: &str) -> Result<(), ReviewError> {
+    reply(token, thread, body).and_then(|_| resolve(token, thread))
+}
+
+/// Comments `body` on the pull request; returns the comment's URL.
+pub fn comment(token: Option<&str>, pr: &str, body: &str) -> Result<String, ReviewError> {
+    write(token, &["pr", "comment", pr, "--body", body])
 }
 
 /// The blocks the findings become, given the queue's tickets; the caller appends them through the tracker.
