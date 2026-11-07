@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 /// The instance directory the queue lives under.
 pub const SPECS: &str = "specs";
 
+// `__TRACKER__`: stands in for what `/setup-matt-pocock-skills` would write into the client repo
+pub const ABOUT: &str = "The tracker is local files, already set up: never run `/setup-matt-pocock-skills`. Each spec is `__ENALLAGI_DIR__/specs/<spec>/spec.md` and each of its tickets is `__ENALLAGI_DIR__/specs/<spec>/issues/T-NNN-<slug>.md`; a `T-NNN` id is global across specs and the launcher assigns it. A ticket's `**Status:**` is one of `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human` and `wontfix`, then `review` and `done`. Notes go under its `## Comments`; the fields the launcher reads go under its `## Harness`.";
+
 const STATUS: &str = "**Status:**";
 const BLOCKED_BY: &str = "**Blocked by:**";
 const CRITERIA: &str = "## Acceptance criteria";

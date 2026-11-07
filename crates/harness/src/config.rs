@@ -853,7 +853,9 @@ pub fn unset_keys(cfg: &Config) -> Vec<&'static str> {
 }
 
 pub fn subst(text: &str, cfg: &Config) -> String {
-    let text = text.replace(LEGACY_DIR_TOKEN, DIR_TOKEN);
+    let text = text
+        .replace(LEGACY_DIR_TOKEN, DIR_TOKEN)
+        .replace("__TRACKER__", crate::tracker::ABOUT);
     let l = &cfg.layout;
     let cap = l.learnings_cap.to_string();
     let or = |value: &str, unset: &str| match value.is_empty() {

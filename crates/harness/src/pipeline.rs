@@ -23,7 +23,8 @@ use crate::{archive, audit, git, pr, review};
 const LANE: &str = "You are this loop's own lane, spawned by the harness. There is no human in this session
 and no answer will come, so never end a turn on a question -- decide and act. A running harness
 or agent process in ps is your PARENT process, not a competing writer: LEARNINGS.md's one-checkout-one-writer
-rule is about a second operator, and it does not apply to the process that started you.";
+rule is about a second operator, and it does not apply to the process that started you.
+__TRACKER__";
 
 const SCOUT: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/scout.md: read that file first and follow it exactly. Run `enallagi probe` and write one ticket file at needs-triage per FINDING line, each carrying probe:, command:, output: and rows:. Zero FINDING lines is zero tickets, which is a valid outcome and not something to escalate. Never promote, never fix, never edit any file a finding names. Then stop.";
 
@@ -1948,6 +1949,30 @@ mod tests {
                 "{fallback}"
             );
         }
+    }
+
+    #[test]
+    fn lane_prompt_names_tracker() {
+        let mut cfg = Config::default();
+        cfg.layout.harness_dir = ".enallagi".into();
+        let prompt = prompt_for("implementer", &cfg);
+        for want in [
+            "`.enallagi/specs/<spec>/issues/T-NNN-<slug>.md`",
+            "global",
+            "`needs-triage`",
+            "`needs-info`",
+            "`ready-for-agent`",
+            "`ready-for-human`",
+            "`wontfix`",
+            "`review`",
+            "`done`",
+            "`## Comments`",
+            "`## Harness`",
+            "/setup-matt-pocock-skills",
+        ] {
+            assert!(prompt.contains(want), "{want}: {prompt}");
+        }
+        assert!(!prompt.contains("__"), "{prompt}");
     }
 
     #[test]

@@ -22,6 +22,10 @@ the adjudicator promotes or sets `wontfix`, the implementer sets `review` and ne
 promotes and never fixes, and the launcher re-runs the gate behind the verdict. Touch only the files
 on the task's `scope:` line; an out-of-scope need is a note and a stop.
 
+A lane has no user to answer. Where a skill says to ask or confirm with the user, the ticket's
+criteria are the agreed seams and the answer; anything they leave open is a note under `## Comments`
+and a stop.
+
 ## The rails
 
 Named, never numbered, and each names what enforces it.

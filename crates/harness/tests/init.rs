@@ -288,6 +288,19 @@ fn the_context_file_stays_short() {
 }
 
 #[test]
+fn context_says_no_user() {
+    let repo = Repo::new();
+    install(&repo);
+    let text = read(&repo, ".enallagi/AGENTS.md");
+    let para = text
+        .split("\n\n")
+        .find(|p| p.starts_with("A lane has no user to answer"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(para.contains("criteria"), "{para}");
+    assert!(para.contains("stop"), "{para}");
+}
+
+#[test]
 fn the_project_skill_is_valid_agentskills_frontmatter() {
     let repo = Repo::new();
     install(&repo);

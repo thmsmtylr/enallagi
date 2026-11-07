@@ -588,14 +588,24 @@ pub fn cost_report(
     out
 }
 
-// unresolved {{skill:<id>}} tokens are left alone; inline presets get the body appended, others get the invocation
+// a skill that refuses model invocation reaches a lane only as text in its prompt
+fn model_disabled(body: &str) -> bool {
+    body.strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---"))
+        .is_some_and(|(front, _)| {
+            front
+                .lines()
+                .any(|l| l.trim() == "disable-model-invocation: true")
+        })
+}
+
+// unresolved {{skill:<id>}} tokens are left alone; inline presets and model-disabled skills get the body appended, others get the invocation
 pub fn render(
     role_text: &str,
     resolved: &[ResolvedSkill],
     preset: &Preset,
     cfg: &Config,
 ) -> String {
-    let inline = preset.skills_dir.is_none();
     let mut invocation = preset
         .invocation
         .as_deref()
@@ -612,6 +622,7 @@ pub fn render(
     let mut sections = String::new();
     for skill in resolved {
         let id = &skill.id;
+        let inline = preset.skills_dir.is_none() || model_disabled(&skill.body);
         let replacement = if inline {
             format!("the `{id}` skill (see the section `## Skill: {id}` below)")
         } else {
@@ -619,7 +630,12 @@ pub fn render(
         };
         out = out.replace(&format!("{{{{skill:{id}}}}}"), &replacement);
         if inline {
-            sections.push_str(&format!("\n\n## Skill: {id}\n\n{}", skill.body));
+            let dir = skills_dir(cfg, Some(preset)).join(id);
+            sections.push_str(&format!(
+                "\n\n## Skill: {id}\n\nIts files are in `{}`.\n\n{}",
+                dir.display(),
+                skill.body
+            ));
         }
     }
     out.push_str(&sections);
@@ -873,7 +889,36 @@ mod tests {
         assert!(out.starts_with(
             "first the `tdd` skill (see the section `## Skill: tdd` below) then work."
         ));
-        assert!(out.ends_with(&format!("\n\n## Skill: tdd\n\n{BODY}")));
+        assert!(out.ends_with(&format!(
+            "\n\n## Skill: tdd\n\nIts files are in `.enallagi/skills/tdd`.\n\n{BODY}"
+        )));
+    }
+
+    #[test]
+    fn render_inlines_model_disabled() {
+        let cfg = config("path:vendor/tdd", "", None);
+        let claude = preset("claude");
+        let skill = |id: &str, body: &str| ResolvedSkill {
+            id: id.into(),
+            dir: PathBuf::new(),
+            result: "cached".into(),
+            body: body.into(),
+        };
+        let off = "---\nname: triage\ndisable-model-invocation: true\n---\n\nTriage it.\n";
+        let got = [skill("triage", off), skill("tdd", BODY)];
+        let out = render(
+            "use {{skill:triage}}, then {{skill:tdd}}.",
+            &got,
+            &claude,
+            &cfg,
+        );
+        assert!(out.starts_with(
+            "use the `triage` skill (see the section `## Skill: triage` below), then `tdd` (invoke it via the Skill tool as `harness:tdd`)."
+        ), "{out}");
+        assert!(out.ends_with(&format!(
+            "\n\n## Skill: triage\n\nIts files are in `.enallagi/adapters/claude/skills/triage`.\n\n{off}"
+        )), "{out}");
+        assert!(!out.contains("## Skill: tdd"), "{out}");
     }
 
     #[test]
