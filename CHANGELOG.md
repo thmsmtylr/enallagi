@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- with no `bwrap` outside the product, or no `enallagi` binary found for the bridge, a Linux spawn fails instead of running whatever a PATH lookup finds
 - osv-scanner always gets `--config` (an empty one when the instance has none), so it never reads an `osv-scanner.toml` a lane left beside the lockfile; a scanner fetch gives up after 300 s
 - a lane also cannot read `~/.git-credentials`, `~/.config/git/credentials`, `~/.docker/config.json`, `~/.npmrc`, `~/.cargo/credentials.toml`, `~/.cargo/credentials` or `~/.pypirc`
 - the egress proxy also refuses a listed name resolving to a private (`10/8`, `172.16/12`, `192.168/16`), shared (`100.64/10`) or unique-local (`fc00::/7`) address

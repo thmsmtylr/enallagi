@@ -166,7 +166,8 @@ impl Sandbox {
             _relays: relays,
             roles: Default::default(),
             proxy,
-            bwrap: bwrap::find(root).unwrap_or_else(|| "bwrap".into()),
+            // a PATH lookup could find the planted copy find() skipped; this one cannot exec
+            bwrap: bwrap::find(root).unwrap_or_else(|| "/nonexistent/bwrap".into()),
             ports: cfg.sandbox.ports.clone(),
             write: cfg.sandbox.write.clone(),
             env: cfg.sandbox.env.clone(),

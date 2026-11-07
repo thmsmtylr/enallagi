@@ -63,7 +63,7 @@ pub(super) fn find(root: &Path) -> Option<PathBuf> {
 }
 
 /// The binary that runs `sandbox bridge`: this one when it is enallagi, else `ENALLAGI_BIN`, else
-/// the `enallagi` cargo builds beside a test binary's `deps/`.
+/// the `enallagi` cargo builds beside a test binary's `deps/`, else a path that cannot exec.
 pub(super) fn exe() -> PathBuf {
     let own = std::env::current_exe().ok();
     if let Some(own) = own
@@ -77,7 +77,8 @@ pub(super) fn exe() -> PathBuf {
     }
     own.and_then(|p| Some(p.parent()?.parent()?.join("enallagi")))
         .filter(|p| p.is_file())
-        .unwrap_or_else(|| "enallagi".into())
+        // a bare name would run whatever enallagi a lane put on PATH, unfiltered
+        .unwrap_or_else(|| "/nonexistent/enallagi".into())
 }
 
 pub(super) fn refusal(root: &Path, off: &str) -> Option<String> {
