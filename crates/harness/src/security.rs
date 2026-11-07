@@ -371,6 +371,7 @@ mod tests {
                     halts: &mut halts,
                     dry_rounds: &mut dry,
                     cache: cache.path().to_path_buf(),
+                    sandbox: &crate::sandbox::Sandbox::start(&repo.root, &cfg),
                 },
             );
             println!("pass={} halt={} {}", out.pass, out.halt, out.reason);

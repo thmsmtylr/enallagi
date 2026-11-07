@@ -24,6 +24,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     let mut warnings = Vec::new();
     let mut halts = Vec::new();
     let mut dry_rounds = 0;
+    let sandbox = crate::sandbox::Sandbox::start(&root, &cfg);
     let name = match args.which {
         GateWhich::Verdict => "verdict",
         GateWhich::Scope => "scope",
@@ -55,6 +56,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             halts: &mut halts,
             dry_rounds: &mut dry_rounds,
             cache: config::cache_root(),
+            sandbox: &sandbox,
         },
     );
     println!("{}", outcome.reason);

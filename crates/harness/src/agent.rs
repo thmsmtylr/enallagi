@@ -6,7 +6,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -517,6 +517,7 @@ fn notice_of(line: &str) -> Option<String> {
 // retried at most twice: an agent that prints the limit notice forever would hold the run forever
 pub fn spawn(
     s: &StageSpawn,
+    sandbox: &crate::sandbox::Sandbox,
     events: &mut Writer,
     stop_file: &Path,
     rate_limit: &Regex,
@@ -525,7 +526,7 @@ pub fn spawn(
     // one clock for the whole stage, not per attempt: retries and waits count against the seconds budget
     let started = Instant::now();
     loop {
-        let (exit, output, timed_out) = run_once(s, events)?;
+        let (exit, output, timed_out) = run_once(s, sandbox, events)?;
         let mut result = StageResult {
             exit,
             seconds: started.elapsed().as_secs(),
@@ -574,7 +575,11 @@ fn sleep_until(seconds: u64, stop_file: &Path) -> Result<(), AgentError> {
     Ok(())
 }
 
-fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), AgentError> {
+fn run_once(
+    s: &StageSpawn,
+    sandbox: &crate::sandbox::Sandbox,
+    events: &mut Writer,
+) -> Result<(i32, String, bool), AgentError> {
     let turns = s.turns.to_string();
     let timeout = s.timeout.map(|t| t.as_secs().to_string());
     // the layout is reloaded here because StageSpawn carries the filled argv, not the layout that filled it
@@ -593,7 +598,9 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
             word.replace("{prompt}", &s.prompt)
         })
         .collect();
-    let (program, args) = argv.split_first().ok_or(AgentError::EmptyCommand)?;
+    if argv.is_empty() {
+        return Err(AgentError::EmptyCommand);
+    }
 
     let preset_env = match &cfg {
         Some(cfg) => fill_env(&s.preset.env, &cfg.layout),
@@ -601,7 +608,7 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
     };
 
     use std::os::unix::process::CommandExt;
-    let mut command = Command::new(program);
+    let mut command = sandbox.wrap(&argv, s.cwd).command();
     // a lane commits as the repository's configured identity; left to itself it invents one from
     // whatever the agent's own session knows, and that identity lands in the operator's history
     for (var, key) in [
@@ -618,8 +625,6 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
     }
     // the agent gets its own process group, so a stop reaches the lanes and shells it spawned too
     let mut child = command
-        .args(args)
-        .current_dir(s.cwd)
         .envs(&preset_env)
         .envs(&s.env)
         .stdin(Stdio::null())
@@ -1214,6 +1219,10 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 
+    fn off() -> crate::sandbox::Sandbox {
+        crate::sandbox::Sandbox::start(Path::new("."), &crate::config::Config::default())
+    }
+
     fn spawner<'a>(argv: Vec<String>, root: &'a std::path::Path) -> StageSpawn<'a> {
         StageSpawn {
             argv,
@@ -1239,6 +1248,7 @@ mod tests {
         s.stage = "implement".into();
         let res = spawn(
             &s,
+            &off(),
             &mut w,
             &stop_file(&r.root),
             &Regex::new("never").unwrap(),
@@ -1272,6 +1282,7 @@ mod tests {
         );
         let res = spawn(
             &s,
+            &off(),
             &mut w,
             &stop_file(&r.root),
             &Regex::new("never").unwrap(),
@@ -1292,6 +1303,7 @@ mod tests {
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
             &stop_file(&r.root),
             &Regex::new("never").unwrap(),
@@ -1309,6 +1321,7 @@ mod tests {
         s.timeout = Some(std::time::Duration::from_secs(1));
         let res = spawn(
             &s,
+            &off(),
             &mut w,
             &stop_file(&r.root),
             &Regex::new("never").unwrap(),
@@ -1334,6 +1347,7 @@ mod tests {
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let err = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
             &stop_file(&r.root),
             &Regex::new("hit your session limit").unwrap(),
@@ -1367,6 +1381,7 @@ mod tests {
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let err = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
             &stop_file(&r.root),
             &Regex::new("hit your session limit").unwrap(),
@@ -1400,6 +1415,7 @@ mod tests {
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
             &stop_file(&r.root),
             &Regex::new("hit your session limit").unwrap(),
@@ -1431,6 +1447,7 @@ mod tests {
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
             &stop_file(&r.root),
             &Regex::new("hit your session limit").unwrap(),
@@ -1473,6 +1490,7 @@ mod tests {
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
             &stop_file(&r.root),
             &Regex::new("hit your session limit").unwrap(),
@@ -1500,6 +1518,7 @@ mod tests {
         s.turns = 7;
         let res = spawn(
             &s,
+            &off(),
             &mut w,
             &stop_file(&r.root),
             &Regex::new("never").unwrap(),
@@ -1515,6 +1534,7 @@ mod tests {
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
             &stop_file(&r.root),
             &Regex::new("hit your session limit").unwrap(),
@@ -1544,6 +1564,7 @@ mod tests {
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
             &stop_file(&r.root),
             &Regex::new("hit your weekly limit").unwrap(),

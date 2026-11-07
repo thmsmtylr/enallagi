@@ -265,7 +265,8 @@ pub fn verify_done(root: &Path, input: &str) -> (i32, String) {
     if is_executable(&check_covered) {
         return run_check_covered(&check_covered, input);
     }
-    render_check_report(&gates::check_delta(root, &cfg, false))
+    let sandbox = crate::sandbox::Sandbox::start(root, &cfg);
+    render_check_report(&gates::check_delta(&sandbox, root, &cfg, false))
 }
 
 fn stop_hook_active(input: &str) -> bool {

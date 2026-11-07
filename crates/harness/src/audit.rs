@@ -499,7 +499,8 @@ fn ask(
         command: Some(spawn.preset.name.clone()),
         task: None,
     });
-    let result = crate::agent::spawn(&spawn, events, &stop_file, &rate_limit)
+    let sandbox = crate::sandbox::Sandbox::start(root, cfg);
+    let result = crate::agent::spawn(&spawn, &sandbox, events, &stop_file, &rate_limit)
         .map_err(|e| AuditError::Agent(e.to_string()))?;
     events.emit(Kind::StageEnd {
         stage: spawn.stage.clone(),

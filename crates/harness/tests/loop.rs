@@ -3453,16 +3453,6 @@ fn a_skip_with_no_bypass_flag_refuses_the_run() {
     assert!(ends(&events).is_empty(), "nothing may spawn");
 }
 
-fn skipped(events: &[Event]) -> Option<bool> {
-    events.iter().find_map(|e| match &e.kind {
-        Kind::RunStart {
-            permissions_skipped,
-            ..
-        } => Some(*permissions_skipped),
-        _ => None,
-    })
-}
-
 #[test]
 fn the_skip_flag_adds_the_bypass_flag() {
     let r = claude_args_repo("");
@@ -3470,17 +3460,20 @@ fn the_skip_flag_adds_the_bypass_flag() {
         dangerously_skip_permissions: true,
         ..opts(1)
     };
-    let (_, events) = try_go(&r, &run);
+    let _ = try_go(&r, &run);
     let args = std::fs::read_to_string(r.root.join("args.txt")).expect("the scout ran");
     assert!(args.contains("--dangerously-skip-permissions"), "{args}");
-    assert_eq!(skipped(&events), Some(true), "{events:#?}");
 }
 
 #[test]
-fn the_run_start_records_no_skip() {
+fn run_start_records_sandbox() {
     let r = claude_args_repo("");
     let (_, events) = try_go(&r, &opts(1));
-    assert_eq!(skipped(&events), Some(false), "{events:#?}");
+    let sandbox = events.iter().find_map(|e| match &e.kind {
+        Kind::RunStart { sandbox, .. } => Some(sandbox.as_str()),
+        _ => None,
+    });
+    assert_eq!(sandbox, Some("off"), "{events:#?}");
 }
 
 #[test]

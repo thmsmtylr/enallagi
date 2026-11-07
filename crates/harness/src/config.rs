@@ -139,6 +139,24 @@ pub struct Config {
     pub stage: Vec<Stage>,
     pub skill: Vec<SkillDecl>,
     pub role: Vec<RoleDecl>,
+    pub sandbox: SandboxConfig,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SandboxConfig {
+    pub mode: SandboxMode,
+    pub hosts: Vec<String>,
+    pub ports: Vec<u16>,
+    pub write: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SandboxMode {
+    #[default]
+    Off,
+    Native,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -1246,6 +1264,16 @@ mod tests {
             matches!(parse_when("probe.litter").unwrap(), Predicate::Probe(ref n) if n == "litter")
         );
         assert!(parse_when("queue.takeable && x").is_err());
+    }
+
+    #[test]
+    fn sandbox_mode_unknown_refused() {
+        let d = tempfile::tempdir().unwrap();
+        write_config(d.path(), "[sandbox]\nmode = 'docker'\n");
+        let err = load(d.path()).unwrap_err().to_string();
+        assert!(err.contains("docker"), "{err}");
+        write_config(d.path(), "[sandbox]\nmode = 'native'\n");
+        assert!(load(d.path()).is_ok());
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -37,6 +37,7 @@ pub struct GateCtx<'a> {
     pub dry_rounds: &'a mut u32,
     // the scanners and their reports; config::cache_root() outside a test
     pub cache: PathBuf,
+    pub sandbox: &'a crate::sandbox::Sandbox,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -491,7 +492,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         );
     }
 
-    let report = check_delta(ctx.root, ctx.cfg, false);
+    let report = check_delta(ctx.sandbox, ctx.root, ctx.cfg, false);
     if let Some(halt) = hung(ctx, &report) {
         return halt;
     }
@@ -572,7 +573,7 @@ fn claims(ctx: &mut GateCtx) -> GateOutcome {
         }
         let mut exits = [-1; 2];
         for exit in &mut exits {
-            let Ok(run) = run_bounded(ctx.root, &cmd, timeout) else {
+            let Ok(run) = run_bounded(ctx.sandbox, ctx.root, &cmd, timeout) else {
                 continue;
             };
             let report = CheckReport {
@@ -1134,7 +1135,7 @@ fn red_first(ctx: &mut GateCtx) -> GateOutcome {
         .check
         .timeout_duration()
         .unwrap_or(crate::config::DEFAULT_CHECK_TIMEOUT);
-    let run = run_bounded(at, &ctx.cfg.check.command, timeout);
+    let run = run_bounded(ctx.sandbox, at, &ctx.cfg.check.command, timeout);
     drop(tree);
     let named = tests.join(" ");
     match run {
@@ -1657,12 +1658,16 @@ const GRACE: Duration = Duration::from_secs(10);
 const DRAIN: Duration = Duration::from_secs(1);
 
 // the check gets its own process group so a build tool's children die with it, not with the shell alone
-fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result<Run> {
+fn run_bounded(
+    sandbox: &crate::sandbox::Sandbox,
+    root: &Path,
+    command: &str,
+    timeout: Duration,
+) -> std::io::Result<Run> {
     use std::os::unix::process::CommandExt;
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(root)
+    let mut child = sandbox
+        .wrap(&["sh", "-c", command], root)
+        .command()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1841,7 +1846,12 @@ fn counted(ctx: &mut GateCtx, report: &CheckReport) -> Option<Tally> {
     counts.then_some(report.tally)
 }
 
-pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
+pub fn check_delta(
+    sandbox: &crate::sandbox::Sandbox,
+    root: &Path,
+    cfg: &Config,
+    force: bool,
+) -> CheckReport {
     let command = if force {
         &cfg.check.force
     } else {
@@ -1851,7 +1861,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         .check
         .timeout_duration()
         .unwrap_or(crate::config::DEFAULT_CHECK_TIMEOUT);
-    let run = match run_bounded(root, command, timeout) {
+    let run = match run_bounded(sandbox, root, command, timeout) {
         Ok(run) => run,
         Err(err) => {
             return CheckReport {
@@ -1993,7 +2003,7 @@ fn hung(ctx: &mut GateCtx, report: &CheckReport) -> Option<GateOutcome> {
 }
 
 fn check_gate(ctx: &mut GateCtx) -> GateOutcome {
-    let report = check_delta(ctx.root, ctx.cfg, false);
+    let report = check_delta(ctx.sandbox, ctx.root, ctx.cfg, false);
     if let Some(halt) = hung(ctx, &report) {
         return halt;
     }
@@ -2033,9 +2043,12 @@ fn install_stale(ctx: &mut GateCtx) -> GateOutcome {
     let spawned = std::env::current_exe()
         .map_err(|e| e.to_string())
         .and_then(|exe| {
-            Command::new(exe)
-                .args(["probe", "install-stale"])
-                .current_dir(ctx.root)
+            ctx.sandbox
+                .wrap(
+                    &[&exe.to_string_lossy(), "probe", "install-stale"],
+                    ctx.root,
+                )
+                .command()
                 .output()
                 .map_err(|e| e.to_string())
         });
@@ -2149,6 +2162,7 @@ mod tests {
         halts: Vec<String>,
         dry_rounds: u32,
         cache: tempfile::TempDir,
+        sandbox: crate::sandbox::Sandbox,
     }
 
     impl Env {
@@ -2170,14 +2184,15 @@ mod tests {
             let cfg = crate::config::load(&repo.root).expect("load enallagi.toml");
             let writer = Writer::new(Log::open(&repo.root.join(".enallagi")));
             Env {
-                repo,
-                cfg,
                 writer,
                 stage_output: String::new(),
                 warnings: Vec::new(),
                 halts: Vec::new(),
                 dry_rounds: 0,
                 cache: tempfile::tempdir().expect("cache"),
+                sandbox: crate::sandbox::Sandbox::start(&repo.root, &cfg),
+                repo,
+                cfg,
             }
         }
 
@@ -2195,6 +2210,7 @@ mod tests {
                 halts: &mut self.halts,
                 dry_rounds: &mut self.dry_rounds,
                 cache: self.cache.path().to_path_buf(),
+                sandbox: &self.sandbox,
             }
         }
 
@@ -2839,7 +2855,7 @@ echo '{{"results":[]}}' > "$out"
     #[test]
     fn red_not_on_baseline_is_a_rejection() {
         let env = Env::new("echo '(fail) alpha'\nexit 1\n");
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         assert!(r.red);
         assert_eq!(r.unforgiven, vec!["alpha".to_string()]);
         assert!(!r.accepts());
@@ -2850,7 +2866,7 @@ echo '{{"results":[]}}' > "$out"
         let env = Env::new("echo '(fail) alpha'\nexit 1\n");
         env.repo
             .write(".enallagi/.check-baseline", "# inherited\nalpha\n");
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         assert!(r.red);
         assert!(r.unforgiven.is_empty());
         assert_eq!(r.forgiven, vec!["alpha".to_string()]);
@@ -2861,7 +2877,7 @@ echo '{{"results":[]}}' > "$out"
     fn one_forgiven_one_new_is_still_red() {
         let env = Env::new("echo '(fail) alpha'\necho '(fail) beta [12ms]'\nexit 1\n");
         env.repo.write(".enallagi/.check-baseline", "alpha\n");
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         assert_eq!(r.unforgiven, vec!["beta".to_string()]);
         assert_eq!(r.forgiven, vec!["alpha".to_string()]);
         assert!(!r.accepts());
@@ -2870,7 +2886,7 @@ echo '{{"results":[]}}' > "$out"
     #[test]
     fn red_it_cannot_name_fails_closed() {
         let env = Env::new("echo boom\nexit 1\n");
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         assert!(r.red && r.unnamed);
         assert!(r.unforgiven.is_empty());
         assert!(!r.accepts());
@@ -2879,7 +2895,7 @@ echo '{{"results":[]}}' > "$out"
     #[test]
     fn green_is_green() {
         let env = Env::new("exit 0\n");
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         assert!(!r.red && r.accepts());
     }
 
@@ -2887,7 +2903,7 @@ echo '{{"results":[]}}' > "$out"
     fn a_check_past_its_timeout_is_neither_red_nor_green() {
         let mut env = Env::timed("sleep 10\n", "2s");
         let started = Instant::now();
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         let waited = started.elapsed();
         assert!(
             waited < Duration::from_secs(5),
@@ -2922,7 +2938,7 @@ echo '{{"results":[]}}' > "$out"
                 "(sleep 60; touch survived) & echo $! >child.pid\nsleep 60\n",
                 "4s",
             );
-            let r = check_delta(&env.repo.root, &env.cfg, false);
+            let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
             assert!(r.timed_out.is_some(), "{r:?}");
             let pid = std::fs::read_to_string(env.repo.root.join("child.pid"))
                 .unwrap_or_default()
@@ -2950,7 +2966,7 @@ echo '{{"results":[]}}' > "$out"
     fn a_grandchild_on_the_pipe_is_bound_by_timeout() {
         let env = Env::timed("sleep 25 & exit 0\n", "2s");
         let started = Instant::now();
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         let waited = started.elapsed();
         assert!(
             waited < Duration::from_secs(5),
@@ -2965,7 +2981,7 @@ echo '{{"results":[]}}' > "$out"
     fn a_grandchild_outside_the_group_is_bound() {
         let env = Env::timed("perl -e 'use POSIX; setsid(); sleep 12' & exit 0\n", "2s");
         let started = Instant::now();
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         let waited = started.elapsed();
         assert!(
             waited < Duration::from_secs(5),
@@ -2977,7 +2993,7 @@ echo '{{"results":[]}}' > "$out"
     }
 
     fn alive(pid: &str) -> bool {
-        Command::new("kill")
+        std::process::Command::new("kill")
             .args(["-0", pid])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -3046,7 +3062,7 @@ echo '{{"results":[]}}' > "$out"
             "cat <<'EOF'\n{}EOF\nexit 0\n",
             fourteen_result_lines()
         ));
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         assert_eq!(r.exit, 0, "{}", r.output);
         assert_eq!(r.tally.passed, 471);
         assert_eq!(r.tally.lines, 14);
@@ -4281,12 +4297,13 @@ echo '{{"results":[]}}' > "$out"
             ),
         );
         let cfg = crate::config::load(&repo.root).expect("load enallagi.toml");
-        check_delta(&repo.root, &cfg, true);
+        let sandbox = crate::sandbox::Sandbox::start(&repo.root, &cfg);
+        check_delta(&sandbox, &repo.root, &cfg, true);
         assert_eq!(
             std::fs::read_to_string(repo.root.join("ran.txt")).expect("ran.txt"),
             "forced\n"
         );
-        check_delta(&repo.root, &cfg, false);
+        check_delta(&sandbox, &repo.root, &cfg, false);
         assert_eq!(
             std::fs::read_to_string(repo.root.join("ran.txt")).expect("ran.txt"),
             "forced\nplain\n"

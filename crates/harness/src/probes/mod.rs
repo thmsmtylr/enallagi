@@ -230,7 +230,8 @@ fn force_check(ctx: &ProbeCtx) -> CheckOutcome {
             output: "nested under turbo, the check would recurse".to_string(),
         };
     }
-    let report = crate::gates::check_delta(ctx.root, ctx.cfg, true);
+    let sandbox = crate::sandbox::Sandbox::start(ctx.root, ctx.cfg);
+    let report = crate::gates::check_delta(&sandbox, ctx.root, ctx.cfg, true);
     if report.timed_out.is_none() && report.exit == 127 {
         return CheckOutcome {
             ran: false,

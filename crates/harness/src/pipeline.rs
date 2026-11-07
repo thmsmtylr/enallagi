@@ -15,6 +15,7 @@ use crate::events::{Kind, Log, Sink, Writer};
 use crate::gates::{self, GateCtx};
 use crate::probes::{self, CheckOutcome, ProbeCtx};
 use crate::roles;
+use crate::sandbox::Sandbox;
 use crate::skills::{self, ResolveOpts};
 use crate::tracker::{self, Tracker};
 use crate::{archive, audit, git, pr, review};
@@ -321,13 +322,14 @@ pub fn plan(root: &Path, cfg: &Config, pipelines: &[String]) -> Result<String, C
     let mut out = String::new();
     let mut scouting = false;
     let mut warnings = Vec::new();
+    let sandbox = Sandbox::start(root, cfg);
 
     for pipeline in cfg.pipeline.iter() {
         if !pipelines.is_empty() && !pipelines.contains(&pipeline.name) {
             continue;
         }
         let when = config::parse_when(&pipeline.when)?;
-        if !holds(root, cfg, &when, &mut warnings) {
+        if !holds(&sandbox, root, cfg, &when, &mut warnings) {
             continue;
         }
         let blocks = queue_blocks(root, cfg);
@@ -381,7 +383,7 @@ pub fn plan(root: &Path, cfg: &Config, pipelines: &[String]) -> Result<String, C
     if scouting {
         out.push_str("  probes, which are the scout's whole input:\n");
         // ENALLAGI_DRIVER only here and the scout stage -- it installs throwaway repos and costs wall clock elsewhere
-        let check = check_outcome(root, cfg);
+        let check = check_outcome(&sandbox, root, cfg);
         let ctx = ProbeCtx {
             root,
             cfg,
@@ -428,9 +430,11 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         return Ok(Digest::default());
     }
 
+    let sandbox = Sandbox::start(root, &cfg);
     let mut looper = Loop {
         root,
         cfg: &cfg,
+        sandbox: &sandbox,
         presets,
         opts,
         rate_limit,
@@ -469,6 +473,7 @@ impl Drop for PidFile {
 struct Loop<'a> {
     root: &'a Path,
     cfg: &'a Config,
+    sandbox: &'a Sandbox,
     presets: agent::Presets,
     opts: &'a RunOpts,
     rate_limit: Regex,
@@ -517,7 +522,7 @@ impl<'a> Loop<'a> {
         self.emit(Kind::RunStart {
             config_sha256: config_sha256(self.root),
             pipeline: None,
-            permissions_skipped: self.cfg.agent.dangerously_skip_permissions,
+            sandbox: self.sandbox.name().into(),
             binary: Some(crate::events::binary()),
         });
 
@@ -865,8 +870,13 @@ impl<'a> Loop<'a> {
         };
         let stage_bases = (snapshot(self.root), snapshot(&self.state_root()));
         let stop_file = self.file("STOP");
-        let mut result = match agent::spawn(&spawn, &mut self.writer, &stop_file, &self.rate_limit)
-        {
+        let mut result = match agent::spawn(
+            &spawn,
+            self.sandbox,
+            &mut self.writer,
+            &stop_file,
+            &self.rate_limit,
+        ) {
             Ok(result) => result,
             Err(err) => {
                 // Stopped means the operator ended a rate-limit wait, which is their halt and not a stage that could not start
@@ -1026,6 +1036,7 @@ impl<'a> Loop<'a> {
                 halts: &mut self.digest.halts,
                 dry_rounds: &mut self.dry_rounds,
                 cache: crate::config::cache_root(),
+                sandbox: self.sandbox,
             };
             let outcome = gates::run(gate, &mut ctx);
             self.check_log();
@@ -1356,7 +1367,13 @@ impl<'a> Loop<'a> {
             let Ok(when) = config::parse_when(&self.cfg.pipeline[i].when) else {
                 continue;
             };
-            if holds(self.root, self.cfg, &when, &mut self.digest.warnings) {
+            if holds(
+                self.sandbox,
+                self.root,
+                self.cfg,
+                &when,
+                &mut self.digest.warnings,
+            ) {
                 return Some(self.cfg.pipeline[i].clone());
             }
         }
@@ -1853,9 +1870,15 @@ fn waiting_classes(root: &Path, cfg: &Config) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>) -> bool {
+fn holds(
+    sandbox: &Sandbox,
+    root: &Path,
+    cfg: &Config,
+    when: &Predicate,
+    warnings: &mut Vec<String>,
+) -> bool {
     match when {
-        Predicate::Not(inner) => !holds(root, cfg, inner, warnings),
+        Predicate::Not(inner) => !holds(sandbox, root, cfg, inner, warnings),
         Predicate::QueueTakeable => tracker::takeable(&queue_blocks(root, cfg)).is_some(),
         // an unreadable or unparseable queue is not evidence of a task at review, so this fails closed like `takeable`
         Predicate::QueueReviewing => match queue_read(root, cfg) {
@@ -1900,9 +1923,9 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
         Predicate::SpecUndecomposed => {
             !tracker::undecomposed(root, &cfg.layout.harness_dir).is_empty()
         }
-        Predicate::CheckRed => gates::check_delta(root, cfg, false).red,
+        Predicate::CheckRed => gates::check_delta(sandbox, root, cfg, false).red,
         Predicate::Probe(name) => {
-            let check = check_outcome(root, cfg);
+            let check = check_outcome(sandbox, root, cfg);
             let ctx = ProbeCtx {
                 root,
                 cfg,
@@ -1918,8 +1941,8 @@ fn holds(root: &Path, cfg: &Config, when: &Predicate, warnings: &mut Vec<String>
 
 // `ran` means the check STARTED, not that it named what failed --
 // reporting ran:false there would turn a real finding into an ERROR
-fn check_outcome(root: &Path, cfg: &Config) -> CheckOutcome {
-    let mut outcome = gates::check_delta(root, cfg, true).outcome();
+fn check_outcome(sandbox: &Sandbox, root: &Path, cfg: &Config) -> CheckOutcome {
+    let mut outcome = gates::check_delta(sandbox, root, cfg, true).outcome();
     // nested under turbo the check would recurse, so it is not run at all
     if std::env::var_os("TURBO_HASH").is_some() {
         outcome.ran = false;
@@ -1991,7 +2014,8 @@ mod tests {
         let mut cfg = Config::default();
         cfg.layout.harness_dir = ".enallagi".into();
         let when = config::parse_when("spec.undecomposed").expect("a predicate");
-        let held = || holds(&repo.root, &cfg, &when, &mut Vec::new());
+        let sandbox = Sandbox::start(&repo.root, &cfg);
+        let held = || holds(&sandbox, &repo.root, &cfg, &when, &mut Vec::new());
         repo.write(
             ".enallagi/specs/app/spec.md",
             "# App\n\n**Status:** needs-triage\n",

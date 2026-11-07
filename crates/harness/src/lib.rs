@@ -22,6 +22,7 @@ pub mod propose;
 pub mod review;
 pub mod roles;
 pub mod runners;
+pub mod sandbox;
 pub mod security;
 pub mod skills;
 pub mod tracker;

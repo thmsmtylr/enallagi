@@ -26,9 +26,8 @@ pub enum Kind {
     RunStart {
         config_sha256: String,
         pipeline: Option<String>,
-        // a log written before the field existed reads as not skipped
         #[serde(default)]
-        permissions_skipped: bool,
+        sandbox: String,
         #[serde(default)]
         binary: Option<Binary>,
     },
@@ -512,7 +511,7 @@ mod tests {
         w.emit(Kind::RunStart {
             config_sha256: "a".into(),
             pipeline: None,
-            permissions_skipped: false,
+            sandbox: "off".into(),
             binary: None,
         });
         w.set_iter(1);

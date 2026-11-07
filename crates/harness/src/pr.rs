@@ -603,7 +603,7 @@ fn apply_and_commit(
         }
     }
 
-    let report = gates::check_delta(wt, cfg, false);
+    let report = gates::check_delta(&crate::sandbox::Sandbox::start(wt, cfg), wt, cfg, false);
     if report.exit != 0 {
         return Err(PrError::Check(report.output));
     }

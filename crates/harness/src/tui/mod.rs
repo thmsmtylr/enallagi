@@ -335,7 +335,7 @@ mod tests {
             w.emit(Kind::RunStart {
                 config_sha256: "deadbeef".into(),
                 pipeline: None,
-                permissions_skipped: false,
+                sandbox: "off".into(),
                 binary: None,
             }),
             w.emit(Kind::StageStart {

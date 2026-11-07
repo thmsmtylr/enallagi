@@ -1482,7 +1482,8 @@ fn check_red_says_nothing_for_a_timed_out_check() {
     let (repo, mut cfg) = seeded();
     cfg.check.force = "sleep 10".to_string();
     cfg.check.timeout = "2s".to_string();
-    let report = enallagi::gates::check_delta(&repo.root, &cfg, true);
+    let sandbox = enallagi::sandbox::Sandbox::start(&repo.root, &cfg);
+    let report = enallagi::gates::check_delta(&sandbox, &repo.root, &cfg, true);
     assert!(report.timed_out.is_some(), "{report:?}");
     let outcome = report.outcome();
     assert!(

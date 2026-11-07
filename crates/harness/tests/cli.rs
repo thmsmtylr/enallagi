@@ -34,13 +34,13 @@ fn run_help_mentions_iterations_and_budget_usd() {
 }
 
 #[test]
-fn events_prints_whether_permissions_were_skipped() {
+fn events_print_sandbox() {
     let dir = tempfile::tempdir().unwrap();
     let harness_dir = dir.path().join(".enallagi");
     std::fs::create_dir_all(&harness_dir).unwrap();
     std::fs::write(
         harness_dir.join("events.jsonl"),
-        r#"{"ts":"2026-09-18T00:00:00Z","run":"r","iter":0,"seq":1,"kind":"run.start","config_sha256":"a","pipeline":null,"permissions_skipped":true}"#.to_string() + "\n",
+        r#"{"ts":"2026-09-18T00:00:00Z","run":"r","iter":0,"seq":1,"kind":"run.start","config_sha256":"a","pipeline":null,"sandbox":"off"}"#.to_string() + "\n",
     )
     .unwrap();
     let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
@@ -50,7 +50,7 @@ fn events_prints_whether_permissions_were_skipped() {
         .expect("run enallagi events");
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("permissions_skipped=true"), "{stdout}");
+    assert!(stdout.contains("sandbox=off"), "{stdout}");
 }
 
 #[test]

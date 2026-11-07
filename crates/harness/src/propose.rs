@@ -135,7 +135,7 @@ pub fn run_tally(root: &Path, cfg: &Config) -> anyhow::Result<Outcome> {
     crate::agent::catch_stop_signals();
     let clean = step(
         &format!("running `{}` on the clean tree", cfg.check.command),
-        || crate::gates::check_delta(root, cfg, false),
+        || crate::gates::check_delta(&crate::sandbox::Sandbox::start(root, cfg), root, cfg, false),
     );
     if let Some(reason) = &clean.timed_out {
         return Ok(Outcome::Refused(vec![(Vec::new(), reason.clone())]));
@@ -293,7 +293,8 @@ fn ask_as<T: serde::de::DeserializeOwned>(
     let stop_file = config::instance_path(root, dir, "STOP");
     let label = format!("asking the {} agent", spawn.preset.name);
     let result = step(&label, || {
-        crate::agent::spawn(&spawn, &mut events, &stop_file, &rate_limit)
+        let sandbox = crate::sandbox::Sandbox::start(root, cfg);
+        crate::agent::spawn(&spawn, &sandbox, &mut events, &stop_file, &rate_limit)
     })?;
     parse_as(&result.output).ok_or_else(|| {
         anyhow::anyhow!(
@@ -463,7 +464,14 @@ fn steps(
     if green != Some(p.command.as_str()) {
         let clean = step(
             &format!("running `{}` on the clean tree", p.command),
-            || crate::gates::check_delta(root, &checked, false),
+            || {
+                crate::gates::check_delta(
+                    &crate::sandbox::Sandbox::start(root, &checked),
+                    root,
+                    &checked,
+                    false,
+                )
+            },
         );
         if let Some(reason) = &clean.timed_out {
             return Err(reason.clone());
@@ -485,7 +493,14 @@ fn steps(
     let planted = Planted(probe);
     let report = step(
         &format!("running it again with {} planted", p.probe_file),
-        || crate::gates::check_delta(root, &checked, false),
+        || {
+            crate::gates::check_delta(
+                &crate::sandbox::Sandbox::start(root, &checked),
+                root,
+                &checked,
+                false,
+            )
+        },
     );
     drop(planted);
     if let Some(reason) = &report.timed_out {
