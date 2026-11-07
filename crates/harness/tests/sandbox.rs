@@ -18,6 +18,9 @@ fn nested() -> bool {
 }
 
 fn native(ports: &[u16]) -> Config {
+    // the bridge bwrap runs inside is the enallagi binary, not this test binary
+    static BIN: std::sync::Once = std::sync::Once::new();
+    BIN.call_once(|| std::env::set_var("ENALLAGI_BIN", env!("CARGO_BIN_EXE_enallagi")));
     let mut cfg = Config::default();
     cfg.layout.harness_dir = ".enallagi".into();
     cfg.sandbox.mode = SandboxMode::Native;
@@ -26,11 +29,10 @@ fn native(ports: &[u16]) -> Config {
 }
 
 fn sh(sb: &Sandbox, cwd: &Path, script: &str) -> Output {
-    let mut c = sb.wrap(&["sh", "-c", script], cwd, &[]).command();
-    if let Ok(bin) = std::env::var("CARGO_BIN_EXE_enallagi") {
-        c.env("ENALLAGI_BIN", bin);
-    }
-    c.output().expect("spawn")
+    sb.wrap(&["sh", "-c", script], cwd, &[])
+        .command()
+        .output()
+        .expect("spawn")
 }
 
 fn text(out: &Output) -> String {
@@ -57,6 +59,11 @@ fn serve() -> u16 {
         }
     });
     port
+}
+
+// not under /tmp, which bwrap masks: the path is visible to the lane, so only the rule stops it
+fn outside() -> tempfile::TempDir {
+    tempfile::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir")
 }
 
 fn fetch(port: u16) -> String {
@@ -145,7 +152,7 @@ fn host_unix_socket_refused() {
         return;
     }
     let r = Repo::new();
-    let outside = tempfile::TempDir::new().expect("tempdir");
+    let outside = outside();
     let path = outside.path().join("d.sock");
     let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
     std::thread::spawn(move || {
@@ -168,7 +175,7 @@ fn writes_outside_lane_refused() {
         return;
     }
     let r = Repo::new();
-    let outside = tempfile::TempDir::new().expect("tempdir");
+    let outside = outside();
     let sb = Sandbox::start(&r.root, &native(&[]));
     let script = format!(
         "echo x > '{}/stray'; echo x > in-lane && echo x > \"$TMPDIR/scratch\"",
@@ -243,6 +250,7 @@ fn git_config_unwritable() {
         "echo x > .enallagi/.git/hooks/pre-commit",
         "mv .git .g",
         "mv .git/hooks .git/h",
+        "mv .git/worktrees .git/w",
         "echo x > .git/worktrees/lane-a/gitdir",
     ];
     for attempt in attempts {
@@ -254,4 +262,36 @@ fn git_config_unwritable() {
     assert!(!r.root.join(".git/hooks/pre-commit").exists());
     assert!(r.root.join(".git/config").exists());
     assert!(!git(&r.root, &["config", "--list"]).contains("hookspath"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_without_bwrap_refuses() {
+    if nested() {
+        return;
+    }
+    let r = Repo::new();
+    r.write(".enallagi/enallagi.toml", "[sandbox]\nmode = \"native\"\n");
+    // PATH holds git and a bwrap planted inside the product, which must not count
+    let tools = r.root.join("bin");
+    std::fs::create_dir_all(&tools).expect("mkdir");
+    let git_bin = std::env::split_paths(&std::env::var_os("PATH").expect("PATH"))
+        .map(|d| d.join("git"))
+        .find(|p| p.is_file())
+        .expect("git on PATH");
+    std::os::unix::fs::symlink(git_bin, tools.join("git")).expect("symlink");
+    std::fs::write(tools.join("bwrap"), "#!/bin/sh\nexec \"$@\"\n").expect("write");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(tools.join("bwrap"), std::fs::Permissions::from_mode(0o755))
+        .expect("chmod");
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["run", "--iterations", "1", "--no-tui"])
+        .env("PATH", &tools)
+        .current_dir(&r.root)
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("apt install bubblewrap"), "{err}");
+    assert!(err.contains("mode = \"off\""), "{err}");
 }

@@ -311,6 +311,9 @@ fn go(repo: &Repo, opts: &RunOpts) -> (Digest, Vec<Event>) {
 
 // installed on the shared events::Writer, so this collects the live stream in emit order, not a replay of the log
 fn try_go(repo: &Repo, opts: &RunOpts) -> (anyhow::Result<Digest>, Vec<Event>) {
+    // on Linux a native lane runs inside `enallagi sandbox bridge`, and this test binary is not it
+    static BIN: std::sync::Once = std::sync::Once::new();
+    BIN.call_once(|| std::env::set_var("ENALLAGI_BIN", env!("CARGO_BIN_EXE_enallagi")));
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&seen);
     let digest = pipeline::run(

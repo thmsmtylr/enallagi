@@ -6,6 +6,8 @@ use std::process::Command;
 use crate::config::{Config, SandboxMode};
 use crate::proxy::{Denial, Proxy};
 
+pub mod bwrap;
+
 // the security gate's scanners download from GitHub releases, which redirect to release-assets (ADR 0009)
 pub const BASE_HOSTS: &[&str] = &[
     "github.com",
@@ -26,13 +28,18 @@ enum Kind {
 
 pub struct Sandbox {
     kind: Kind,
+    // dropped first, so no relay outlives its socket dir or its proxy
+    _relays: Option<bwrap::Relays>,
     // ponytail: a proxy that cannot bind leaves None and lanes get port 0, so no egress
     proxy: Option<Proxy>,
+    bwrap: PathBuf,
     ports: Vec<u16>,
     write: Vec<String>,
     dir: String,
     // removed on drop with every spawn's TMPDIR under it
     run: Option<tempfile::TempDir>,
+    // the launcher's end of each bridged port, Linux only
+    socks: Option<tempfile::TempDir>,
 }
 
 pub struct Wrapped {
@@ -54,7 +61,7 @@ impl Sandbox {
         Sandbox::with(root, cfg, std::env::var_os(VAR).is_some())
     }
 
-    fn with(_root: &Path, cfg: &Config, nested: bool) -> Sandbox {
+    fn with(root: &Path, cfg: &Config, nested: bool) -> Sandbox {
         let kind = match cfg.sandbox.mode {
             SandboxMode::Off => Kind::Off,
             SandboxMode::Native if nested => Kind::Nested,
@@ -62,22 +69,34 @@ impl Sandbox {
             SandboxMode::Native => Kind::Bwrap,
         };
         let live = matches!(kind, Kind::Seatbelt | Kind::Bwrap);
-        let tmp = crate::config::cache_root().join("tmp");
+        let cache = crate::config::cache_root();
+        let dir_in = |sub: &str| {
+            let parent = cache.join(sub);
+            std::fs::create_dir_all(&parent).ok()?;
+            tempfile::Builder::new()
+                .prefix("run-")
+                .tempdir_in(&parent)
+                .ok()
+        };
+        let proxy = live.then(|| Proxy::start(allowlist(cfg)).ok()).flatten();
+        let socks = (kind == Kind::Bwrap).then(|| dir_in("run")).flatten();
+        let relays = socks.as_ref().map(|d| {
+            let port = proxy.as_ref().map_or(0, |p| p.port);
+            let ports: Vec<u16> = std::iter::once(port)
+                .chain(cfg.sandbox.ports.clone())
+                .collect();
+            bwrap::Relays::start(d.path(), &ports)
+        });
         Sandbox {
             kind,
-            proxy: live.then(|| Proxy::start(allowlist(cfg)).ok()).flatten(),
+            _relays: relays,
+            proxy,
+            bwrap: bwrap::find(root).unwrap_or_else(|| "bwrap".into()),
             ports: cfg.sandbox.ports.clone(),
             write: cfg.sandbox.write.clone(),
             dir: cfg.layout.harness_dir.clone(),
-            run: live
-                .then(|| {
-                    std::fs::create_dir_all(&tmp).ok()?;
-                    tempfile::Builder::new()
-                        .prefix("run-")
-                        .tempdir_in(&tmp)
-                        .ok()
-                })
-                .flatten(),
+            run: live.then(|| dir_in("tmp")).flatten(),
+            socks,
         }
     }
 
@@ -123,7 +142,18 @@ impl Sandbox {
             env.push(("TMPDIR".to_string(), canon(&tmp).display().to_string()));
         }
         env.push((VAR.to_string(), self.name().to_string()));
-        let argv = seatbelt(&policy, port, &self.ports, argv);
+        let argv = match self.kind {
+            Kind::Bwrap => {
+                // ponytail: no socket dir means no bridge to reach, so the lane has no egress
+                let socks = self
+                    .socks
+                    .as_ref()
+                    .map_or(Path::new("/nonexistent"), |d| d.path());
+                let ports: Vec<u16> = std::iter::once(port).chain(self.ports.clone()).collect();
+                bwrap::argv(&self.bwrap, &policy, socks, &ports, &cwd, argv)
+            }
+            _ => seatbelt(&policy, port, &self.ports, argv),
+        };
         Wrapped { argv, cwd, env }
     }
 
@@ -254,7 +284,7 @@ fn seatbelt(policy: &Policy, proxy: u16, ports: &[u16], argv: Vec<String>) -> Ve
 }
 
 /// Why `mode = "native"` cannot confine on this host, naming the fix; None when it can.
-pub fn refusal(_root: &Path, cfg: &Config) -> Option<String> {
+pub fn refusal(root: &Path, cfg: &Config) -> Option<String> {
     if cfg.sandbox.mode == SandboxMode::Off || std::env::var_os(VAR).is_some() {
         return None;
     }
@@ -265,6 +295,9 @@ pub fn refusal(_root: &Path, cfg: &Config) -> Option<String> {
                 "/usr/bin/sandbox-exec is missing, so no lane can be confined; restore it, {off}"
             )
         });
+    }
+    if cfg!(target_os = "linux") {
+        return bwrap::refusal(root, off);
     }
     Some(format!(
         "no native sandbox on {}; {off}",

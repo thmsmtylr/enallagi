@@ -277,6 +277,27 @@ pub enum Command {
         /// Iterations the lane's run performs
         n: Option<u32>,
     },
+    /// Sandbox internals the launcher spawns itself
+    #[command(hide = true)]
+    Sandbox {
+        #[command(subcommand)]
+        cmd: SandboxCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SandboxCmd {
+    /// Forward the namespace's loopback ports to the launcher's sockets, then run argv
+    Bridge {
+        /// Directory holding one `<port>` socket per forwarded port
+        #[arg(long)]
+        dir: std::path::PathBuf,
+        /// Loopback port to forward, the proxy's first
+        #[arg(long)]
+        port: Vec<u16>,
+        #[arg(last = true, required = true)]
+        argv: Vec<String>,
+    },
 }
 
 pub fn run(cli: Cli) -> anyhow::Result<i32> {
@@ -390,6 +411,9 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             prefix,
         }),
         Command::Worktree { n } => worktree::run(&worktree::Args { n }),
+        Command::Sandbox {
+            cmd: SandboxCmd::Bridge { dir, port, argv },
+        } => std::process::exit(crate::sandbox::bwrap::bridge(&dir, &port, &argv)),
     }
 }
 
@@ -473,7 +497,7 @@ mod tests {
     fn visible_flags() -> Vec<String> {
         let cmd = Cli::command();
         let mut found = Vec::new();
-        for sub in cmd.get_subcommands() {
+        for sub in cmd.get_subcommands().filter(|s| !s.is_hide_set()) {
             for arg in sub.get_arguments() {
                 let Some(long) = arg.get_long() else { continue };
                 if arg.is_hide_set() || long == "help" || long == "version" {
@@ -555,6 +579,7 @@ jobs:
     fn subcommand_names() -> Vec<String> {
         Cli::command()
             .get_subcommands()
+            .filter(|s| !s.is_hide_set())
             .map(|s| s.get_name().to_string())
             .collect()
     }

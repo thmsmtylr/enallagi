@@ -119,17 +119,42 @@ fn read_head(client: &mut TcpStream) -> Option<String> {
     Some(String::from_utf8_lossy(&head).into_owned())
 }
 
-fn pump(client: TcpStream, server: TcpStream) {
-    let (Ok(mut c2), Ok(mut s2)) = (client.try_clone(), server.try_clone()) else {
+/// A stream whose two halves can be pumped from two threads.
+pub trait Duplex: Read + Write + Send + Sized + 'static {
+    fn dup(&self) -> io::Result<Self>;
+    fn close_write(&self);
+}
+
+impl Duplex for TcpStream {
+    fn dup(&self) -> io::Result<Self> {
+        self.try_clone()
+    }
+    fn close_write(&self) {
+        let _ = self.shutdown(Shutdown::Write);
+    }
+}
+
+impl Duplex for std::os::unix::net::UnixStream {
+    fn dup(&self) -> io::Result<Self> {
+        self.try_clone()
+    }
+    fn close_write(&self) {
+        let _ = self.shutdown(Shutdown::Write);
+    }
+}
+
+/// Copies both ways until each side closes.
+pub fn pump<A: Duplex, B: Duplex>(client: A, server: B) {
+    let (Ok(mut c2), Ok(mut s2)) = (client.dup(), server.dup()) else {
         return;
     };
     let (mut client, mut server) = (client, server);
     let up = std::thread::spawn(move || {
         let _ = io::copy(&mut c2, &mut s2);
-        let _ = s2.shutdown(Shutdown::Write);
+        s2.close_write();
     });
     let _ = io::copy(&mut server, &mut client);
-    let _ = client.shutdown(Shutdown::Write);
+    client.close_write();
     let _ = up.join();
 }
 
