@@ -497,6 +497,26 @@ fn secrets_unreadable() {
     }
 }
 
+// the unfiltered bridge is the lane's parent at its uid: readable, it could be driven to a host socket
+#[cfg(target_os = "linux")]
+#[test]
+fn bridge_not_dumpable() {
+    // root reads a root-owned /proc file anyway, so only a user run proves the rule
+    let uid = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .expect("id");
+    if nested() || String::from_utf8_lossy(&uid.stdout).trim() == "0" {
+        return;
+    }
+    let r = Repo::new();
+    let sb = Sandbox::start(&r.root, &native(&[]));
+    let own = sh(&sb, &r.root, "cat /proc/self/environ > /dev/null");
+    assert!(own.status.success(), "{}", text(&own));
+    let out = sh(&sb, &r.root, "cat /proc/$PPID/environ > /dev/null");
+    assert!(!out.status.success(), "{}", text(&out));
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn native_without_bwrap_refuses() {

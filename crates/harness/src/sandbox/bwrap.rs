@@ -1,5 +1,4 @@
-//! Linux: bwrap with a private network namespace whose loopback ports are bridged out over Unix
-//! sockets to the launcher, and a seccomp filter that keeps the lane off every other socket.
+//! Linux: bwrap, a private netns bridged to the launcher over Unix sockets, and a seccomp filter.
 
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -185,6 +184,15 @@ pub(super) fn argv(
 
 /// Inside the namespace: listen on each loopback port, forward to its socket, run argv filtered.
 pub fn bridge(dir: &Path, ports: &[u16], argv: &[String]) -> i32 {
+    // the lane's same-uid parent, unfiltered: undumpable, so it cannot be ptraced or read
+    #[cfg(target_os = "linux")]
+    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+        eprintln!(
+            "enallagi sandbox bridge: {}",
+            std::io::Error::last_os_error()
+        );
+        return 125;
+    }
     for &port in ports {
         let listener = match TcpListener::bind(("127.0.0.1", port)) {
             Ok(l) => l,

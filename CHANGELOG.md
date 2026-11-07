@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- on Linux the unfiltered sandbox bridge marks itself undumpable, so its lane cannot ptrace it or read its `/proc` entries
 - the launcher's `status`, `add`, `diff`, `commit` and `stash` refuse a gitlink to a repository inside the checkout, whose `core.fsmonitor` or filter a lane could set to run outside the sandbox; a lane cannot write `.git/modules/`
 - a confined lane inherits only an allowlist of the launcher's env (`PATH`, `HOME`, locale, `XDG_*`, `ENALLAGI_*`, the agent keys) plus the names in the new `[sandbox] env`; `GH_TOKEN`, `GITHUB_TOKEN`, `[respond] token_env` and every other credential stay with the launcher; `harness.default.toml` gains the `[sandbox]` table
 - the security gate reads its scanner pins from the binary, never from `harness.lock`, which a lane can write; `[[tool]]` entries are ignored and init no longer writes them
