@@ -10,7 +10,7 @@ An autonomous task loop for a coding agent, in one static binary.
 - Runs each task in a fresh agent process, never a long-lived session.
 - Splits the work across five roles that cannot grade each other.
 - Re-derives every `done` from the tree instead of trusting a claim.
-- Runs each lane in its own git worktree and fast-forwards on success.
+- Runs each lane in its own git worktree and fast-forwards on success, up to `[parallel] writers` lanes at once.
 - Wraps any headless agent CLI, with thirteen presets shipped.
 - Pins every vendored skill by commit and hash.
 

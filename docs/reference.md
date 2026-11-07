@@ -124,6 +124,21 @@ Each run in the log is a lane: the stages and output panes show the focused lane
 | `?` | toggle the key list |
 | `q` | write `STOP` under `run`, and leave under `watch` or once a run has finished |
 
+### Parallel lanes
+
+Under `[parallel] writers = N` above 1, `enallagi worktree` runs up to N writer lanes, each pinned to one ticket with `run --task`.
+A lane takes its ticket through a claim in `.enallagi/run/claims.json`, under a file lock: the lowest-id takeable ticket no live claim holds and whose `scope:` overlaps no live writer's.
+A ticket with no `scope:`, or a glob with no literal prefix, overlaps every other.
+A claim is live while its lane's worktree exists.
+A reader lane (`run --task <id> --pipeline review`) takes a reader claim on a `review` ticket no claim holds; it blocks no writer and does not count toward N.
+When nothing can be claimed and no lane is live, one unpinned lane runs as under one writer.
+Each lane's `BUDGET_USD` and `BUDGET_TOKENS` are what is left divided by N.
+Lanes land one at a time under `.enallagi/run/land.lock`, in the order they finish.
+A lane whose parent branch moved is rebased onto it and its check run again.
+A ticket the lane filed whose id another lane landed first is renamed to the next free id, in its file and in the lane's own ticket.
+Every landing emits an `integrate` gate event.
+A writer lane's implementer prompt lists the commits other lanes landed since its base, each once.
+
 ## Gates
 
 `[[stage]].post` names the gates run after a stage. A failed gate sends the ticket back to `ready-for-agent`
@@ -149,6 +164,7 @@ or halts the run. The names are matched in `crates/harness/src/gates.rs`.
 | `adjudicator-halt` | an adjudicator output line opening with `halt` and naming a task id, and halts the run | adjudicate |
 | `dry-round` | a round that leaves no `ready-for-agent` ticket, counted toward `end_after_dry_rounds` | adjudicate |
 | `install-stale` | an installed file that drifted from what `enallagi init` writes now, read by spawning the binary | verify |
+| `integrate` | under `[parallel] writers` above 1, a lane whose rebase onto the parent branch conflicts, whose check is red after the rebase, or whose state merge conflicts; the ticket goes back to `ready-for-agent` with a reason naming the paths or tests, what landed first and `git show <tip>`, and the lane branch is kept | landing |
 | `holdout` | a `done` whose spec's holdouts are red at HEAD; the ticket goes back to `ready-for-agent` with `holdouts: <k> of <n> red`, and a second red for one ticket in a run halts | verify |
 
 Holdouts are tests the operator writes and no lane may read (ADR 0006).
