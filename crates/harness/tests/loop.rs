@@ -4612,3 +4612,29 @@ fn denial_emits_event() {
         "{events:#?}"
     );
 }
+
+#[test]
+fn red_check_names_denial() {
+    if std::env::var_os("ENALLAGI_SANDBOX").is_some() {
+        println!("nested: skipped");
+        return;
+    }
+    let curl = "curl -sf -x $HTTPS_PROXY https://example.invalid/";
+    let toml = base_toml("").replace("./src/fakecheck.sh", curl);
+    let r = repo(&toml, "");
+    let cfg = enallagi::config::load(&r.root).expect("load");
+    let sandbox = enallagi::sandbox::Sandbox::start(&r.root, &cfg);
+    let red = enallagi::gates::check_delta(&sandbox, &r.root, &cfg, false);
+    assert!(red.red, "{}", red.output);
+    assert!(
+        red.tail(3)
+            .join("\n")
+            .contains("sandbox refused example.invalid:443"),
+        "{}",
+        red.output
+    );
+    write_toml(&r, &toml.replace(curl, "echo ok"));
+    let cfg = enallagi::config::load(&r.root).expect("load");
+    let green = enallagi::gates::check_delta(&sandbox, &r.root, &cfg, false);
+    assert_eq!(green.output.trim(), "ok");
+}

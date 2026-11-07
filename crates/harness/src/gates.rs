@@ -1861,6 +1861,7 @@ pub fn check_delta(
         .check
         .timeout_duration()
         .unwrap_or(crate::config::DEFAULT_CHECK_TIMEOUT);
+    let mark = sandbox.denials_since(0).len();
     let run = match run_bounded(sandbox, root, command, timeout) {
         Ok(run) => run,
         Err(err) => {
@@ -1876,7 +1877,7 @@ pub fn check_delta(
     let hang = hang_reason("the check", command, timeout, &run);
     let Run { exit, output, .. } = run;
     // a runner forced into colour would otherwise need every fail_name to spell out its escape codes
-    let output = strip_ansi(&output);
+    let mut output = strip_ansi(&output);
     let tally = tally(&output, &cfg.check.tally);
     if let Some(reason) = hang {
         return CheckReport {
@@ -1907,6 +1908,13 @@ pub fn check_delta(
     };
     names.sort();
     names.dedup();
+    // after the names, so a refusal line never reads as a failing test
+    for d in sandbox.denials_since(mark) {
+        output.push_str(&format!(
+            "\nsandbox refused {}:{} ({})",
+            d.host, d.port, d.reason
+        ));
+    }
 
     let baseline = baseline(&crate::config::instance_path(
         root,
