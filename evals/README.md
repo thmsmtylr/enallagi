@@ -24,6 +24,13 @@ refuses rather than reporting a result it did not measure.
 `verifier-findings` and `verifier-filing` build a JavaScript fixture and need `bun` on `PATH`. Without it
 the `setup.sh` exits non-zero and the eval reports `ERROR`, not a result.
 
+## decomposer
+
+`decomposer` holds the decomposer role, which ADR 0008 asks of every new role. Its fixture is one
+accepted spec, `calc`, with three exit criteria, the third needing the other two. It passes when
+`enallagi tasks check calc` exits 0 on at least two drafts and `spec.md` is unchanged. Its ablation
+replaces the installed `decomposer.md` with one generic line.
+
 ## cold-start
 
 `cold-start` is the only eval with no `prompt.txt`. It builds an ordinary repository the harness did

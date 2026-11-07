@@ -493,3 +493,76 @@ fn ablate_anchors_match() {
     }
     assert!(broken.is_empty(), "{broken:#?}");
 }
+
+// a package holding the shipped decomposer eval and nothing else, so no other eval runs
+fn decomposer_package() -> tempfile::TempDir {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let pkg = package();
+    let dir = pkg.path().join("evals/decomposer");
+    fs::create_dir_all(&dir).unwrap();
+    for f in ["setup.sh", "prompt.txt", "assert.sh", "ablate.sh"] {
+        fs::copy(repo.join("evals/decomposer").join(f), dir.join(f)).expect(f);
+    }
+    pkg
+}
+
+#[test]
+fn decomposer_assert_holds() {
+    let pkg = decomposer_package();
+    let r = run_eval(pkg.path(), "true {prompt}", &["decomposer"]);
+    assert_eq!(
+        last_line(&r.stdout),
+        "EVAL decomposer FAIL",
+        "{} {}",
+        r.stdout,
+        r.stderr
+    );
+
+    let draft = |num: &str, blocked: &str, test: &str| {
+        format!("# {num}: Step {num}\n\n**What to build:** step {num}.\n\n**Blocked by:** {blocked}\n\n**Status:** ready-for-agent\n\n- [ ] `{test}` passes\n")
+    };
+    let issues = ".enallagi/specs/calc/issues";
+    let agent = pkg.path().join("decompose.sh");
+    write_exec(
+        &agent,
+        &format!(
+            "mkdir -p {issues}\nprintf '%s' '{}' >{issues}/01-add.md\nprintf '%s' '{}' >{issues}/02-sub.md\nprintf '%s' '{}' >{issues}/03-usage.md\n",
+            draft("01", "None", "adds"),
+            draft("02", "None", "subtracts"),
+            draft("03", "01, 02", "usage_lists_ops"),
+        ),
+    );
+    let r = run_eval(
+        pkg.path(),
+        &format!("{} {{prompt}}", agent.display()),
+        &["decomposer"],
+    );
+    assert_eq!(
+        last_line(&r.stdout),
+        "EVAL decomposer PASS",
+        "{} {}",
+        r.stdout,
+        r.stderr
+    );
+}
+
+#[test]
+fn decomposer_ablate_strips_role() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let fixture = enallagi::fixture::Repo::new();
+    fixture.init_harness("");
+    let out = std::process::Command::new("bash")
+        .arg(repo.join("evals/decomposer/ablate.sh"))
+        .current_dir(&fixture.root)
+        .output()
+        .expect("run ablate.sh");
+    assert!(out.status.success(), "{out:?}");
+    let role = fs::read_to_string(fixture.root.join(".enallagi/roles/decomposer.md")).unwrap();
+    let shipped = fs::read_to_string(repo.join("roles/decomposer.md")).unwrap();
+    let body = shipped.split("\n---\n").nth(1).expect("frontmatter");
+    let kept: Vec<&str> = body
+        .lines()
+        .filter(|l| !l.trim().is_empty() && role.contains(l))
+        .collect();
+    assert!(kept.is_empty(), "{kept:?}");
+}
