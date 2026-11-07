@@ -260,8 +260,9 @@ impl Sandbox {
             role.writes.as_deref(),
             extra.chain(tmp.clone()),
         );
+        // lifted as read-only binds: under the bwrap /tmp tmpfs an unbound set would vanish
         if role.holdouts {
-            policy.holdouts.clear();
+            policy.deny.append(&mut policy.holdouts);
         }
         if let Some(tmp) = tmp {
             env.push(("TMPDIR".to_string(), canon(&tmp).display().to_string()));
