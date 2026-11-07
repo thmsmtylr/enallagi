@@ -500,7 +500,7 @@ fn decomposer_package() -> tempfile::TempDir {
     let pkg = package();
     let dir = pkg.path().join("evals/decomposer");
     fs::create_dir_all(&dir).unwrap();
-    for f in ["setup.sh", "prompt.txt", "assert.sh", "ablate.sh"] {
+    for f in ["setup.sh", "prompt.txt", "assert.sh"] {
         fs::copy(repo.join("evals/decomposer").join(f), dir.join(f)).expect(f);
     }
     pkg
@@ -544,31 +544,4 @@ fn decomposer_assert_holds() {
         r.stdout,
         r.stderr
     );
-}
-
-#[test]
-fn decomposer_ablate_strips_role() {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let fixture = enallagi::fixture::Repo::new();
-    fixture.init_harness("");
-    let out = std::process::Command::new("bash")
-        .arg(repo.join("evals/decomposer/ablate.sh"))
-        .current_dir(&fixture.root)
-        .output()
-        .expect("run ablate.sh");
-    assert!(out.status.success(), "{out:?}");
-    let shipped = fs::read_to_string(repo.join("roles/decomposer.md")).unwrap();
-    let body = shipped.split("\n---\n").nth(1).expect("frontmatter");
-    // the adapter's agent file is a second copy an agent reads as readily as the role
-    for rel in [
-        ".enallagi/roles/decomposer.md",
-        ".enallagi/adapters/claude/agents/decomposer.md",
-    ] {
-        let role = fs::read_to_string(fixture.root.join(rel)).expect(rel);
-        let kept: Vec<&str> = body
-            .lines()
-            .filter(|l| !l.trim().is_empty() && role.contains(l))
-            .collect();
-        assert!(kept.is_empty(), "{rel}: {kept:?}");
-    }
 }

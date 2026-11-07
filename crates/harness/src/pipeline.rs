@@ -1572,7 +1572,6 @@ impl<'a> Loop<'a> {
             _ => spec_for(self.root, self.cfg, &ticket),
         };
         let mut prompt = prompt_for(role, self.cfg, &spec);
-        // the protocol lives in the role alone, so the decomposer eval's ablation measures it
         if role == "decomposer" {
             prompt.push_str(&format!(" The spec to decompose is {spec}."));
         }

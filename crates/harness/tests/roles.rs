@@ -423,3 +423,14 @@ fn adjudicator_scopes_stated_doc() {
         assert!(text.contains(want), "roles/adjudicator.md wants {want:?}");
     }
 }
+
+// ruling G: every rule the decomposer stated is a gate, so the role is the skill plus the check
+#[test]
+fn decomposer_skill_only() {
+    let text = role("decomposer");
+    let body = text.split("\n---\n").nth(1).expect("frontmatter");
+    assert!(body.contains("{{skill:to-tickets}}"), "{body}");
+    assert!(body.contains("enallagi tasks check <spec>"), "{body}");
+    assert!(!body.contains("Protocol:"), "{body}");
+    assert!(body.lines().count() <= 3, "{body}");
+}
