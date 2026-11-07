@@ -158,7 +158,7 @@ for mode in uncommitted no-progress out-of-scope red-check; do
   }
   case "$mode" in
   uncommitted)
-    [ "$status" = "done" ] && [ "${dirty:-0}" -gt 0 ] && echo "FINDING a lane left its implementation uncommitted and the task still reached done with $dirty dirty path(s). Nothing the launcher runs reads the working tree; only verifier.md step 0 does, and a prompt is not a gate."
+    [ "$status" = "done" ] && [ "${dirty:-0}" -gt 0 ] && echo "FINDING a lane left its implementation uncommitted and the task still reached done with $dirty dirty path(s). Nothing the launcher runs reads the working tree."
     ;;
   no-progress)
     printf '%s\n' "$out" | grep -q 'wrote no PROGRESS.md entry' ||

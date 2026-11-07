@@ -32,6 +32,6 @@ Run against `claude -p` on 2026-09-02, `--gate verifier` rejected the rule it wa
 GATE verifier REJECT the case passes with the rule ablated, so the rule changed no outcome
 ```
 
-The rule was `verifier.md` step 0, which says uncommitted source is a rejection. With it removed,
-the model still rejected the uncommitted task. On that model and that fixture the line is not
-load-bearing; one sample is not a reason to delete it.
+The rule was `verifier.md` step 0, which said uncommitted source is a rejection. With it removed,
+the model still rejected the uncommitted task, in this run and in two later ones, so the step was
+deleted. The `verifier` eval stays as a plain case with no `ablate.sh`.

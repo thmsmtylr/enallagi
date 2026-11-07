@@ -291,7 +291,7 @@ fn a_fixture_that_cannot_be_built_is_error_never_fail() {
 }
 
 // RULE is a real line of the verifier prompt enallagi init writes; ablate.sh deletes it
-const RULE: &str = "git status --porcelain";
+const RULE: &str = "enallagi tasks ids-at review";
 
 fn write_gate_fixture(pkg: &Path, other_assert: &str) -> PathBuf {
     write_eval(

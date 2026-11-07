@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `verifier.md` drops step 0 (uncommitted source is a rejection), which three `--gate verifier` runs found not load-bearing; the `verifier` eval has no `ablate.sh`
 - under `writers > 1` the launcher vendors every declared skill and role before the first lane, so two lanes never both write `harness.lock` and conflict at landing
 - `enallagi watch` reads the queue and claims at most once per 500 ms and ignores mouse moves, and parses each agent output chunk once, so a long run or a moving mouse no longer spawns git or re-parses the stream on every redraw
 - `gate`, `watch`, `events`, `review`, `issue`, `pr`, `base` and `tasks` find the instance from a subdirectory or a nested state repo, as `run` does

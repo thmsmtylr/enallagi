@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# A task at `review` whose implementation was never committed. verifier.md step 0 is the ONLY thing
-# in this harness that catches it — the launcher's gates run the check, and an uncommitted file does
-# not make the check red. This package's own driver.sh reports that hole; this eval holds the one
-# thing that closes it to its word.
+# A task at `review` whose implementation was never committed. No gate catches it: an uncommitted
+# file does not make the check red. The verifier rejects it with no rule of its own naming it.
 set -u
 issues="$(ls -d .enallagi/specs/*/)issues"
 mkdir -p "$issues"
