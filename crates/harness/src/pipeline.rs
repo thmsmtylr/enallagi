@@ -454,7 +454,7 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         dry_rounds: 0,
         dry_pipeline: None,
         spent: Vec::new(),
-        scope_refusals: std::collections::HashMap::new(),
+        refusals: std::collections::HashMap::new(),
         stopped: false,
         built: Vec::new(),
     };
@@ -494,8 +494,8 @@ struct Loop<'a> {
     // pipelines whose end_after_dry_rounds this run has spent; `choose` passes over them until a
     // round leaves takeable work again
     spent: Vec<String>,
-    // scope refusals per task this run: a second one is a widening no lane will explain
-    scope_refusals: std::collections::HashMap<String, u32>,
+    // scope and holdout refusals per (gate, task) this run: a second is one no lane will answer
+    refusals: std::collections::HashMap<(String, String), u32>,
     stopped: bool,
     // tasks whose pull-request branch this run built, in order, so a dependent task stacks on one
     built: Vec<String>,
@@ -1048,15 +1048,22 @@ impl<'a> Loop<'a> {
             }
             // the first refusal hands the task back to the implementer with the reason; a second
             // in the same run means no lane will answer it, and the run is not spent finding out
-            if gate == "scope" && !outcome.pass {
+            if matches!(gate.as_str(), "scope" | "holdout") && !outcome.pass {
                 if let Some(task) = &task {
-                    let seen = self.scope_refusals.entry(task.clone()).or_insert(0);
+                    let key = (gate.clone(), task.clone());
+                    let seen = self.refusals.entry(key).or_insert(0);
                     *seen += 1;
                     if *seen >= 2 {
-                        let reason = format!(
-                            "{task} was refused by the scope gate twice this run, and the implement round between them did not answer it: {}",
-                            outcome.reason
-                        );
+                        let reason = match gate.as_str() {
+                            "scope" => format!(
+                                "{task} was refused by the scope gate twice this run, and the implement round between them did not answer it: {}",
+                                outcome.reason
+                            ),
+                            _ => format!(
+                                "{task} was red on holdouts twice this run: {}",
+                                outcome.reason
+                            ),
+                        };
                         self.halt(task, reason);
                         return Flow::Stop;
                     }

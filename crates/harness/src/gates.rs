@@ -84,6 +84,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "dry-round" => dry_round(ctx),
         "install-stale" => install_stale(ctx),
         "tickets" => tickets(ctx),
+        "holdout" => holdout(ctx),
         other => fail(format!("no such gate: {other}")),
     };
     let task = ctx.task.clone().unwrap_or_default();
@@ -1064,20 +1065,21 @@ fn skip_added(ctx: &mut GateCtx) -> GateOutcome {
     )
 }
 
-// a detached worktree in the temp dir, removed on drop so a hang or a panic leaves the lane clean
+// a detached worktree at rev under `under`, removed on drop so a hang or a panic leaves the lane clean
 struct Scratch {
     root: PathBuf,
     dir: tempfile::TempDir,
 }
 
 impl Scratch {
-    fn add(root: &Path) -> Result<Scratch, String> {
+    fn add(root: &Path, under: &Path, rev: &str) -> Result<Scratch, String> {
+        std::fs::create_dir_all(under).map_err(|e| e.to_string())?;
         let dir = tempfile::Builder::new()
-            .prefix("enallagi-red-first-")
-            .tempdir()
+            .prefix("enallagi-scratch-")
+            .tempdir_in(under)
             .map_err(|e| e.to_string())?;
         let path = dir.path().to_string_lossy().into_owned();
-        git(root, &["worktree", "add", "--detach", &path, "HEAD"]).map_err(|e| e.to_string())?;
+        git(root, &["worktree", "add", "--detach", &path, rev]).map_err(|e| e.to_string())?;
         Ok(Scratch {
             root: root.to_path_buf(),
             dir,
@@ -1117,7 +1119,7 @@ fn red_first(ctx: &mut GateCtx) -> GateOutcome {
     if tests.is_empty() {
         return pass("no test-only file changed");
     }
-    let tree = match Scratch::add(ctx.root) {
+    let tree = match Scratch::add(ctx.root, &std::env::temp_dir(), "HEAD") {
         Ok(tree) => tree,
         Err(e) => return fail(format!("red-first could not add a worktree: {e}")),
     };
@@ -1155,6 +1157,118 @@ fn red_first(ctx: &mut GateCtx) -> GateOutcome {
                 &format!("the verifier returned done and the red-first gate rejected it: {why}"),
                 &format!("chore({task}): harness red-first gate rejected a done verdict"),
                 &format!("{task} was forced back to ready by the red-first gate: {why}."),
+            )
+        }
+    }
+}
+
+/// A spec's holdouts: the executable regular files in `holdouts/<slug>/`, sorted.
+pub fn holdout_set(root: &Path, cfg: &Config, slug: &str) -> Vec<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = crate::config::instance_path(root, &cfg.layout.harness_dir, "holdouts").join(slug);
+    let mut set: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            e.metadata()
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+        .map(|e| e.path())
+        .collect();
+    set.sort();
+    set
+}
+
+/// Runs a spec's holdouts at `rev` in a scratch worktree; returns (run, red) and nothing else,
+/// since anything more reaches the queue a writer reads (spec 6).
+pub fn holdouts(
+    sandbox: &crate::sandbox::Sandbox,
+    root: &Path,
+    cfg: &Config,
+    cache: &Path,
+    slug: &str,
+    task: &str,
+    rev: &str,
+) -> Result<(usize, usize), String> {
+    let set = holdout_set(root, cfg, slug);
+    let tree = Scratch::add(
+        root,
+        &root.join(&cfg.layout.harness_dir).join("worktrees"),
+        rev,
+    )?;
+    let logs = cache
+        .join("holdouts")
+        .join(tracker::repo_slug(root))
+        .join(task);
+    std::fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
+    let timeout = cfg
+        .check
+        .timeout_duration()
+        .unwrap_or(crate::config::DEFAULT_CHECK_TIMEOUT);
+    let lifted = crate::sandbox::RolePolicy {
+        holdouts: true,
+        ..Default::default()
+    };
+    let mut red = 0;
+    for h in &set {
+        let mut w = sandbox.wrap_as(&[h.display().to_string()], tree.dir.path(), &[], &lifted);
+        let dir = h.parent().unwrap_or(h).display().to_string();
+        w.env.push(("ENALLAGI_HOLDOUTS".to_string(), dir));
+        let name = h.file_name().unwrap_or_default().to_string_lossy();
+        let output = match run_wrapped(&w, timeout) {
+            Ok(run) if run.exit == 0 && !run.timed_out && run.stopped.is_none() => run.output,
+            Ok(run) => {
+                red += 1;
+                run.output
+            }
+            Err(e) => {
+                red += 1;
+                e.to_string()
+            }
+        };
+        let _ = std::fs::write(logs.join(format!("{name}.log")), output);
+    }
+    Ok((set.len(), red))
+}
+
+// a red holdout says only how many, so the writer has nothing to fit the code to (spec 6)
+fn holdout(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(task) = ctx.task.clone() else {
+        return pass("no task");
+    };
+    match status_of(ctx, &task) {
+        Err(_) => return unreadable(ctx, &task),
+        Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
+        Ok(_) => {}
+    }
+    let Some(slug) = queue_of(ctx).spec_of(&task) else {
+        return pass("no holdout set");
+    };
+    if holdout_set(ctx.root, ctx.cfg, &slug).is_empty() {
+        return pass("no holdout set");
+    }
+    match holdouts(
+        ctx.sandbox,
+        ctx.root,
+        ctx.cfg,
+        &ctx.cache,
+        &slug,
+        &task,
+        "HEAD",
+    ) {
+        Err(e) => halted(ctx, format!("{task}: the holdouts could not be run: {e}")),
+        Ok((n, 0)) => pass(format!("holdouts: {n} of {n} green")),
+        Ok((n, k)) => {
+            let reason = format!("holdouts: {k} of {n} red");
+            force_back(
+                ctx,
+                "holdout",
+                &task,
+                "ready-for-agent",
+                &reason,
+                &format!("chore({task}): harness holdout gate rejected a done verdict"),
+                &format!("{task} was forced back to ready by the holdout gate: {reason}."),
             )
         }
     }
@@ -1664,9 +1778,12 @@ fn run_bounded(
     command: &str,
     timeout: Duration,
 ) -> std::io::Result<Run> {
+    run_wrapped(&sandbox.wrap(&["sh", "-c", command], root, &[]), timeout)
+}
+
+fn run_wrapped(wrapped: &crate::sandbox::Wrapped, timeout: Duration) -> std::io::Result<Run> {
     use std::os::unix::process::CommandExt;
-    let mut child = sandbox
-        .wrap(&["sh", "-c", command], root, &[])
+    let mut child = wrapped
         .command()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -4358,5 +4475,101 @@ echo '{{"results":[]}}' > "$out"
         let mut env = Env::new("exit 0\n");
         env.duplicate_queue("ready-for-agent");
         assert!(!run("dry-round", &mut env.ctx(None, None)).pass);
+    }
+
+    // one holdout in the ticket's spec set, written after the last commit so no repo tracks it
+    fn holdout(env: &Env, name: &str, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let rel = format!(
+            ".enallagi/holdouts/{}/{name}",
+            tracker::repo_slug(&env.repo.root)
+        );
+        env.repo.write(&rel, &format!("#!/bin/sh\n{body}"));
+        std::fs::set_permissions(
+            env.repo.root.join(rel),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("chmod");
+    }
+
+    fn holdout_env() -> Env {
+        let env = Env::new("exit 0\n");
+        env.queue("done", "src/*", "none");
+        env.repo.commit_all("verdict");
+        env
+    }
+
+    #[test]
+    fn holdout_red_forces_back() {
+        let mut env = holdout_env();
+        holdout(&env, "a.sh", "exit 0\n");
+        holdout(&env, "b.sh", "exit 1\n");
+        let out = run("holdout", &mut env.ctx(Some("T-001"), None));
+        assert!(!out.pass);
+        assert_eq!(out.reason, "holdouts: 1 of 2 red");
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
+        assert!(env.tasks_text().contains("gate: holdouts: 1 of 2 red"));
+    }
+
+    #[test]
+    fn holdout_reason_names_none() {
+        let mut env = holdout_env();
+        holdout(&env, "leaky.sh", "echo LEAKYLINE\nexit 1\n");
+        run("holdout", &mut env.ctx(Some("T-001"), None));
+        let events = format!("{:?}", env.events());
+        let seen = [env.tasks_text(), events, env.warnings.join("\n")];
+        for text in &seen {
+            for word in ["leaky", "holdouts/", "LEAKYLINE"] {
+                assert!(!text.contains(word), "{word} in {text}");
+            }
+        }
+        let log = env
+            .cache
+            .path()
+            .join("holdouts")
+            .join(tracker::repo_slug(&env.repo.root))
+            .join("T-001/leaky.sh.log");
+        let text = std::fs::read_to_string(&log).expect("the holdout log");
+        assert!(text.contains("LEAKYLINE"), "{text}");
+    }
+
+    #[test]
+    fn holdout_leaves_tree_clean() {
+        let mut env = holdout_env();
+        holdout(
+            &env,
+            "copy.sh",
+            "cp \"$ENALLAGI_HOLDOUTS/data.txt\" ./copied.txt\n",
+        );
+        env.repo.write(
+            &format!(
+                ".enallagi/holdouts/{}/data.txt",
+                tracker::repo_slug(&env.repo.root)
+            ),
+            "data\n",
+        );
+        let trees = |env: &Env| git(&env.repo.root, &["worktree", "list"]).expect("list");
+        let (status, before) = (porcelain(&env.repo.root), trees(&env));
+        let out = run("holdout", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert_eq!(porcelain(&env.repo.root), status);
+        assert_eq!(trees(&env), before);
+        assert!(!env.repo.root.join("copied.txt").exists());
+    }
+
+    #[test]
+    fn holdout_without_set() {
+        let mut env = holdout_env();
+        let out = run("holdout", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass && out.reason == "no holdout set", "{}", out.reason);
+        env.repo.write(
+            &format!(
+                ".enallagi/holdouts/{}/data.txt",
+                tracker::repo_slug(&env.repo.root)
+            ),
+            "not executable\n",
+        );
+        let out = run("holdout", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass && out.reason == "no holdout set", "{}", out.reason);
     }
 }

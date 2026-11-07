@@ -231,7 +231,7 @@ fn repo(toml: &str, tasks: &str) -> Repo {
     // what `enallagi init` ignores under the harness dir; vendored skills and roles are committed
     repo.write(
         ".enallagi/.gitignore",
-        "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\n",
+        "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\nholdouts/\n",
     );
     script(&repo, "src/fakecheck.sh", "exit 0\n");
     script(&repo, "src/fakeagent.sh", QUIET);
@@ -4414,6 +4414,47 @@ fn a_stop_skips_the_audit() {
     assert!(!r.root.join("src/auditor-ran").exists(), "{digest:#?}");
 }
 
+// the fixture spec's holdout set; init's .gitignore keeps it out of every commit
+fn holdout_dir(r: &Repo) -> String {
+    format!(
+        ".enallagi/holdouts/{}",
+        enallagi::tracker::repo_slug(&r.root)
+    )
+}
+
+// implement and verify land T-001 each round; the verify stage adds the holdout gate
+fn holdout_repo() -> Repo {
+    let r = repo("", "");
+    let implement = implementer(&r, "");
+    let verify = verifier(&r);
+    let toml = base_toml(&role_commands(&implement, &verify)).replace(
+        r#"post = ["commit-verdict", "verdict", "scope"]"#,
+        r#"post = ["commit-verdict", "verdict", "scope", "holdout"]"#,
+    );
+    write_toml(&r, &toml);
+    queue(&r, TASKS);
+    r.commit_all("stubs");
+    r
+}
+
+#[test]
+fn second_red_holdout_halts() {
+    let r = holdout_repo();
+    script(&r, &format!("{}/red.sh", holdout_dir(&r)), "exit 1\n");
+
+    let (digest, events) = go(&r, &opts(3));
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("ready-for-agent"));
+    assert!(
+        digest
+            .halts
+            .iter()
+            .any(|h| h.contains("T-001 was red on holdouts twice this run")),
+        "{:?}",
+        digest.halts
+    );
+    assert_eq!(digest.iterations, 2, "{events:#?}");
+}
+
 #[test]
 fn claims_after_verdict() {
     let repo = Repo::new();
@@ -4595,7 +4636,6 @@ fn check_cannot_read_holdouts() {
     let r = repo(&toml, "");
     queue(&r, "# queue\n");
     r.write(".enallagi/holdouts/s/t", "scenario\n");
-    r.commit_all("a check reading holdouts");
     assert!(plan_of(&r).contains("FINDING check-red"), "holdouts read");
 }
 

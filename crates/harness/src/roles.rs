@@ -110,5 +110,6 @@ pub fn policy(text: &str) -> RolePolicy {
     RolePolicy {
         writes: list("writes:"),
         hosts: list("hosts:").unwrap_or_default(),
+        ..RolePolicy::default()
     }
 }

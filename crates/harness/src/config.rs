@@ -64,6 +64,7 @@ pub const GATE_NAMES: &[&str] = &[
     "dry-round",
     "install-stale",
     "tickets",
+    "holdout",
 ];
 
 #[derive(Debug, thiserror::Error)]

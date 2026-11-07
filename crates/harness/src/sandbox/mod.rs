@@ -35,6 +35,8 @@ pub struct RolePolicy {
     /// Checkout-relative; `Some` replaces the checkout and both git dirs as the writable set.
     pub writes: Option<Vec<String>>,
     pub hosts: Vec<String>,
+    /// The holdout runner's one exception to the hidden rule (spec 6); never a role's.
+    pub holdouts: bool,
 }
 
 type RoleProxy = (Vec<String>, Option<bwrap::Relays>, Proxy);
@@ -173,12 +175,15 @@ impl Sandbox {
                 .map(tempfile::TempDir::keep)
         });
         let extra = self.write.iter().chain(write).map(|w| home(w));
-        let policy = policy(
+        let mut policy = policy(
             &cwd,
             &self.dir,
             role.writes.as_deref(),
             extra.chain(tmp.clone()),
         );
+        if role.holdouts {
+            policy.holdouts.clear();
+        }
         if let Some(tmp) = tmp {
             env.push(("TMPDIR".to_string(), canon(&tmp).display().to_string()));
         }

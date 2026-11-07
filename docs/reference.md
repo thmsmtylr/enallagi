@@ -108,6 +108,13 @@ or halts the run. The names are matched in `crates/harness/src/gates.rs`.
 | `adjudicator-halt` | an adjudicator output line opening with `halt` and naming a task id, and halts the run | adjudicate |
 | `dry-round` | a round that leaves no `ready-for-agent` ticket, counted toward `end_after_dry_rounds` | adjudicate |
 | `install-stale` | an installed file that drifted from what `enallagi init` writes now, read by spawning the binary | verify |
+| `holdout` | a `done` whose spec's holdouts are red at HEAD; the ticket goes back to `ready-for-agent` with `holdouts: <k> of <n> red`, and a second red for one ticket in a run halts | verify |
+
+Holdouts are tests the operator writes and no lane may read (ADR 0006).
+A spec's set is the executable regular files in `.enallagi/holdouts/<spec>/`, where `<spec>` is the ticket's directory under `specs/`; other files there are data the holdouts read.
+Each holdout runs in name order, in a scratch worktree of the commit under test under `.enallagi/worktrees/`, with `ENALLAGI_HOLDOUTS` set to the set's absolute path and `[check] timeout` as its bound.
+Exit 0 passes it and anything else is red.
+Its output goes to `~/.cache/enallagi/holdouts/<repo>/<ticket>/<holdout>.log` and nowhere else, so the queue never names a holdout.
 
 ## Probes
 

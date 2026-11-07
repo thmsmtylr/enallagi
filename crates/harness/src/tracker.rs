@@ -779,6 +779,13 @@ impl Tracker {
         })
     }
 
+    /// The spec directory a ticket's file sits under.
+    pub fn spec_of(&self, id: &str) -> Option<String> {
+        let path = self.path_of(id)?;
+        let spec = path.parent()?.parent()?.file_name()?;
+        Some(spec.to_string_lossy().into_owned())
+    }
+
     pub fn set_status(&self, id: &str, status: &str, reason: &str) -> Result<(), QueueError> {
         let path = self
             .path_of(id)
