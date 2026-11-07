@@ -167,14 +167,20 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     }
 }
 
+// inside a nested instance repo the toplevel is the instance; the product is the repo around it
 fn toplevel() -> anyhow::Result<PathBuf> {
+    let top = |d: &Path| crate::git::git(d, &["rev-parse", "--show-toplevel"]).map(PathBuf::from);
     let cwd = std::env::current_dir()?;
-    Ok(
-        match crate::git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
-            Ok(top) => PathBuf::from(top),
-            Err(_) => cwd,
-        },
-    )
+    let Ok(own) = top(&cwd) else {
+        return Ok(cwd);
+    };
+    if let Some(outer) = own.parent().and_then(|p| top(p).ok()) {
+        let dir = crate::config::harness_dir(&outer);
+        if outer.join(&dir) == own {
+            return Ok(outer);
+        }
+    }
+    Ok(own)
 }
 
 fn fail(e: &QueueError) -> i32 {

@@ -531,6 +531,7 @@ pub struct Draft {
     pub blockers: Option<Vec<String>>,
     pub what: bool,
     pub criteria: Vec<String>,
+    pub trailer: bool,
 }
 
 const WHAT: &str = "**What to build:**";
@@ -560,8 +561,10 @@ pub fn parse_draft(path: &Path, text: &str) -> Draft {
         blockers: None,
         what: false,
         criteria: Vec::new(),
+        trailer: false,
     };
     for line in text.lines() {
+        d.trailer |= line.trim_end() == HARNESS;
         if let Some(v) = line.strip_prefix(STATUS) {
             d.status = !v.trim().is_empty();
         } else if let Some(v) = line.strip_prefix(BLOCKED_BY) {
@@ -618,6 +621,11 @@ pub fn check(root: &Path, cfg: &crate::config::Config, slug: &str) -> Vec<String
             if !ok {
                 out.push(format!("{n}: no {what}"));
             }
+        }
+        if d.trailer {
+            out.push(format!(
+                "{n}: carries `{HARNESS}`; the tickets gate writes it"
+            ));
         }
         for b in d.blockers.iter().flatten() {
             let known = local(b).map_or(open.contains_key(b), |l| nums.contains(&l));

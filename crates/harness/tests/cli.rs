@@ -2355,3 +2355,40 @@ fn check_refuses_spec_edit() {
         ".enallagi/specs/app/spec.md: changed; the decomposer never edits the spec"
     );
 }
+
+// the tickets gate appends `## Harness`, so a draft carrying one would end with two
+#[test]
+fn check_refuses_trailer() {
+    let r = decompose_repo();
+    let text = draft("01", "None", "`adds` passes") + "\n## Harness\n\nprobe: decompose\n";
+    let (code, out) = check(&r, &[("01-first.md", text)]);
+    assert_eq!(code, Some(2), "{out}");
+    assert_eq!(
+        out.trim(),
+        "01-first.md: carries `## Harness`; the tickets gate writes it"
+    );
+}
+
+// a lane's shell can sit inside a nested instance repo, whose toplevel is not the product's
+#[test]
+fn check_from_instance() {
+    let r = decompose_repo();
+    let git = |dir: &std::path::Path, args: &[&str]| enallagi::git::git(dir, args).expect("git");
+    r.write(".git/info/exclude", ".enallagi/\n");
+    let state = r.root.join(".enallagi");
+    git(&r.root, &["rm", "-rq", "--cached", ".enallagi"]);
+    r.commit_all("instance moves out");
+    git(&state, &["init", "-q"]);
+    git(&state, &["add", "-A"]);
+    git(&state, &["commit", "-qm", "instance"]);
+    r.write(
+        ".enallagi/specs/app/issues/01-first.md",
+        &draft("01", "None", "`adds` passes"),
+    );
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["tasks", "check", "app"])
+        .current_dir(&state)
+        .output()
+        .expect("run enallagi tasks check");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+}
