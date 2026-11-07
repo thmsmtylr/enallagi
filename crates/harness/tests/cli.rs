@@ -681,7 +681,14 @@ fn the_reference_tables_live_in_docs() {
         .collect();
     assert_eq!(
         headings,
-        ["Pipelines", "Gates", "Probes", "Configuration", "Files"]
+        [
+            "Pipelines",
+            "Gates",
+            "Probes",
+            "Configuration",
+            "Files",
+            "Twins"
+        ]
     );
 }
 
@@ -1946,7 +1953,7 @@ fn reference_config_links_the_guide() {
 }
 
 const REVIEW_QUERY: &str = concat!(
-    "query($owner:String!,$repo:String!,$number:Int!){",
+    "query ReviewThreads($owner:String!,$repo:String!,$number:Int!){",
     "repository(owner:$owner,name:$repo){pullRequest(number:$number){",
     "reviews(first:100){pageInfo{hasNextPage} nodes{body}}",
     "reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated ",
@@ -2428,4 +2435,168 @@ fn root_from_instance() {
         .output()
         .expect("run enallagi probe");
     assert_eq!(out.status.code(), Some(0), "{out:?}");
+}
+
+const BIN: &str = env!("CARGO_BIN_EXE_enallagi");
+
+fn twin_call(state: &std::path::Path, args: &[&str]) -> std::process::Output {
+    enallagi::fixture::command(BIN)
+        .args(["twin", "gh"])
+        .args(args)
+        .env(enallagi::fixture::twin::ENV, state)
+        .output()
+        .expect("run enallagi twin")
+}
+
+fn reviewed_pull() -> enallagi::fixture::twin::State {
+    use enallagi::fixture::twin::{Pull, Remark, State, Thread};
+    State {
+        repo: "owner/repo".to_string(),
+        default_branch: "main".to_string(),
+        pulls: vec![Pull {
+            number: 7,
+            url: "https://github.com/owner/repo/pull/7".to_string(),
+            head: "task/T-001".to_string(),
+            base: "main".to_string(),
+            state: "OPEN".to_string(),
+            threads: vec![Thread {
+                id: "PRRT_1".to_string(),
+                comments: vec![Remark {
+                    author: "kilo-code-bot".to_string(),
+                    path: Some("src/date.rs".to_string()),
+                    line: Some(3),
+                    body: "parse drops the timezone".to_string(),
+                    url: "https://github.com/owner/repo/pull/7#discussion_r1".to_string(),
+                    ..Remark::default()
+                }],
+                ..Thread::default()
+            }],
+            ..Pull::default()
+        }],
+        ..State::default()
+    }
+}
+
+#[test]
+fn twin_serves_review_threads() {
+    let f = GhRepo::new("");
+    enallagi::fixture::twin::install(f.tools.path(), BIN, &reviewed_pull());
+    let out = f.review(&["https://github.com/owner/repo/pull/7"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let blocks = enallagi::block::parse(&f.tasks()).expect("parse");
+    let last = blocks.last().expect("a block");
+    assert_eq!(last.title, "parse drops the timezone");
+    assert_eq!(
+        enallagi::block::field(last, "scope").as_deref(),
+        Some("src/date.rs")
+    );
+    assert_eq!(enallagi::review::thread_of(last).as_deref(), Some("PRRT_1"));
+}
+
+#[test]
+fn twin_settle_resolves_thread() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_, path) = enallagi::fixture::twin::install(dir.path(), BIN, &reviewed_pull());
+    let query = format!("query={}", enallagi::review::SETTLE);
+    let out = twin_call(
+        &path,
+        &[
+            "api",
+            "graphql",
+            "-f",
+            &query,
+            "-f",
+            "thread=PRRT_1",
+            "-f",
+            "body=fixed",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let state = enallagi::fixture::twin::load(&path);
+    let thread = &state.pulls[0].threads[0];
+    assert!(thread.resolved);
+    assert_eq!(thread.comments.len(), 2);
+    assert_eq!(thread.comments[1].body, "fixed");
+}
+
+#[test]
+fn twin_push_round() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let work = dir.path().join("work");
+    let origin = dir.path().join("origin.git");
+    let r = enallagi::fixture::Repo::new();
+    let git = |root: &std::path::Path, args: &[&str]| {
+        enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+    };
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            &r.root.display().to_string(),
+            "origin.git",
+        ],
+    );
+    git(
+        dir.path(),
+        &["clone", "-q", &origin.display().to_string(), "work"],
+    );
+    git(&work, &["checkout", "-q", "-b", "task/T-001"]);
+    git(&work, &["push", "-q", "origin", "task/T-001"]);
+    let first = git(&work, &["rev-parse", "HEAD"]);
+    let mut state = reviewed_pull();
+    state.origin = origin.clone();
+    state.pulls[0].head_sha = first;
+    state.script = vec![enallagi::fixture::twin::Round {
+        head: "task/T-001".to_string(),
+        round: 1,
+        checks: vec![
+            serde_json::json!({"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}),
+        ],
+    }];
+    let (_, path) = enallagi::fixture::twin::install(&dir.path().join("tools"), BIN, &state);
+
+    git(
+        &work,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "push",
+        ],
+    );
+    git(&work, &["push", "-q", "origin", "task/T-001"]);
+    let out = twin_call(
+        &path,
+        &["pr", "view", "7", "--json", "headRefOid,statusCheckRollup"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let state = enallagi::fixture::twin::load(&path);
+    let pull = &state.pulls[0];
+    assert_eq!(pull.round, 1);
+    assert_eq!(pull.head_sha, git(&work, &["rev-parse", "HEAD"]));
+    assert_eq!(pull.checks[0]["conclusion"], "SUCCESS");
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&pull.head_sha));
+}
+
+#[test]
+fn twin_refuses_unknown_call() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_, path) = enallagi::fixture::twin::install(dir.path(), BIN, &reviewed_pull());
+    let out = twin_call(&path, &["repo", "fork"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("no response for gh repo fork"), "{stderr}");
+    assert_eq!(
+        enallagi::fixture::twin::load(&path).calls,
+        [["repo", "fork"]]
+    );
 }

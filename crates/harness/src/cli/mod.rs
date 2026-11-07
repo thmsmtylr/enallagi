@@ -280,6 +280,15 @@ pub enum Command {
         #[command(subcommand)]
         cmd: SandboxCmd,
     },
+    /// Serve a gh call from the twin's state file, for tests and the demo
+    #[command(hide = true)]
+    Twin {
+        /// The service the call is for; only gh
+        service: String,
+        /// The call's arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -409,6 +418,10 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         Command::Sandbox {
             cmd: SandboxCmd::Bridge { dir, port, argv },
         } => std::process::exit(crate::sandbox::bwrap::bridge(&dir, &port, &argv)),
+        Command::Twin { service, args } => match service.as_str() {
+            "gh" => Ok(crate::fixture::twin::gh(&args)),
+            _ => anyhow::bail!("twin: no twin for {service}"),
+        },
     }
 }
 

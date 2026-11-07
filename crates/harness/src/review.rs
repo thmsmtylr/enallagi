@@ -8,7 +8,7 @@ use std::process::Command;
 // ponytail: first:100 on each list; a longer pull request is reported short rather than read, and
 // `hasNextPage` is what says so. Follow the cursors when one repository needs it.
 const QUERY: &str = concat!(
-    "query($owner:String!,$repo:String!,$number:Int!){",
+    "query ReviewThreads($owner:String!,$repo:String!,$number:Int!){",
     "repository(owner:$owner,name:$repo){pullRequest(number:$number){",
     "reviews(first:100){pageInfo{hasNextPage} nodes{body}}",
     "reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated ",
@@ -361,8 +361,8 @@ pub fn thread_of(block: &block::Block) -> Option<String> {
         .map(str::to_string)
 }
 
-const SETTLE: &str = concat!(
-    "mutation($thread:ID!,$body:String!){",
+pub const SETTLE: &str = concat!(
+    "mutation SettleThread($thread:ID!,$body:String!){",
     "addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$thread,body:$body}){comment{url}} ",
     "resolveReviewThread(input:{threadId:$thread}){thread{isResolved}}",
     "}",

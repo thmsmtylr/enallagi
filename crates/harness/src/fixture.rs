@@ -1,5 +1,7 @@
 //! fixture: test support, also used by `enallagi eval` and the driver.
 
+pub mod twin;
+
 use crate::git;
 use std::fs;
 use std::path::{Path, PathBuf};

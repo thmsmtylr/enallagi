@@ -469,6 +469,32 @@ fn push_pushes_the_branch_and_opens_the_pr() {
 }
 
 #[test]
+fn push_opens_pull() {
+    let (f, _) = landed("exit 0\n");
+    let state = enallagi::fixture::twin::State {
+        repo: "owner/repo".to_string(),
+        origin: f.origin.clone(),
+        default_branch: "main".to_string(),
+        ..Default::default()
+    };
+    let (_, path) =
+        enallagi::fixture::twin::install(&f.tools, env!("CARGO_BIN_EXE_enallagi"), &state);
+    let (code, out) = f.harness(&["pr", "T-001", "--push"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("pushed: https://github.com/owner/repo/pull/1"),
+        "{out}"
+    );
+    let state = enallagi::fixture::twin::load(&path);
+    assert_eq!(state.pulls.len(), 1, "{state:?}");
+    assert_eq!(state.pulls[0].state, "OPEN");
+    assert_eq!(
+        state.pulls[0].head_sha,
+        git(&f.origin, &["rev-parse", "task/T-001"])
+    );
+}
+
+#[test]
 fn pr_refuses_a_done_task_no_round_commit_names() {
     let (f, _) = landed("exit 0\n");
     let tasks = format!("{DONE_AND_REJECTED}\n## [T-004] only the queue moved\nscope: TASKS.md\nblockedBy: none\nstatus: done\n");

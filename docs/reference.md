@@ -201,3 +201,30 @@ Those two commits are what an install leaves in the product's history.
 | `.enallagi/specs/<repo>/spec.md` | the spec, seeded once; its tickets go in `issues/` beside it, one file each |
 | `.enallagi/AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QWEN.md`, `.github/copilot-instructions.md` | seeded once: the context file, and one-line pointers to it |
 | `.gitignore` | `/.enallagi/` appended and committed, so the product's linters skip the harness directory |
+
+## Twins
+
+The GitHub twin stands in for `gh` in tests and the demo (ADR 0010).
+`enallagi twin gh <args>` is a hidden subcommand that serves one call from the JSON state file `ENALLAGI_TWIN` names.
+`fixture::twin::install(dir, bin, state)` writes the state as `dir/twin.json` and a two-line `gh` shim that execs the binary.
+It returns the `PATH` to use and the state's path; `twin::load` reads the state back.
+
+The state is one object, declared in `crates/harness/src/fixture/twin.rs`:
+
+- `repo` (`owner/name`), `origin` (the bare remote's path) and `default_branch`.
+- `pulls`: `number`, `url`, `title`, `body`, `head`, `base`, `head_sha`, `state` (`OPEN`, `MERGED` or `CLOSED`), `round`, `checks` (in `statusCheckRollup`'s shape), `reviews` and `comments` (`author`, `typename`, `body`, `url`), and `threads` (`id`, `resolved`, `outdated`, and `comments` with `author`, `typename`, `path`, `line`, `start_line`, `body` and `url`).
+- `script`: `{head, round, checks}` entries; `head` is a branch or `*`. When a pull reaches the round, its checks are replaced.
+- `responses`: `{args, stdout, stderr, exit}`, matched on exact argv before any served call.
+- `calls`: every argv the twin was handed, in order.
+
+On every call the twin reads each open pull's head from `origin`.
+A moved head is a push: `head_sha` follows it, `round` goes up by one, and that round's script applies.
+`pr create` applies round 0.
+
+Served calls:
+
+- `pr create` (`--head`, `--base`, `--title`, `--body` or `--body-file`), `pr list --json` (`--state`), `pr view <url|number|branch> --json`, and `pr comment <pull> --body`.
+- `--json` takes `number`, `url`, `title`, `body`, `state`, `headRefName`, `baseRefName`, `headRefOid`, `statusCheckRollup`, `reviews` and `comments`.
+- `api graphql` dispatched on the document's operation name: `ReviewThreads` (the review read) and `SettleThread` (reply and resolve).
+
+Any other call, or an operation no handler names, exits 1 with `twin: no response for gh <args>`.
