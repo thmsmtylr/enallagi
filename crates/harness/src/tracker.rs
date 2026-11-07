@@ -408,8 +408,8 @@ pub fn verdict(b: &Block) -> Option<Ruling> {
 /// Where a kill is recorded: one file per concept, in the format of Pocock's `triage`.
 pub const OUT_OF_SCOPE: &str = ".out-of-scope";
 
-/// The indented line starting `prefix` (`url:`, `>`) under the ticket's `finding: <id> ` entry, without it.
-pub fn finding_field(b: &Block, id: &str, prefix: &str) -> Option<String> {
+/// The indented lines under the ticket's `finding: <id> ` entry, trimmed.
+pub fn finding_lines<'b>(b: &'b Block, id: &str) -> Vec<&'b str> {
     let head = format!("finding: {id} ");
     b.body
         .iter()
@@ -417,7 +417,15 @@ pub fn finding_field(b: &Block, id: &str, prefix: &str) -> Option<String> {
         .skip_while(|l| !l.starts_with(&head))
         .skip(1)
         .take_while(|l| l.starts_with("  "))
-        .find_map(|l| l.trim().strip_prefix(prefix))
+        .map(str::trim)
+        .collect()
+}
+
+/// The first of those lines starting `prefix` (`url:`, `>`), without it.
+pub fn finding_field(b: &Block, id: &str, prefix: &str) -> Option<String> {
+    finding_lines(b, id)
+        .into_iter()
+        .find_map(|l| l.strip_prefix(prefix))
         .map(|v| v.trim().to_string())
 }
 

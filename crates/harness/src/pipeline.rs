@@ -1783,7 +1783,62 @@ impl<'a> Loop<'a> {
                 || blocks.iter().any(|b| b.body.iter().any(|(_, l)| *l == key))
                 || prior.iter().any(|l| crate::issue::carries(l, &f.url))
         };
-        let fresh: Vec<&review::Finding> = found.findings.iter().filter(|f| !carried(f)).collect();
+        // a rejected finding's gist, the URL of the reply that rejected it, and its id
+        let rejected: Vec<(String, String, &str)> = ticket
+            .body
+            .iter()
+            .filter_map(|(_, l)| l.strip_prefix("answer: "))
+            .filter_map(|a| a.split_once(" reject ").map(|(f, _)| f.trim()))
+            .filter_map(|f| {
+                let settled = format!("settled: {f} ");
+                let reply = ticket
+                    .body
+                    .iter()
+                    .find_map(|(_, l)| l.strip_prefix(&settled))?
+                    .split_whitespace()
+                    .next()?
+                    .to_string();
+                let lines = tracker::finding_lines(ticket, f);
+                let by = tracker::finding_field(ticket, f, "by:")?;
+                let anchor = tracker::finding_field(ticket, f, "anchor:");
+                let path = anchor.as_deref().map(|a| a.split(':').next().unwrap_or(a));
+                let said: Vec<&str> = lines.iter().filter_map(|l| l.strip_prefix('>')).collect();
+                Some((review::gist(&by, path, &said.join("\n")), reply, f))
+            })
+            .collect();
+        let mut fresh = Vec::new();
+        let mut pointed = Vec::new();
+        for f in found.findings.iter().filter(|f| !carried(f)) {
+            let gist = review::gist(&f.by, f.path.as_deref(), &f.body);
+            let Some((_, first, was)) = rejected.iter().find(|(g, ..)| *g == gist) else {
+                fresh.push(f);
+                continue;
+            };
+            // raised again after a reject: point at the reply, resolve, and start no round
+            let body = format!(
+                "Raised before and rejected: {first}. Not taken up again by enallagi.\n\n{}{was} -->",
+                review::OWN
+            );
+            let sent = match &f.thread {
+                Some(thread) => review::settle(token.as_deref(), thread, &body).inspect(|_| {
+                    resolved.push(thread.clone());
+                }),
+                None => review::comment(token.as_deref(), url, &body),
+            };
+            match sent {
+                Ok(reply) => pointed.push(format!("settled: {was} {reply} for {}", f.url)),
+                Err(err) => {
+                    let err = self.denied(err);
+                    self.digest
+                        .warnings
+                        .push(format!("{id}: no pointer on {}: {err}", f.url));
+                }
+            }
+        }
+        if !pointed.is_empty() {
+            t.add_lines(id, &pointed.join("\n"))
+                .map_err(|e| e.to_string())?;
+        }
         let mut entries = Vec::new();
         for f in fresh.iter().copied() {
             if f.path.as_deref().is_none_or(|p| gates::in_scope(p, &scope)) {

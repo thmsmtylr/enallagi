@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- a new finding with the same author, path and words as one the ticket rejected is not routed: the launcher replies with the rejection's URL, resolves its thread, records `settled: F-<n> <url> for <new url>` and starts no round
 - the respond loop stops: inside `[respond] quiet` (default `10m`) after a push the poll judges nothing, and the launcher sleeps to the window's end when nothing else can run; new in-scope findings after `[respond] max_rounds` (default `3`) set `ready-for-human` and `respond: max_rounds`; no new finding, green checks and every thread resolved write `respond: clean at <sha>`; each push asks every `[respond] rereview` reviewer again
 - after a respond push the launcher replies once per answered finding, marked `<!-- enallagi:F-<n> -->` (a thread reply, or one comment listing the rest by URL), writes each reply's URL as `settled:`, and at the next poll resolves only the answered threads still unresolved; `[respond] token_env` (default `ENALLAGI_GH_TOKEN`) names the variable passed to `gh` as `GH_TOKEN` for these writes
 - a returned ticket's implementer writes one `answer: F-<n> accept <test>` or `answer: F-<n> reject <concept>: <command>` per finding and the verifier re-runs each; a new `findings` gate after `claims` forces back a `done` with a finding unanswered or answered twice, an accept no changed test file holds, or a reject with no command or no `ran:` line; after the push each reject is appended to `.out-of-scope/<concept>.md`

@@ -341,13 +341,10 @@ fn collect(response: Response) -> Found {
         found.folded += replies.len();
         let finding = Finding {
             source: "thread",
-            key: thread.id.clone().unwrap_or_else(|| {
-                format!(
-                    "{by} {} {}",
-                    first.path.as_deref().unwrap_or("-"),
-                    plain(&first.body)
-                )
-            }),
+            key: thread
+                .id
+                .clone()
+                .unwrap_or_else(|| gist(&by, first.path.as_deref(), &first.body)),
             by,
             url: first.url,
             path: first.path,
@@ -387,7 +384,7 @@ fn collect(response: Response) -> Found {
         }
         let key = match &summary {
             Some((marker, _)) => marker.to_string(),
-            None => format!("{by} - {}", plain(&note.body)),
+            None => gist(&by, None, &note.body),
         };
         let finding = Finding {
             source,
@@ -441,6 +438,11 @@ fn plain(body: &str) -> String {
         .filter(|w| !w.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Who said what where, wording aside: the same request raised again in a new thread has the same gist.
+pub fn gist(by: &str, path: Option<&str>, body: &str) -> String {
+    format!("{by} {} {}", path.unwrap_or("-"), plain(body))
 }
 
 pub fn read(reference: &str) -> Result<Found, ReviewError> {
@@ -584,9 +586,9 @@ pub fn resolve(token: Option<&str>, thread: &str) -> Result<(), ReviewError> {
     .map(drop)
 }
 
-/// Replies `body` on the thread and resolves it.
-pub fn settle(token: Option<&str>, thread: &str, body: &str) -> Result<(), ReviewError> {
-    reply(token, thread, body).and_then(|_| resolve(token, thread))
+/// Replies `body` on the thread and resolves it; returns the reply's URL.
+pub fn settle(token: Option<&str>, thread: &str, body: &str) -> Result<String, ReviewError> {
+    reply(token, thread, body).and_then(|url| resolve(token, thread).map(|_| url))
 }
 
 /// Asks `who` to review the pull request again.

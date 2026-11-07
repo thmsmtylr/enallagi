@@ -4811,6 +4811,35 @@ fn rereview_requested_on_push() {
     assert_eq!(state_of(&p.repo, "T-900").as_deref(), Some("open"), "{out}");
 }
 
+#[test]
+fn recurring_rejection_gets_pointer() {
+    let first = "https://github.com/owner/repo/pull/13#discussion_PRRT_7_2";
+    let rejected = format!(
+        "branch: task/T-001\nrounds: 1\nfinding: F-1 thread round 1\n  by: pat\n  key: PRRT_7\n  \
+         url: https://github.com/owner/repo/pull/13#discussion_r7\n  anchor: src/thing.ts:3\n  \
+         thread-id: PRRT_7\n  > finding 7 on src/thing.ts\nanswer: F-1 reject naming: true\n\
+         settled: F-1 {first}\n"
+    );
+    let r = driven_repo(&OPEN_TASKS.replacen("branch: task/T-001\n", &rejected, 1));
+    let mut again = thread_on("src/thing.ts", 8);
+    again.comments[0].body = "Finding 7 on `src/thing.ts`".to_string();
+    let old = Thread {
+        resolved: true,
+        ..thread_on("src/thing.ts", 7)
+    };
+    let path = serving(&r, pull_with(vec![old, again]));
+    let out = run_with_path(&r, &path);
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("open"), "{out}");
+    assert_eq!(field_of(&r, "T-001", "rounds").as_deref(), Some("1"));
+    let text = ticket_file(&r, "T-001");
+    assert_eq!(text.matches("finding:").count(), 1, "{text}");
+    assert!(text.contains("#discussion_r8"), "{text}");
+    let pull = &twin::load(&r.root.join("tools/twin.json")).pulls[0];
+    let thread = &pull.threads[1];
+    assert!(thread.resolved, "{thread:?}");
+    assert!(thread.comments[1].body.contains(first), "{thread:?}");
+}
+
 const LEARNING: &str = "- [proposed] `vacuous-test`: a test passed with its logic deleted → watch it fail first\n  instances: `SPEC.md:1`, `PROGRESS.md:1`, `TASKS.md:1`\n";
 
 fn decisions(earned: &str, proposed: &str) -> String {
