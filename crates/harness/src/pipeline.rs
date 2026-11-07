@@ -2301,6 +2301,17 @@ impl<'a> Loop<'a> {
         if let (Some(id), "implementer") = (&self.opts.task, role) {
             prompt = prompt.replace("the one `enallagi tasks ready` prints.", &format!("{id}."));
         }
+        if let (Some(id), "verifier") = (&self.opts.task, role) {
+            prompt = prompt
+                .replace(
+                    "every ticket at review (`enallagi tasks ids-at review`)",
+                    id,
+                )
+                .replace(
+                    "Verify every ticket at review.",
+                    &format!("Verify {id} only; leave every other ticket at review alone."),
+                );
+        }
         if role == "decomposer" {
             prompt.push_str(&format!(" The spec to decompose is {spec}."));
         }

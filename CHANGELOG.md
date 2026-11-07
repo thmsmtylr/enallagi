@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- under `writers > 1` the launcher also starts a reader lane (`run --task <id> --pipeline review`) per `review` ticket no live claim holds, outside the `writers` count; a pinned verifier verifies only its ticket
 - a writer lane's implementer prompt lists the commits other lanes landed on the parent branch since its base (short sha, subject, files), each once per run
 - under `writers > 1` a ticket a lane filed whose id another lane landed first is renamed to the next free id at landing, and the old id is rewritten in it and in the lane's own ticket
 - the GitHub twin serves `ReplyThread` and `ResolveThread` in place of `SettleThread`, records each call's `GH_TOKEN` under `tokens`, resolves the thread ids a script round's `resolve` names, and posts a scripted finding with no `path` as a summary row only

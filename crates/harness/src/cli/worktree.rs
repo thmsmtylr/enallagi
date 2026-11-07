@@ -74,8 +74,14 @@ fn writers(root: &Path, cfg: &config::Config, n: u32) -> anyhow::Result<i32> {
     let reports = worktree::launch(root, cfg, &|wt, task, env| {
         eprintln!("worktree: cd {} && enallagi watch", wt.display());
         let mut args = vec!["run", "--iterations", &n, "--no-tui"];
-        if let Some(task) = task {
-            args.extend(["--task", task, "--pipeline", "task", "--pipeline", "review"]);
+        match task {
+            Some((task, worktree::Hold::Writer)) => {
+                args.extend(["--task", task, "--pipeline", "task", "--pipeline", "review"])
+            }
+            Some((task, worktree::Hold::Reader)) => {
+                args.extend(["--task", task, "--pipeline", "review"])
+            }
+            None => {}
         }
         let status = Command::new(std::env::current_exe()?)
             .args(args)

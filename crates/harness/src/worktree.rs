@@ -255,7 +255,7 @@ fn untracked_notice(paths: &[String]) -> String {
     )
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Hold {
     Writer,
@@ -362,6 +362,31 @@ fn take(
                 .find(|b| &b.id == id)
                 .expect("taken from blocks");
             claims.push(held_at(wt, id, scope(b)));
+        }
+        Ok(id)
+    })?
+}
+
+/// Claims the lowest-id `review` ticket outside `skip` that no live claim holds, for a reader at `wt`; `None` only looks.
+pub fn read_claim(
+    root: &Path,
+    cfg: &Config,
+    wt: Option<&Path>,
+    skip: &[String],
+) -> std::io::Result<Option<String>> {
+    let dir = &cfg.layout.harness_dir;
+    with_claims(root, dir, |claims| {
+        let blocks = crate::tracker::Tracker::open(root, dir)
+            .blocks()
+            .map_err(std::io::Error::other)?;
+        let id = crate::tracker::ids_in(&blocks, &["review"])
+            .into_iter()
+            .find(|id| !skip.contains(id) && claims.iter().all(|c| &c.id != id));
+        if let (Some(id), Some(wt)) = (&id, wt) {
+            claims.push(Claim {
+                hold: Hold::Reader,
+                ..held_at(wt, id, Vec::new())
+            });
         }
         Ok(id)
     })?
@@ -514,11 +539,11 @@ fn lane_budget(
     Some(env)
 }
 
-/// Runs the lane's round in `wt`: pinned to a ticket, or unpinned, with these variables set.
+/// Runs the lane's round in `wt`: pinned to a ticket as writer or reader, or unpinned, with these variables set.
 pub type Spawn<'a> =
-    &'a (dyn Fn(&Path, Option<&str>, &[(String, String)]) -> anyhow::Result<()> + Sync);
+    &'a (dyn Fn(&Path, Option<(&str, Hold)>, &[(String, String)]) -> anyhow::Result<()> + Sync);
 
-/// `writers > 1`: up to `writers` pinned lanes at once, each landing as it finishes; an unpinned lane when nothing can be claimed.
+/// `writers > 1`: up to `writers` pinned lanes at once, plus a reader per unheld `review` ticket, each landing as it finishes; an unpinned lane when nothing can be claimed.
 pub fn launch(root: &Path, cfg: &Config, spawn: Spawn) -> Result<Vec<LaneReport>, WorktreeError> {
     let dir = &cfg.layout.harness_dir;
     let writers = cfg.parallel.writers.get();
@@ -529,11 +554,12 @@ pub fn launch(root: &Path, cfg: &Config, spawn: Spawn) -> Result<Vec<LaneReport>
     let stops = crate::config::stop_files(root, dir);
     // ponytail: a ticket is taken once per launch, so a rejected one waits for the next `enallagi worktree`
     let mut tried: Vec<String> = Vec::new();
+    let mut read: Vec<String> = Vec::new();
     let mut reports = Vec::new();
     let mut unpinned = false;
     std::thread::scope(|s| -> Result<(), WorktreeError> {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let mut live = 0;
+        let (mut live, mut readers) = (0, 0);
         loop {
             let used = spent(
                 log.read()
@@ -541,6 +567,7 @@ pub fn launch(root: &Path, cfg: &Config, spawn: Spawn) -> Result<Vec<LaneReport>
                     .get(before..)
                     .unwrap_or_default(),
             );
+            // ponytail: a reader takes a writer's share on top of the writers', so readers can overshoot the budget by one share each
             let env = lane_budget(budget.budget_usd, budget.budget_tokens, used, writers)
                 .filter(|_| {
                     !stops.iter().any(|p| p.exists()) && crate::agent::stop_signal().is_none()
@@ -549,34 +576,53 @@ pub fn launch(root: &Path, cfg: &Config, spawn: Spawn) -> Result<Vec<LaneReport>
                     env.push(("ENALLAGI_PARENT".to_string(), parent.clone()));
                     env
                 });
-            while let Some(env) = env
-                .clone()
-                .filter(|_| live < writers && claimable(root, cfg, &tried))
-            {
-                let (tx, rx) = std::sync::mpsc::channel();
-                let (done, skip) = (done_tx.clone(), tried.clone());
-                s.spawn(move || {
-                    let report = lane(root, cfg, &mut |wt| {
-                        let id = claim(root, cfg, wt, &skip)?;
-                        let _ = tx.send(id.clone());
-                        match id {
-                            Some(id) => spawn(wt, Some(&id), &env),
-                            None => Ok(()),
+            for hold in [Hold::Writer, Hold::Reader] {
+                loop {
+                    let room = match hold {
+                        Hold::Writer => live < writers && claimable(root, cfg, &tried),
+                        Hold::Reader => {
+                            read_claim(root, cfg, None, &read).is_ok_and(|id| id.is_some())
                         }
+                    };
+                    let Some(env) = env.clone().filter(|_| room) else {
+                        break;
+                    };
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let done = done_tx.clone();
+                    let skip = match hold {
+                        Hold::Writer => tried.clone(),
+                        Hold::Reader => read.clone(),
+                    };
+                    s.spawn(move || {
+                        let report = lane(root, cfg, &mut |wt| {
+                            let id = match hold {
+                                Hold::Writer => claim(root, cfg, wt, &skip)?,
+                                Hold::Reader => read_claim(root, cfg, Some(wt), &skip)?,
+                            };
+                            let _ = tx.send(id.clone());
+                            match id {
+                                Some(id) => spawn(wt, Some((&id, hold)), &env),
+                                None => Ok(()),
+                            }
+                        });
+                        let _ = done.send((hold, report));
                     });
-                    let _ = done.send(report);
-                });
-                live += 1;
-                // another launcher may have taken it between the look and the claim
-                match rx.recv() {
-                    Ok(Some(id)) => {
-                        tried.push(id);
-                        unpinned = false;
+                    match hold {
+                        Hold::Writer => live += 1,
+                        Hold::Reader => readers += 1,
                     }
-                    _ => break,
+                    // another launcher may have taken it between the look and the claim
+                    match (rx.recv(), hold) {
+                        (Ok(Some(id)), Hold::Writer) => {
+                            tried.push(id);
+                            unpinned = false;
+                        }
+                        (Ok(Some(id)), Hold::Reader) => read.push(id),
+                        _ => break,
+                    }
                 }
             }
-            if live == 0 {
+            if live == 0 && readers == 0 {
                 let Some(env) = env.filter(|_| !unpinned) else {
                     return Ok(());
                 };
@@ -587,8 +633,12 @@ pub fn launch(root: &Path, cfg: &Config, spawn: Spawn) -> Result<Vec<LaneReport>
                 })?);
                 continue;
             }
-            let report = done_rx.recv().expect("a live lane reports")?;
-            live -= 1;
+            let (hold, report) = done_rx.recv().expect("a live lane reports");
+            match hold {
+                Hold::Writer => live -= 1,
+                Hold::Reader => readers -= 1,
+            }
+            let report = report?;
             if report.task.is_some() {
                 reports.push(report);
             }
@@ -1044,6 +1094,37 @@ mod tests {
             .map(|c| c.id)
             .collect();
         assert_eq!(held, ["T-001", "T-003"]);
+    }
+
+    #[test]
+    fn reader_unclaimed() {
+        let r = repo_with_harness_dir();
+        r.queue(
+            ".enallagi",
+            "## [T-001] a\nscope: src/a/**\nstatus: review\n\n## [T-002] b\nscope: src/a/x.rs\nstatus: ready-for-agent\n",
+        );
+        let cfg = cfg(&r);
+        let wts: Vec<tempfile::TempDir> =
+            (0..3).map(|_| tempfile::TempDir::new().unwrap()).collect();
+
+        let read = read_claim(&r.root, &cfg, Some(wts[0].path()), &[]).expect("read");
+        let write = claim(&r.root, &cfg, wts[1].path(), &[]).expect("claim");
+        let again = read_claim(&r.root, &cfg, Some(wts[2].path()), &[]).expect("read");
+
+        assert_eq!(read.as_deref(), Some("T-001"));
+        assert_eq!(write.as_deref(), Some("T-002"));
+        assert_eq!(again, None);
+        let holds: Vec<(String, Hold)> = claims(&r.root, ".enallagi")
+            .into_iter()
+            .map(|c| (c.id, c.hold))
+            .collect();
+        assert_eq!(
+            holds,
+            [
+                ("T-001".into(), Hold::Reader),
+                ("T-002".into(), Hold::Writer)
+            ]
+        );
     }
 
     #[test]

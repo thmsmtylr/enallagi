@@ -273,7 +273,7 @@ fn parent_stop_halts_lane() {
 }
 
 // two writers, a task and a review pipeline, and a stub agent that implements the pinned ticket
-// and verifies whatever is at review; `wait` runs before the implementer commits
+// and verifies the pinned ticket, or whatever is at review; `wait` runs before the implementer commits
 fn writers_repo(tools: &Path, queue: &str, wait: &str) -> Repo {
     let r = lane_repo(tools);
     let state = r.root.join(".enallagi");
@@ -290,6 +290,11 @@ case "$1" in
     mkdir -p src; echo "$id" > "src/$id.txt"
     git add -- "src/$id.txt"; git -c commit.gpgsign=false commit -qm "$id: work"
     "$bin" tasks set-status "$id" review 'stub implemented'
+    ;;
+  *"Verify T-"*)
+    id=$(printf '%s' "$1" | grep -o 'Verify T-[0-9]*' | grep -o 'T-[0-9]*')
+    echo "verify $id $(pwd)" >> '{log}'
+    "$bin" tasks set-status "$id" done 'stub verified'
     ;;
   *"Verify every ticket at review"*)
     for id in $("$bin" tasks ids-at review); do "$bin" tasks set-status "$id" done 'stub verified'; done
@@ -327,7 +332,8 @@ role = "verifier"
 turns = 1
 "#;
     std::fs::write(state.join("enallagi.toml"), toml).expect("config");
-    let (code, out) = harness(&r.root, &["init"]);
+    // vendored up front; lanes vendoring different role sets conflict on harness.lock
+    let (code, out) = harness(&r.root, &["init", "--sync"]);
     assert_eq!(code, 0, "{out}");
     r.queue(".enallagi", queue);
     git(&state, &["add", "-A"]);
@@ -397,6 +403,41 @@ fn overlapping_tickets_serialize() {
         .unwrap_or_else(|| panic!("T-002 never started:\n{log}\n{out}"));
     assert!(second.contains("T-001.txt"), "{log}\n{out}");
     for id in ["T-001", "T-002"] {
+        assert_eq!(status_of(&r, id).as_deref(), Some("done"), "{id}\n{out}");
+    }
+    assert_eq!(code, 0, "{out}");
+    remove_lanes(&r);
+}
+
+#[test]
+fn readers_fan_out() {
+    let tools = tempfile::tempdir().expect("tools");
+    let log = tools.path().join("log");
+    // the writer waits for both readers, so a pass means they ran beside it
+    let wait = format!(
+        "for i in $(seq 1 300); do [ $(grep -c '^verify T-00[12]' '{l}') -ge 2 ] && break; sleep 0.1; done; [ $(grep -c '^verify T-00[12]' '{l}') -ge 2 ] || echo \"alone $id\" >> '{l}'",
+        l = log.display()
+    );
+    let r = writers_repo(
+        tools.path(),
+        "## [T-001] one\nscope: src/one.txt\nstatus: review\n\n## [T-002] two\nscope: src/two.txt\nstatus: review\n\n## [T-003] three\nscope: src/T-003.txt\nstatus: ready-for-agent\n",
+        &wait,
+    );
+
+    let (code, out) = harness(&r.root, &["worktree", "1"]);
+
+    let log = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(!log.contains("alone"), "{log}\n{out}");
+    let dirs: Vec<&str> = ["T-001", "T-002"]
+        .iter()
+        .map(|id| {
+            log.lines()
+                .find_map(|l| l.strip_prefix(&format!("verify {id} ")))
+                .unwrap_or_else(|| panic!("{id} never verified:\n{log}\n{out}"))
+        })
+        .collect();
+    assert_ne!(dirs[0], dirs[1], "{log}");
+    for id in ["T-001", "T-002", "T-003"] {
         assert_eq!(status_of(&r, id).as_deref(), Some("done"), "{id}\n{out}");
     }
     assert_eq!(code, 0, "{out}");
