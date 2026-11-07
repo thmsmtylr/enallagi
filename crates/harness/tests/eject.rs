@@ -96,7 +96,10 @@ fn stub_config(tools: &Path) -> String {
     );
     let verify = exec(
         &tools.join("verify.sh"),
-        &format!("{bin} tasks set-status T-001 done 'stub verified'\n{quiet}"),
+        &format!(
+            "{bin} tasks set-status T-001 done 'stub verified'\n\
+             printf 'verdict: verified by verifier\\n' >>.enallagi/specs/*/issues/T-001-*.md\n{quiet}"
+        ),
     );
     let mut toml = format!(
         r#"

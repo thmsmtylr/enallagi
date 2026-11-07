@@ -267,6 +267,58 @@ pub fn ticket_text(b: &Block) -> String {
     out.join("\n")
 }
 
+/// A ticket's `verdict:` line in `## Harness`.
+#[derive(Debug, PartialEq)]
+pub enum Verdict {
+    Verified,
+    Rejected(String),
+    Answered,
+}
+
+/// Every form a `verdict:` line takes; the role prompts name each.
+pub const VERDICT_FORMS: [&str; 3] = [
+    "verified by verifier",
+    "rejected by verifier: <reason>",
+    "answered by implementer",
+];
+
+/// The verdict and the `ran:`/`exit:` pairs directly under it. Any other value reads as none.
+pub fn verdict(b: &Block) -> Option<(Verdict, Vec<(String, i32)>)> {
+    // `## Comments` comes last, opening at `notes:`; a verdict quoted there is prose
+    let lines: Vec<&str> = b
+        .body
+        .iter()
+        .map(|(_, l)| l.as_str())
+        .take_while(|l| !l.starts_with("notes:"))
+        .collect();
+    let at = lines.iter().position(|l| l.starts_with("verdict:"))?;
+    let value = lines[at]["verdict:".len()..].trim();
+    let v = match value {
+        "verified by verifier" => Verdict::Verified,
+        "answered by implementer" => Verdict::Answered,
+        _ => {
+            let rest = value.strip_prefix("rejected by verifier")?;
+            if !(rest.is_empty() || rest.starts_with(':')) {
+                return None;
+            }
+            Verdict::Rejected(rest[rest.len().min(1)..].trim().to_string())
+        }
+    };
+    let mut runs = Vec::new();
+    for pair in lines[at + 1..].chunks(2) {
+        let (Some(cmd), Some(exit)) = (
+            pair[0].strip_prefix("ran:"),
+            pair.get(1).and_then(|l| l.strip_prefix("exit:")),
+        ) else {
+            break;
+        };
+        if let Ok(exit) = exit.trim().trim_matches('`').parse() {
+            runs.push((cmd.trim().trim_matches('`').to_string(), exit));
+        }
+    }
+    Some((v, runs))
+}
+
 /// The spec a new ticket lands in: the product repository's directory name.
 pub fn repo_slug(root: &Path) -> String {
     let name = root
@@ -589,6 +641,40 @@ mod tests {
         assert!(t
             .append("enallagi", "## [T-006] again\nstatus: needs-triage\n")
             .is_err());
+    }
+
+    #[test]
+    fn verdict_forms() {
+        let read = |harness: &str| {
+            let text = format!("# T-001: t\n\n**Status:** review\n\n## Comments\n\nThe verifier wrote:\nverdict: verified by verifier\n\n## Harness\n\n{harness}\n");
+            verdict(&parse_ticket(&text).unwrap())
+        };
+        assert_eq!(
+            read("gate: x\nverdict: verified by verifier\nran: `cargo test`\nexit: 0\nran: true\nexit: 1\nscope: a.rs\nran: late\nexit: 0"),
+            Some((
+                Verdict::Verified,
+                vec![("cargo test".to_string(), 0), ("true".to_string(), 1)]
+            ))
+        );
+        assert_eq!(
+            read("verdict: rejected by verifier: red on `a`\nran: false"),
+            Some((Verdict::Rejected("red on `a`".to_string()), vec![]))
+        );
+        assert_eq!(
+            read("verdict: rejected by verifier"),
+            Some((Verdict::Rejected(String::new()), vec![]))
+        );
+        assert_eq!(
+            read("verdict: answered by implementer"),
+            Some((Verdict::Answered, vec![]))
+        );
+        for bad in [
+            "verdict: VERIFIED",
+            "verdict: rejected by verifiers: x",
+            "scope: a.rs",
+        ] {
+            assert_eq!(read(bad), None, "{bad}");
+        }
     }
 
     #[test]

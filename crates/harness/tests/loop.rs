@@ -269,9 +269,18 @@ fn verifier(repo: &Repo) -> String {
         repo,
         "src/fakeverify.sh",
         &format!(
-            "{bin} tasks set-status T-001 done 'stub verified'\n{QUIET}",
+            "{bin} tasks set-status T-001 done 'stub verified'\n{verified}{QUIET}",
             bin = env!("CARGO_BIN_EXE_enallagi"),
+            verified = verdict("verified by verifier"),
         ),
+    )
+}
+
+// a stub's verdict, written as a role writes it: one line, replacing the last, in `## Harness`, the file's last section
+fn verdict(line: &str) -> String {
+    format!(
+        "f=$(ls {}/*/issues/T-001-*.md)\nsed -i.bak '/^verdict:/d' \"$f\"\nrm -f \"$f.bak\"\nprintf 'verdict: {line}\\n' >>\"$f\"\n",
+        queue_path()
     )
 }
 
@@ -1040,8 +1049,9 @@ fn stale_install_fails_verify() {
         "src/fakeverify.sh",
         &format!(
             "printf 'drift\\n' >>.enallagi/RAILS.md\n\
-             {bin} tasks set-status T-001 done 'stub verified'\n{QUIET}",
+             {bin} tasks set-status T-001 done 'stub verified'\n{verified}{QUIET}",
             bin = env!("CARGO_BIN_EXE_enallagi"),
+            verified = verdict("verified by verifier"),
         ),
     );
     let (code, out) = harness(&r.root, &["init"]);
@@ -1174,11 +1184,13 @@ fn a_fetched_skill_commits_before_its_stage() {
         "src/fakeverify.sh",
         &format!(
             "{bin} tasks set-status T-001 done 'stub verified'\n\
+             {verified}\
              git add -- {queue} >/dev/null 2>&1\n\
              git -c commit.gpgsign=false commit -qm 'verify: T-001 verdict' >/dev/null 2>&1\n\
              {QUIET}",
             bin = env!("CARGO_BIN_EXE_enallagi"),
             queue = queue_path(),
+            verified = verdict("verified by verifier"),
         ),
     );
     let skills = r.local_skills(&toml);
@@ -1569,9 +1581,11 @@ fn verifier_noting(r: &Repo, note: &str, proposed: &str) -> String {
         "src/fakeverify.sh",
         &format!(
             "{bin} tasks set-status T-001 done ''\n\
+             {verified}\
              printf 'notes: {note}\\n' >>{ticket}\n\
              {queued}{QUIET}",
             bin = env!("CARGO_BIN_EXE_enallagi"),
+            verified = verdict("verified by verifier"),
             ticket = ticket(r, "T-001", "do the thing"),
             queued = queues(r, proposed),
         ),
@@ -2188,9 +2202,11 @@ fn rejecting_verifier(r: &Repo) -> String {
         "src/fakeverify.sh",
         &format!(
             "{bin} tasks set-status T-001 ready-for-agent '{REJECTION}'\n\
+             {rejected}\
              {filing}\
              {QUIET}",
             bin = env!("CARGO_BIN_EXE_enallagi"),
+            rejected = verdict(&format!("rejected by verifier: {REJECTION}")),
             filing = filing(r),
         ),
     )
@@ -2204,11 +2220,13 @@ fn verifier_rejecting_in_notes(r: &Repo) -> String {
         &format!(
             "sed -i.bak 's/^\\*\\*Status:\\*\\* review$/**Status:** ready-for-agent/' {t}\n\
              rm -f {t}.bak\n\
+             {rejected}\
              printf '\\n## Comments\\n\\nVerifier: REJECTED on criterion 1. {NOTED_REJECTION}. Re-run it.\\n' >>{t}\n\
              {filing}\
              {QUIET}",
             t = ticket(r, "T-001", "do the thing"),
             filing = filing(r),
+            rejected = verdict(&format!("rejected by verifier: {NOTED_REJECTION}")),
         ),
     )
 }
@@ -3629,11 +3647,15 @@ fn diff_reading_verifier(r: &Repo) -> String {
              base=$(git rev-list --max-parents=0 HEAD)\n\
              if [ -n \"$specs\" ] && eval \"git diff $base -- $specs\" | grep -q '^+.*assert!(true)'; then\n\
              {bin} tasks set-status T-001 ready-for-agent 'REJECTED: assert!(true) replaced an assertion'\n\
+             {rejected}\
              else\n\
              {bin} tasks set-status T-001 done 'stub verified'\n\
+             {verified}\
              fi\n\
              {QUIET}",
             bin = env!("CARGO_BIN_EXE_enallagi"),
+            rejected = verdict("rejected by verifier: assert!(true) replaced an assertion"),
+            verified = verdict("verified by verifier"),
         ),
     )
 }

@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- the verifier and implementer write one `verdict:` line in the ticket's `## Harness`; the `verdict` gate sends back to `review` a `done` not `verified by verifier` and a rejection with no reason, and `implementer-not-done` refuses a `review` over a standing rejection
 - `enallagi eval` puts its own binary first on the agent's `PATH`, sets `ENALLAGI_TASK` to the fixture's ready ticket, and reads `EVAL_AGENT` with shell quoting
 - the `immutable` hook lets a lane edit a hashed file its own ticket's `scope:` line names, as the scope gate does; `test-hashes.json` and sessions outside a lane stay refused
 - a new `skip-added` gate forces a `done` back when its commits add a skip with no stated reason; init writes `layout.skip_patterns` for the detected runner

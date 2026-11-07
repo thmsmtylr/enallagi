@@ -987,8 +987,9 @@ impl<'a> Loop<'a> {
         output: String,
     ) -> Flow {
         for gate in &stage.post {
-            // commit-verdict judges only what the verifier wrote, not the implementer's notes from the same iteration
-            let (base, state_base) = if gate == "commit-verdict" {
+            // commit-verdict judges only what the verifier wrote, not the implementer's notes from the same iteration;
+            // verdict reads the status the verifier was handed
+            let (base, state_base) = if matches!(gate.as_str(), "commit-verdict" | "verdict") {
                 &stage_bases
             } else {
                 &iter_bases

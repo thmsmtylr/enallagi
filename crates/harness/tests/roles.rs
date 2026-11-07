@@ -277,7 +277,7 @@ fn the_verifier_reproduces_each_claim() {
         "A check that exits non-zero is a rejection",
         "never put down to the environment",
         "out of a probe's reach",
-        "A verdict line with neither",
+        "A claim with neither",
     ] {
         assert!(text.contains(want), "roles/verifier.md wants {want:?}");
     }
@@ -317,20 +317,17 @@ fn the_adjudicator_gates_each_proposed_learning() {
     }
 }
 
-// stopgap until spec 2's `verdict:` line: the words a role is told to open with are the words the probe reads
+// the forms a role is told to write are the forms the tracker reads
 #[test]
-fn verdict_words() {
-    let mut want = enallagi::probes::rejection_stale::VERDICTS.to_vec();
-    want.sort();
+fn roles_name_verdict_forms() {
     for role in ["verifier", "implementer"] {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../roles/{role}.md"));
         let text = fs::read_to_string(&source).expect("read role");
-        let line = text
-            .lines()
-            .find(|l| l.starts_with("Verdict words:"))
-            .unwrap_or_else(|| panic!("roles/{role}.md names no verdict words"));
-        let mut named: Vec<&str> = line.split('`').skip(1).step_by(2).collect();
-        named.sort();
-        assert_eq!(named, want, "roles/{role}.md");
+        for form in enallagi::tracker::VERDICT_FORMS {
+            assert!(
+                text.contains(&format!("`verdict: {form}`")),
+                "roles/{role}.md names no `verdict: {form}`"
+            );
+        }
     }
 }

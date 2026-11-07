@@ -31,11 +31,12 @@ status=$(enallagi tasks field T-002 status)
   echo "  expected T-002 rejected to ready-for-agent, its test passes with the trim deleted; got status: $status" >&2
   exit 1
 }
-notes=$(sed -n '/^## Comments/,/^## Harness/p' .enallagi/specs/*/issues/T-002-*.md)
-printf '%s\n' "$notes" | grep -q 'REJECTED' || {
-  echo "  T-002's comments carry no REJECTED verdict:" >&2; printf '%s\n' "$notes" >&2
-  exit 1
-}
+verdict=$(enallagi tasks field T-002 verdict)
+case "$verdict" in
+  "rejected by verifier: "?*) ;;
+  *) echo "  T-002's verdict line is not a reasoned rejection: $verdict" >&2; exit 1 ;;
+esac
+notes=$(sed -n '/^## Comments/,$p' .enallagi/specs/*/issues/T-002-*.md)
 printf '%s\n' "$notes" | grep -qi 'trims surrounding whitespace' || {
   echo "  T-002's rejection does not name the test that passes with its logic deleted:" >&2; printf '%s\n' "$notes" >&2
   exit 1

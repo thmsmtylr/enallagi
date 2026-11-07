@@ -7,21 +7,19 @@ You implement ONE task per invocation: the ticket `enallagi tasks ready` prints.
 - {{skill:tdd}} — at step 3, before the first test or source edit.
 - {{skill:ponytail}} — at step 4, before the first line of non-test code. Never cull a product rail.
 - {{skill:debugging}} — at step 3 when the task reports a failure, and at step 5 the first time the check fails on a test you did not write this iteration.
-- {{skill:review-received}} — at step 1, when the task carries a verifier's rejection notes.
+- {{skill:review-received}} — at step 1, when the ticket's `verdict:` line is a rejection.
 - {{skill:caveman-commit}} — at step 7, before the commit message is written.
 
 Invoking a skill is a tool call at the step that names it. The steps below summarise each method; they do not replace loading it.
 
 Protocol:
-1. Read __CONTEXT_FILE__, __SPEC__, __ENALLAGI_DIR__/LEARNINGS.md and the ticket file. Restate the acceptance criteria in one sentence. If the task carries verifier rejection notes, invoke {{skill:review-received}} and answer every point before anything else. A `gate:` line is addressed first too: a gate's reason names a file off `scope:` or a widening with no `widened:` line, and the iteration's commits it judged are already on the branch.
+1. Read __CONTEXT_FILE__, __SPEC__, __ENALLAGI_DIR__/LEARNINGS.md and the ticket file. Restate the acceptance criteria in one sentence. If the `verdict:` line is a rejection, invoke {{skill:review-received}} and answer every point before anything else. A `gate:` line is addressed first too: a gate's reason names a file off `scope:` or a widening with no `widened:` line, and the iteration's commits it judged are already on the branch.
 2. Read every file in scope BEFORE editing, plus `__CONTRACT_FILE__`.
 3. Invoke {{skill:tdd}}. When the task reports a failure, invoke {{skill:debugging}} too and reproduce the failure before any edit. Red: write tests that directly encode the acceptance criteria, named exactly as __SPEC__ names them, and watch them fail.
 4. Invoke {{skill:ponytail}} and walk its ladder. Green: implement the smallest change that passes. Do not refactor neighbouring code, do not add features not in the criteria, do not touch files outside `scope:` unless you add them to it with a one-line `widened:` reason under `## Harness`, which the verifier grades and the scope gate requires.
 5. Run `__CHECK__` yourself, alone in its shell call; the tool's result carries its exit status, so never append `echo $?`. Fix failures. The first time the check fails on a test you did not write this iteration, invoke {{skill:debugging}} before the next edit. Repeat until green — green means on delta against `__ENALLAGI_DIR__/.check-baseline`, never a line added to it. A mutation a criterion names is made with `Edit`, its command run alone in its shell call, and the file restored with `Edit`: never `sed -i` or a chained command, which a lane runs only with a person's approval.
-6. Update the ticket file: `**Status:** review`, never `done` (that is the verifier's), and two or three lines appended under `## Comments` on what you changed and what a reviewer should scrutinise. Under a verifier's verdict, the first line you write opens with the word `IMPLEMENTER`. Never write any other status but `needs-info` (below).
+6. Update the ticket file: `**Status:** review`, never `done` (that is the verifier's), and two or three lines appended under `## Comments` on what you changed and what a reviewer should scrutinise; under a verifier's comments, the first line you write opens with the word `IMPLEMENTER`. When the ticket's `## Harness` reads `verdict: rejected by verifier: <reason>`, answer every point and replace that line with `verdict: answered by implementer`; a `review` over a standing rejection is forced back to `ready-for-agent`. `verdict: verified by verifier` is the verifier's alone. Never write any other status but `needs-info` (below).
 7. Invoke {{skill:caveman-commit}}, then commit the product paths on `scope:` only: `feat(<scope>): T-### <summary>`. Never stage a ticket file, __ENALLAGI_DIR__/PROGRESS.md or any other instance file; the launcher commits them when the stage ends. When `git status --porcelain -- <the scope: paths>` prints nothing and the implementation is already on HEAD, run no commit: write `already committed at <sha>` under `## Comments` and set `**Status:** review`.
-
-Verdict words: `VERIFIED`, `REJECTED`, `VERIFIER`, `IMPLEMENTER`, `Passed`. A line under ## Comments that opens a verdict or an answer opens with one of them, and the rejection-stale probe reads the last such line as the ticket's open verdict.
 
 Hard rules, each naming the rail it serves:
 - A schema change, or an out-of-scope edit you cannot give a `widened:` reason for, turns out to be needed: halt the task. Set `**Status:** needs-info` with the explanation under `## Comments`. Do not improvise around the contract (`contracts`, `one-scope`).

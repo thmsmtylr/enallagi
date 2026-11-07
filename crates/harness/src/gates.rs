@@ -159,6 +159,11 @@ fn field_at(ctx: &GateCtx, task: &str, key: &str, rev: Option<&str>) -> Option<S
     block::field(&b, key)
 }
 
+fn verdict_of(ctx: &GateCtx, task: &str) -> Option<tracker::Verdict> {
+    let b = queue_of(ctx).get(task).ok()??;
+    tracker::verdict(&b).map(|(v, _)| v)
+}
+
 fn unreadable(ctx: &mut GateCtx, task: &str) -> GateOutcome {
     ctx.warnings.push(format!(
         "{task}: the queue could not be read; the gate did not run."
@@ -215,7 +220,20 @@ fn implementer_not_done(ctx: &mut GateCtx) -> GateOutcome {
     match status_of(ctx, &task) {
         Err(_) => unreadable(ctx, &task),
         Ok(status) if status.as_deref() == Some("review") => {
-            pass("the implementer left it at review")
+            if !matches!(verdict_of(ctx, &task), Some(tracker::Verdict::Rejected(_))) {
+                return pass("the implementer left it at review");
+            }
+            let mut out = force_back(
+                ctx,
+                "implementer-not-done",
+                &task,
+                "ready-for-agent",
+                "the implementer set review over a rejection; answer it and write `verdict: answered by implementer`",
+                &format!("chore({task}): the implementer left a rejection standing"),
+                &format!("{task} was forced back to ready: review with the rejection unanswered."),
+            );
+            out.skip_rest = true;
+            out
         }
         Ok(status) if status.as_deref() != Some("done") => GateOutcome {
             skip_rest: true,
@@ -386,9 +404,37 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
     };
+    let line = verdict_of(ctx, &task);
     match status_of(ctx, &task) {
         Err(_) => return unreadable(ctx, &task),
+        Ok(status) if status.as_deref() == Some("ready-for-agent") => {
+            if field_at(ctx, &task, "status", None).as_deref() != Some("review")
+                || matches!(&line, Some(tracker::Verdict::Rejected(r)) if !r.is_empty())
+            {
+                return pass("a reasoned rejection");
+            }
+            return force_back(
+                ctx,
+                "verdict",
+                &task,
+                "review",
+                "the verifier rejected it without `verdict: rejected by verifier: <reason>`",
+                &format!("chore({task}): enallagi gate refused a rejection with no reason"),
+                &format!("{task} went back to review: a rejection with no verdict reason."),
+            );
+        }
         Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
+        Ok(_) if line != Some(tracker::Verdict::Verified) => {
+            return force_back(
+                ctx,
+                "verdict",
+                &task,
+                "review",
+                "done without `verdict: verified by verifier`",
+                &format!("chore({task}): enallagi gate refused a done with no verified verdict"),
+                &format!("{task} went back to review: done with no verified verdict."),
+            );
+        }
         Ok(_) => {}
     }
 
@@ -1948,9 +1994,14 @@ mod tests {
             }
         }
 
+        // a done carries the verifier's verdict, as a lane's would
         fn queue(&self, status: &str, scope: &str, rows: &str) {
+            let verdict = match status {
+                "done" => "verdict: verified by verifier\n",
+                _ => "",
+            };
             self.write_queue(&format!(
-                "## [T-001] first\nscope: {scope}\nrows: {rows}\nblockedBy: none\nstatus: {status}\n"
+                "## [T-001] first\nscope: {scope}\nrows: {rows}\nblockedBy: none\nstatus: {status}\n{verdict}"
             ));
         }
 
@@ -2688,6 +2739,80 @@ mod tests {
         assert!(out.pass, "{}", out.reason);
         assert!(env.tasks_text().contains("status: done"));
         assert!(env.warnings.is_empty());
+    }
+
+    #[test]
+    fn verdict_requires_verified() {
+        for line in [
+            "",
+            "verdict: rejected by verifier: red\n",
+            "verdict: VERIFIED\n",
+        ] {
+            let mut env = Env::new("exit 0\n");
+            env.write_queue(&format!("## [T-001] first\nstatus: done\n{line}"));
+            env.repo.commit_all("verify");
+            let out = run("verdict", &mut env.ctx(Some("T-001"), None));
+            assert!(!out.pass, "{line}");
+            let text = env.tasks_text();
+            assert!(text.contains("status: review"), "{text}");
+            assert!(text.contains("gate: done without `verdict: verified by verifier`"));
+        }
+    }
+
+    #[test]
+    fn rejected_needs_reason() {
+        for (line, refused) in [
+            ("", true),
+            ("verdict: rejected by verifier\n", true),
+            ("verdict: rejected by verifier:  \n", true),
+            ("verdict: answered by implementer\n", true),
+            (
+                "verdict: rejected by verifier: `cargo test` is red\n",
+                false,
+            ),
+        ] {
+            let mut env = Env::new("exit 0\n");
+            env.queue("review", "src/a.ts", "none");
+            env.repo.commit_all("implement");
+            let base = env.head();
+            env.write_queue(&format!(
+                "## [T-001] first\nstatus: ready-for-agent\n{line}"
+            ));
+            env.repo.commit_all("verify");
+            let out = run("verdict", &mut env.ctx(Some("T-001"), Some(&base)));
+            assert_eq!(out.pass, !refused, "{line}: {}", out.reason);
+            let want = if refused { "review" } else { "ready-for-agent" };
+            assert!(
+                env.tasks_text().contains(&format!("status: {want}")),
+                "{line}"
+            );
+        }
+
+        // a gate's force-back, not a verifier's rejection, is not read
+        let mut env = Env::new("exit 0\n");
+        env.queue("ready-for-agent", "src/a.ts", "none");
+        env.repo.commit_all("implement");
+        let base = env.head();
+        let out = run("verdict", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
+    fn review_over_rejection() {
+        let mut env = Env::new("exit 0\n");
+        env.write_queue("## [T-001] first\nstatus: review\nverdict: rejected by verifier: red\n");
+        env.repo.commit_all("implement");
+        let out = run("implementer-not-done", &mut env.ctx(Some("T-001"), None));
+        assert!(!out.pass && out.skip_rest, "{out:?}");
+        let text = env.tasks_text();
+        assert!(text.contains("status: ready-for-agent"), "{text}");
+        assert!(text.contains("gate: the implementer set review over a rejection"));
+
+        let mut env = Env::new("exit 0\n");
+        env.write_queue("## [T-001] first\nstatus: review\nverdict: answered by implementer\n");
+        env.repo.commit_all("implement");
+        let out = run("implementer-not-done", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass && !out.skip_rest, "{out:?}");
     }
 
     impl Env {
