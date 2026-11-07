@@ -331,3 +331,55 @@ fn roles_name_verdict_forms() {
         }
     }
 }
+
+// each shipped role's {{skill:<id>}} tokens, rendered, that the config declares no skill for
+fn unresolved(cfg: &config::Config) -> Vec<String> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles");
+    let mut names: Vec<_> = fs::read_dir(&dir)
+        .expect("read roles/")
+        .map(|e| e.expect("entry").path())
+        .collect();
+    names.sort();
+    let mut out = Vec::new();
+    for path in names {
+        let text = config::subst(&fs::read_to_string(&path).expect("role"), cfg);
+        for id in skills::required_ids(&text) {
+            if !cfg.skill.iter().any(|s| s.id == id) {
+                let role = path.file_name().expect("name").to_string_lossy();
+                out.push(format!("{role}: {id}"));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn every_role_skill_resolves() {
+    let repo = Repo::new();
+    repo.write(".enallagi/enallagi.toml", "[check]\ncommand = \"true\"\n");
+    let mut cfg = config::load(&repo.root).expect("load");
+    assert_eq!(unresolved(&cfg), Vec::<String>::new());
+    cfg.skill.retain(|s| s.id != "writing-for-agents");
+    assert_eq!(unresolved(&cfg), ["implementer.md: writing-for-agents"]);
+}
+
+fn role(name: &str) -> String {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../roles/{name}.md"));
+    fs::read_to_string(&source).expect("read role")
+}
+
+#[test]
+fn implementer_loads_codebase_design() {
+    assert!(role("implementer").contains("{{skill:codebase-design}}"));
+}
+
+#[test]
+fn implementer_updates_stated_doc() {
+    let text = role("implementer");
+    for want in [
+        "updates the doc that states it in the same commit",
+        "a change no doc states touches no doc",
+    ] {
+        assert!(text.contains(want), "roles/implementer.md wants {want:?}");
+    }
+}

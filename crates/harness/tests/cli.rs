@@ -471,6 +471,11 @@ fn skills_cost_counts_loads_against_uses() {
         "{report}"
     );
     assert_eq!(row("to-tickets"), ["to-tickets", "5", "0", "0"], "{report}");
+    assert_eq!(
+        row("codebase-design"),
+        ["codebase-design", "5", "1", "0"],
+        "{report}"
+    );
 }
 
 #[test]
@@ -486,6 +491,9 @@ fn skills_cost_names_an_unused_skill_unproven() {
         unproven,
         [
             "diagnosing-bugs",
+            "codebase-design",
+            "writing-for-agents",
+            "domain-modeling",
             "ponytail",
             "receiving-code-review",
             "verification-before-completion"

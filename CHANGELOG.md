@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- the implementer loads `codebase-design` by its own token, `writing-for-agents` and `domain-modeling` when its scope names a doc, skill, role, glossary or ADR, and updates the doc stating a changed behaviour in the same commit
 - the probes read exit-criteria rows from every `specs/*/spec.md`, each finding citing its own spec; a one-ticket stage's `__SPEC__` is that ticket's `spec.md`; the default rows heading is `### Exit criteria`, ending at `## Out of Scope`
 - a skill whose frontmatter holds `disable-model-invocation: true` renders inline in the role prompt for every preset, under `## Skill: <id>` naming its vendored directory
 - the lane prompt describes the tracker (specs layout, global ids, states, `## Comments`, `## Harness`), and a new install's context file says a lane has no user to answer
