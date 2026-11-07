@@ -19,6 +19,7 @@ pub mod pipeline;
 pub mod pr;
 pub mod probes;
 pub mod propose;
+pub mod proxy;
 pub mod review;
 pub mod roles;
 pub mod runners;

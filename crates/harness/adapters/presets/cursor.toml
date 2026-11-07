@@ -1,4 +1,5 @@
 name = "cursor"
+hosts = ["*.cursor.sh"]
 argv = ["agent", "-p", "{prompt}", "--output-format", "stream-json", "--force"]
 turn_cap = "none"
 model_flag = "--model"

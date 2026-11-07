@@ -1,4 +1,5 @@
 name = "copilot"
+hosts = ["api.github.com", "github.com", "*.githubcopilot.com"]
 argv = ["copilot", "-p", "{prompt}", "--allow-all-tools", "--max-autopilot-continues", "{turns}"]
 turn_cap = "flag"
 model_flag = "--model"

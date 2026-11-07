@@ -435,6 +435,7 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         root,
         cfg: &cfg,
         sandbox: &sandbox,
+        denied: 0,
         presets,
         opts,
         rate_limit,
@@ -474,6 +475,8 @@ struct Loop<'a> {
     root: &'a Path,
     cfg: &'a Config,
     sandbox: &'a Sandbox,
+    // the proxy refusals already emitted
+    denied: usize,
     presets: agent::Presets,
     opts: &'a RunOpts,
     rate_limit: Regex,
@@ -1694,6 +1697,15 @@ impl<'a> Loop<'a> {
     }
 
     fn emit(&mut self, kind: Kind) {
+        // the proxy's threads hold no writer, so their refusals reach the log ahead of the next event
+        for d in self.sandbox.denials_since(self.denied) {
+            self.denied += 1;
+            self.writer.emit(Kind::SandboxDenied {
+                host: d.host,
+                port: d.port,
+                reason: d.reason,
+            });
+        }
         self.writer.emit(kind);
         self.check_log();
     }
@@ -1978,6 +1990,7 @@ fn shell_preset() -> Preset {
         model_flag: None,
         effort_flag: None,
         bypass_flag: None,
+        hosts: Vec::new(),
     }
 }
 

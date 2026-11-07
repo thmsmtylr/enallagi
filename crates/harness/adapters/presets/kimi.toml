@@ -1,4 +1,5 @@
 name = "kimi"
+hosts = ["api.kimi.com", "auth.kimi.com", "api.moonshot.ai"]
 argv = ["kimi", "-p", "{prompt}", "--output-format", "stream-json"]
 bypass_flag = "--yolo"
 turn_cap = "config"

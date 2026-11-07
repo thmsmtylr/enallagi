@@ -1,4 +1,5 @@
 name = "amp"
+hosts = ["ampcode.com", "static.ampcode.com"]
 argv = ["amp", "-x", "{prompt}", "--stream-json", "--dangerously-allow-all"]
 turn_cap = "none"
 instruction_file = "AGENTS.md"

@@ -1,4 +1,5 @@
 name = "aider"
+hosts = ["openrouter.ai", "api.anthropic.com", "api.openai.com"]
 argv = ["aider", "--message", "{prompt}", "--yes-always"]
 turn_cap = "none"
 model_flag = "--model"

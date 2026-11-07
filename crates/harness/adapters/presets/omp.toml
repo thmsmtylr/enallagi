@@ -1,4 +1,5 @@
 name = "omp"
+hosts = ["api.anthropic.com", "platform.claude.com"]
 argv = ["omp", "-p", "{prompt}", "--mode", "json", "--max-time", "{timeout}"]
 bypass_flag = "--yolo"
 turn_cap = "time"

@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- under `[sandbox] mode = "native"` each run starts a loopback CONNECT proxy whose allowlist is GitHub's API and release hosts, the configured presets' new `hosts` and `[sandbox] hosts` (`name` or `*.suffix`, optional `:port`, 443 by default); it refuses other methods, IP literals, unlisted hosts and names resolving to loopback, link-local or unspecified addresses with `403`, each logged as `sandbox.denied`; every spawn gets `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` in both cases
 - new `[sandbox]` table (`mode` = `"off"` | `"native"`, `hosts`, `ports`, `write`), `off` by default and any other mode refused at load; `run.start` records `sandbox` in place of `permissions_skipped`, and `enallagi events` prints `sandbox=<mode>`
 - every command run from inside a nested instance repo (`run`, `probe`, `skills`, `audit`, `eval`, `eject`, `init`, `hook`, `worktree`) reads the product around it, as `tasks check` and `tasks archive` do
 - `enallagi skills --cost` takes `--since <ts>` and `--until <ts>`, counting only role stages that started in that window

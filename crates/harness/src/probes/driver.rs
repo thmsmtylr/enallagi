@@ -15,8 +15,9 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
         Err(e) => return ProbeResult::Error(format!("no working directory for the driver: {e}")),
     };
     let sandbox = crate::sandbox::Sandbox::start(ctx.root, ctx.cfg);
-    let mut child = sandbox.wrap(&["sh", "-c", command], dir.path()).command();
-    child.env_clear();
+    let wrapped = sandbox.wrap(&["sh", "-c", command], dir.path());
+    let mut child = wrapped.command();
+    child.env_clear().envs(wrapped.env.iter().cloned());
     for key in ["PATH", "HOME"] {
         if let Some(value) = std::env::var_os(key) {
             child.env(key, value);

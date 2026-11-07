@@ -4534,3 +4534,23 @@ fn dry_run_plans_decompose() {
         "{out}"
     );
 }
+
+// the proxy's refusals are recorded on threads with no writer; the loop logs them
+#[test]
+fn denial_emits_event() {
+    if std::env::var_os("ENALLAGI_SANDBOX").is_some() {
+        println!("nested: skipped");
+        return;
+    }
+    let toml = format!("{}\n[sandbox]\nmode = \"native\"\n", base_toml(""));
+    let r = repo(&toml, TASKS);
+    let curl = "curl -s -o /dev/null -x \"$HTTPS_PROXY\" https://example.com/\n";
+    script(&r, "src/fakeagent.sh", &format!("{curl}{QUIET}"));
+    r.commit_all("agent");
+    let (_, events) = try_go(&r, &opts(1));
+    assert!(
+        events.iter().any(|e| matches!(&e.kind,
+            Kind::SandboxDenied { host, port: 443, .. } if host == "example.com")),
+        "{events:#?}"
+    );
+}

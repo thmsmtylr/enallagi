@@ -67,6 +67,12 @@ pub enum Kind {
         #[serde(default)]
         turn_cap: Option<u32>,
     },
+    #[serde(rename = "sandbox.denied")]
+    SandboxDenied {
+        host: String,
+        port: u16,
+        reason: String,
+    },
     #[serde(rename = "gate")]
     Gate {
         gate: String,

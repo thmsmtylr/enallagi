@@ -56,6 +56,9 @@ pub struct Preset {
     // kept out of argv so a lane runs with the agent's permission checks unless the operator asks otherwise
     #[serde(default)]
     pub bypass_flag: Option<String>,
+    // the CLI's API and auth hosts, for the sandbox's allowlist
+    #[serde(default)]
+    pub hosts: Vec<String>,
 }
 
 pub type Presets = BTreeMap<String, Preset>;
@@ -226,6 +229,7 @@ pub fn resolve_task(
             model_flag: None,
             effort_flag: None,
             bypass_flag: None,
+            hosts: Vec::new(),
         }
     } else {
         let mut preset = presets
@@ -1221,6 +1225,13 @@ mod tests {
 
     fn off() -> crate::sandbox::Sandbox {
         crate::sandbox::Sandbox::start(Path::new("."), &crate::config::Config::default())
+    }
+
+    #[test]
+    fn every_preset_declares_hosts() {
+        for (name, p) in presets() {
+            assert!(!p.hosts.is_empty(), "{name}");
+        }
     }
 
     fn spawner<'a>(argv: Vec<String>, root: &'a std::path::Path) -> StageSpawn<'a> {
