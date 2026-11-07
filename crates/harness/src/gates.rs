@@ -747,7 +747,8 @@ fn commit_files(
     let flag = format!("--diff-filter={filter}");
     let mut files: Vec<String> = Vec::new();
     for sha in task_commits(root, base, task)? {
-        let mut args = vec!["show", "--format=", "--name-only"];
+        // both paths of a rename, so a restore at base brings the old one back
+        let mut args = vec!["show", "--format=", "--name-only", "--no-renames"];
         if !filter.is_empty() {
             args.push(&flag);
         }
@@ -931,8 +932,13 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let manifest_in_scope = changed
         .iter()
         .any(|f| f.ends_with("Cargo.toml") && in_scope(f, &pats));
+    let rejections = format!("{}/", rel(ctx, tracker::OUT_OF_SCOPE));
     for f in changed {
-        if bookkeeping.contains(&f) || f == lock || own.as_ref() == Some(&f) {
+        if bookkeeping.contains(&f)
+            || f.starts_with(&rejections)
+            || f == lock
+            || own.as_ref() == Some(&f)
+        {
             continue;
         }
         // a ticket the range adds is a filed finding, as appending a block was, so only untriaged
@@ -1104,12 +1110,9 @@ fn skip_added(ctx: &mut GateCtx) -> GateOutcome {
         Err(e) => return fail(format!("skip_patterns: {e}")),
     };
     let globs = &ctx.cfg.layout.test_glob;
-    let (files, commits) = match (
-        task_files(ctx, &base, &task, ""),
-        task_commits(ctx.root, &base, &task),
-    ) {
-        (Ok(files), Ok(commits)) => (files, commits),
-        (Err(e), _) | (_, Err(e)) => return fail(e.to_string()),
+    let files = match task_files(ctx, &base, &task, "") {
+        Ok(files) => files,
+        Err(e) => return fail(e.to_string()),
     };
     let mut hits: Vec<String> = Vec::new();
     // an empty test_glob reads every changed file, so an unset key never switches the gate off
@@ -1117,26 +1120,23 @@ fn skip_added(ctx: &mut GateCtx) -> GateOutcome {
         .iter()
         .filter(|f| globs.is_empty() || in_scope(f, globs))
     {
-        let Ok(now) = git(ctx.root, &["show", &format!("HEAD:{f}")]) else {
-            continue;
+        // the net diff: a skip taken back is gone, and a new one is numbered from its own hunk
+        let diff = match git(ctx.root, &["diff", "-U0", &base, "HEAD", "--", f]) {
+            Ok(diff) => diff,
+            Err(e) => return fail(e.to_string()),
         };
-        let now: Vec<&str> = now.lines().collect();
-        for sha in &commits {
-            let diff =
-                git(ctx.root, &["show", "--format=", "-U0", sha, "--", f]).unwrap_or_default();
-            for added in diff
-                .lines()
-                .skip_while(|l| !l.starts_with("@@"))
-                .filter_map(|l| l.strip_prefix('+'))
-                .filter(|l| res.iter().any(|re| re.is_match(l)))
-            {
-                // a line a later commit took back is not at HEAD, and is no skip
-                if let Some(n) = now.iter().position(|l| *l == added) {
-                    let hit = format!("{f}:{} {}", n + 1, added.trim());
-                    if !hits.contains(&hit) {
-                        hits.push(hit);
-                    }
+        let mut at = 0;
+        for l in diff.lines().skip_while(|l| !l.starts_with("@@")) {
+            if l.starts_with("@@") {
+                let plus = l.split_whitespace().find_map(|w| w.strip_prefix('+'));
+                at = plus
+                    .and_then(|p| p.split(',').next()?.parse().ok())
+                    .unwrap_or(0);
+            } else if let Some(added) = l.strip_prefix('+') {
+                if res.iter().any(|re| re.is_match(added)) {
+                    hits.push(format!("{f}:{at} {}", added.trim()));
                 }
+                at += 1;
             }
         }
     }
@@ -1219,26 +1219,42 @@ fn red_first(ctx: &mut GateCtx) -> GateOutcome {
     let at = tree.dir.path();
     for f in &source {
         // a file the task added is absent at base, so restoring it is deleting it
-        if git(at, &["cat-file", "-e", &format!("{base}:{f}")]).is_ok() {
-            let _ = git(at, &["checkout", &base, "--", f]);
+        let restored = if git(at, &["cat-file", "-e", &format!("{base}:{f}")]).is_ok() {
+            git(at, &["checkout", &base, "--", f])
+                .map(drop)
+                .map_err(|e| e.to_string())
         } else {
-            let _ = std::fs::remove_file(at.join(f));
+            match std::fs::remove_file(at.join(f)) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+                _ => Ok(()),
+            }
+        };
+        if let Err(e) = restored {
+            return fail(format!("red-first could not restore {f} at base: {e}"));
         }
     }
-    let timeout = ctx
-        .cfg
-        .check
-        .timeout_duration()
-        .unwrap_or(crate::config::DEFAULT_CHECK_TIMEOUT);
-    let run = run_bounded(ctx.sandbox, at, &ctx.cfg.check.command, timeout);
+    let mut report = check_delta(ctx.sandbox, at, ctx.cfg, false);
     drop(tree);
+    if report.output.starts_with(NEVER_RAN) {
+        return fail(format!("red-first: {}", report.output));
+    }
+    if let Some(halt) = hung(ctx, &report) {
+        return halt;
+    }
+    // red only on what the baseline forgives is the base's own red, not the new tests'
+    let dir = &ctx.cfg.layout.harness_dir;
+    let forgiven = baseline(&crate::config::instance_path(
+        ctx.root,
+        dir,
+        ".check-baseline",
+    ));
+    report.unforgiven.retain(|n| !forgiven.contains(n));
     let named = tests.join(" ");
-    match run {
-        Err(e) => fail(format!("red-first could not run the check: {e}")),
-        Ok(run) if run.exit != 0 || run.timed_out || run.stopped.is_some() => {
-            pass(format!("{named} red on base {base} (exit {})", run.exit))
+    match report {
+        r if r.red && (r.unnamed || !r.unforgiven.is_empty()) => {
+            pass(format!("{named} red on base {base} (exit {})", r.exit))
         }
-        Ok(_) => {
+        _ => {
             let why = format!(
                 "the check passes with {named} and every other changed file at base {base}, so the tests prove nothing"
             );
@@ -1496,11 +1512,13 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
     let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
         return pass("no base");
     };
-    let before: Vec<String> = blocks_at_base(ctx)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|b| b.id)
-        .collect();
+    let Some((_, _, rev)) = at_base(ctx, &rel(ctx, SPECS)) else {
+        return pass("no base");
+    };
+    let Some(at) = tracker::blocks_at(ctx.root, &ctx.cfg.layout.harness_dir, &rev) else {
+        return fail(format!("the queue could not be read at base {rev}"));
+    };
+    let before: Vec<String> = at.into_iter().map(|b| b.id).collect();
     if before.is_empty() {
         return pass("no ids at base");
     }
@@ -2834,6 +2852,35 @@ mod tests {
     }
 
     #[test]
+    fn red_first_timeout_halts() {
+        let (mut env, base) = red_first_env("true\n", "sleep 30\n", "1s");
+        let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass && out.halt, "{}", out.reason);
+    }
+
+    #[test]
+    fn red_first_baselined_red() {
+        let check = "[ -f tests/t.sh ] && sh tests/t.sh || exit 0\necho '(fail) alpha'; exit 1\n";
+        let (mut env, base) = red_first_env("true\n", check, "30m");
+        // uncommitted, as a nested install's baseline is absent from the scratch tree
+        env.repo.write(".enallagi/.check-baseline", "alpha\n");
+        let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass, "{}", out.reason);
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
+    }
+
+    #[test]
+    fn red_first_restores_rename() {
+        let (mut env, _) = red_first_env("true\n", RUN_TEST, "30m");
+        let base = env.head();
+        git(&env.repo.root, &["mv", "src/lib.txt", "src/moved.txt"]).expect("mv");
+        env.repo.write("tests/t.sh", "! [ -f src/lib.txt ]\n");
+        env.repo.commit_all("T-001 rename");
+        let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
     fn red_first_without_tests() {
         let (mut env, base) = red_first_env("true\n", RUN_TEST, "30m");
         env.cfg.layout.test_only_glob = globs(&["**/spec/**"]);
@@ -2854,7 +2901,10 @@ mod tests {
 
     fn skip_env(line: &str) -> (Env, String) {
         let mut env = Env::new("exit 0\n");
-        env.cfg.layout.skip_patterns = globs(&[r"^\s*#\[ignore\]"]);
+        let cargo = crate::runners::presets()
+            .into_iter()
+            .find(|r| r.name == "cargo");
+        env.cfg.layout.skip_patterns = cargo.expect("cargo preset").skip_patterns;
         env.cfg.layout.test_glob = globs(&["tests/*.rs"]);
         env.repo.write("tests/a.rs", "#[test]\nfn a() {}\n");
         env.queue("done", "tests/*", "§11 row 1");
@@ -2877,6 +2927,32 @@ mod tests {
             out.reason
         );
         assert!(env.tasks_text().contains("status: ready-for-agent"));
+    }
+
+    #[test]
+    fn skip_added_net() {
+        let (mut env, _) = skip_env("#[ignore]");
+        let base = env.head();
+        let old = "#[test]\n#[ignore]\nfn a() {}\n";
+        env.repo.write(
+            "tests/a.rs",
+            &format!("{old}#[test]\n#[ignore]\nfn b() {{}}\n"),
+        );
+        env.repo.commit_all("T-001 skip b");
+        let out = run("skip-added", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(
+            out.reason.contains("tests/a.rs:5 #[ignore]"),
+            "{}",
+            out.reason
+        );
+        assert!(!out.reason.contains("tests/a.rs:2"), "{}", out.reason);
+        env.repo
+            .write("tests/a.rs", &format!("{old}#[test]\nfn b() {{}}\n"));
+        env.repo.commit_all("T-001 unskip b");
+        env.queue("done", "tests/*", "§11 row 1");
+        env.repo.commit_all("verdict");
+        let out = run("skip-added", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
     }
 
     const LEAK: &str = r#"[{"RuleID":"aws-access-token","File":"src/key.txt","StartLine":1,"Commit":"abc123","Secret":"AKIAHIDDEN0SECRET99","Match":"key = AKIAHIDDEN0SECRET99"}]"#;
@@ -3906,6 +3982,9 @@ echo '{{"results":[]}}' > "$out"
 
         let out = run("queue-intact", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
+        let bad = "0".repeat(40);
+        let out = run("queue-intact", &mut env.ctx(Some("T-001"), Some(&bad)));
+        assert!(!out.pass, "{}", out.reason);
     }
 
     #[test]
@@ -3929,11 +4008,26 @@ echo '{{"results":[]}}' > "$out"
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
 
+        env.repo
+            .write(".enallagi/.out-of-scope/naming.md", "# naming\n");
+        env.repo.commit_all("verify: T-001 verdict");
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+
         let other = env.tracker().path_of("T-002").expect("T-002");
         std::fs::write(&other, "# T-002: second\n\n**Status:** wontfix\n").expect("edit");
         env.repo.commit_all("verify: T-001 verdict");
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
+        assert!(out.reason.contains("T-002-second.md"), "{}", out.reason);
+
+        env.tracker().set_status("T-001", "done", "").expect("done");
+        env.repo.commit_all("verify: T-001 verdict");
+        let base = env.head();
+        std::fs::remove_file(&other).expect("delete");
+        env.repo.commit_all("verify: T-001 verdict");
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass, "{}", out.reason);
         assert!(out.reason.contains("T-002-second.md"), "{}", out.reason);
     }
 

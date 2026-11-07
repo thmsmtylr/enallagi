@@ -31,7 +31,8 @@ pub(crate) fn cache_root_in(
     xdg: Option<&std::ffi::OsStr>,
     home: Option<&std::ffi::OsStr>,
 ) -> PathBuf {
-    match xdg {
+    // an empty XDG_CACHE_HOME is unset, not the current directory
+    match xdg.filter(|x| !x.is_empty()) {
         Some(x) => PathBuf::from(x).join("enallagi"),
         None => PathBuf::from(home.unwrap_or_default()).join(".cache/enallagi"),
     }

@@ -697,6 +697,10 @@ mod tests {
             crate::config::cache_root_in(Some(OsStr::new("/x")), home),
             PathBuf::from("/x/enallagi")
         );
+        assert_eq!(
+            crate::config::cache_root_in(Some(OsStr::new("")), home),
+            PathBuf::from("/h/.cache/enallagi")
+        );
     }
 
     #[test]
