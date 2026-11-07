@@ -15,23 +15,25 @@ The re-run rewrites this file's key in `test-hashes.json` to its new sha256 and 
 - `agent.model`, `agent.effort`: passed to the preset. No default. A task's `model:` and `effort:` win.
 - `agent.usage`: JSON paths to `cost`, `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens` and `turns` in the agent's output. The preset's own by default.
 - `agent.rate_limit_pattern`: output that means the agent hit a rate limit, matched without case. Default `"hit your session limit"`.
-- `agent.dangerously_skip_permissions`: adds the preset's bypass flag to every lane. Default `false`.
-  The `claude` preset needs no bypass: its lanes run in the Claude Code sandbox, described below.
 - `[agent.<role>]`: `preset`, `command`, `model`, `effort` and `usage` for one role. The role is one of `decomposer`, `scout`, `adjudicator`, `implementer`, `verifier` or `researcher`.
 
-### The `claude` preset's sandbox
+Every lane carries its preset's bypass flag. The sandbox below is the boundary.
+`agent.dangerously_skip_permissions` is refused at load.
+A `claude` lane loads no MCP server: `--strict-mcp-config` keeps the operator's own out, as the settings keep their plugins out. Its preset's deny list stays.
 
-A `claude` lane runs with the Claude Code sandbox on and file edits accepted.
-The harness fills in the rules when it starts each stage:
+## `[sandbox]`
 
-- each command in `check.command` and `check.force` runs outside the sandbox, since a suite may need a terminal
-- `gh issue view` runs outside the sandbox too
-- no MCP server is loaded: `--strict-mcp-config` keeps the operator's own out, as the settings keep their plugins out
-- `git add`, `git commit` and `git -C <harness_dir>` are allowed, and the state repository's `.git` is writable
-- network, writes outside the lane and the preset's deny list stay blocked
+Every lane, and every check, claims re-run, driver probe and `install-stale` run, is confined by the binary: Seatbelt (`/usr/bin/sandbox-exec`) on macOS, bwrap with a private network namespace and a seccomp filter on Linux.
+A compound check line (`cd sub && pytest`) runs whole inside it.
 
-Only a command run alone in its shell call matches these rules.
-The context file tells each lane to run the check that way.
+- `sandbox.mode`: `"native"` or `"off"`. Default `"native"`. Any other value is refused at load. `off` runs lanes unconfined; `run.start` records the mode in force, and `enallagi events` prints it.
+- `sandbox.hosts`: hosts the egress proxy also allows. An entry is a name or `*.suffix` (subdomains, not the apex), with an optional `:port`, 443 by default. GitHub's API and release hosts and the configured presets' hosts are always allowed.
+- `sandbox.ports`: host loopback ports a lane may connect to, for a suite that needs a local database. Default empty.
+- `sandbox.write`: extra writable paths, `~/` expanded. Default empty.
+
+A lane writes only to its checkout, both repositories' git dirs (never `config`, `hooks/` or worktree pointers), a per-spawn `TMPDIR`, the preset's own state paths and `sandbox.write`.
+Its only egress is the proxy, reached through `HTTPS_PROXY`; each refused host is logged as `sandbox.denied`.
+Under `native`, a run refuses to start when the sandbox is unavailable, naming the fix.
 
 ## `[check]`
 

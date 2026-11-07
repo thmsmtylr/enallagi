@@ -104,8 +104,6 @@ pub struct RunOpts {
     pub budget_seconds: Option<u64>,
     pub budget_usd: Option<f64>,
     pub budget_tokens: Option<u64>,
-    // overrides [agent] dangerously_skip_permissions only toward true
-    pub dangerously_skip_permissions: bool,
     // overrides [pr] per_task only toward true
     pub pr_per_task: bool,
 }
@@ -121,7 +119,6 @@ impl Default for RunOpts {
             budget_seconds: None,
             budget_usd: None,
             budget_tokens: None,
-            dangerously_skip_permissions: false,
             pr_per_task: false,
         }
     }
@@ -399,8 +396,7 @@ pub fn plan(root: &Path, cfg: &Config, pipelines: &[String]) -> Result<String, C
 }
 
 pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
-    let mut cfg = config::load(root).map_err(|e| Refused(e.to_string()))?;
-    cfg.agent.dangerously_skip_permissions |= opts.dangerously_skip_permissions;
+    let cfg = config::load(root).map_err(|e| Refused(e.to_string()))?;
     let presets = agent::presets();
     config::validate(&cfg, &presets, &|role| role_source(root, &cfg, role)).map_err(|errs| {
         Refused(

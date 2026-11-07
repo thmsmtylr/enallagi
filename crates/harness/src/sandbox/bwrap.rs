@@ -63,13 +63,22 @@ pub(super) fn find(root: &Path) -> Option<PathBuf> {
         .find(|p| p.is_file() && !super::canon(p).starts_with(&root))
 }
 
-/// The binary that runs `sandbox bridge`: this one when it is enallagi, else `ENALLAGI_BIN`.
+/// The binary that runs `sandbox bridge`: this one when it is enallagi, else `ENALLAGI_BIN`, else
+/// the `enallagi` cargo builds beside a test binary's `deps/`.
 pub(super) fn exe() -> PathBuf {
     let own = std::env::current_exe().ok();
-    match own.filter(|p| p.file_name().is_some_and(|n| n == "enallagi")) {
-        Some(own) => own,
-        None => std::env::var_os("ENALLAGI_BIN").map_or_else(|| "enallagi".into(), PathBuf::from),
+    if let Some(own) = own
+        .iter()
+        .find(|p| p.file_name().is_some_and(|n| n == "enallagi"))
+    {
+        return own.clone();
     }
+    if let Some(bin) = std::env::var_os("ENALLAGI_BIN") {
+        return bin.into();
+    }
+    own.and_then(|p| Some(p.parent()?.parent()?.join("enallagi")))
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| "enallagi".into())
 }
 
 pub(super) fn refusal(root: &Path, off: &str) -> Option<String> {

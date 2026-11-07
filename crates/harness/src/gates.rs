@@ -2963,11 +2963,19 @@ echo '{{"results":[]}}' > "$out"
         );
     }
 
+    // bwrap's pid namespace ends a grandchild with the check, so only `off` can be held open by one
+    fn unconfined(env: &Env) -> crate::sandbox::Sandbox {
+        let mut cfg = env.cfg.clone();
+        cfg.sandbox.mode = crate::config::SandboxMode::Off;
+        crate::sandbox::Sandbox::start(&env.repo.root, &cfg)
+    }
+
     #[test]
     fn a_grandchild_on_the_pipe_is_bound_by_timeout() {
         let env = Env::timed("sleep 25 & exit 0\n", "2s");
+        let sandbox = unconfined(&env);
         let started = Instant::now();
-        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
+        let r = check_delta(&sandbox, &env.repo.root, &env.cfg, false);
         let waited = started.elapsed();
         assert!(
             waited < Duration::from_secs(5),
@@ -2981,8 +2989,9 @@ echo '{{"results":[]}}' > "$out"
     #[test]
     fn a_grandchild_outside_the_group_is_bound() {
         let env = Env::timed("perl -e 'use POSIX; setsid(); sleep 12' & exit 0\n", "2s");
+        let sandbox = unconfined(&env);
         let started = Instant::now();
-        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
+        let r = check_delta(&sandbox, &env.repo.root, &env.cfg, false);
         let waited = started.elapsed();
         assert!(
             waited < Duration::from_secs(5),

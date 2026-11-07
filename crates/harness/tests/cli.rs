@@ -26,10 +26,6 @@ fn run_help_mentions_iterations_and_budget_usd() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("--iterations"), "{stdout}");
     assert!(stdout.contains("--budget-usd"), "{stdout}");
-    assert!(
-        stdout.contains("--dangerously-skip-permissions"),
-        "{stdout}"
-    );
     assert!(stdout.contains("--pr-per-task"), "{stdout}");
 }
 

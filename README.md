@@ -100,11 +100,8 @@ A tree that matches none has the agent propose a check, written only once the ch
 
 - `agent.preset` names the CLI to drive, or `custom` with your own `agent.command`.
 - `agent.model` and `agent.effort` set defaults. A role or a task can override both.
-- A `claude` lane runs sandboxed with edits accepted, so it needs no bypass flag. See [docs/configuration.md](docs/configuration.md).
-- `agent.dangerously_skip_permissions` adds the preset's bypass flag to every lane. Default `false`.
-- `enallagi run --dangerously-skip-permissions` does the same for one run.
-  A preset that declares no bypass flag refuses the run.
-- `run.start` records the choice as `permissions_skipped`, and `enallagi events` prints it.
+- Every lane runs in the binary's own sandbox (`[sandbox] mode = "native"`, the default) with its preset's bypass flag. See [docs/configuration.md](docs/configuration.md).
+- `[sandbox] mode = "off"` runs lanes unconfined. `run.start` records the mode, and `enallagi events` prints it.
 - `check.command` is the single command that decides green.
 - `[[skill]]` declares a skill to vendor, with its `rev` and the gate that enforces it.
 

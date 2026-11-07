@@ -876,8 +876,10 @@ fn frictions_sharing_only_prose_are_not_repeats() {
 }
 
 fn with_driver(body: &str) -> (Repo, Config) {
-    let (repo, cfg) =
-        seeded_with("[layout]\ndriver_command = \"$ENALLAGI_ROOT/src/fakedriver.sh\"\n");
+    // the driver runs from a scratch dir, and the product in /tmp is masked by bwrap
+    let (repo, cfg) = seeded_with(
+        "[layout]\ndriver_command = \"$ENALLAGI_ROOT/src/fakedriver.sh\"\n\n[sandbox]\nmode = \"off\"\n",
+    );
     repo.write("src/fakedriver.sh", &format!("#!/usr/bin/env bash\n{body}"));
     #[cfg(unix)]
     {

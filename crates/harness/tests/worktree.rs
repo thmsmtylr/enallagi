@@ -33,6 +33,10 @@ cost = "total_cost_usd"
 [check]
 command = "{check}"
 
+# the stubs sit in /tmp outside the lane, which bwrap masks
+[sandbox]
+mode = "off"
+
 [[pipeline]]
 name = "discover"
 when = "!queue.takeable"

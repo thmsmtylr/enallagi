@@ -76,7 +76,8 @@ impl Fixture {
         write(
             &state,
             "enallagi.toml",
-            &format!("[check]\ncommand = \"{check}\"\n"),
+            // the stubs sit in /tmp outside the task worktree, which bwrap masks
+            &format!("[sandbox]\nmode = \"off\"\n\n[check]\ncommand = \"{check}\"\n"),
         );
         enallagi::fixture::queue(&root, ".enallagi", tasks);
         git(&state, &["add", "-A"]);

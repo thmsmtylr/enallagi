@@ -123,9 +123,6 @@ pub enum Command {
         /// Refuse a stage whose skills are not already vendored and locked; never fetch
         #[arg(long)]
         frozen: bool,
-        /// Add the agent preset's bypass flag to every lane, as `[agent] dangerously_skip_permissions` does
-        #[arg(long)]
-        dangerously_skip_permissions: bool,
         /// Push each landed task to its own branch and open its pull request, as `[pr] per_task` does
         #[arg(long)]
         pr_per_task: bool,
@@ -349,7 +346,6 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             no_tui,
             dry_run,
             frozen,
-            dangerously_skip_permissions,
             pr_per_task,
         } => run::run(&run::Args {
             iterations,
@@ -360,7 +356,6 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             no_tui,
             dry_run,
             frozen,
-            dangerously_skip_permissions,
             pr_per_task,
         }),
         Command::Watch => watch::run(),
@@ -450,7 +445,7 @@ mod tests {
         "hook", "skills", "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 41] = [
+    const FLAGS: [&str; 40] = [
         "init --adapter",
         "init --dry-run",
         "init --prune-defaults",
@@ -474,7 +469,6 @@ mod tests {
         "run --no-tui",
         "run --dry-run",
         "run --frozen",
-        "run --dangerously-skip-permissions",
         "run --pr-per-task",
         "pr --push",
         "pr --policy-read",

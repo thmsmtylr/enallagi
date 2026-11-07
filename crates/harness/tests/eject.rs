@@ -108,6 +108,10 @@ command = ["{verify}", "{{prompt}}", "{{turns}}"]
 [check]
 command = "{check}"
 
+# the stubs sit in /tmp outside the lane, which bwrap masks
+[sandbox]
+mode = "off"
+
 [[pipeline]]
 name = "review"
 when = "queue.reviewing"

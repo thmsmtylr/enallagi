@@ -311,9 +311,6 @@ fn go(repo: &Repo, opts: &RunOpts) -> (Digest, Vec<Event>) {
 
 // installed on the shared events::Writer, so this collects the live stream in emit order, not a replay of the log
 fn try_go(repo: &Repo, opts: &RunOpts) -> (anyhow::Result<Digest>, Vec<Event>) {
-    // on Linux a native lane runs inside `enallagi sandbox bridge`, and this test binary is not it
-    static BIN: std::sync::Once = std::sync::Once::new();
-    BIN.call_once(|| std::env::set_var("ENALLAGI_BIN", env!("CARGO_BIN_EXE_enallagi")));
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&seen);
     let digest = pipeline::run(
@@ -3430,40 +3427,9 @@ fn claude_args_repo(key: &str) -> Repo {
 }
 
 #[test]
-fn a_claude_lane_skips_no_permission_by_default() {
+fn lane_carries_bypass_flag() {
     let r = claude_args_repo("");
     let _ = try_go(&r, &opts(1));
-    let args = std::fs::read_to_string(r.root.join("args.txt")).expect("the scout ran");
-    assert!(!args.contains("--dangerously-skip-permissions"), "{args}");
-}
-
-#[test]
-fn the_skip_key_adds_the_bypass_flag() {
-    let r = claude_args_repo("dangerously_skip_permissions = true\n");
-    let _ = try_go(&r, &opts(1));
-    let args = std::fs::read_to_string(r.root.join("args.txt")).expect("the scout ran");
-    assert!(args.contains("--dangerously-skip-permissions"), "{args}");
-}
-
-#[test]
-fn a_skip_with_no_bypass_flag_refuses_the_run() {
-    let extra = "dangerously_skip_permissions = true\n";
-    let toml = base_toml("").replacen("[agent]\n", &format!("[agent]\n{extra}"), 1);
-    let r = repo(&toml, TASKS);
-    let (digest, events) = try_go(&r, &opts(1));
-    let err = digest.expect_err("the run is refused");
-    assert!(err.to_string().contains("custom"), "{err}");
-    assert!(ends(&events).is_empty(), "nothing may spawn");
-}
-
-#[test]
-fn the_skip_flag_adds_the_bypass_flag() {
-    let r = claude_args_repo("");
-    let run = RunOpts {
-        dangerously_skip_permissions: true,
-        ..opts(1)
-    };
-    let _ = try_go(&r, &run);
     let args = std::fs::read_to_string(r.root.join("args.txt")).expect("the scout ran");
     assert!(args.contains("--dangerously-skip-permissions"), "{args}");
 }
@@ -3476,20 +3442,14 @@ fn run_start_records_sandbox() {
         Kind::RunStart { sandbox, .. } => Some(sandbox.as_str()),
         _ => None,
     });
-    assert_eq!(sandbox, Some("off"), "{events:#?}");
-}
-
-#[test]
-fn a_skip_flag_with_no_bypass_flag_is_refused() {
-    let r = repo(&base_toml(""), TASKS);
-    let run = RunOpts {
-        dangerously_skip_permissions: true,
-        ..opts(1)
+    let want = if std::env::var_os("ENALLAGI_SANDBOX").is_some() {
+        "nested"
+    } else if cfg!(target_os = "macos") {
+        "seatbelt"
+    } else {
+        "bwrap"
     };
-    let (digest, events) = try_go(&r, &run);
-    let err = digest.expect_err("the run is refused");
-    assert!(err.to_string().contains("custom"), "{err}");
-    assert!(ends(&events).is_empty(), "nothing may spawn");
+    assert_eq!(sandbox, Some(want), "{events:#?}");
 }
 
 const EXTRA_SKILL: &str = "
@@ -4536,6 +4496,35 @@ fn dry_run_plans_decompose() {
         at("decompose") < at("task") && at("task") != usize::MAX,
         "{out}"
     );
+}
+
+// T-460: a compound check reaches a host service only once its port is declared
+#[test]
+fn check_reaches_declared_port() {
+    if std::env::var_os("ENALLAGI_SANDBOX").is_some() {
+        println!("nested: skipped");
+        return;
+    }
+    let server = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = server.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        for mut conn in server.incoming().flatten() {
+            use std::io::{Read, Write};
+            let _ = conn.read(&mut [0; 1024]);
+            let _ = conn.write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok");
+        }
+    });
+    let check = format!("cd sub && curl -sf http://127.0.0.1:{port}/");
+    let toml = base_toml("").replace("./src/fakecheck.sh", &check);
+    let r = repo(&toml, "");
+    r.write("sub/.keep", "");
+    queue(&r, "# queue\n");
+    r.commit_all("a check on a host port");
+    assert!(plan_of(&r).contains("FINDING check-red"), "undeclared");
+    write_toml(&r, &format!("{toml}\n[sandbox]\nports = [{port}]\n"));
+    r.commit_all("declared");
+    let plan = plan_of(&r);
+    assert!(!plan.contains("FINDING check-red"), "{plan}");
 }
 
 // the proxy's refusals are recorded on threads with no writer; the loop logs them

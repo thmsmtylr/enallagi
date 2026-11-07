@@ -53,7 +53,7 @@ pub struct Preset {
     pub model_flag: Option<String>,
     #[serde(default)]
     pub effort_flag: Option<String>,
-    // kept out of argv so a lane runs with the agent's permission checks unless the operator asks otherwise
+    // kept out of argv and added to every lane, since the sandbox is the boundary (ADR 0004)
     #[serde(default)]
     pub bypass_flag: Option<String>,
     // the CLI's API and auth hosts, for the sandbox's allowlist
@@ -78,8 +78,6 @@ pub enum AgentError {
     Stopped,
     #[error("the agent command is empty")]
     EmptyCommand,
-    #[error("preset {0} declares no bypass flag, so dangerously_skip_permissions cannot apply")]
-    NoBypassFlag(String),
 }
 
 const PRESET_FILES: &[(&str, &str)] = &[
@@ -257,13 +255,7 @@ pub fn resolve_task(
     if !matches!(preset.turn_cap, TurnCap::Time) {
         drop_token(&mut argv, "{timeout}");
     }
-    if cfg.dangerously_skip_permissions {
-        let flag = preset
-            .bypass_flag
-            .clone()
-            .ok_or_else(|| AgentError::NoBypassFlag(preset.name.clone()))?;
-        argv.push(flag);
-    }
+    argv.extend(preset.bypass_flag.clone());
     if let (Some(flag), Some(model)) = (&preset.model_flag, model) {
         argv.push(flag.clone());
         argv.push(model.to_string());
@@ -602,7 +594,6 @@ fn run_once(
                 Some(t) => word.replace("{timeout}", t),
                 None => word,
             };
-            let word = fill_lane(&word, s.cwd, cfg.as_ref());
             word.replace("{prompt}", &s.prompt)
         })
         .collect();
@@ -698,60 +689,6 @@ fn run_once(
     Ok((exit, output, timed_out))
 }
 
-/// What a sandboxed lane may do past its sandbox: run the check unsandboxed, since a suite may need a
-/// terminal or a cache outside the lane, read an issue, and commit to the product and state repositories.
-pub fn fill_lane(word: &str, cwd: &Path, cfg: Option<&crate::config::Config>) -> String {
-    if !word.contains("\"{lane_") && !word.contains("\"{state_git_dir}\"") {
-        return word.to_string();
-    }
-    let dir = cfg.map_or(".enallagi", |c| c.layout.harness_dir.as_str());
-    let mut unsandboxed: Vec<String> = cfg
-        .into_iter()
-        .flat_map(|c| [c.check.command.as_str(), c.check.force.as_str()])
-        .flat_map(command_prefixes)
-        .collect();
-    unsandboxed.push("gh issue view:*".to_string());
-    unsandboxed.sort();
-    unsandboxed.dedup();
-    let mut allowed: Vec<String> = unsandboxed.iter().map(|p| format!("Bash({p})")).collect();
-    allowed.extend([
-        "Bash(git add:*)".to_string(),
-        "Bash(git commit:*)".to_string(),
-        format!("Bash(git -C {dir}:*)"),
-    ]);
-    let state = crate::git::git(
-        &cwd.join(dir),
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )
-    .unwrap_or_else(|_| cwd.join(dir).join(".git").display().to_string());
-    let items = |list: &[String]| {
-        list.iter()
-            .map(|item| serde_json::Value::String(item.clone()).to_string())
-            .collect::<Vec<String>>()
-            .join(",")
-    };
-    word.replace("\"{lane_unsandboxed}\"", &items(&unsandboxed))
-        .replace("\"{lane_allowed}\"", &items(&allowed))
-        .replace("\"{state_git_dir}\"", &items(&[state]))
-}
-
-/// One `<program> <subcommand>:*` rule per command in a shell line; leading `VAR=value` words are dropped.
-pub fn command_prefixes(line: &str) -> Vec<String> {
-    line.split(['&', ';', '|'])
-        .filter_map(|part| {
-            let words: Vec<&str> = part
-                .split_whitespace()
-                .skip_while(|w| w.contains('=') && !w.starts_with('-'))
-                .collect();
-            let program = words.first()?;
-            Some(match words.get(1).filter(|w| !w.starts_with('-')) {
-                Some(sub) => format!("{program} {sub}:*"),
-                None => format!("{program}:*"),
-            })
-        })
-        .collect()
-}
-
 fn drain<R: Read + Send + 'static>(
     pipe: R,
     buffer: Arc<Mutex<String>>,
@@ -831,34 +768,6 @@ mod tests {
     }
 
     #[test]
-    fn the_bypass_flag_rides_only_when_asked() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut cfg = crate::config::load(dir.path()).unwrap().agent;
-        cfg.preset = "claude".into();
-        let off = resolve(&cfg, "scout", &presets()).unwrap();
-        assert!(!off
-            .argv
-            .iter()
-            .any(|w| w == "--dangerously-skip-permissions"));
-        cfg.dangerously_skip_permissions = true;
-        let on = resolve(&cfg, "scout", &presets()).unwrap();
-        assert!(on
-            .argv
-            .iter()
-            .any(|w| w == "--dangerously-skip-permissions"));
-    }
-
-    #[test]
-    fn no_bypass_flag_refuses_the_skip() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut cfg = crate::config::load(dir.path()).unwrap().agent;
-        cfg.preset = "pi".into();
-        cfg.dangerously_skip_permissions = true;
-        let err = resolve(&cfg, "scout", &presets()).err().expect("refused");
-        assert!(err.to_string().contains("pi"), "{err}");
-    }
-
-    #[test]
     fn role_override_replaces_preset() {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = crate::config::load(dir.path()).unwrap().agent;
@@ -898,59 +807,13 @@ mod tests {
     }
 
     #[test]
-    fn a_check_line_names_one_rule_per_command() {
-        assert_eq!(
-            command_prefixes("CI=false npm test -- --serial"),
-            ["npm test:*"]
-        );
-        assert_eq!(
-            command_prefixes("cargo test -q && cargo clippy --all-targets"),
-            ["cargo test:*", "cargo clippy:*"]
-        );
-        assert_eq!(command_prefixes("pytest -q"), ["pytest:*"]);
-        assert!(command_prefixes("").is_empty());
-    }
-
-    #[test]
-    fn a_lane_runs_its_check_outside_the_sandbox() {
-        let r = crate::fixture::Repo::new();
-        r.write(
-            ".enallagi/enallagi.toml",
-            "[check]\ncommand = \"CI=false npm test -- --serial\"\nfail_name = '(.+)'\n",
-        );
-        crate::git::git(&r.root.join(".enallagi"), &["init", "-q"]).expect("git init");
-        let cfg = crate::config::load(&r.root).expect("config");
-        let argv = resolve(&cfg.agent, "default", &presets())
-            .expect("resolve")
-            .argv;
-        let argv: Vec<String> = argv
-            .iter()
-            .map(|w| fill_lane(w, &r.root, Some(&cfg)))
-            .collect();
-        let settings = settings_word(&argv);
-        let excluded = settings
-            .pointer("/sandbox/excludedCommands")
-            .expect("excluded");
-        assert!(
-            excluded.as_array().unwrap().contains(&"npm test:*".into()),
-            "{excluded}"
-        );
-        let allowed = settings.pointer("/permissions/allow").expect("allow");
-        assert!(
-            allowed
-                .as_array()
-                .unwrap()
-                .contains(&"Bash(npm test:*)".into()),
-            "{allowed}"
-        );
-        let write = settings
-            .pointer("/sandbox/filesystem/allowWrite/0")
-            .expect("allowWrite");
-        assert!(
-            write.as_str().unwrap().ends_with(".enallagi/.git"),
-            "{write}"
-        );
-        assert!(std::path::Path::new(write.as_str().unwrap()).is_absolute());
+    fn claude_no_sandbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = crate::config::load(dir.path()).unwrap().agent;
+        let s = settings_word(&resolve(&cfg, "scout", &presets()).unwrap().argv);
+        assert!(s.get("sandbox").is_none(), "{s}");
+        assert!(s.pointer("/permissions/allow").is_none(), "{s}");
+        assert!(s.pointer("/permissions/deny/0").is_some(), "{s}");
     }
 
     #[test]
@@ -1615,7 +1478,7 @@ mod tests {
 
         cfg.command = Some(vec!["mytool".into(), "{prompt}".into()]);
         let r = resolve(&cfg, "scout", &presets()).unwrap();
-        assert_eq!(r.argv, ["mytool".to_string(), "{prompt}".to_string()]);
+        assert_eq!(r.argv, ["mytool", "{prompt}", "--yolo"]);
         assert_eq!(r.preset.turn_cap, TurnCap::None);
     }
 }

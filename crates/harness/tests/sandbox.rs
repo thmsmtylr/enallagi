@@ -18,9 +18,6 @@ fn nested() -> bool {
 }
 
 fn native(ports: &[u16]) -> Config {
-    // the bridge bwrap runs inside is the enallagi binary, not this test binary
-    static BIN: std::sync::Once = std::sync::Once::new();
-    BIN.call_once(|| std::env::set_var("ENALLAGI_BIN", env!("CARGO_BIN_EXE_enallagi")));
     let mut cfg = Config::default();
     cfg.layout.harness_dir = ".enallagi".into();
     cfg.sandbox.mode = SandboxMode::Native;

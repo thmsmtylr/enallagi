@@ -95,10 +95,8 @@ pub enum ConfigError {
     UnknownPreset(String),
     #[error("agent preset custom needs a command list ({0})")]
     CustomWithoutCommand(String),
-    #[error(
-        "agent preset {0} declares no bypass flag, so dangerously_skip_permissions cannot apply"
-    )]
-    NoBypassFlag(String),
+    #[error("agent.dangerously_skip_permissions is gone: every lane runs under [sandbox] mode, and mode = \"off\" runs lanes unconfined")]
+    SkipPermissions,
     #[error("check.command is empty: set it in enallagi.toml, then run `enallagi init`")]
     EmptyCheck,
     #[error("[agent.{role}] is not a role ({})", ROLE_NAMES.join(", "))]
@@ -154,8 +152,8 @@ pub struct SandboxConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SandboxMode {
-    #[default]
     Off,
+    #[default]
     Native,
 }
 
@@ -168,7 +166,6 @@ pub struct AgentConfig {
     pub effort: Option<String>,
     pub usage: Option<UsagePaths>,
     pub rate_limit_pattern: String,
-    pub dangerously_skip_permissions: bool,
     #[serde(flatten)]
     pub roles: BTreeMap<String, AgentOverride>,
 }
@@ -474,6 +471,13 @@ pub fn load(root: &Path) -> Result<Config, ConfigError> {
     if path.is_file() {
         let text = std::fs::read_to_string(&path)?;
         let user: toml::Value = parse_toml(&text, CONFIG)?;
+        if user
+            .get("agent")
+            .and_then(|a| a.get("dangerously_skip_permissions"))
+            .is_some()
+        {
+            return Err(ConfigError::SkipPermissions);
+        }
         // check.force follows check.command, so overriding the check without pinning force can't leave the old tool behind
         let user_check = user.get("check");
         if let (Some(command), None) = (
@@ -771,7 +775,6 @@ pub fn validate(
         }
     }
     let mut checked_roles: BTreeSet<&str> = BTreeSet::new();
-    let mut unbypassed: BTreeSet<String> = BTreeSet::new();
 
     for st in &cfg.stage {
         match (&st.role, &st.command) {
@@ -816,13 +819,6 @@ pub fn validate(
         let preset = over
             .and_then(|o| o.preset.clone())
             .unwrap_or_else(|| cfg.agent.preset.clone());
-        let bypass = presets.get(&preset).map(|p| p.bypass_flag.is_some());
-        if cfg.agent.dangerously_skip_permissions
-            && (preset == "custom" || bypass == Some(false))
-            && unbypassed.insert(preset.clone())
-        {
-            errs.push(ConfigError::NoBypassFlag(preset.clone()));
-        }
         if preset == "custom" {
             let command = over
                 .and_then(|o| o.command.as_ref())
@@ -1277,6 +1273,14 @@ mod tests {
     }
 
     #[test]
+    fn skip_permissions_key_refused() {
+        let d = tempfile::tempdir().unwrap();
+        write_config(d.path(), "[agent]\ndangerously_skip_permissions = true\n");
+        let err = load(d.path()).unwrap_err().to_string();
+        assert!(err.contains("[sandbox] mode"), "{err}");
+    }
+
+    #[test]
     fn unknown_gate_is_refused() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
         c.stage[0].post.extend(["nope".into(), "tickets".into()]);
@@ -1299,26 +1303,6 @@ mod tests {
         c.agent.preset = "aider".into();
         let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
         assert!(errs.iter().any(|e| e.to_string().contains("timeout")));
-    }
-
-    #[test]
-    fn a_skip_with_no_bypass_flag_is_refused() {
-        let mut c = checked();
-        c.agent.dangerously_skip_permissions = true;
-        assert!(validate(&c, &crate::agent::presets(), &|_| Some(String::new())).is_ok());
-        c.agent.roles.insert(
-            "scout".into(),
-            AgentOverride {
-                preset: Some("pi".into()),
-                ..AgentOverride::default()
-            },
-        );
-        let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
-        assert!(
-            errs.iter()
-                .any(|e| e.to_string().contains("pi declares no bypass flag")),
-            "{errs:?}"
-        );
     }
 
     #[test]
