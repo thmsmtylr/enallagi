@@ -2912,39 +2912,38 @@ echo '{{"results":[]}}' > "$out"
         assert_eq!(env.halts, vec![out.reason]);
     }
 
+    // judged by what the child does if it lives, not by a clock: a surviving child touches `survived`
     #[test]
-    fn a_timed_out_check_kills_its_process_group() {
+    fn timeout_kills_group() {
         let mut runs = 0;
-        let pid = loop {
+        let (env, pid) = loop {
             runs += 1;
-            let env = Env::timed("sleep 30 & echo $! >child.pid\nsleep 30\n", "4s");
-            let started = Instant::now();
+            let env = Env::timed(
+                "(sleep 60; touch survived) & echo $! >child.pid\nsleep 60\n",
+                "4s",
+            );
             let r = check_delta(&env.repo.root, &env.cfg, false);
             assert!(r.timed_out.is_some(), "{r:?}");
-            // a grandchild still holding the pipe would hold the gate for its own 30 seconds
-            let waited = started.elapsed();
-            assert!(
-                waited < Duration::from_secs(10),
-                "the gate waited {waited:?}"
-            );
             let pid = std::fs::read_to_string(env.repo.root.join("child.pid"))
                 .unwrap_or_default()
                 .trim()
                 .to_string();
             // under load the timeout can fire before the check reaches its fork, which proves nothing
             if !pid.is_empty() {
-                break pid;
+                break (env, pid);
             }
             assert!(
                 runs < 3,
                 "the check never wrote its child's pid in {runs} runs"
             );
         };
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while alive(&pid) && Instant::now() < deadline {
+        while alive(&pid) {
             std::thread::sleep(Duration::from_millis(50));
         }
-        assert!(!alive(&pid), "the check's child {pid} outlived it");
+        assert!(
+            !env.repo.root.join("survived").exists(),
+            "the check's child {pid} outlived it"
+        );
     }
 
     #[test]
