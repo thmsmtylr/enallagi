@@ -29,15 +29,18 @@ When the launcher opens a ticket's pull request, it sets the ticket `open` and w
 Before selecting a task, an iteration polls each `open` ticket's pull request with one light read (state, head sha, newest comment and review, check rollup).
 A merged pull request sets `done`, and a closed one sets `wontfix` with gate `pull request closed unmerged`.
 The full review read runs only when that key differs from the ticket's `polled:`, which then takes the new key.
+Limit: the key carries no `updatedAt`, so a comment or summary edited in place is not re-read until the head, a newest comment or review, or the rollup changes.
 A finding inside the ticket's `scope:`, or with no anchor, goes back to that ticket as a `finding:` entry with its body quoted; the ticket returns to `ready-for-agent`, `rounds:` goes up by one, and its criteria are never touched.
 A finding outside the scope becomes a `needs-triage` ticket, and the launcher replies on its thread naming that ticket and resolves it.
 A returned ticket, a `ready-for-agent` one carrying `pr:`, is taken before any other.
 Its round runs in a worktree started from `origin/<branch>` after a fetch, with that head as the gate base, and the checkout's branch never carries it.
+Limit: an in-tree install, whose instance has no state repository of its own, has no respond lane; a returned ticket's round runs in the checkout, and the launcher writes no replies, resolves, `settled:` lines or `.out-of-scope/` records, so `respond: clean` is never reached.
 After verify passes, the launcher fast-forward pushes the round's commits to `<branch>`, writes `pushed:` (sha and time) and sets the ticket `open`.
 A range holding a state commit, or a remote head that moved, refuses the push: the ticket goes back to `open` with the reason under `gate:`.
 The implementer answers each `finding:` with one `answer:` line, `accept <test>` or `reject <concept>: <command>`, and the `findings` gate forces back a `done` that leaves one unanswered.
 After the push, each reject is appended to `.out-of-scope/<concept>.md` in Pocock's format; a concept file that exists gains only a `## Prior requests` line.
 The launcher then replies once per finding answered since the last push, marked `<!-- enallagi:F-<n> -->`: a thread reply on a thread (an accept names the fixing sha and the test, a reject the concept and the command), and one comment listing the other findings by URL. Each reply's URL is written as `settled: F-<n> <url>`.
+Limit: a reject's reply carries its concept and command, not the reasoning, which stays in the ticket's `## Comments`.
 Each push also asks every `[respond] rereview` reviewer again with `gh pr edit <pr> --add-reviewer <r>`; a failure is a warning.
 Replies, comments, resolves and re-review requests run with `GH_TOKEN` set to the value of the variable `[respond] token_env` names, when it is set.
 The poll judges nothing on a ticket whose `pushed:` time is less than `[respond] quiet` ago. When no pipeline's `when` holds and a pushed ticket is inside its window, the launcher sleeps until the earliest window closes and iterates.
