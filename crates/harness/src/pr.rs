@@ -1,7 +1,7 @@
 //! Builds a pull-request branch off the upstream default branch from the product commits whose subject names a landed task.
 
 use crate::probes::{contribution_policy, Finding};
-use crate::tracker::Tracker;
+use crate::tracker::{self, Tracker};
 use crate::{block, config, gates, git};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -668,17 +668,14 @@ fn describe(
             .skip(1)
             .take_while(|l| l.starts_with(' '))
             .collect();
-        let notes: Vec<&str> = body
-            .lines()
-            .skip_while(|l| !l.starts_with("notes:"))
-            .collect();
-        let verdict = notes
-            .iter()
-            .rposition(|l| {
-                let l = l.trim_start().trim_start_matches("notes:").trim_start();
-                l.to_lowercase().starts_with("verifier")
+        let verdict = tracker::verdict(&task.block)
+            .map(|(v, runs)| {
+                let pairs: String = runs
+                    .iter()
+                    .map(|(cmd, exit)| format!("\nran: {cmd}\nexit: {exit}"))
+                    .collect();
+                format!("```\nverdict: {v}{pairs}\n```")
             })
-            .map(|at| notes[at..].join("\n"))
             .unwrap_or_default();
         out.push_str(&format!(
             "\n## {} {}\n\n{}\n",

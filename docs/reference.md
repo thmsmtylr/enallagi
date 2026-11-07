@@ -80,7 +80,7 @@ or halts the run. The names are matched in `crates/harness/src/gates.rs`.
 | `implementer-not-done` | a `done` from anyone but the verifier, a `review` over a standing `rejected` verdict, or an implementer that stopped short of `review` | implement |
 | `commit-verdict` | a verdict whose `deferred:` line or new prose defers a finding and adds no `needs-triage` ticket, or a failed commit of the queue | verify |
 | `verdict` | a `done` without `verdict: verified by verifier`, a rejection without `verdict: rejected by verifier: <reason>`, or a `done` whose work is uncommitted or whose check is red on delta | verify |
-| `claims` | a `done` whose latest verdict claims an exit on a `ran:` line that two re-runs both contradict, for commands `[check] claims_allow` names | verify |
+| `claims` | a `done` whose `ran:`/`exit:` pairs under the `verdict:` line claim an exit that two re-runs both contradict, for commands `[check] claims_allow` names | verify |
 | `skip-added` | a `done` whose commits add a `[layout] skip_patterns` match to a test file, named by `file:line` | verify |
 | `red-first` | a `done` whose `[layout] test_only_glob` files pass the check with every other changed file at the iteration base, run in a temporary worktree | verify |
 | `scope` | a file outside the task's `scope:` globs, or a product task editing the harness | verify |

@@ -275,6 +275,16 @@ pub enum Verdict {
     Answered,
 }
 
+impl std::fmt::Display for Verdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Verdict::Verified => write!(f, "verified by verifier"),
+            Verdict::Rejected(reason) => write!(f, "rejected by verifier: {reason}"),
+            Verdict::Answered => write!(f, "answered by implementer"),
+        }
+    }
+}
+
 /// Every form a `verdict:` line takes; the role prompts name each.
 pub const VERDICT_FORMS: [&str; 3] = [
     "verified by verifier",

@@ -155,6 +155,9 @@ blockedBy: none
 status: done
 criteria:
   - src/thing.txt says two twice
+verdict: verified by verifier
+ran: `grep -c two src/thing.txt`
+exit: 0
 notes: implementer: doubled two
   verifier, first pass: REJECTED, three does not mention two
   implementer: three mentions two
@@ -266,12 +269,21 @@ fn the_task_branch_holds_only_the_done_change() {
     assert!(text.contains("src/thing.txt says two twice"), "{text}");
     assert!(text.contains(&shas[0]) && text.contains(&shas[2]), "{text}");
     assert!(!text.contains(&shas[1]), "{text}");
+}
+
+#[test]
+fn pr_body_verdict() {
+    let (f, _) = landed("exit 0\n");
+    let (code, out) = f.harness(&["pr", "T-001"]);
+    assert_eq!(code, 0, "{out}");
+    let text = fs::read_to_string(f.root.join(".enallagi/pr/T-001.md")).expect("description");
     let verification = text.split("### Verification").nth(1).expect("verification");
     assert!(
-        verification.contains("`grep -c two src/thing.txt` → 2"),
+        verification.trim_start().starts_with(
+            "```\nverdict: verified by verifier\nran: grep -c two src/thing.txt\nexit: 0\n```\n"
+        ),
         "{text}"
     );
-    assert!(!verification.contains("first pass"), "{text}");
 }
 
 #[test]

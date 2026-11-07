@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `claims` re-runs only the `ran:`/`exit:` pairs under the `verdict:` line, and a PR body's Verification section prints that line and its pairs
 - `rejection-stale` and the implementer's retry prompt read the `verdict:` line; REJECTED prose in comments is no longer a verdict
 - the verifier and implementer write one `verdict:` line in the ticket's `## Harness`; the `verdict` gate sends back to `review` a `done` not `verified by verifier` and a rejection with no reason, and `implementer-not-done` refuses a `review` over a standing rejection
 - `enallagi eval` puts its own binary first on the agent's `PATH`, sets `ENALLAGI_TASK` to the fixture's ready ticket, and reads `EVAL_AGENT` with shell quoting
