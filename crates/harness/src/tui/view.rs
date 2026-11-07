@@ -5,11 +5,11 @@ use std::collections::HashMap;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
 
-use super::{stream, Model};
-use crate::events::Kind;
+use super::{stream, Model, Pane};
+use crate::events::{self, Kind};
 use crate::{block, tracker};
 
 pub fn view(model: &Model, frame: &mut Frame) {
@@ -93,7 +93,8 @@ fn render_queue(model: &Model, frame: &mut Frame, area: Rect) {
             }
         })
         .collect();
-    let p = Paragraph::new(lines).block(Block::bordered().title("queue"));
+    let p = Paragraph::new(window(model, Pane::Queue, lines, area))
+        .block(Block::bordered().title("queue"));
     frame.render_widget(p, area);
 }
 
@@ -191,7 +192,8 @@ fn render_stages(model: &Model, frame: &mut Frame, area: Rect) {
         .iter()
         .map(|r| Line::from(render_stage_row(r)))
         .collect();
-    let p = Paragraph::new(lines).block(Block::bordered().title("stages"));
+    let p = Paragraph::new(window(model, Pane::Stages, lines, area))
+        .block(Block::bordered().title("stages"));
     frame.render_widget(p, area);
 }
 
@@ -219,24 +221,63 @@ fn output_title(model: &Model) -> String {
     t
 }
 
-fn render_output(model: &Model, frame: &mut Frame, area: Rect) {
-    let all_lines: Vec<String> = model
-        .output
-        .iter()
-        .flat_map(|c| stream::parse_chunk(c))
-        .collect();
+// the lines of `lines` that fit `area`, ending `model.offset(pane)` lines before the tail
+fn window<'a>(model: &Model, pane: Pane, lines: Vec<Line<'a>>, area: Rect) -> Vec<Line<'a>> {
     let height = area.height.saturating_sub(2) as usize;
-    let total = all_lines.len();
-    let end = total.saturating_sub(model.scroll.min(total));
+    let total = lines.len();
+    model.record(pane, height, total);
+    let end = total - model.offset(pane).min(total.saturating_sub(height));
     let start = end.saturating_sub(height);
-    let lines: Vec<Line> = all_lines[start..end]
+    lines.into_iter().skip(start).take(end - start).collect()
+}
+
+// one line per stage and gate event, as `enallagi events` prints it, and one per agent tool call
+fn feed(model: &Model) -> Vec<String> {
+    model
+        .events
         .iter()
-        .map(|s| Line::from(s.as_str()))
+        .flat_map(|e| match &e.kind {
+            Kind::StageStart { .. } | Kind::StageEnd { .. } | Kind::Gate { .. } => {
+                vec![events::render_line(e)]
+            }
+            Kind::StageOutput { chunk, .. } => stream::tool_calls(chunk),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+fn render_output(model: &Model, frame: &mut Frame, area: Rect) {
+    let (all_lines, title) = if model.raw {
+        let lines = model
+            .output
+            .iter()
+            .flat_map(|c| stream::parse_chunk(c))
+            .collect();
+        (
+            lines,
+            format!("{} \u{b7} raw \u{b7} r: events", output_title(model)),
+        )
+    } else {
+        (feed(model), "events \u{b7} r: raw".to_string())
+    };
+    let width = area.width.saturating_sub(2).max(1) as usize;
+    let lines = all_lines
+        .iter()
+        .flat_map(|l| wrap(l, width))
+        .map(Line::from)
         .collect();
-    let p = Paragraph::new(lines)
-        .block(Block::bordered().title(output_title(model)))
-        .wrap(Wrap { trim: false });
+    let p = Paragraph::new(window(model, Pane::Output, lines, area))
+        .block(Block::bordered().title(title));
     frame.render_widget(p, area);
+}
+
+// wrapped before windowing, so the window counts rows on screen and the tail is never cut
+fn wrap(line: &str, width: usize) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    if chars.is_empty() {
+        return vec![String::new()];
+    }
+    chars.chunks(width).map(|c| c.iter().collect()).collect()
 }
 
 fn render_footer(model: &Model, frame: &mut Frame, area: Rect) {
@@ -279,16 +320,19 @@ fn render_footer(model: &Model, frame: &mut Frame, area: Rect) {
 }
 
 fn render_help(frame: &mut Frame, area: Rect) {
-    let width = area.width.min(44);
-    let height = area.height.min(7);
+    let width = area.width.min(48);
+    let height = area.height.min(10);
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
     let help_area = Rect::new(x, y, width, height);
     let p = Paragraph::new(
-        "q     STOP (write) / quit (watch)\n\
-         Tab   cycle focus\n\
-         ↑ ↓   scroll\n\
-         ?     toggle this help",
+        "q          STOP (write) / quit (watch)\n\
+         Tab        cycle focus\n\
+         ↑ ↓ wheel  scroll the focused pane\n\
+         PgUp PgDn  scroll a page\n\
+         Home End   top / follow the tail\n\
+         r          events / raw agent output\n\
+         ?          toggle this help",
     )
     .block(Block::bordered().title("help"));
     frame.render_widget(Clear, help_area);

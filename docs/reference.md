@@ -84,6 +84,22 @@ A skill that no stage loading it ever used is named as unproven in this log.
 `--since <ts>` and `--until <ts>` count only stages that started at or after `since` and before `until`.
 `--cost` takes no subcommand and no `--frozen`.
 
+### Watching a run
+
+`enallagi watch` attaches read-only to a live loop, and `enallagi run` draws the same view.
+The output pane opens on the event feed.
+It shows one line per stage and gate event, as `enallagi events` prints it, and one line per agent tool call.
+
+| Key | What |
+| --- | --- |
+| `Tab` | cycle focus between the queue, stages and output panes |
+| `↑` `↓`, mouse wheel | scroll the focused pane by one line, or three for the wheel |
+| `PgUp` `PgDn` | scroll the focused pane by its height |
+| `Home` `End` | the top of the focused pane, and back to following its tail |
+| `r` | switch the output pane between the event feed and the agent's raw output |
+| `?` | toggle the key list |
+| `q` | write `STOP` under `run`, and leave under `watch` or once a run has finished |
+
 ## Gates
 
 `[[stage]].post` names the gates run after a stage. A failed gate sends the ticket back to `ready-for-agent`

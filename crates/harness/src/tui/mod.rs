@@ -3,13 +3,17 @@
 mod stream;
 mod view;
 
+use std::cell::Cell;
 use std::panic::PanicHookInfo;
 use std::path::Path;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossterm::event::{self, Event as CEvent, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event as CEvent, KeyCode, KeyEvent,
+    KeyEventKind, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -36,7 +40,10 @@ pub struct Model {
     pub loop_running: bool,
     pub budget_usd: Option<f64>,
     pub focus: Pane,
-    pub scroll: usize,
+    // lines back from each pane's tail, indexed by `Pane as usize`; 0 follows the tail
+    pub scroll: [usize; 3],
+    // the output pane shows the agent's stream in place of the event feed
+    pub raw: bool,
     pub stop_requested: bool,
     pub current_stage: Option<String>,
     pub output: Vec<String>,
@@ -46,6 +53,9 @@ pub struct Model {
     // tracked for the queue's bold row and the output pane's title; not part of the shared interface, so private
     current_task: Option<String>,
     current_command: Option<String>,
+    // each pane's inner height and furthest offset, recorded by the last draw so keys page and stop at the top
+    heights: Cell<[usize; 3]>,
+    max_scroll: Cell<[usize; 3]>,
 }
 
 impl Model {
@@ -58,7 +68,8 @@ impl Model {
                 .ok()
                 .and_then(|s| s.parse().ok()),
             focus: Pane::Queue,
-            scroll: 0,
+            scroll: [0; 3],
+            raw: false,
             stop_requested: false,
             current_stage: None,
             output: Vec::new(),
@@ -66,6 +77,8 @@ impl Model {
             finished: false,
             current_task: None,
             current_command: None,
+            heights: Cell::new([10; 3]),
+            max_scroll: Cell::new([usize::MAX; 3]),
         }
     }
 
@@ -109,11 +122,55 @@ impl Model {
                     Pane::Output => Pane::Queue,
                 };
             }
-            KeyCode::Up => self.scroll = self.scroll.saturating_add(1),
-            KeyCode::Down => self.scroll = self.scroll.saturating_sub(1),
+            KeyCode::Up => self.scroll_by(1),
+            KeyCode::Down => self.scroll_by(-1),
+            KeyCode::PageUp => self.scroll_by(self.page(self.focus) as isize),
+            KeyCode::PageDown => self.scroll_by(-(self.page(self.focus) as isize)),
+            KeyCode::Home => {
+                self.scroll[self.focus as usize] = self.max_scroll.get()[self.focus as usize]
+            }
+            KeyCode::End => self.scroll[self.focus as usize] = 0,
+            KeyCode::Char('r') => self.raw = !self.raw,
             KeyCode::Char('?') => self.help = !self.help,
             _ => {}
         }
+    }
+
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => self.scroll_by(3),
+            MouseEventKind::ScrollDown => self.scroll_by(-3),
+            _ => {}
+        }
+    }
+
+    pub fn offset(&self, pane: Pane) -> usize {
+        self.scroll[pane as usize]
+    }
+
+    pub fn page(&self, pane: Pane) -> usize {
+        self.heights.get()[pane as usize].max(1)
+    }
+
+    fn scroll_by(&mut self, lines: isize) {
+        let i = self.focus as usize;
+        let s = self.scroll[i];
+        self.scroll[i] = if lines >= 0 {
+            s.saturating_add(lines as usize)
+        } else {
+            s.saturating_sub(lines.unsigned_abs())
+        }
+        .min(self.max_scroll.get()[i]);
+    }
+
+    fn record(&self, pane: Pane, height: usize, total: usize) {
+        let i = pane as usize;
+        let mut heights = self.heights.get();
+        heights[i] = height;
+        self.heights.set(heights);
+        let mut max = self.max_scroll.get();
+        max[i] = total.saturating_sub(height);
+        self.max_scroll.set(max);
     }
 }
 
@@ -151,7 +208,7 @@ struct TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         if self.alt_screen {
-            let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+            let _ = execute!(std::io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
         }
         if self.raw_mode {
             let _ = disable_raw_mode();
@@ -161,7 +218,7 @@ impl Drop for TerminalGuard {
 
 // unlike TerminalGuard, tries both steps unconditionally and ignores errors -- idempotent, safe to call more than once
 fn restore_terminal() {
-    let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+    let _ = execute!(std::io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
     let _ = disable_raw_mode();
 }
 
@@ -174,6 +231,7 @@ fn enter_terminal() -> anyhow::Result<(Terminal<CrosstermBackend<std::io::Stdout
     };
     execute!(std::io::stdout(), EnterAlternateScreen)?;
     guard.alt_screen = true;
+    execute!(std::io::stdout(), EnableMouseCapture)?;
     let terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     Ok((terminal, guard))
 }
@@ -249,7 +307,11 @@ fn run_live_loop<B: Backend>(
             model.queue = read_queue(tracker);
         }
         if event::poll(Duration::from_millis(500))? {
-            if let CEvent::Key(key) = event::read()? {
+            let read = event::read()?;
+            if let CEvent::Mouse(mouse) = read {
+                model.handle_mouse(mouse);
+            }
+            if let CEvent::Key(key) = read {
                 let leaving = is_leave_key(model.finished, &key);
                 model.handle_key(key);
                 if leaving {
@@ -309,7 +371,11 @@ fn run_attached_loop<B: Backend>(
             .draw(|f| view(&model, f))
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         if event::poll(Duration::from_millis(500))? {
-            if let CEvent::Key(key) = event::read()? {
+            let read = event::read()?;
+            if let CEvent::Mouse(mouse) = read {
+                model.handle_mouse(mouse);
+            }
+            if let CEvent::Key(key) = read {
                 model.handle_key(key);
                 if model.stop_requested {
                     break;
@@ -324,7 +390,7 @@ fn run_attached_loop<B: Backend>(
 mod tests {
     use super::*;
     use crate::events::{Log as EventLog, Writer};
-    use crossterm::event::{KeyEventState, KeyModifiers};
+    use crossterm::event::{KeyEventState, KeyModifiers, MouseEvent, MouseEventKind};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -487,11 +553,160 @@ mod tests {
                 state: KeyEventState::NONE,
             },
             press('?'),
+            press('r'),
+            key(KeyCode::PageUp),
+            key(KeyCode::PageDown),
+            key(KeyCode::Home),
+            key(KeyCode::End),
         ] {
             model.handle_key(key);
             assert_eq!(format!("{:?}", model.queue), queue_before);
         }
         assert!(model.stop_requested);
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn wheel(kind: MouseEventKind) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    fn tool_chunk(name: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"{name}","input":{{"path":"a.rs"}}}}]}}}}"#
+        )
+    }
+
+    fn with_tool_calls(n: usize) -> Model {
+        let mut model = fixture_model();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut w = Writer::new(EventLog::open(dir.path()));
+        for i in 0..n {
+            model.apply(&w.emit(Kind::StageOutput {
+                stage: "verify".into(),
+                chunk: tool_chunk(&format!("Tool{i:02}")),
+            }));
+        }
+        model
+    }
+
+    fn draw(model: &Model) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
+        terminal.draw(|f| view(model, f)).expect("draw");
+        buffer_text(terminal.backend())
+    }
+
+    #[test]
+    fn keys_scroll_focused_pane() {
+        let mut model = with_tool_calls(100);
+        model.focus = Pane::Output;
+        draw(&model);
+        let page = model.page(Pane::Output);
+        assert!(page > 1, "{page}");
+        model.handle_key(key(KeyCode::PageUp));
+        assert_eq!(model.offset(Pane::Output), page);
+        assert_eq!(model.offset(Pane::Queue), 0);
+        model.handle_key(key(KeyCode::PageUp));
+        model.handle_key(key(KeyCode::PageDown));
+        assert_eq!(model.offset(Pane::Output), page);
+        model.handle_key(key(KeyCode::Home));
+        let top = model.offset(Pane::Output);
+        assert_eq!(top, 107 - page, "four events of 7 rows and 100 tool calls");
+        model.handle_key(key(KeyCode::PageUp));
+        assert_eq!(model.offset(Pane::Output), top, "the top stops the scroll");
+        model.handle_key(key(KeyCode::PageDown));
+        assert_eq!(model.offset(Pane::Output), top - page);
+        model.handle_key(key(KeyCode::End));
+        assert_eq!(model.offset(Pane::Output), 0);
+
+        model.handle_mouse(wheel(MouseEventKind::ScrollUp));
+        assert_eq!(model.offset(Pane::Output), 3);
+        assert_eq!(model.offset(Pane::Stages), 0);
+        model.handle_mouse(wheel(MouseEventKind::ScrollDown));
+        assert_eq!(model.offset(Pane::Output), 0);
+    }
+
+    #[test]
+    fn home_end_show_ends() {
+        let mut model = with_tool_calls(40);
+        model.focus = Pane::Output;
+        let tail = draw(&model);
+        assert!(tail.contains("Tool39"), "{tail}");
+        assert!(!tail.contains("Tool00"), "{tail}");
+        model.handle_key(key(KeyCode::Home));
+        let top = draw(&model);
+        assert!(top.contains("stage.start"), "{top}");
+        assert!(!top.contains("Tool39"), "{top}");
+        model.handle_key(key(KeyCode::End));
+        assert!(draw(&model).contains("Tool39"));
+    }
+
+    #[test]
+    fn wrapped_tail_shows() {
+        let mut model = fixture_model();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut w = Writer::new(EventLog::open(dir.path()));
+        for _ in 0..30 {
+            model.apply(&w.emit(Kind::Gate {
+                gate: "verdict".into(),
+                task: "T-001".into(),
+                pass: false,
+                reason: "x".repeat(300),
+                tally: None,
+            }));
+        }
+        model.apply(&w.emit(Kind::StageOutput {
+            stage: "verify".into(),
+            chunk: tool_chunk("Newest"),
+        }));
+        model.focus = Pane::Output;
+        assert!(draw(&model).contains("tool  Newest"));
+        model.handle_key(key(KeyCode::Home));
+        assert!(!draw(&model).contains("tool  Newest"));
+        model.handle_key(key(KeyCode::End));
+        assert!(draw(&model).contains("tool  Newest"));
+    }
+
+    #[test]
+    fn output_default_feed() {
+        let mut model = with_tool_calls(1);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut w = Writer::new(EventLog::open(dir.path()));
+        model.apply(&w.emit(Kind::StageOutput {
+            stage: "verify".into(),
+            chunk: r#"{"type":"other","n":1}"#.into(),
+        }));
+        let feed = draw(&model);
+        assert!(feed.contains("stage.start"), "{feed}");
+        assert!(feed.contains("gate"), "{feed}");
+        assert!(feed.contains("tool  Tool00"), "{feed}");
+        assert!(!feed.contains(r#"{"type""#), "{feed}");
+        model.handle_key(press('r'));
+        let raw = draw(&model);
+        assert!(raw.contains(r#"{"type":"other","n":1}"#), "{raw}");
+        assert!(!raw.contains("stage.start"), "{raw}");
+    }
+
+    #[test]
+    fn help_lists_keys() {
+        let mut model = fixture_model();
+        model.handle_key(press('?'));
+        let text = draw(&model);
+        for needle in ["Tab", "PgUp PgDn", "Home", "End", "wheel", "r ", "q "] {
+            assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+        }
     }
 
     #[test]
