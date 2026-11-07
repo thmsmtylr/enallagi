@@ -406,7 +406,7 @@ fn skills_sync_custom_preset() {
 
 // the shipped implementer loads ponytail, the verifier ponytail-review, and both caveman-commit; the implementer's
 // transcript invokes tdd and the verifier's invokes caveman-commit
-fn cost_in(root: &std::path::Path) -> String {
+fn cost_in(root: &std::path::Path, window: &[&str]) -> String {
     let mut toml = String::from("[check]\ncommand = \"true\"\n\n");
     for id in enallagi::fixture::SKILL_IDS {
         toml.push_str(&format!(
@@ -440,7 +440,7 @@ fn cost_in(root: &std::path::Path) -> String {
         r#"{"ts":"2026-09-07T00:20:00Z","run":"r","iter":1,"seq":6,"kind":"stage.end","stage":"verify","task":"T-1","seconds":540,"exit":0,"cost":null,"input_tokens":null,"output_tokens":null,"turns":null}"#.to_string(),
     ];
     std::fs::write(root.join(".enallagi/events.jsonl"), lines.join("\n") + "\n").unwrap();
-    let out = harness(&["skills", "--cost"]);
+    let out = harness(&[&["skills", "--cost"], window].concat());
     assert!(out.status.success(), "{out:?}");
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
@@ -448,7 +448,7 @@ fn cost_in(root: &std::path::Path) -> String {
 #[test]
 fn skills_cost_counts_loads_against_uses() {
     let dir = tempfile::tempdir().unwrap();
-    let report = cost_in(dir.path());
+    let report = cost_in(dir.path(), &[]);
     let row = |id: &str| -> Vec<String> {
         report
             .lines()
@@ -483,10 +483,34 @@ fn skills_cost_counts_loads_against_uses() {
     );
 }
 
+// T-470 splits the log at the swap: a stage counts in the window it started in
+#[test]
+fn skills_cost_by_period() {
+    let row = |report: &str, id: &str| -> Vec<String> {
+        report
+            .lines()
+            .find(|l| l.starts_with(&format!("{id} ")))
+            .unwrap_or_else(|| panic!("no {id} row: {report}"))
+            .split_whitespace()
+            .skip(2)
+            .map(String::from)
+            .collect()
+    };
+    let split = "2026-09-07T00:11:00Z";
+    let dir = tempfile::tempdir().unwrap();
+    let before = cost_in(dir.path(), &["--until", split]);
+    assert_eq!(row(&before, "tdd"), ["1", "1"], "{before}");
+    assert_eq!(row(&before, "caveman-commit"), ["1", "0"], "{before}");
+    let dir = tempfile::tempdir().unwrap();
+    let after = cost_in(dir.path(), &["--since", split]);
+    assert_eq!(row(&after, "tdd"), ["0", "0"], "{after}");
+    assert_eq!(row(&after, "caveman-commit"), ["1", "1"], "{after}");
+}
+
 #[test]
 fn skills_cost_names_an_unused_skill_unproven() {
     let dir = tempfile::tempdir().unwrap();
-    let report = cost_in(dir.path());
+    let report = cost_in(dir.path(), &[]);
     let unproven: Vec<&str> = report
         .lines()
         .filter(|l| l.contains("unproven"))

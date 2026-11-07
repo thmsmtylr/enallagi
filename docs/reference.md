@@ -72,6 +72,7 @@ Each row carries its vendored bytes and two stage counts.
 `loaded` counts the role stages whose role file names the skill.
 `used` counts the stages whose transcript shows a `Skill` tool call for it.
 A skill that no stage loading it ever used is named as unproven in this log.
+`--since <ts>` and `--until <ts>` count only stages that started at or after `since` and before `until`.
 `--cost` takes no subcommand and no `--frozen`.
 
 ## Gates

@@ -223,6 +223,12 @@ pub enum Command {
         /// Print each skill's bytes and the stages that loaded it against the stages that used it
         #[arg(long, conflicts_with_all = ["cmd", "frozen"])]
         cost: bool,
+        /// With --cost, count only role stages that started at or after this timestamp
+        #[arg(long, requires = "cost")]
+        since: Option<String>,
+        /// With --cost, count only role stages that started before this timestamp
+        #[arg(long, requires = "cost")]
+        until: Option<String>,
     },
     /// Query or edit the queue
     ///
@@ -353,7 +359,19 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         Command::Base { task } => base::run(&base::Args { task }),
         Command::Gate { which, task, base } => gate::run(&gate::Args { which, task, base }),
         Command::Hook { name } => hook::run(&hook::Args { name }),
-        Command::Skills { cmd, frozen, cost } => skills::run(&skills::Args { cmd, frozen, cost }),
+        Command::Skills {
+            cmd,
+            frozen,
+            cost,
+            since,
+            until,
+        } => skills::run(&skills::Args {
+            cmd,
+            frozen,
+            cost,
+            since,
+            until,
+        }),
         Command::Tasks { cmd, args } => tasks::run(&tasks::Args { cmd, args }),
         Command::Eval { gate, names } => eval::run(&eval::Args { gate, names }),
         Command::Events {
@@ -390,7 +408,7 @@ mod tests {
         "hook", "skills", "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 39] = [
+    const FLAGS: [&str; 41] = [
         "init --adapter",
         "init --dry-run",
         "init --prune-defaults",
@@ -423,6 +441,8 @@ mod tests {
         "audit --harness",
         "gate --base",
         "skills --cost",
+        "skills --since",
+        "skills --until",
         "eval --gate",
         "events --role",
         "events --task",

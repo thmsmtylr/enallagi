@@ -2,7 +2,7 @@
 
 use crate::agent;
 use crate::config;
-use crate::events::{Log, Writer};
+use crate::events::{Kind, Log, Writer};
 use crate::git;
 use crate::pipeline::role_source;
 use crate::skills::{self, ResolveOpts, SkillError};
@@ -19,6 +19,8 @@ pub struct Args {
     pub cmd: Option<SkillsCmd>,
     pub frozen: bool,
     pub cost: bool,
+    pub since: Option<String>,
+    pub until: Option<String>,
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
@@ -55,7 +57,14 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 .map(|source| skills::required_ids(&config::subst(&source, &cfg)))
                 .unwrap_or_default()
         };
-        let events = Log::open(&root.join(&cfg.layout.harness_dir)).read()?;
+        let mut events = Log::open(&root.join(&cfg.layout.harness_dir)).read()?;
+        // a stage is in the window it started in; its output and end follow the start
+        let (since, until) = (args.since.as_deref(), args.until.as_deref());
+        events.retain(|e| {
+            !matches!(e.kind, Kind::StageStart { .. })
+                || (since.is_none_or(|s| e.ts.as_str() >= s)
+                    && until.is_none_or(|u| e.ts.as_str() < u))
+        });
         print!("{}", skills::cost_report(&sized, &loads, &events));
         return Ok(0);
     }
