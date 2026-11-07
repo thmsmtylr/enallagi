@@ -35,6 +35,8 @@ pub const HARNESS_KEYS: &[&str] = &[
     "pr",
     "branch",
     "polled",
+    "rounds",
+    "finding",
 ];
 
 /// The specs directory.
@@ -404,6 +406,28 @@ pub const OUT_OF_SCOPE: &str = ".out-of-scope";
 
 /// The dated kill lines under the harness dir `dir`: every `.out-of-scope/*.md`'s, then those of
 /// DECISIONS.md `## Rejected findings`, which is read-only history.
+/// Every line under a `## Prior requests` heading in `.out-of-scope/`: a rejected request, by URL.
+pub fn prior_requests(dir: &Path) -> std::io::Result<Vec<String>> {
+    let Ok(entries) = std::fs::read_dir(dir.join(OUT_OF_SCOPE)) else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for path in entries.flatten().map(|e| e.path()) {
+        if path.extension().is_none_or(|x| x != "md") {
+            continue;
+        }
+        let mut inside = false;
+        for line in std::fs::read_to_string(path)?.lines() {
+            if line.starts_with("## ") {
+                inside = line.trim() == "## Prior requests";
+            } else if inside && !line.trim().is_empty() {
+                out.push(line.to_string());
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub fn kill_lines(dir: &Path) -> std::io::Result<Vec<String>> {
     let dated = |l: &str| {
         l.strip_prefix("- [")
@@ -840,18 +864,27 @@ impl Tracker {
         let harness = lines.iter().position(|l| l.trim_end() == HARNESS);
         let prefix = format!("{key}:");
         match harness.and_then(|h| (h..lines.len()).find(|&i| lines[i].starts_with(&prefix))) {
-            Some(at) => lines[at] = line,
-            None => {
-                while lines.last().is_some_and(|l| l.is_empty()) {
-                    lines.pop();
-                }
-                if harness.is_none() {
-                    lines.extend([String::new(), HARNESS.to_string(), String::new()]);
-                }
-                lines.extend([line, String::new()]);
+            Some(at) => {
+                lines[at] = line;
+                std::fs::write(&path, lines.join("\n"))?;
+                Ok(())
             }
+            None => self.add_lines(id, &line),
         }
-        std::fs::write(&path, lines.join("\n"))?;
+    }
+
+    /// Appends `text` at the end of `## Harness`, which ends the file.
+    pub fn add_lines(&self, id: &str, text: &str) -> Result<(), QueueError> {
+        let path = self
+            .path_of(id)
+            .ok_or_else(|| QueueError::NoSuchTask(id.to_string()))?;
+        let mut out = std::fs::read_to_string(&path)?.trim_end().to_string();
+        if !out.lines().any(|l| l.trim_end() == HARNESS) {
+            out.push_str(&format!("\n\n{HARNESS}"));
+            out.push('\n');
+        }
+        out.push_str(&format!("\n{text}\n"));
+        std::fs::write(&path, out)?;
         Ok(())
     }
 

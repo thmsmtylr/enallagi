@@ -469,6 +469,33 @@ pub fn render(f: &Finding, id: &str) -> String {
     lines.join("\n")
 }
 
+/// A finding as its ticket carries it under its harness trailer: a `finding:` line, its fields indented under it, its body quoted.
+pub fn entry(f: &Finding, id: &str, round: u64) -> String {
+    let mut lines = vec![
+        format!("finding: {id} {} round {round}", f.source),
+        format!("  by: {}", f.by),
+        format!("  key: {}", f.key),
+        format!("  url: {}", f.url),
+    ];
+    if let Some(path) = &f.path {
+        let at = match f.lines {
+            (Some(a), Some(b)) if a != b => format!(":{a}-{b}"),
+            (_, Some(l)) | (Some(l), None) => format!(":{l}"),
+            _ => String::new(),
+        };
+        lines.push(format!("  anchor: {path}{at}"));
+    }
+    // `thread-id`, not `thread`: `thread_of` reads the first `thread:` as a block's origin
+    if let Some(thread) = &f.thread {
+        lines.push(format!("  thread-id: {thread}"));
+    }
+    if let Some(n) = f.severity {
+        lines.push(format!("  severity: {n}"));
+    }
+    issue::quote(&f.body, &mut lines);
+    lines.join("\n")
+}
+
 /// The thread id a block carries from the moment `append` wrote it, or none for a block with no origin thread.
 pub fn thread_of(block: &block::Block) -> Option<String> {
     block
@@ -487,9 +514,8 @@ pub const SETTLE: &str = concat!(
     "}",
 );
 
-/// Replies on the thread with the sha that answered it and resolves it, through the same gh the read uses.
-pub fn settle(root: &Path, thread: &str, sha: &str) -> Result<(), ReviewError> {
-    let body = format!("Answered in {sha} by enallagi.");
+/// Replies `body` on the thread and resolves it, through the same gh the read uses.
+pub fn settle(root: &Path, thread: &str, body: &str) -> Result<(), ReviewError> {
     let args = [
         "api",
         "graphql",

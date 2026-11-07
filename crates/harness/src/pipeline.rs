@@ -1572,7 +1572,8 @@ impl<'a> Loop<'a> {
         .filter(|s| !s.is_empty())
         .or_else(|| git::git(self.root, &["rev-parse", "HEAD"]).ok())
         .unwrap_or_default();
-        if let Err(err) = review::settle(self.root, &thread, sha.trim()) {
+        let body = format!("Answered in {} by enallagi.", sha.trim());
+        if let Err(err) = review::settle(self.root, &thread, &body) {
             self.digest
                 .warnings
                 .push(format!("{task}: thread {thread} was left open: {err}"));
@@ -1605,13 +1606,15 @@ impl<'a> Loop<'a> {
                 }
             };
             let moved = match light.state.as_str() {
-                "MERGED" => t.set_status(&id, "done", ""),
-                "CLOSED" => t.set_status(&id, "wontfix", "pull request closed unmerged"),
+                "MERGED" => t.set_status(&id, "done", "").map_err(|e| e.to_string()),
+                "CLOSED" => t
+                    .set_status(&id, "wontfix", "pull request closed unmerged")
+                    .map_err(|e| e.to_string()),
                 _ if polled.as_deref() == Some(light.key.as_str()) => Ok(()),
-                _ => {
-                    self.read_pull(&t, &spec, &decisions, &url);
+                _ => self.route(&t, &spec, &decisions, &id, &url).and_then(|_| {
                     t.set_field(&id, "polled", &light.key)
-                }
+                        .map_err(|e| e.to_string())
+                }),
             };
             if let Err(err) = moved {
                 self.digest.warnings.push(format!("{id}: {err}"));
@@ -1619,13 +1622,21 @@ impl<'a> Loop<'a> {
         }
     }
 
-    // the loop cannot wait on a reviewer: an anchored comment becomes a proposed block the next lane takes
-    fn read_pull(&mut self, t: &Tracker, spec: &str, decisions: &str, url: &str) {
+    // a finding inside the ticket's scope, or with no anchor, goes back to the ticket; any other is a new
+    // `needs-triage` ticket, its thread answered and resolved so the pull request can come clean
+    fn route(
+        &mut self,
+        t: &Tracker,
+        spec: &str,
+        decisions: &str,
+        id: &str,
+        url: &str,
+    ) -> Result<(), String> {
         let found = match review::read(url) {
             Ok(found) => found,
             Err(err) => {
                 self.digest.warnings.push(err.to_string());
-                return;
+                return Ok(());
             }
         };
         if found.short {
@@ -1633,23 +1644,77 @@ impl<'a> Loop<'a> {
                 "{url}: only the first 100 reviews, threads and comments were read"
             ));
         }
-        let appended = t
-            .blocks()
-            .map_err(|e| e.to_string())
-            .and_then(|blocks| {
-                review::append(&blocks, decisions, &found).map_err(|e| e.to_string())
-            })
-            .and_then(|a| {
-                for block in &a.blocks {
-                    t.append(spec, block).map_err(|e| e.to_string())?;
+        let blocks = t.blocks().map_err(|e| e.to_string())?;
+        let Some(ticket) = blocks.iter().find(|b| b.id == id) else {
+            return Ok(());
+        };
+        let scope: Vec<String> = block::field(ticket, "scope")
+            .unwrap_or_default()
+            .split(',')
+            .map(|g| g.trim().to_string())
+            .collect();
+        let had = ticket
+            .body
+            .iter()
+            .filter(|(_, l)| l.starts_with("finding:"))
+            .count();
+        let round = block::field(ticket, "rounds")
+            .and_then(|r| r.parse::<u64>().ok())
+            .unwrap_or(0)
+            + 1;
+        let prior = tracker::prior_requests(&self.root.join(&self.cfg.layout.harness_dir))
+            .map_err(|e| e.to_string())?;
+        // a ticket of any state, `wontfix` too, or an `.out-of-scope/` request already carries it
+        let carried = |f: &review::Finding| {
+            let key = format!("  key: {}", f.key);
+            crate::issue::carrier(blocks.iter(), &f.url).is_some()
+                || blocks.iter().any(|b| b.body.iter().any(|(_, l)| *l == key))
+                || prior.iter().any(|l| crate::issue::carries(l, &f.url))
+        };
+        let mut entries = Vec::new();
+        for f in found.findings.iter().filter(|f| !carried(f)) {
+            if f.path.as_deref().is_none_or(|p| gates::in_scope(p, &scope)) {
+                let n = had + entries.len() + 1;
+                entries.push(review::entry(f, &format!("F-{n}"), round));
+                continue;
+            }
+            let one = review::Found {
+                findings: vec![f.clone()],
+                ..review::Found::default()
+            };
+            let appended = t
+                .blocks()
+                .map_err(|e| e.to_string())
+                .and_then(|b| review::append(&b, decisions, &one).map_err(|e| e.to_string()))?;
+            for text in &appended.blocks {
+                t.append(spec, text).map_err(|e| e.to_string())?;
+                let filed = block::parse(text)
+                    .ok()
+                    .and_then(|b| b.into_iter().next())
+                    .map(|b| b.id)
+                    .unwrap_or_default();
+                println!("  proposed: {filed} from {}", f.url);
+                let Some(thread) = &f.thread else {
+                    continue;
+                };
+                let body = format!(
+                    "Outside {id}'s scope; filed as {filed} by enallagi.\n\n{}{filed} -->",
+                    review::OWN
+                );
+                if let Err(err) = review::settle(self.root, thread, &body) {
+                    self.digest
+                        .warnings
+                        .push(format!("{filed}: thread {thread} was left open: {err}"));
                 }
-                Ok(a.blocks.len())
-            });
-        match appended {
-            Ok(0) => {}
-            Ok(n) => println!("  proposed: {n} from {url}"),
-            Err(err) => self.digest.warnings.push(format!("the queue: {err}")),
+            }
         }
+        if entries.is_empty() {
+            return Ok(());
+        }
+        t.add_lines(id, &entries.join("\n"))
+            .and_then(|_| t.set_field(id, "rounds", &round.to_string()))
+            .and_then(|_| t.set_status(id, "ready-for-agent", ""))
+            .map_err(|e| e.to_string())
     }
 
     // the launcher pushes, never the lane: the lane's argv denies `git push`

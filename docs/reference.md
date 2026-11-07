@@ -29,12 +29,15 @@ When the launcher opens a ticket's pull request, it sets the ticket `open` and w
 Before selecting a task, an iteration polls each `open` ticket's pull request with one light read (state, head sha, newest comment and review, check rollup).
 A merged pull request sets `done`, and a closed one sets `wontfix` with gate `pull request closed unmerged`.
 The full review read runs only when that key differs from the ticket's `polled:`, which then takes the new key.
-Every finding lands as one `needs-triage` ticket: an unresolved thread (carrying its thread id), a review body, a plain comment, or a failed check on the head.
+A finding inside the ticket's `scope:`, or with no anchor, goes back to that ticket as a `finding:` entry with its body quoted; the ticket returns to `ready-for-agent`, `rounds:` goes up by one, and its criteria are never touched.
+A finding outside the scope becomes a `needs-triage` ticket, and the launcher replies on its thread naming that ticket and resolves it.
+A finding is already carried, and not routed again, when any ticket (`wontfix` included) holds its URL or its key, or an `.out-of-scope/` file lists its URL under `## Prior requests`.
+`enallagi review <pr>` reads a pull request no ticket owns, and every finding there lands as one `needs-triage` ticket: an unresolved thread (carrying its thread id), a review body, a plain comment, or a failed check on the head.
 The same finding raised twice on the same lines is one ticket.
 A bot's summary comment is keyed by its marker, so one it edits in place is one finding; it is no finding while that bot has an unresolved thread, or when it counts zero findings.
 A comment carrying `<!-- enallagi:` is the loop's own and never a finding.
 The bot table in `crates/harness/src/review.rs` is the only vendor-specific code: it maps a `Bot` account's login, `[bot]` dropped, to its vendor, and never drops a finding for its author.
-When that ticket lands, the launcher replies on the thread with the sha and resolves it.
+When a ticket filed from a thread lands, the launcher replies on the thread with the sha and resolves it.
 No host tool or a failed host call is a warning, never a halt.
 
 `enallagi audit` reads review findings, frictions and rejections, and writes proposed learnings to DECISIONS.md: a model names each class, and code checks each citation.

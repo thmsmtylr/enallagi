@@ -4295,6 +4295,130 @@ fn iteration_queues_review() {
     assert!(field_of(&r, "T-001", "polled").is_some(), "{tasks}");
 }
 
+// the twin under `tools/` serving `pulls` from its own state, with no canned read
+fn serving(r: &Repo, pulls: Vec<Pull>) -> String {
+    let state = State {
+        repo: "owner/repo".to_string(),
+        pulls,
+        ..State::default()
+    };
+    let (path, _) = twin::install(&r.root.join("tools"), BIN, &state);
+    path.to_string_lossy().into_owned()
+}
+
+fn thread_on(path: &str, n: u32) -> Thread {
+    Thread {
+        id: format!("PRRT_{n}"),
+        comments: vec![Remark {
+            author: "pat".to_string(),
+            path: Some(path.to_string()),
+            line: Some(3),
+            body: format!("finding {n} on {path}"),
+            url: format!("https://github.com/owner/repo/pull/13#discussion_r{n}"),
+            ..Remark::default()
+        }],
+        ..Thread::default()
+    }
+}
+
+fn pull_with(threads: Vec<Thread>) -> Vec<Pull> {
+    let mut pulls = open_pulls();
+    pulls[0].threads = threads;
+    pulls[1].state = "MERGED".to_string();
+    pulls
+}
+
+fn ticket_file(r: &Repo, id: &str) -> String {
+    let t = enallagi::tracker::Tracker::open(&r.root, ".enallagi");
+    std::fs::read_to_string(t.path_of(id).expect("ticket")).expect("read ticket")
+}
+
+fn criteria_of(text: &str) -> String {
+    let at = text.find("## Acceptance criteria").expect("criteria");
+    let rest = &text[at..];
+    rest[..rest[2..].find("\n## ").map_or(rest.len(), |e| e + 2)].to_string()
+}
+
+#[test]
+fn in_scope_finding_returns() {
+    let r = driven_repo(OPEN_TASKS);
+    let criteria = criteria_of(&ticket_file(&r, "T-001"));
+    let path = serving(&r, pull_with(vec![thread_on("src/thing.ts", 7)]));
+    let out = run_with_path(&r, &path);
+    let text = ticket_file(&r, "T-001");
+    assert_eq!(criteria_of(&text), criteria);
+    assert!(
+        text.contains("finding: F-1 thread round 1\n  by: pat\n  key: PRRT_7\n  url: https://github.com/owner/repo/pull/13#discussion_r7\n  anchor: src/thing.ts:3\n  thread-id: PRRT_7\n  > finding 7 on src/thing.ts\n"),
+        "{text}\n{out}"
+    );
+    assert_eq!(field_of(&r, "T-001", "rounds").as_deref(), Some("1"));
+    assert!(
+        !tasks_text(&r).contains("needs-triage"),
+        "{}",
+        tasks_text(&r)
+    );
+    assert_ne!(state_of(&r, "T-001").as_deref(), Some("open"), "{out}");
+
+    // nothing new: a second poll appends nothing
+    let t = enallagi::tracker::Tracker::open(&r.root, ".enallagi");
+    t.set_status("T-001", "open", "").expect("open");
+    t.set_field("T-001", "polled", "-").expect("polled");
+    let before = ticket_file(&r, "T-001");
+    run_with_path(&r, &path);
+    let after = ticket_file(&r, "T-001");
+    assert_eq!(after.matches("finding:").count(), 1, "{after}");
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("open"), "{after}");
+    let unpolled = |t: &str| -> Vec<String> {
+        t.lines()
+            .filter(|l| !l.starts_with("polled:"))
+            .map(String::from)
+            .collect()
+    };
+    assert_eq!(unpolled(&after), unpolled(&before));
+}
+
+#[test]
+fn foreign_finding_triaged() {
+    let r = driven_repo(OPEN_TASKS);
+    let path = serving(&r, pull_with(vec![thread_on("src/elsewhere.ts", 8)]));
+    let out = run_with_path(&r, &path);
+    assert_eq!(
+        state_of(&r, "T-003").as_deref(),
+        Some("needs-triage"),
+        "{out}"
+    );
+    assert_eq!(
+        field_of(&r, "T-003", "scope").as_deref(),
+        Some("src/elsewhere.ts")
+    );
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("open"), "{out}");
+    let pull = &twin::load(&r.root.join("tools/twin.json")).pulls[0];
+    let thread = &pull.threads[0];
+    assert!(thread.resolved, "{thread:?}");
+    assert!(thread.comments[1].body.contains("T-003"), "{thread:?}");
+}
+
+#[test]
+fn rejected_url_skipped() {
+    let killed = "\n## [T-003] an old finding\n\nscope: src/thing.ts\nstatus: wontfix\nnotes: https://github.com/owner/repo/pull/13#discussion_r7\n";
+    let r = driven_repo(&format!("{OPEN_TASKS}{killed}"));
+    r.write(
+        ".enallagi/.out-of-scope/elsewhere.md",
+        "# Elsewhere\n\nNot this loop's.\n\n## Why this is out of scope\n\nNo.\n\n## Prior requests\n\n- https://github.com/owner/repo/pull/13#discussion_r8: \"finding 8\"\n",
+    );
+    let path = serving(
+        &r,
+        pull_with(vec![
+            thread_on("src/thing.ts", 7),
+            thread_on("src/elsewhere.ts", 8),
+        ]),
+    );
+    let out = run_with_path(&r, &path);
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("open"), "{out}");
+    assert!(!ticket_file(&r, "T-001").contains("finding:"), "{out}");
+    assert_eq!(state_of(&r, "T-004"), None, "{}", tasks_text(&r));
+}
+
 #[test]
 fn no_open_pull_no_host() {
     let r = driven_repo(DONE_TASK);
