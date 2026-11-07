@@ -91,7 +91,7 @@ fn skills_list_prints_every_declared_skill() {
         .filter_map(|l| l.split_whitespace().next())
         .collect();
     let cfg = enallagi::config::load(&repo.root).expect("config");
-    assert_eq!(cfg.skill.len(), 8);
+    assert_eq!(cfg.skill.len(), 13);
     assert_eq!(
         ids,
         cfg.skill.iter().map(|s| s.id.as_str()).collect::<Vec<_>>()

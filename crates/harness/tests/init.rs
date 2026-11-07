@@ -83,6 +83,22 @@ fn walk(root: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
+fn fresh_install_skills_gated() {
+    let repo = Repo::new();
+    install(&repo);
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["probe", "skill-ungated"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("run enallagi probe");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.lines().any(|l| l == "PROBE skill-ungated 0"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn init_exits_0_on_a_fresh_repo() {
     let repo = Repo::new();
     let report = install(&repo);
@@ -1723,7 +1739,7 @@ fn init_sync_vendors_the_declared_skills() {
         .lines()
         .filter(|l| l.starts_with("  vendored: "))
         .count();
-    assert_eq!(vendored, 8, "{stdout}");
+    assert_eq!(vendored, 13, "{stdout}");
     let lock = read(&repo, ".enallagi/harness.lock");
     assert!(lock.contains("id = \"tdd\""), "{lock}");
     assert!(

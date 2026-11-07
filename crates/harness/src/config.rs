@@ -27,7 +27,10 @@ pub fn cache_root() -> PathBuf {
     )
 }
 
-fn cache_root_in(xdg: Option<&std::ffi::OsStr>, home: Option<&std::ffi::OsStr>) -> PathBuf {
+pub(crate) fn cache_root_in(
+    xdg: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+) -> PathBuf {
     match xdg {
         Some(x) => PathBuf::from(x).join("enallagi"),
         None => PathBuf::from(home.unwrap_or_default()).join(".cache/enallagi"),
@@ -1133,17 +1136,6 @@ fn toml_string(s: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn cache_root_is_enallagi() {
-        let xdg = Some(std::ffi::OsStr::new("/x"));
-        let home = Some(std::ffi::OsStr::new("/h"));
-        assert_eq!(cache_root_in(xdg, home), PathBuf::from("/x/enallagi"));
-        assert_eq!(
-            cache_root_in(None, home),
-            PathBuf::from("/h/.cache/enallagi")
-        );
-    }
-
     // the defaults carry no check, and validate refuses one
     fn checked() -> Config {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
@@ -1371,7 +1363,7 @@ mod tests {
             "{errs:?}"
         );
         assert!(validate(&checked(), &crate::agent::presets(), &roles).is_ok());
-        assert_eq!(c.skill.len(), 8);
+        assert_eq!(c.skill.len(), 13);
         assert_eq!(c.layout.learnings_cap, 12);
         assert_eq!(c.layout.skills_dir, None);
         assert_eq!(c.stage[2].env["ENALLAGI_DRIVER"], "1");
@@ -1758,7 +1750,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("both named implement"), "{text}");
-        assert!(text.contains("both have id tdd"), "{text}");
+        assert!(text.contains("both have id to-tickets"), "{text}");
     }
 
     #[test]

@@ -384,16 +384,7 @@ fn skills_sync_custom_preset() {
     let mut toml = String::from(
         "[check]\ncommand = \"true\"\n\n[agent]\npreset = \"custom\"\ncommand = [\"./lane.sh\", \"{prompt}\", \"{turns}\"]\n\n",
     );
-    for id in [
-        "tdd",
-        "ponytail",
-        "debugging",
-        "review-received",
-        "verify-before-done",
-        "review-requested",
-        "brainstorming",
-        "caveman-commit",
-    ] {
+    for id in enallagi::fixture::SKILL_IDS {
         toml.push_str(&format!(
             "[[skill]]\nid = \"{id}\"\nsource = \"path:vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"x\"\n\n"
         ));
@@ -417,16 +408,7 @@ fn skills_sync_custom_preset() {
 // transcript invokes tdd and the verifier's invokes caveman-commit
 fn cost_in(root: &std::path::Path) -> String {
     let mut toml = String::from("[check]\ncommand = \"true\"\n\n");
-    for id in [
-        "tdd",
-        "ponytail",
-        "debugging",
-        "review-received",
-        "verify-before-done",
-        "review-requested",
-        "brainstorming",
-        "caveman-commit",
-    ] {
+    for id in enallagi::fixture::SKILL_IDS {
         toml.push_str(&format!(
             "[[skill]]\nid = \"{id}\"\nsource = \"path:vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"x\"\n\n"
         ));
@@ -488,11 +470,7 @@ fn skills_cost_counts_loads_against_uses() {
         ["caveman-commit", "5", "2", "1"],
         "{report}"
     );
-    assert_eq!(
-        row("brainstorming"),
-        ["brainstorming", "5", "0", "0"],
-        "{report}"
-    );
+    assert_eq!(row("to-tickets"), ["to-tickets", "5", "0", "0"], "{report}");
 }
 
 #[test]
@@ -507,11 +485,10 @@ fn skills_cost_names_an_unused_skill_unproven() {
     assert_eq!(
         unproven,
         [
+            "diagnosing-bugs",
             "ponytail",
-            "debugging",
-            "review-received",
-            "verify-before-done",
-            "review-requested"
+            "receiving-code-review",
+            "verification-before-completion"
         ],
         "{report}"
     );
@@ -542,19 +519,8 @@ fn a_report_flag_refuses_a_flag_it_would_ignore() {
 fn skills_check_after_sync() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    // the shipped roles name every one of these, and `skills check` validates the config first
-    const IDS: [&str; 8] = [
-        "tdd",
-        "ponytail",
-        "debugging",
-        "review-received",
-        "verify-before-done",
-        "review-requested",
-        "brainstorming",
-        "caveman-commit",
-    ];
     let mut toml = String::from("[check]\ncommand = \"true\"\n\n");
-    for id in IDS {
+    for id in enallagi::fixture::SKILL_IDS {
         toml.push_str(&format!(
             "[[skill]]\nid = \"{id}\"\nsource = \"path:vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"x\"\n\n"
         ));

@@ -181,63 +181,87 @@ role = "adjudicator"
 turns = 40
 post = ["commit-round", "queue-intact", "adjudicator-halt", "dry-round"]
 
-# gate names the probe, rail or hook that fails without the skill, or the literal `none`; an id renamed here is renamed in roles/ too.
+# gate names the probe, rail or hook that fails without the skill, or the literal `none`; an id is the last segment of its upstream path, so a bare name inside a skill body resolves, and an id renamed here is renamed in roles/ too.
+
+[[skill]]
+id = "to-tickets"
+source = "github:mattpocock/skills"
+path = "skills/engineering/to-tickets"
+rev = "v1.3.2"
+gate = "tickets"
+why = "a spec is broken into thin vertical slices with blocking edges before any writer takes one"
+
+[[skill]]
+id = "triage"
+source = "github:mattpocock/skills"
+path = "skills/engineering/triage"
+rev = "v1.3.2"
+gate = "anchored"
+why = "every new ticket is judged and moved to a triage state before a writer sees it"
 
 [[skill]]
 id = "tdd"
-source = "github:obra/superpowers"
-path = "skills/test-driven-development"
-rev = "v6.3.0"
+source = "github:mattpocock/skills"
+path = "skills/engineering/tdd"
+rev = "v1.3.2"
 gate = "spec-untested"
 why = "the failing test that encodes the acceptance criteria is written before the code"
+
+[[skill]]
+id = "diagnosing-bugs"
+source = "github:mattpocock/skills"
+path = "skills/engineering/diagnosing-bugs"
+rev = "v1.3.2"
+gate = "anchored"
+why = "a failure is reproduced by a command before any theory about it is acted on"
+
+[[skill]]
+id = "codebase-design"
+source = "github:mattpocock/skills"
+path = "skills/engineering/codebase-design"
+rev = "v1.3.2"
+gate = "contracts"
+why = "an interface is shaped as a deep module before code is written against it"
+
+[[skill]]
+id = "writing-for-agents"
+source = "github:mattpocock/skills"
+path = "skills/productivity/writing-for-agents"
+rev = "v1.3.2"
+gate = "context-behind"
+why = "a doc, skill or role an agent reads is written in one register"
+
+[[skill]]
+id = "domain-modeling"
+source = "github:mattpocock/skills"
+path = "skills/engineering/domain-modeling"
+rev = "v1.3.2"
+gate = "citable"
+why = "the glossary and ADRs keep one word for one thing"
+
+[[skill]]
+id = "code-review"
+source = "github:mattpocock/skills"
+path = "skills/engineering/code-review"
+rev = "v1.3.2"
+gate = "verdict"
+why = "a diff is reviewed against its spec and its standards as two separate axes"
 
 [[skill]]
 id = "ponytail"
 source = "github:DietrichGebert/ponytail"
 path = "skills/ponytail"
-rev = "v4.8.4"
+rev = "v5.3.3"
 gate = "ponytail-ceiling"
 why = "the ladder is walked before any new code, and a shortcut taken anyway is marked"
 
 [[skill]]
-id = "debugging"
-source = "github:obra/superpowers"
-path = "skills/systematic-debugging"
-rev = "v6.3.0"
-gate = "anchored"
-why = "a finding carries the command that reproduces it rather than a theory about it"
-
-[[skill]]
-id = "review-received"
-source = "github:obra/superpowers"
-path = "skills/receiving-code-review"
-rev = "v6.3.0"
-gate = "rejection-repeat"
-why = "a rejected task answers every rejection point before it is re-implemented"
-
-[[skill]]
-id = "verify-before-done"
-source = "github:obra/superpowers"
-path = "skills/verification-before-completion"
-rev = "v6.3.0"
-gate = "blocked-is-allowed"
-why = "no completion claim without the exact command and its pasted output"
-
-[[skill]]
-id = "review-requested"
-source = "github:obra/superpowers"
-path = "skills/requesting-code-review"
-rev = "v6.3.0"
-gate = "verdict-flip"
-why = "the verifier works a checklist rather than reading the diff for whatever stands out"
-
-[[skill]]
-id = "brainstorming"
-source = "github:obra/superpowers"
-path = "skills/brainstorming"
-rev = "v6.3.0"
-gate = "queue-uncovered"
-why = "criteria are written before code, which here happens in the queue and not in a chat"
+id = "ponytail-review"
+source = "github:DietrichGebert/ponytail"
+path = "skills/ponytail-review"
+rev = "v5.3.3"
+gate = "minimal"
+why = "a diff is read for what to delete before it is accepted"
 
 [[skill]]
 id = "caveman-commit"
@@ -246,5 +270,21 @@ path = "skills/caveman-commit"
 rev = "v2.7.0"
 gate = "plain-record"
 why = "a commit subject names what changed and stops there"
+
+[[skill]]
+id = "receiving-code-review"
+source = "github:obra/superpowers"
+path = "skills/receiving-code-review"
+rev = "v6.3.0"
+gate = "rejection-repeat"
+why = "a rejected task answers every rejection point before it is re-implemented"
+
+[[skill]]
+id = "verification-before-completion"
+source = "github:obra/superpowers"
+path = "skills/verification-before-completion"
+rev = "v6.3.0"
+gate = "blocked-is-allowed"
+why = "no completion claim without the exact command and its pasted output"
 
 # [[role]] takes name, source, path and rev as [[skill]] does; <path>/<name>.md vendors to <harness_dir>/roles/<name>.md and pins in harness.lock.

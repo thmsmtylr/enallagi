@@ -673,6 +673,20 @@ mod tests {
     }
 
     #[test]
+    fn cache_under_enallagi() {
+        let home = Some(OsStr::new("/h"));
+        let root = crate::config::cache_root_in(None, home);
+        assert_eq!(
+            cache_path(&root, "https://github.com/o/r.git", "v1"),
+            PathBuf::from("/h/.cache/enallagi/git/github.com/o/r/v1")
+        );
+        assert_eq!(
+            crate::config::cache_root_in(Some(OsStr::new("/x")), home),
+            PathBuf::from("/x/enallagi")
+        );
+    }
+
+    #[test]
     fn required_ids_reads_tokens_in_order() {
         assert_eq!(
             required_ids("use {{skill:tdd}} then {{skill:ponytail}} and {{skill:tdd}}"),

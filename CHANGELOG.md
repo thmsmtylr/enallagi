@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- the default skills are thirteen, each id its upstream directory name: Pocock's `to-tickets`, `triage`, `tdd`, `diagnosing-bugs`, `codebase-design`, `writing-for-agents`, `domain-modeling` and `code-review` at v1.3.2, ponytail and `ponytail-review` at v5.3.3; `debugging`, `review-received` and `verify-before-done` are renamed, `brainstorming` and `review-requested` are gone
 - the `security` gate runs osv-scanner on a lockfile or manifest a `done` task changed, at HEAD and at base, and sends the ticket back to `ready-for-agent` for an advisory the base did not carry
 - `enallagi init` records a full-history secrets baseline in `security/gitleaks-baseline.json` once, which the `security` gate passes to gitleaks; a fetch failure at init is a warning
 - a new `security` gate runs gitleaks with `--redact` over a `done` task's commits; a leak sets the ticket to `ready-for-human` and halts the run. Init seeds `gitleaks.toml`

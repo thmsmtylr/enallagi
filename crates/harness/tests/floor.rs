@@ -538,8 +538,14 @@ fn the_skill_hook_fires_on_a_headless_lane() {
     let (code, stdout, stderr) = harness(&repo.root, &["hook", "skills"]);
     assert_eq!(code, 0, "{stderr}");
     let cfg = enallagi::config::load(&repo.root).expect("config");
-    assert_eq!(cfg.skill.len(), 8);
+    assert_eq!(cfg.skill.len(), 13);
     for skill in &cfg.skill {
+        assert!(skill.rev.is_some(), "{} is unpinned", skill.id);
+        assert!(
+            skill.path.ends_with(&format!("/{}", skill.id)),
+            "{} is not its upstream name",
+            skill.id
+        );
         assert!(
             stdout.contains(&skill.id),
             "{} absent from {stdout}",
@@ -965,6 +971,8 @@ fn the_licence_is_mit() {
     for (source, holder) in [
         ("obra/superpowers", "Jesse Vincent"),
         ("DietrichGebert/ponytail", "DietrichGebert"),
+        ("mattpocock/skills", "Matt Pocock"),
+        ("JuliusBrussee/caveman", "Julius Brussee"),
     ] {
         assert!(notice.contains(source), "NOTICE omits {source}");
         assert!(

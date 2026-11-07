@@ -14,17 +14,6 @@ criteria:
   - it happens
 ";
 
-const SKILLS: [&str; 8] = [
-    "tdd",
-    "ponytail",
-    "debugging",
-    "review-received",
-    "verify-before-done",
-    "review-requested",
-    "brainstorming",
-    "caveman-commit",
-];
-
 // where an eject in these tests keeps its record: never the user's own data directory
 fn data_home() -> &'static Path {
     static DATA: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
@@ -159,7 +148,7 @@ turns = 5
 post = ["commit-round", "adjudicator-halt", "dry-round"]
 "#
     );
-    for id in SKILLS {
+    for id in enallagi::fixture::SKILL_IDS {
         let dir = tools.join("vendor").join(id);
         std::fs::create_dir_all(&dir).expect("skill dir");
         std::fs::write(dir.join("SKILL.md"), format!("# {id}\n")).expect("skill");

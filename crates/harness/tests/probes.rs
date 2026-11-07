@@ -360,22 +360,11 @@ fn the_tree_has_no_litter() {
     assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
 }
 
-// `skills sync` refuses a role whose skill token has no entry, so a fixture declares all eight
-const IDS: [&str; 8] = [
-    "tdd",
-    "ponytail",
-    "debugging",
-    "review-received",
-    "verify-before-done",
-    "review-requested",
-    "brainstorming",
-    "caveman-commit",
-];
-
 // a path: source under src/ keeps the fixture off the network and off the litter list
 fn vendored_skills(repo: &Repo) -> String {
     let mut toml = String::new();
-    for id in IDS {
+    // `skills sync` refuses a role whose skill token has no entry, so a fixture declares them all
+    for id in enallagi::fixture::SKILL_IDS {
         repo.write(&format!("src/vendor/{id}/SKILL.md"), "body\n");
         toml.push_str(&format!(
             "\n[[skill]]\nid = \"{id}\"\nsource = \"path:src/vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"fixture\"\n"
@@ -931,7 +920,7 @@ fn an_unreachable_artifact_is_an_error() {
 fn every_declared_skill_names_its_enforcing_gate() {
     // asserts the COUNT, not just emptiness: an entry deleted to make this pass is the thing that fails it
     let (repo, cfg) = seeded();
-    assert_eq!(cfg.skill.len(), 8);
+    assert_eq!(cfg.skill.len(), 13);
     let results = run(&repo, &cfg);
     let found = findings(&results, "skill-ungated");
     let undefined: Vec<&str> = found

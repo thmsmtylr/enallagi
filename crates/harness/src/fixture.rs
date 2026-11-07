@@ -20,6 +20,23 @@ pub fn command(bin: &str) -> Command {
 }
 
 // writes the --report-path or --output it is handed an empty result, as a clean scan would
+/// Every shipped skill id, in the defaults' order.
+pub const SKILL_IDS: [&str; 13] = [
+    "to-tickets",
+    "triage",
+    "tdd",
+    "diagnosing-bugs",
+    "codebase-design",
+    "writing-for-agents",
+    "domain-modeling",
+    "code-review",
+    "ponytail",
+    "ponytail-review",
+    "caveman-commit",
+    "receiving-code-review",
+    "verification-before-completion",
+];
+
 const STUB_SCANNER: &str = r#"#!/bin/sh
 # stub scanner
 while [ $# -gt 0 ]; do
@@ -187,18 +204,8 @@ impl Repo {
     /// `[[skill]]` entries for every shipped skill id the given TOML does not declare, each a
     /// `path:` source under `vendor/`, so a fixture run never reaches the network.
     pub fn local_skills(&self, toml: &str) -> String {
-        const IDS: [&str; 8] = [
-            "tdd",
-            "ponytail",
-            "debugging",
-            "review-received",
-            "verify-before-done",
-            "review-requested",
-            "brainstorming",
-            "caveman-commit",
-        ];
         let mut out = String::new();
-        for id in IDS {
+        for id in SKILL_IDS {
             if toml.contains(&format!("id = \"{id}\"")) {
                 continue;
             }

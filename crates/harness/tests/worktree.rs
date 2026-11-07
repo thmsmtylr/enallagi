@@ -3,17 +3,6 @@
 use enallagi::fixture::Repo;
 use std::path::Path;
 
-const SKILLS: [&str; 8] = [
-    "tdd",
-    "ponytail",
-    "debugging",
-    "review-received",
-    "verify-before-done",
-    "review-requested",
-    "brainstorming",
-    "caveman-commit",
-];
-
 fn git(root: &Path, args: &[&str]) -> String {
     enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
 }
@@ -56,7 +45,7 @@ role = "scout"
 turns = 1
 "#
     );
-    for id in SKILLS {
+    for id in enallagi::fixture::SKILL_IDS {
         let dir = tools.join("vendor").join(id);
         std::fs::create_dir_all(&dir).expect("skill dir");
         std::fs::write(dir.join("SKILL.md"), format!("# {id}\n")).expect("skill");
