@@ -43,6 +43,7 @@ queue. No line under `## Comments` opens with `## `: that ends the section.
 | `pr:` `branch:` `polled:` | written by the launcher: the open pull request's URL, its head branch, and the poll's last key (head sha, newest comment and review, check rollup). |
 | `pushed:` | written by the launcher after a respond round reaches the pull request branch: the pushed sha and the time. |
 | `finding:` `rounds:` | written by the launcher when the poll returns a finding to the ticket: `finding: F-<n> <source> round <r>`, then indented `by:`, `key:`, `url:`, `anchor:`, `thread-id:` and `severity:` as the finding has them, then its body quoted. `rounds:` counts the respond rounds. |
+| `answer:` | written by the implementer, one per `finding:`: `answer: F-<n> accept <test>` (a test the round adds or changes, failing at the round base) or `answer: F-<n> reject <concept>: <command>`, with the reasoning under `## Comments`. The `findings` gate checks them. |
 | `deferred:` | the verifier's `needs-triage` filing for a defect outside the criteria, by id and reason. The `commit-verdict` gate reads it. |
 
 A lane edits only its own ticket file. The one other file it may add is a new ticket at

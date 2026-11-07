@@ -1882,10 +1882,65 @@ impl<'a> Loop<'a> {
         if let Err(err) = set {
             self.digest.warnings.push(format!("{task}: {err}"));
         }
-        if let Some(reason) = refused {
-            self.digest.warnings.push(format!("{task}: {reason}"));
+        match refused {
+            Some(reason) => self.digest.warnings.push(format!("{task}: {reason}")),
+            None => self.record_rejects(task),
         }
         self.commit_state(&format!("queue: {task} pushed"));
+    }
+
+    // each verified reject, in Pocock's `.out-of-scope/` format, so the poll never routes it again
+    fn record_rejects(&mut self, task: &str) {
+        let Some(b) = self.blocks().into_iter().find(|b| b.id == task) else {
+            return;
+        };
+        let runs = tracker::verdict(&b).map(|r| r.runs).unwrap_or_default();
+        let lines: Vec<&str> = b.body.iter().map(|(_, l)| l.as_str()).collect();
+        for answer in lines.iter().filter_map(|l| l.strip_prefix("answer: ")) {
+            let Some((id, reject)) = answer.split_once(" reject ") else {
+                continue;
+            };
+            let Some((concept, cmd)) = reject.split_once(':') else {
+                continue;
+            };
+            let (concept, cmd) = (concept.trim(), cmd.trim());
+            // the finding's entry: its head line, then the indented lines under it
+            let entry: Vec<&str> = lines
+                .iter()
+                .skip_while(|l| !l.starts_with(&format!("finding: {id} ")))
+                .skip(1)
+                .take_while(|l| l.starts_with("  "))
+                .map(|l| l.trim())
+                .collect();
+            let url = entry
+                .iter()
+                .find_map(|l| l.strip_prefix("url: "))
+                .unwrap_or_default();
+            let said = entry
+                .iter()
+                .find_map(|l| l.strip_prefix("> "))
+                .unwrap_or_default();
+            let exit = runs
+                .iter()
+                .find(|(ran, _)| ran == cmd)
+                .map_or("no".to_string(), |(_, e)| e.to_string());
+            let dir = self.file(tracker::OUT_OF_SCOPE);
+            let path = dir.join(format!("{}.md", tracker::slug(concept)));
+            let request = format!("- {url}: \"{said}\"\n");
+            let text = match std::fs::read_to_string(&path) {
+                Ok(text) => format!("{}\n{request}", text.trim_end()),
+                Err(_) => format!(
+                    "# {concept}\n\n{said}\n\n## Why this is out of scope\n\nRejected on {task} as {id}: `{cmd}` exited {exit}.\n\n## Prior requests\n\n{request}"
+                ),
+            };
+            if let Err(err) =
+                std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, text))
+            {
+                self.digest
+                    .warnings
+                    .push(format!("{task}: {} was not written: {err}", path.display()));
+            }
+        }
     }
 
     // the launcher pushes, never the lane: the lane's argv denies `git push`

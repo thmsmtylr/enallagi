@@ -71,6 +71,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "commit-verdict" => commit_verdict(ctx),
         "verdict" => verdict(ctx),
         "claims" => claims(ctx),
+        "findings" => findings(ctx),
         "scope" => scope(ctx),
         "red-first" => red_first(ctx),
         "skip-added" => skip_added(ctx),
@@ -625,6 +626,91 @@ fn claims(ctx: &mut GateCtx) -> GateOutcome {
         ));
     }
     pass(parts.join(". "))
+}
+
+// every finding a returned ticket carries is answered once: an accept names a test the round's
+// test files hold, a reject names a command the verdict ran
+fn findings(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(task) = ctx.task.clone() else {
+        return pass("no task");
+    };
+    match status_of(ctx, &task) {
+        Err(_) => return unreadable(ctx, &task),
+        Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
+        Ok(_) => {}
+    }
+    let Some(b) = queue_of(ctx).get(&task).ok().flatten() else {
+        return unreadable(ctx, &task);
+    };
+    let lines = |key: &str| -> Vec<String> {
+        b.body
+            .iter()
+            .filter_map(|(_, l)| l.strip_prefix(key))
+            .map(|l| l.trim().to_string())
+            .collect()
+    };
+    let ids: Vec<String> = lines("finding:")
+        .iter()
+        .filter_map(|l| l.split_whitespace().next().map(String::from))
+        .collect();
+    if ids.is_empty() {
+        return pass("no finding");
+    }
+    let answers = lines("answer:");
+    let ran: Vec<String> = tracker::verdict(&b)
+        .map(|r| r.runs.into_iter().map(|(cmd, _)| cmd).collect())
+        .unwrap_or_default();
+    let base = ctx.iter_base.clone().unwrap_or_default();
+    let globs = &ctx.cfg.layout.test_glob;
+    let tests: String = task_files(ctx, &base, &task, "")
+        .unwrap_or_default()
+        .iter()
+        .filter(|f| globs.is_empty() || in_scope(f, globs))
+        .filter_map(|f| git(ctx.root, &["show", &format!("HEAD:{f}")]).ok())
+        .collect();
+    let mut wrong = Vec::new();
+    for id in &ids {
+        let mine: Vec<&str> = answers
+            .iter()
+            .filter_map(|a| a.strip_prefix(id.as_str()))
+            .filter(|a| a.starts_with(' '))
+            .map(str::trim)
+            .collect();
+        let [answer] = mine[..] else {
+            wrong.push(format!("{id} has {} answers, not one", mine.len()));
+            continue;
+        };
+        if let Some(test) = answer.strip_prefix("accept ").map(str::trim) {
+            if test.is_empty() || !names_task(&tests, test) {
+                wrong.push(format!(
+                    "{id}'s test `{test}` is in no test file the round changed"
+                ));
+            }
+        } else if let Some(reject) = answer.strip_prefix("reject ") {
+            match reject.split_once(':').map(|(_, c)| c.trim()) {
+                None | Some("") => wrong.push(format!("{id}'s reject names no command")),
+                Some(cmd) if !ran.iter().any(|r| r == cmd) => {
+                    wrong.push(format!("{id}'s reject command `{cmd}` has no `ran:` line"))
+                }
+                Some(_) => {}
+            }
+        } else {
+            wrong.push(format!("{id}'s answer is neither accept nor reject"));
+        }
+    }
+    if wrong.is_empty() {
+        return pass(format!("{} finding(s) answered", ids.len()));
+    }
+    let why = wrong.join("; ");
+    force_back(
+        ctx,
+        "findings",
+        &task,
+        "ready-for-agent",
+        &format!("the verifier returned done and the findings gate rejected it: {why}"),
+        &format!("chore({task}): enallagi findings gate rejected a done verdict"),
+        &format!("{task} was forced back to ready by the findings gate: {why}."),
+    )
 }
 
 // a whole command word, so `cargo test` never admits `cargo testx`
@@ -3556,6 +3642,58 @@ echo '{{"results":[]}}' > "$out"
             ));
             self.repo.commit_all("verdict");
         }
+    }
+
+    // a done round answering `F-1` and `F-2` with `answers`, its test file holding `fn held`
+    fn answering(answers: &str, runs: &str) -> (Env, String) {
+        let env = Env::new("exit 0\n");
+        let base = env.head();
+        env.repo.write("tests/t.rs", "fn held() {}\n");
+        env.repo.commit_all("T-001 fix");
+        env.write_queue(&format!(
+            "## [T-001] first\nscope: tests/*\nstatus: done\nfinding: F-1 thread round 1\n  > one\nfinding: F-2 comment round 1\n  > two\n{answers}verdict: verified by verifier\nspec: none\nstandards: none\n{runs}"
+        ));
+        env.repo.commit_all("verdict");
+        (env, base)
+    }
+
+    fn findings_of(answers: &str, runs: &str) -> (GateOutcome, String) {
+        let (mut env, base) = answering(answers, runs);
+        let out = run("findings", &mut env.ctx(Some("T-001"), Some(&base)));
+        (out, env.tasks_text())
+    }
+
+    #[test]
+    fn findings_rejects_unanswered() {
+        let (out, text) = findings_of("answer: F-1 accept held\n", "");
+        assert!(!out.pass && out.reason.contains("F-2"), "{}", out.reason);
+        assert!(text.contains("status: ready-for-agent"), "{text}");
+        let twice = "answer: F-1 accept held\nanswer: F-1 accept held\nanswer: F-2 accept held\n";
+        let (out, _) = findings_of(twice, "");
+        assert!(!out.pass && out.reason.contains("F-1"), "{}", out.reason);
+        let unheld = "answer: F-1 accept held\nanswer: F-2 accept missing\n";
+        let (out, _) = findings_of(unheld, "");
+        assert!(
+            !out.pass && out.reason.contains("missing"),
+            "{}",
+            out.reason
+        );
+        let (out, text) = findings_of("answer: F-1 accept held\nanswer: F-2 accept held\n", "");
+        assert!(out.pass, "{}", out.reason);
+        assert!(text.contains("status: done"), "{text}");
+    }
+
+    #[test]
+    fn findings_rejects_bare_reject() {
+        let bare = "answer: F-1 accept held\nanswer: F-2 reject naming:\n";
+        let (out, text) = findings_of(bare, "");
+        assert!(!out.pass && out.reason.contains("F-2"), "{}", out.reason);
+        assert!(text.contains("status: ready-for-agent"), "{text}");
+        let unran = "answer: F-1 accept held\nanswer: F-2 reject naming: grep -q x README\n";
+        let (out, _) = findings_of(unran, "ran: true\nexit: 0\n");
+        assert!(!out.pass && out.reason.contains("ran:"), "{}", out.reason);
+        let (out, _) = findings_of(unran, "ran: grep -q x README\nexit: 1\n");
+        assert!(out.pass, "{}", out.reason);
     }
 
     #[test]

@@ -35,6 +35,8 @@ A returned ticket, a `ready-for-agent` one carrying `pr:`, is taken before any o
 Its round runs in a worktree started from `origin/<branch>` after a fetch, with that head as the gate base, and the checkout's branch never carries it.
 After verify passes, the launcher fast-forward pushes the round's commits to `<branch>`, writes `pushed:` (sha and time) and sets the ticket `open`.
 A range holding a state commit, or a remote head that moved, refuses the push: the ticket goes back to `open` with the reason under `gate:`.
+The implementer answers each `finding:` with one `answer:` line, `accept <test>` or `reject <concept>: <command>`, and the `findings` gate forces back a `done` that leaves one unanswered.
+After the push, each reject is appended to `.out-of-scope/<concept>.md` in Pocock's format; a concept file that exists gains only a `## Prior requests` line.
 A finding is already carried, and not routed again, when any ticket (`wontfix` included) holds its URL or its key, or an `.out-of-scope/` file lists its URL under `## Prior requests`.
 `enallagi review <pr>` reads a pull request no ticket owns, and every finding there lands as one `needs-triage` ticket: an unresolved thread (carrying its thread id), a review body, a plain comment, or a failed check on the head.
 The same finding raised twice on the same lines is one ticket.
@@ -124,6 +126,7 @@ or halts the run. The names are matched in `crates/harness/src/gates.rs`.
 | `commit-verdict` | a verdict whose `deferred:` line or new prose defers a finding and adds no `needs-triage` ticket, or a failed commit of the queue | verify |
 | `verdict` | a `done` without `verdict: verified by verifier` or without its `spec:` and `standards:` lines, a rejection without `verdict: rejected by verifier: <reason>`, or a `done` whose work is uncommitted or whose check is red on delta | verify |
 | `claims` | a `done` whose `ran:`/`exit:` pairs under the `verdict:` line claim an exit that two re-runs both contradict, for commands `[check] claims_allow` names | verify |
+| `findings` | a `done` on a ticket carrying `finding:` entries where a finding has no `answer:` or more than one, an `accept <test>` names a test no test file the round changed holds, or a `reject <concept>: <command>` names no command or a command with no `ran:` line under the verdict | verify |
 | `skip-added` | a `done` whose commits add a `[layout] skip_patterns` match to a test file, named by `file:line` | verify |
 | `security` | a `done` whose commits carry a secret gitleaks finds (run with `--redact`) that `security/gitleaks-baseline.json` does not hold; the ticket goes to `ready-for-human` naming `RuleID file:line commit` per finding, and the run halts. When the commits change a lockfile or manifest, osv-scanner scans it at HEAD and at the base (with `osv-scanner.toml` from the harness directory when present); an advisory at HEAD that the base lacks for the same package sends the ticket back to `ready-for-agent`, naming package, version and id. A missing pin or baseline, a failed fetch or an exit other than 0 or 1 also halts | verify |
 | `red-first` | a `done` whose `[layout] test_only_glob` files pass the check with every other changed file at the iteration base, run in a temporary worktree | verify |

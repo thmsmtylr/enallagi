@@ -177,7 +177,7 @@ post = ["queue-intact", "commit-identity", "commit-task", "implementer-not-done"
 name = "verify"
 role = "verifier"
 turns = 100
-post = ["commit-verdict", "queue-intact", "commit-identity", "verdict", "claims", "skip-added", "security", "red-first", "scope", "install-stale", "holdout"]
+post = ["commit-verdict", "queue-intact", "commit-identity", "verdict", "claims", "findings", "skip-added", "security", "red-first", "scope", "install-stale", "holdout"]
 
 [[stage]]
 name = "scout"

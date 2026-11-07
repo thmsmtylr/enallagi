@@ -4451,10 +4451,21 @@ criteria:
   - it happens
 pr: https://github.com/owner/repo/pull/9
 branch: task/T-900
+finding: F-1 thread round 1
+  url: https://github.com/owner/repo/pull/9#discussion_r1
+  > rename parse to read
+finding: F-2 comment round 1
+  url: https://github.com/owner/repo/pull/9#issuecomment-2
+  > call it read instead
 ";
 
 // a returned ticket's lane, its stubs working whichever ticket the launcher hands them
 fn returned(commit: &str) -> Pulls {
+    returned_with(commit, "", "")
+}
+
+// `answers` are appended to the ticket by the implementer, `runs` under the verdict by the verifier
+fn returned_with(commit: &str, answers: &str, runs: &str) -> Pulls {
     let p = pulls("", "exit 0\n");
     let r = &p.repo;
     let bin = env!("CARGO_BIN_EXE_enallagi");
@@ -4463,15 +4474,19 @@ fn returned(commit: &str) -> Pulls {
         "src/fakeimpl.sh",
         &format!(
             "echo fix >src/thing.ts\n{bin} tasks set-status \"$ENALLAGI_TASK\" review stub\n\
-             git add -A && git -c commit.gpgsign=false commit -qm {commit}\n{QUIET}"
+             printf '{answers}' >>\"$(ls {}/*/issues/$ENALLAGI_TASK-*.md)\"\n\
+             git add -A && git -c commit.gpgsign=false commit -qm {commit}\n{QUIET}",
+            queue_path()
         ),
     );
     let verify = script(
         r,
         "src/fakeverify.sh",
         &format!(
-            "{bin} tasks set-status \"$ENALLAGI_TASK\" done stub\n{}{QUIET}",
-            verdict_for("$ENALLAGI_TASK", "verified by verifier")
+            "{bin} tasks set-status \"$ENALLAGI_TASK\" done stub\n{}\
+             printf '{runs}' >>\"$(ls {}/*/issues/$ENALLAGI_TASK-*.md)\"\n{QUIET}",
+            verdict_for("$ENALLAGI_TASK", "verified by verifier"),
+            queue_path()
         ),
     );
     write_toml(r, &base_toml(&role_commands(&implement, &verify)));
@@ -4538,6 +4553,28 @@ fn push_refuses_state_commit() {
     assert_eq!(state_of(&p.repo, "T-900").as_deref(), Some("open"), "{out}");
     let gate = field_of(&p.repo, "T-900", "gate").unwrap_or_default();
     assert!(gate.contains("state commit"), "{gate}\n{out}");
+}
+
+#[test]
+fn rejection_out_of_scope() {
+    let answers = "answer: F-1 reject naming: true\\nanswer: F-2 reject naming: true\\n";
+    let p = returned_with("'T-900: fix'", answers, "ran: true\\nexit: 0\\n");
+    let (_, out) = p.run(&[]);
+    let path = p.repo.root.join(".enallagi/.out-of-scope/naming.md");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{out}"));
+    assert!(text.starts_with("# naming\n"), "{text}");
+    assert_eq!(
+        text.matches("## Why this is out of scope").count(),
+        1,
+        "{text}"
+    );
+    assert_eq!(text.matches("## Prior requests").count(), 1, "{text}");
+    assert!(
+        text.contains("- https://github.com/owner/repo/pull/9#discussion_r1: \"rename parse to read\"\n- https://github.com/owner/repo/pull/9#issuecomment-2: \"call it read instead\""),
+        "{text}"
+    );
+    let state = p.repo.root.join(".enallagi");
+    assert!(enallagi::git::porcelain(&state).is_empty(), "{out}");
 }
 
 const LEARNING: &str = "- [proposed] `vacuous-test`: a test passed with its logic deleted → watch it fail first\n  instances: `SPEC.md:1`, `PROGRESS.md:1`, `TASKS.md:1`\n";

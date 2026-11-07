@@ -332,6 +332,19 @@ fn roles_name_verdict_forms() {
     }
 }
 
+// the answers the `findings` gate reads, named the same in both roles
+#[test]
+fn roles_name_answer_forms() {
+    for name in ["verifier", "implementer"] {
+        for form in [
+            "`answer: F-<n> accept <test>`",
+            "`answer: F-<n> reject <concept>: <command>`",
+        ] {
+            assert!(role(name).contains(form), "roles/{name}.md names no {form}");
+        }
+    }
+}
+
 // each shipped role's {{skill:<id>}} tokens, rendered, that the config declares no skill for
 fn unresolved(cfg: &config::Config) -> Vec<String> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles");

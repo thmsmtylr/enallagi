@@ -38,6 +38,7 @@ pub const HARNESS_KEYS: &[&str] = &[
     "pushed",
     "rounds",
     "finding",
+    "answer",
 ];
 
 /// The specs directory.
@@ -88,7 +89,7 @@ fn number(id: &str) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-fn slug(title: &str) -> String {
+pub fn slug(title: &str) -> String {
     let words: Vec<String> = title
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|w| !w.is_empty())
