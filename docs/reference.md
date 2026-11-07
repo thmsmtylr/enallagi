@@ -97,7 +97,7 @@ A role file's frontmatter may declare two keys, which the sandbox enforces on th
 `writes:` lists paths relative to the lane's checkout, comma-separated, a directory covering its subpath; an absolute entry, a `..`, or one that resolves outside the checkout is dropped.
 Present, it replaces the checkout and both repositories' git dirs as the writable set; the preset's state paths and the spawn's `TMPDIR` stay writable.
 Present and empty, only those two are writable. Absent, the writable set is unchanged.
-`hosts:` lists proxy allowlist entries added for that role's spawns; `*` matches any name, and the proxy still refuses IP literals and names resolving to loopback, link-local or unspecified addresses.
+`hosts:` lists proxy allowlist entries added for that role's spawns; `*` matches any name, and the proxy still refuses IP literals and names resolving to loopback, link-local, private, shared (`100.64.0.0/10`), unique-local (`fc00::/7`) or unspecified addresses.
 Checks and gates keep the run's policy.
 A role file carrying `tools:` is refused at load: it reached the model as prose and enforced nothing.
 The shipped `auditor` declares `writes:` empty; the `researcher` declares `writes: REFERENCES.md` and `hosts: "*"`.

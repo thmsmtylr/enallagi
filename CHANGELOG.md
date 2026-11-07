@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- the egress proxy also refuses a listed name resolving to a private (`10/8`, `172.16/12`, `192.168/16`), shared (`100.64/10`) or unique-local (`fc00::/7`) address
 - under `[sandbox] mode = "off"` a lane runs without its preset's bypass flag, so the CLI keeps its own permission prompts
 - the claude preset declares no writable state: a lane could add a hook to `~/.claude/settings.json`, an `mcpServers` entry to `~/.claude.json` or a memory under `~/.claude/projects/`, each read unconfined by the operator's next session; `claude -p` runs with both read-only
 - a lane cannot write either instance's `enallagi.toml`, `harness.toml`, `roles/`, `gitleaks.toml`, `gitleaksignore`, `osv-scanner.toml` or `security/`, which the launcher re-reads at the next spawn or gate

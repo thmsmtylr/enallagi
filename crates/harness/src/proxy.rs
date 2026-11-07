@@ -240,9 +240,21 @@ fn public(ip: IpAddr) -> bool {
         v4 => v4,
     };
     match ip {
-        IpAddr::V4(v4) => !(v4.is_loopback() || v4.is_link_local() || v4.is_unspecified()),
+        // 100.64/10 is carrier-grade NAT, where some clouds serve metadata
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            !(v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_private()
+                || (a == 100 && b & 0xc0 == 64))
+        }
         IpAddr::V6(v6) => {
-            !(v6.is_loopback() || v6.is_unspecified() || v6.segments()[0] & 0xffc0 == 0xfe80)
+            let top = v6.segments()[0];
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || top & 0xffc0 == 0xfe80
+                || top & 0xfe00 == 0xfc00)
         }
     }
 }
@@ -290,6 +302,21 @@ mod tests {
         assert!(listed("*", "a.b.example", 443));
         assert!(listed("*:80", "example.com", 80));
         assert!(!listed("*", "example.com", 80));
+    }
+
+    #[test]
+    fn refuses_private_target() {
+        for ip in [
+            "10.0.0.1",
+            "172.16.0.1",
+            "192.168.1.1",
+            "100.100.100.200",
+            "fd00:ec2::254",
+            "::ffff:192.168.1.1",
+        ] {
+            assert!(!public(ip.parse().unwrap()), "{ip}");
+        }
+        assert!(public("100.128.0.1".parse().unwrap()));
     }
 
     #[test]
