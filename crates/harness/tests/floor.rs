@@ -316,28 +316,28 @@ fn the_bootstrap_record_is_derived_from_git() {
 }
 
 #[test]
-fn docs_demo_drives_one_iteration_and_cleans_up() {
+fn docs_demo_merges_dark() {
     let (code, out) = script(&repo_root().join("docs/demo.sh"), &repo_root(), &[]);
     assert_eq!(code, 0, "{out}");
 
-    // exit code alone would pass on a demo that printed nothing; check the stage sequence too
-    let seen: Vec<&str> = out
-        .lines()
-        .filter_map(|l| {
-            if l.contains("stage.start") && l.contains("stage=implement") {
-                Some("implement")
-            } else if l.contains("stage.start") && l.contains("stage=verify") {
-                Some("verify")
-            } else if l.starts_with("T-001  status: ") {
-                Some(l.trim_end())
-            } else {
-                None
-            }
-        })
-        .collect();
+    // exit code alone would pass on a demo that printed nothing; check the sequence too
+    let marks = [
+        "stage decompose",
+        "stage implement",
+        "stage verify",
+        "holdout gate: holdouts: 1 of 1 green",
+        "respond round: 2 finding(s) answered",
+        "T-001: merged ",
+    ];
+    let mut at = 0;
+    for mark in marks {
+        let found = out[at..].find(mark);
+        let found = found.unwrap_or_else(|| panic!("no {mark:?} after byte {at}:\n{out}"));
+        at += found + mark.len();
+    }
     assert_eq!(
-        seen,
-        vec!["implement", "verify", "T-001  status: done"],
+        out.trim_end().lines().last(),
+        Some("pull 1  MERGED"),
         "{out}"
     );
 

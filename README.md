@@ -79,6 +79,11 @@ With none named, every pipeline in `.enallagi/enallagi.toml` is eligible.
 The pipeline, gate, probe, key and file tables are in [docs/reference.md](docs/reference.md).
 Changing a skill, a pipeline or a stage is in [docs/pipeline.md](docs/pipeline.md).
 
+`docs/demo.sh` shows one accepted spec run from decompose to a dark merge in a throwaway repository, with no credential and no network.
+Stub agents stand in for the model, and the binary's GitHub twin stands in for `gh`, with Kilo and Greptile scripted to review.
+The run decomposes the spec, implements and verifies under the sandbox, passes the operator's holdout, answers both bots' findings and pushes, then merges under `merge = "auto"`.
+It prints the stages, the holdout gate, the respond round and the merge, and deletes the repository on exit.
+
 ## Configuration
 
 `.enallagi/enallagi.toml` holds the whole configuration.

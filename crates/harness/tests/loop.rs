@@ -5844,3 +5844,28 @@ fn stale_clean_blocks_merge() {
     assert!(out.contains(&reason), "{out}");
     assert_eq!(merges(&p), 0, "{out}");
 }
+
+#[test]
+fn lane_runs_holdouts() {
+    let p = returned("'T-900: fix'");
+    let toml = p.repo.root.join(".enallagi/enallagi.toml");
+    let text = std::fs::read_to_string(&toml).expect("toml");
+    let post = r#"post = ["commit-verdict", "verdict", "scope"#;
+    std::fs::write(&toml, text.replace(post, &format!("{post}\", \"holdout"))).expect("write");
+    installed(&p.repo);
+    script(
+        &p.repo,
+        &format!("{}/a.sh", holdout_dir(&p.repo)),
+        "exit 1\n",
+    );
+    let (_, out) = p.run(&[]);
+    assert_eq!(
+        state_of(&p.repo, "T-900").as_deref(),
+        Some("ready-for-agent"),
+        "{out}"
+    );
+    assert!(
+        tasks_text(&p.repo).contains("holdouts: 1 of 1 red"),
+        "{out}"
+    );
+}

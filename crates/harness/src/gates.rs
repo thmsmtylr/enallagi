@@ -1246,9 +1246,17 @@ fn red_first(ctx: &mut GateCtx) -> GateOutcome {
 }
 
 /// A spec's holdouts: the executable regular files in `holdouts/<slug>/`, sorted.
+// a respond lane's state worktree lacks the ignored set; the main worktree holds it
+fn holdout_root(root: &Path, cfg: &Config) -> PathBuf {
+    let dir = &cfg.layout.harness_dir;
+    git::main_worktree_path(&root.join(dir))
+        .map(|main| main.join("holdouts"))
+        .unwrap_or_else(|| crate::config::instance_path(root, dir, "holdouts"))
+}
+
 pub fn holdout_set(root: &Path, cfg: &Config, slug: &str) -> Vec<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
-    let dir = crate::config::instance_path(root, &cfg.layout.harness_dir, "holdouts").join(slug);
+    let dir = holdout_root(root, cfg).join(slug);
     let mut set: Vec<PathBuf> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
@@ -1265,7 +1273,7 @@ pub fn holdout_set(root: &Path, cfg: &Config, slug: &str) -> Vec<PathBuf> {
 
 /// The specs with a holdout set.
 pub fn holdout_specs(root: &Path, cfg: &Config) -> Vec<String> {
-    let dir = crate::config::instance_path(root, &cfg.layout.harness_dir, "holdouts");
+    let dir = holdout_root(root, cfg);
     let mut specs: Vec<String> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()

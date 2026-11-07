@@ -493,8 +493,11 @@ fn auto_refusals(root: &Path, cfg: &Config, opts: &RunOpts) -> Vec<String> {
         .into_iter()
         .filter(|b| !matches!(tracker::state(b).as_deref(), Some("done" | "wontfix")));
     let sets = gates::holdout_specs(root, cfg);
+    // an accepted spec not yet decomposed is open work too
+    let undecomposed = tracker::undecomposed(root, &cfg.layout.harness_dir);
     if !open
         .filter_map(|b| t.spec_of(&b.id))
+        .chain(undecomposed)
         .any(|spec| sets.contains(&spec))
     {
         out.push(format!(
