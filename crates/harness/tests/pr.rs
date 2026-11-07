@@ -289,7 +289,7 @@ fn pr_body_verdict() {
 }
 
 #[test]
-fn pr_refuses_a_blocker_not_yet_upstream() {
+fn pr_refuses_unpushed_blocker() {
     let (f, _) = landed("exit 0\n");
     let tasks = format!(
         "{DONE_AND_REJECTED}\n## [T-003] the thing says twelve at the end\nscope: src/other.txt\nblockedBy: T-001\nstatus: done\n"
@@ -341,7 +341,7 @@ fn pr_refuses_a_blocker_not_yet_upstream() {
 }
 
 #[test]
-fn pr_refuses_a_checkout_behind_its_upstream() {
+fn pr_refuses_stale_checkout() {
     let (f, _) = landed("exit 0\n");
     git(&f.root, &["checkout", "-q", "main"]);
     commit(&f.root, "src/other.txt", "eleven\n", "upstream eleven");
@@ -416,7 +416,7 @@ fn a_red_check_pushes_nothing() {
 }
 
 #[test]
-fn a_hung_check_is_bound_by_timeout() {
+fn hung_check_bound() {
     let (f, _) = landed("sleep 10\n");
     f.twin();
     let toml = f.root.join(".enallagi/enallagi.toml");
@@ -435,7 +435,7 @@ fn a_hung_check_is_bound_by_timeout() {
 }
 
 #[test]
-fn push_pushes_the_branch_and_opens_the_pr() {
+fn push_opens_pr() {
     let (f, _) = landed("exit 0\n");
     let log = f.twin();
 
@@ -481,7 +481,7 @@ fn push_opens_pull() {
 }
 
 #[test]
-fn pr_refuses_a_done_task_no_round_commit_names() {
+fn pr_refuses_unnamed_task() {
     let (f, _) = landed("exit 0\n");
     let tasks = format!("{DONE_AND_REJECTED}\n## [T-004] only the queue moved\nscope: TASKS.md\nblockedBy: none\nstatus: done\n");
     enallagi::fixture::queue(&f.root, ".enallagi", &tasks);
@@ -506,7 +506,7 @@ fn guarded() -> (Fixture, PathBuf) {
 }
 
 #[test]
-fn push_refuses_a_guide_refusing_generated_work() {
+fn push_refuses_guarded() {
     let (f, log) = guarded();
     let (code, out) = f.harness(&["pr", "T-001", "--push"]);
     assert_ne!(code, 0, "{out}");
@@ -537,7 +537,7 @@ fn push_refuses_a_guide_refusing_generated_work() {
 }
 
 #[test]
-fn pr_without_push_prints_the_policy_finding() {
+fn pr_prints_policy_finding() {
     let (f, log) = guarded();
     let (code, out) = f.harness(&["pr", "T-001"]);
     assert_eq!(code, 0, "{out}");
@@ -864,7 +864,7 @@ fn an_empty_names_list_still_sweeps_the_state_repo() {
 }
 
 #[test]
-fn landed_names_each_state_and_filters_built() {
+fn landed_filters_built() {
     let (f, shas) = landed("exit 0");
     let tasks = format!(
         "{DONE_AND_REJECTED}\n## [T-003] pushed already\nscope: src/thing.txt\nblockedBy: none\nstatus: done\n\n## [T-004] never built\nscope: src/thing.txt\nblockedBy: none\nstatus: done\n"
@@ -904,7 +904,7 @@ fn landed_names_each_state_and_filters_built() {
 }
 
 #[test]
-fn push_on_a_built_branch_updates_the_pushed_line() {
+fn push_updates_pushed_line() {
     let (f, _) = landed("exit 0");
     let (code, out) = f.harness(&["pr", "T-001"]);
     assert_eq!(code, 0, "{out}");

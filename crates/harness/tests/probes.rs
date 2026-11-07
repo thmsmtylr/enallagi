@@ -648,7 +648,7 @@ fn a_dated_learning_is_told_where_to_move() {
 }
 
 #[test]
-fn learning_unenforced_reads_earned_rules() {
+fn learning_unenforced_reads_rules() {
     let (repo, cfg) = seeded();
     let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "DECISIONS.md");
     let earned = "## Earned rules\n\n- [2026-09-20] a rule that names no file, no command and no hook and is enforced by nothing at all.\n- [2026-09-20] a rule whose `citation` sits on its second line\n  `crates/harness/src/probes/common.rs`\n";
@@ -933,7 +933,7 @@ fn an_unreachable_artifact_is_an_error() {
 }
 
 #[test]
-fn every_declared_skill_names_its_enforcing_gate() {
+fn skills_name_gates() {
     // asserts the COUNT, not emptiness: an entry deleted to make this pass is what fails it
     let (repo, cfg) = seeded();
     assert_eq!(cfg.skill.len(), 13);
@@ -1061,7 +1061,7 @@ fn a_ceiling_with_no_kill_line_is_still_reported() {
 }
 
 #[test]
-fn the_queue_is_not_read_as_product_source() {
+fn queue_not_source() {
     let (repo, cfg) = seeded_with("[layout]\nsource_ext = [\".rs\", \".md\"]\n");
     let m = marker();
     repo.write(
@@ -1110,7 +1110,7 @@ fn slashed_row_source_root() {
 }
 
 #[test]
-fn only_a_review_block_needs_a_scope_file() {
+fn review_needs_scope_file() {
     let (repo, cfg) = seeded();
     queue(&repo, "\n## [T-002] the finished one, whose files a later cleanup deleted\nscope: src/gone.rs\nblockedBy: none\nstatus: done\n\n## [T-003] the reviewed one whose file never landed\nscope: src/missing.rs\nblockedBy: none\nstatus: review\n",
     );
@@ -1472,7 +1472,7 @@ fn old_title_left() {
 }
 
 #[test]
-fn check_red_says_nothing_for_a_timed_out_check() {
+fn check_red_skips_timeout() {
     let (repo, mut cfg) = seeded();
     cfg.check.force = "sleep 10".to_string();
     cfg.check.timeout = "2s".to_string();
@@ -1997,7 +1997,7 @@ fn direct_commits_on_the_default_branch_count() {
 }
 
 #[test]
-fn the_host_leg_quotes_the_answer_and_command() {
+fn host_leg_quotes_answer() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
     let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
@@ -2013,7 +2013,7 @@ fn the_host_leg_quotes_the_answer_and_command() {
 }
 
 #[test]
-fn an_unadministered_repository_is_silence() {
+fn non_admin_silent() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
     let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
@@ -2026,7 +2026,7 @@ fn an_unadministered_repository_is_silence() {
 }
 
 #[test]
-fn an_unauthenticated_host_tool_reads_unknown() {
+fn unauthenticated_host_unknown() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
     let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
@@ -2039,7 +2039,7 @@ fn an_unauthenticated_host_tool_reads_unknown() {
 }
 
 #[test]
-fn a_host_tool_error_reads_unknown() {
+fn host_error_unknown() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
     let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
@@ -2053,7 +2053,7 @@ fn a_host_tool_error_reads_unknown() {
 
 // a silent host tool dies with its children at the bound; the test's own ceiling catches a lost bound
 #[test]
-fn a_hung_host_tool_reads_unknown_after_the_bound() {
+fn hung_host_unknown() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
     let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
@@ -2152,7 +2152,7 @@ fn merged_origin(repo: &Repo) -> (tempfile::TempDir, String) {
 }
 
 #[test]
-fn a_merged_review_block_is_reported() {
+fn merged_review_reported() {
     let (repo, cfg) = seeded();
     let (_origin, sha) = merged_origin(&repo);
     let ProbeResult::Count(found) = merged(&repo, &cfg) else {
@@ -2182,7 +2182,7 @@ fn no_origin_head_off() {
 }
 
 #[test]
-fn an_unmerged_or_done_block_reports_nothing() {
+fn unmerged_reports_nothing() {
     let (repo, cfg) = seeded();
     queue(&repo, REVIEW_AND_DONE);
     let (_origin, branch) = tracked_clone(&repo);
@@ -2461,7 +2461,7 @@ fn out_of_scope(repo: &Repo, concept: &str, kill: &str) {
 }
 
 #[test]
-fn out_of_scope_settles_ceiling() {
+fn exclusion_settles_ceiling() {
     let (repo, cfg) = ceilings();
     out_of_scope(
         &repo,
@@ -2478,7 +2478,7 @@ fn out_of_scope_settles_ceiling() {
 }
 
 #[test]
-fn out_of_scope_kill_reused() {
+fn exclusion_kill_reused() {
     let (repo, cfg) = seeded();
     out_of_scope(
         &repo,
@@ -2495,7 +2495,7 @@ fn out_of_scope_kill_reused() {
 }
 
 #[test]
-fn out_of_scope_covers_friction() {
+fn exclusion_covers_friction() {
     let (repo, cfg) = seeded();
     append(&repo, "PROGRESS.md", FRICTION_FIXTURE);
     out_of_scope(
