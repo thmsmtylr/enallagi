@@ -11,7 +11,9 @@ words = shlex.split(os.environ['EVAL_AGENT'])
 path = '.enallagi/enallagi.toml'
 text = open(path).read()
 assert '[agent]' not in text, 'the seeded config already holds an [agent] table'
-open(path, 'a').write('\n[agent]\npreset = "custom"\ncommand = %s\n' % json.dumps(words))
+# a custom preset declares no hosts, so the sandbox proxy would refuse the agent's API
+hosts = ['api.anthropic.com', 'platform.claude.com']
+open(path, 'a').write('\n[agent]\npreset = "custom"\ncommand = %s\n\n[sandbox]\nhosts = %s\n' % (json.dumps(words), json.dumps(hosts)))
 PY
 fi
 
