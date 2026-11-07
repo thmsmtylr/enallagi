@@ -122,12 +122,13 @@ fn direct_egress_refused() {
     }
     let r = Repo::new();
     let sb = Sandbox::start(&r.root, &native(&[]));
+    // exit 7 is curl's own connect failure: curl ran, under a sandbox that ran it, and was refused
     let out = sh(
         &sb,
         &r.root,
-        "curl -s --max-time 5 --noproxy '*' http://1.1.1.1/",
+        "curl -s --max-time 5 --noproxy '*' http://1.1.1.1/; echo rc=$?",
     );
-    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("rc=7"), "{}", text(&out));
 }
 
 #[test]
@@ -200,6 +201,9 @@ fn host_unix_socket_refused() {
     let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
     std::thread::spawn(move || {
         for mut s in listener.incoming().flatten() {
+            // read first: a close with the request unread resets curl before it reads the body
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
             let _ = s.write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nhi");
         }
     });
@@ -207,6 +211,16 @@ fn host_unix_socket_refused() {
     let script = format!(
         "curl -s --max-time 5 --noproxy '*' --unix-socket '{}' http://x/",
         path.display()
+    );
+    let reach = std::process::Command::new("sh")
+        .args(["-c", &script])
+        .output()
+        .expect("spawn");
+    assert_eq!(
+        String::from_utf8_lossy(&reach.stdout),
+        "hi",
+        "{}",
+        text(&reach)
     );
     let out = sh(&sb, &r.root, &script);
     assert_ne!(String::from_utf8_lossy(&out.stdout), "hi", "{}", text(&out));
