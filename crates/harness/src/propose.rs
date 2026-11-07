@@ -287,6 +287,7 @@ fn ask_as<T: serde::de::DeserializeOwned>(
         stage: "propose-check".to_string(),
         task: None,
         preset: resolved.preset,
+        role: Default::default(),
     };
     let rate_limit = regex::Regex::new(&format!("(?i){}", cfg.agent.rate_limit_pattern))?;
     let mut events = crate::events::Writer::new(crate::events::Log::open(&root.join(dir)));

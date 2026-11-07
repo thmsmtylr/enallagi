@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- a role's frontmatter declares `writes:` (checkout-relative paths, replacing the checkout and git dirs as its writable set) and `hosts:` (proxy entries for its spawns, `*` for any name), enforced by the sandbox; `tools:` is gone from the shipped roles and refused at load; the auditor writes nothing and the researcher writes only `REFERENCES.md` and reaches any host
 - each runner preset gains `hosts` (its registries) and `write` (its caches), and init writes the detected runner's into `[sandbox] hosts` and `[sandbox] write`
 - a red check's output ends with one `sandbox refused <host>:<port> (<reason>)` line per proxy refusal during that check, so the gate's tail names it
 - the adjudicator no longer re-runs a `probe: issue` ticket's `gh issue view` (a lane has no GitHub credentials); it judges the state `enallagi issue` recorded in `output:`

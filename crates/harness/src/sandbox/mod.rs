@@ -29,10 +29,22 @@ enum Kind {
     Bwrap,
 }
 
+/// What a role's frontmatter grants its spawns; the default keeps the run's policy.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RolePolicy {
+    /// Checkout-relative; `Some` replaces the checkout and both git dirs as the writable set.
+    pub writes: Option<Vec<String>>,
+    pub hosts: Vec<String>,
+}
+
+type RoleProxy = (Vec<String>, Option<bwrap::Relays>, Proxy);
+
 pub struct Sandbox {
     kind: Kind,
     // dropped first, so no relay outlives its socket dir or its proxy
     _relays: Option<bwrap::Relays>,
+    // one proxy per role host list, started on first use; relays before proxy, as above
+    roles: std::sync::Mutex<Vec<RoleProxy>>,
     // ponytail: a proxy that cannot bind leaves None and lanes get port 0, so no egress
     proxy: Option<Proxy>,
     bwrap: PathBuf,
@@ -102,6 +114,7 @@ impl Sandbox {
         Sandbox {
             kind,
             _relays: relays,
+            roles: Default::default(),
             proxy,
             bwrap: bwrap::find(root).unwrap_or_else(|| "bwrap".into()),
             ports: cfg.sandbox.ports.clone(),
@@ -123,6 +136,17 @@ impl Sandbox {
 
     /// The argv and env that spawn `argv` in `cwd` confined; `write` is the preset's own state paths.
     pub fn wrap<S: AsRef<str>>(&self, argv: &[S], cwd: &Path, write: &[String]) -> Wrapped {
+        self.wrap_as(argv, cwd, write, &RolePolicy::default())
+    }
+
+    /// `wrap`, narrowed or widened by a role's `writes:` and `hosts:`.
+    pub fn wrap_as<S: AsRef<str>>(
+        &self,
+        argv: &[S],
+        cwd: &Path,
+        write: &[String],
+        role: &RolePolicy,
+    ) -> Wrapped {
         let argv: Vec<String> = argv.iter().map(|s| s.as_ref().to_string()).collect();
         let cwd = cwd.to_path_buf();
         if !matches!(self.kind, Kind::Seatbelt | Kind::Bwrap) {
@@ -132,7 +156,7 @@ impl Sandbox {
                 env: Vec::new(),
             };
         }
-        let port = self.proxy.as_ref().map_or(0, |p| p.port);
+        let port = self.port_for(&role.hosts);
         let url = format!("http://127.0.0.1:{port}");
         let mut env = Vec::new();
         for var in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
@@ -149,7 +173,12 @@ impl Sandbox {
                 .map(tempfile::TempDir::keep)
         });
         let extra = self.write.iter().chain(write).map(|w| home(w));
-        let policy = policy(&cwd, &self.dir, extra.chain(tmp.clone()));
+        let policy = policy(
+            &cwd,
+            &self.dir,
+            role.writes.as_deref(),
+            extra.chain(tmp.clone()),
+        );
         if let Some(tmp) = tmp {
             env.push(("TMPDIR".to_string(), canon(&tmp).display().to_string()));
         }
@@ -167,6 +196,30 @@ impl Sandbox {
             _ => seatbelt(&policy, port, &self.ports, argv),
         };
         Wrapped { argv, cwd, env }
+    }
+
+    fn port_for(&self, hosts: &[String]) -> u16 {
+        let Some(base) = &self.proxy else { return 0 };
+        if hosts.is_empty() {
+            return base.port;
+        }
+        let mut roles = self
+            .roles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((_, _, p)) = roles.iter().find(|(h, _, _)| h == hosts) {
+            return p.port;
+        }
+        let Ok(proxy) = base.beside(hosts) else {
+            return 0;
+        };
+        let relays = self
+            .socks
+            .as_ref()
+            .map(|d| bwrap::Relays::start(d.path(), &[proxy.port]));
+        let port = proxy.port;
+        roles.push((hosts.to_vec(), relays, proxy));
+        port
     }
 
     pub fn denials_since(&self, mark: usize) -> Vec<Denial> {
@@ -204,7 +257,12 @@ fn canon(path: &Path) -> PathBuf {
     }
 }
 
-fn policy(cwd: &Path, dir: &str, extra: impl Iterator<Item = PathBuf>) -> Policy {
+fn policy(
+    cwd: &Path,
+    dir: &str,
+    writes: Option<&[String]>,
+    extra: impl Iterator<Item = PathBuf>,
+) -> Policy {
     let mut write = vec![canon(cwd)];
     let mut deny = Vec::new();
     // the lane's own instance, and the parent instance beside the product's common git dir
@@ -235,6 +293,9 @@ fn policy(cwd: &Path, dir: &str, extra: impl Iterator<Item = PathBuf>) -> Policy
             deny.push(pointer);
         }
         write.push(common);
+    }
+    if let Some(own) = writes {
+        write = own.iter().map(|w| canon(&cwd.join(w))).collect();
     }
     write.extend(extra.map(|p| canon(&p)));
     write.sort();

@@ -2,6 +2,7 @@
 
 use crate::config::Config;
 use crate::events::Writer;
+use crate::sandbox::RolePolicy;
 use crate::skills::{
     pin, read_lock, valid_id, valid_path, write_lock, Pin, ResolveOpts, SkillError,
 };
@@ -82,4 +83,32 @@ fn vendor(src: &Path, dst: &Path) -> Result<String, SkillError> {
     }
     fs::copy(src, dst)?;
     Ok(fs::read_to_string(dst)?)
+}
+
+// the lines between a leading `---` and the next; empty when there is none
+pub(crate) fn frontmatter(text: &str) -> &str {
+    text.strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---"))
+        .map_or("", |(front, _)| front)
+}
+
+/// The `writes:` and `hosts:` a role's frontmatter declares, comma-separated.
+pub fn policy(text: &str) -> RolePolicy {
+    let list = |key: &str| {
+        frontmatter(text).lines().find_map(|l| {
+            let value = l.strip_prefix(key)?;
+            Some(
+                value
+                    .split(',')
+                    .map(|v| v.trim().trim_matches(['"', '\'']))
+                    .filter(|v| !v.is_empty())
+                    .map(String::from)
+                    .collect::<Vec<_>>(),
+            )
+        })
+    };
+    RolePolicy {
+        writes: list("writes:"),
+        hosts: list("hosts:").unwrap_or_default(),
+    }
 }

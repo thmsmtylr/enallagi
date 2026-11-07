@@ -4301,6 +4301,11 @@ fn learning_expires() {
     );
 }
 
+// the auditor writes nothing in the checkout, so a stub recording its run needs a declared path
+fn writable_src(r: &Repo) -> String {
+    format!("\n[sandbox]\nwrite = [{:?}]\n", r.root.join("src"))
+}
+
 #[test]
 fn the_audit_runs_once_after_the_last_iteration() {
     let r = repo("", "");
@@ -4312,13 +4317,14 @@ fn the_audit_runs_once_after_the_last_iteration() {
         "src/fakeagent.sh",
         &format!(
             "case \"$1\" in *'BEGIN ENALLAGI LEARNING'*)\n\
-             echo ran >>auditor-ran\n\
+             echo ran >>src/auditor-ran\n\
              printf 'BEGIN ENALLAGI LEARNING\\nclass: `slow-check`\\nthe check ran past its timeout → run it alone\\ninstances: `{p}:2`, `{p}:3`\\nEND ENALLAGI LEARNING\\n' ;;\n\
              esac\n{QUIET}",
             p = instance("PROGRESS.md"),
         ),
     );
-    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
+    let toml = base_toml(&role_commands(&implement, &verify));
+    write_toml(&r, &format!("{toml}{}", writable_src(&r)));
     queue(&r, TASKS);
     r.write(
         &instance("PROGRESS.md"),
@@ -4328,7 +4334,7 @@ fn the_audit_runs_once_after_the_last_iteration() {
 
     let (digest, _) = go(&r, &opts(2));
     assert_eq!(digest.iterations, 2);
-    let ran = std::fs::read_to_string(r.root.join("auditor-ran")).unwrap_or_default();
+    let ran = std::fs::read_to_string(r.root.join("src/auditor-ran")).unwrap_or_default();
     assert_eq!(ran.lines().count(), 1, "{ran}");
     let text = pipeline::digest_text(&digest);
     assert!(
@@ -4388,10 +4394,10 @@ fn a_stop_skips_the_audit() {
         &r,
         "src/fakeagent.sh",
         &format!(
-            "case \"$1\" in *'BEGIN ENALLAGI LEARNING'*) echo ran >>auditor-ran ;; esac\n{QUIET}"
+            "case \"$1\" in *'BEGIN ENALLAGI LEARNING'*) echo ran >>src/auditor-ran ;; esac\n{QUIET}"
         ),
     );
-    write_toml(&r, &base_toml(""));
+    write_toml(&r, &format!("{}{}", base_toml(""), writable_src(&r)));
     queue(&r, TASKS);
     r.write(
         &instance("PROGRESS.md"),
@@ -4405,7 +4411,7 @@ fn a_stop_skips_the_audit() {
         digest.halts.iter().any(|h| h.contains("STOP")),
         "{digest:#?}"
     );
-    assert!(!r.root.join("auditor-ran").exists(), "{digest:#?}");
+    assert!(!r.root.join("src/auditor-ran").exists(), "{digest:#?}");
 }
 
 #[test]
@@ -4637,4 +4643,30 @@ fn red_check_names_denial() {
     let cfg = enallagi::config::load(&r.root).expect("load");
     let green = enallagi::gates::check_delta(&sandbox, &r.root, &cfg, false);
     assert_eq!(green.output.trim(), "ok");
+}
+
+#[test]
+fn auditor_cannot_write() {
+    if std::env::var_os("ENALLAGI_SANDBOX").is_some() {
+        println!("nested: skipped");
+        return;
+    }
+    let toml = format!("{}\n[sandbox]\nmode = \"native\"\n", base_toml(""));
+    let r = repo(&toml, "");
+    script(
+        &r,
+        "src/fakeagent.sh",
+        &format!(
+            "case \"$1\" in *'BEGIN ENALLAGI LEARNING'*) echo ran >auditor-ran ;; esac\n{QUIET}"
+        ),
+    );
+    queue(&r, "# queue\n");
+    r.write(
+        &instance("PROGRESS.md"),
+        "# progress\nfriction: the check ran past its timeout\nfriction: the check timed out again\n",
+    );
+    r.commit_all("stubs");
+    let (digest, _) = go(&r, &opts(1));
+    assert!(digest.role_seconds.contains_key("auditor"), "{digest:#?}");
+    assert!(!r.root.join("auditor-ran").exists());
 }

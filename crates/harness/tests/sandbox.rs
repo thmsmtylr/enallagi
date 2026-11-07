@@ -240,6 +240,82 @@ fn lane_commits_both_repos() {
     );
 }
 
+fn as_role(sb: &Sandbox, cwd: &Path, role: &str, script: &str) -> Output {
+    let policy = enallagi::roles::policy(&format!("---\nname: r\n{role}---\nbody\n"));
+    sb.wrap_as(&["sh", "-c", script], cwd, &[], &policy)
+        .command()
+        .output()
+        .expect("spawn")
+}
+
+#[test]
+fn role_writes_none() {
+    if nested() {
+        return;
+    }
+    let r = Repo::new();
+    let sb = Sandbox::start(&r.root, &native(&[]));
+    for script in ["echo x > f", "sed -i.bak s/x/y/ src/schema.ts"] {
+        let out = as_role(&sb, &r.root, "writes:\n", script);
+        assert!(!out.status.success(), "{script}: {}", text(&out));
+    }
+    assert_eq!(git(&r.root, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn role_writes_named() {
+    if nested() {
+        return;
+    }
+    let r = Repo::new();
+    r.write("REFERENCES.md", "# refs\n");
+    r.commit_all("refs");
+    let sb = Sandbox::start(&r.root, &native(&[]));
+    let role = "writes: REFERENCES.md\n";
+    let out = as_role(&sb, &r.root, role, "echo x >> REFERENCES.md");
+    assert!(out.status.success(), "{}", text(&out));
+    let out = as_role(&sb, &r.root, role, "echo x >> src/schema.ts");
+    assert!(!out.status.success(), "{}", text(&out));
+    assert_eq!(git(&r.root, &["status", "--porcelain"]), " M REFERENCES.md");
+}
+
+#[test]
+fn role_writes_absent() {
+    if nested() {
+        return;
+    }
+    let r = nested_repo();
+    let sb = Sandbox::start(&r.root, &native(&[]));
+    let commit = "git -c commit.gpgsign=false commit -q --allow-empty -m lane";
+    let script = format!(
+        "{commit} && git -C .enallagi -c commit.gpgsign=false commit -q --allow-empty -m lane"
+    );
+    let out = as_role(&sb, &r.root, "hosts: example.com\n", &script);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(git(&r.root, &["log", "-1", "--format=%s"]), "lane");
+    assert_eq!(
+        git(&r.root.join(".enallagi"), &["log", "-1", "--format=%s"]),
+        "lane"
+    );
+}
+
+// offline: a listed name that does not resolve is refused as unresolved, not as unlisted
+#[test]
+fn role_hosts_listed() {
+    if nested() {
+        return;
+    }
+    let r = Repo::new();
+    let sb = Sandbox::start(&r.root, &native(&[]));
+    let curl = "curl -s -o /dev/null -x \"$HTTPS_PROXY\" https://example.invalid/";
+    as_role(&sb, &r.root, "hosts: example.invalid\n", curl);
+    sh(&sb, &r.root, curl);
+    let reasons: Vec<String> = sb.denials_since(0).into_iter().map(|d| d.reason).collect();
+    assert_eq!(reasons.len(), 2, "{reasons:?}");
+    assert!(reasons[0].starts_with("unresolved"), "{reasons:?}");
+    assert_eq!(reasons[1], "not on the allowlist");
+}
+
 #[test]
 fn git_config_unwritable() {
     if nested() {

@@ -1,7 +1,6 @@
 ---
 name: implementer
 description: Implements exactly one ticket from __ENALLAGI_DIR__/specs/ within its declared scope. Use for any coding work once a task is specified.
-tools: Read, Grep, Glob, Edit, Write, Bash, Skill
 ---
 You implement ONE task per invocation: the ticket `enallagi tasks ready` prints. Its file is `__ENALLAGI_DIR__/specs/<spec>/issues/<id>-<slug>.md` (`ls __ENALLAGI_DIR__/specs/*/issues/<id>-*`), and it is the one ticket file you edit: its `**Status:**` line, `## Comments`, and a `widened:` line under `## Harness`. `enallagi tasks block <id>` prints it as the launcher reads it. Skills, each fetched and present before this stage starts:
 - {{skill:tdd}} — at step 3, before the first test or source edit.

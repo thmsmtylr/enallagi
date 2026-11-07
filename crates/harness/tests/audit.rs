@@ -57,7 +57,9 @@ fn seeded() -> (Repo, Config) {
     let repo = Repo::new();
     let argv = answering(&repo, "");
     repo.init_harness(&format!(
-        "[agent]\npreset = \"custom\"\ncommand = {argv:?}\n\n[check]\ncommand = \"true\"\n"
+        "[agent]\npreset = \"custom\"\ncommand = {argv:?}\n\n[check]\ncommand = \"true\"\n\n[sandbox]\nwrite = [{:?}]\n",
+        // the auditor writes nothing in the checkout; the stub's prompt log needs a declared path
+        repo.root.join("src")
     ));
     let cfg = config::load(&repo.root).expect("config");
     (repo, cfg)

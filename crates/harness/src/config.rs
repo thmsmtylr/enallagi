@@ -86,6 +86,8 @@ pub enum ConfigError {
     MissingRole { stage: String, role: String },
     #[error("role {role}: {{{{skill:{id}}}}} has no matching [[skill]] entry")]
     UndeclaredSkill { role: String, id: String },
+    #[error("role {role}: `tools:` is gone and enforces nothing; declare `writes:` and `hosts:`, which the sandbox enforces")]
+    RoleTools { role: String },
     #[error(
         "stage {stage}: preset {preset} caps turns by neither a flag nor its own config, so the stage needs a timeout"
     )]
@@ -803,6 +805,12 @@ pub fn validate(
             }),
             Some(text) => {
                 if checked_roles.insert(role.as_str()) {
+                    if crate::roles::frontmatter(&text)
+                        .lines()
+                        .any(|l| l.starts_with("tools:"))
+                    {
+                        errs.push(ConfigError::RoleTools { role: role.clone() });
+                    }
                     for id in crate::skills::required_ids(&text) {
                         if !declared.contains(id.as_str()) {
                             errs.push(ConfigError::UndeclaredSkill {
@@ -1370,6 +1378,27 @@ mod tests {
         assert!(t.contains("force = \"make -B\""));
         assert!(renamed.contains(&"checkForce -> check.force".to_string()));
         assert!(t.contains("preset = \"custom\""));
+    }
+
+    #[test]
+    fn role_tools_refused() {
+        let roles = |_: &str| Some("---\nname: x\ntools: Read, Bash\n---\nbody\n".to_string());
+        let errs = validate(&checked(), &crate::agent::presets(), &roles).unwrap_err();
+        let text = errs
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("writes:") && text.contains("hosts:"),
+            "{text}"
+        );
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles");
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let role = std::fs::read_to_string(&path).unwrap();
+            assert!(!role.lines().any(|l| l.starts_with("tools:")), "{path:?}");
+        }
     }
 
     #[test]

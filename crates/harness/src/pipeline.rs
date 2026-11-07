@@ -1161,6 +1161,7 @@ impl<'a> Loop<'a> {
             stage: stage.name.clone(),
             task,
             preset: resolved.preset,
+            role: roles::policy(&source),
         })
     }
 
@@ -1240,6 +1241,7 @@ impl<'a> Loop<'a> {
             stage: stage.name.clone(),
             task,
             preset: shell_preset(),
+            role: Default::default(),
         }
     }
 

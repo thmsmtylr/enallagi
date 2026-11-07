@@ -58,6 +58,15 @@ Each report names every install's dated line and prints the rule as a `[seed]` l
 It only reports: it writes to no install and to no file in this repository.
 A person adds the line to `templates/LEARNINGS.md` in a pull request.
 
+A role file's frontmatter may declare two keys, which the sandbox enforces on that role's spawns (`crates/harness/src/roles.rs`).
+`writes:` lists paths relative to the lane's checkout, comma-separated, a directory covering its subpath.
+Present, it replaces the checkout and both repositories' git dirs as the writable set; the preset's state paths and the spawn's `TMPDIR` stay writable.
+Present and empty, only those two are writable. Absent, the writable set is unchanged.
+`hosts:` lists proxy allowlist entries added for that role's spawns; `*` matches any name, and the proxy still refuses IP literals and names resolving to loopback, link-local or unspecified addresses.
+Checks and gates keep the run's policy.
+A role file carrying `tools:` is refused at load: it reached the model as prose and enforced nothing.
+The shipped `auditor` declares `writes:` empty; the `researcher` declares `writes: REFERENCES.md` and `hosts: "*"`.
+
 `enallagi events --prefix` prints one row per role stage in `events.jsonl`.
 Each row carries the stage's three input token lanes.
 `handed_bytes` prints `-`: no event records the size of the prompt a stage was given.

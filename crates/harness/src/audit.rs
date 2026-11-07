@@ -451,14 +451,14 @@ fn prompt(role: &str, signal: &[Signal], rel: &str, handed: &[Ineffective]) -> S
 }
 
 // an installed role file overrides the shipped one, so an empty one leaves the agent no role
-fn role(root: &Path, cfg: &Config) -> String {
+fn source(root: &Path, cfg: &Config) -> String {
     let installed = root
         .join(&cfg.layout.harness_dir)
         .join("roles")
         .join("auditor.md");
     let text = fs::read_to_string(installed)
         .unwrap_or_else(|_| include_str!("../../../roles/auditor.md").to_string());
-    config::subst(body(&text), cfg)
+    config::subst(&text, cfg)
 }
 
 // an agent CLI reads a prompt that starts with `-` as an option, and the frontmatter starts with `---`
@@ -489,6 +489,7 @@ fn ask(
         stage: "auditor".to_string(),
         task: None,
         preset: resolved.preset,
+        role: crate::roles::policy(&source(root, cfg)),
     };
     let rate_limit = Regex::new(&format!("(?i){}", cfg.agent.rate_limit_pattern))
         .map_err(|e| AuditError::Agent(e.to_string()))?;
@@ -1000,7 +1001,7 @@ pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, Aud
     let result = ask(
         root,
         cfg,
-        prompt(&role(root, cfg), &signal, &decisions_rel, &handed),
+        prompt(body(&source(root, cfg)), &signal, &decisions_rel, &handed),
         events,
     )?;
     let spent = (result.seconds, result.usage.cost);

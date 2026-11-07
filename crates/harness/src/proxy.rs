@@ -18,6 +18,7 @@ type Resolve = fn(&str, u16) -> Result<Vec<SocketAddr>, String>;
 
 pub struct Proxy {
     pub port: u16,
+    allow: Arc<Vec<String>>,
     denials: Arc<Mutex<Vec<Denial>>>,
     stop: Arc<AtomicBool>,
 }
@@ -27,24 +28,40 @@ impl Proxy {
         Proxy::with(allow, resolve)
     }
 
+    /// A second proxy allowing `more` too, logging its refusals with this one's.
+    pub fn beside(&self, more: &[String]) -> io::Result<Proxy> {
+        let allow = self.allow.iter().chain(more).cloned().collect();
+        Proxy::sharing(allow, resolve, Arc::clone(&self.denials))
+    }
+
     fn with(allow: Vec<String>, resolve: Resolve) -> io::Result<Proxy> {
+        Proxy::sharing(allow, resolve, Arc::default())
+    }
+
+    fn sharing(
+        allow: Vec<String>,
+        resolve: Resolve,
+        denials: Arc<Mutex<Vec<Denial>>>,
+    ) -> io::Result<Proxy> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
-        let denials = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
-        let (allow, kept, halt) = (Arc::new(allow), Arc::clone(&denials), Arc::clone(&stop));
+        let allow = Arc::new(allow);
+        let (kept, halt) = (Arc::clone(&denials), Arc::clone(&stop));
+        let listed = Arc::clone(&allow);
         std::thread::spawn(move || {
             for client in listener.incoming() {
                 if halt.load(Ordering::Relaxed) {
                     break;
                 }
                 let Ok(client) = client else { continue };
-                let (allow, kept) = (Arc::clone(&allow), Arc::clone(&kept));
+                let (allow, kept) = (Arc::clone(&listed), Arc::clone(&kept));
                 std::thread::spawn(move || serve(client, &allow, resolve, &kept));
             }
         });
         Ok(Proxy {
             port,
+            allow,
             denials,
             stop,
         })
@@ -180,8 +197,8 @@ fn judge(allow: &[String], host: &str, port: u16) -> Result<(), String> {
     Ok(())
 }
 
-/// An entry is `name` or `*.suffix`, with an optional `:port` defaulting to 443; `*.suffix` matches
-/// subdomains, never the apex.
+/// An entry is `name`, `*.suffix` or `*`, with an optional `:port` defaulting to 443; `*.suffix`
+/// matches subdomains, never the apex; `*` matches any name.
 pub fn listed(entry: &str, host: &str, port: u16) -> bool {
     let (name, want) = match entry.rsplit_once(':') {
         Some((name, p)) => match p.parse::<u16>() {
@@ -198,7 +215,7 @@ pub fn listed(entry: &str, host: &str, port: u16) -> bool {
         Some(suffix) => host
             .strip_suffix(suffix)
             .is_some_and(|sub| sub.ends_with('.') && sub.len() > 1),
-        None => host == name,
+        None => name == "*" || host == name,
     }
 }
 
@@ -268,6 +285,14 @@ mod tests {
     }
 
     #[test]
+    fn star_matches_any() {
+        assert!(listed("*", "example.com", 443));
+        assert!(listed("*", "a.b.example", 443));
+        assert!(listed("*:80", "example.com", 80));
+        assert!(!listed("*", "example.com", 80));
+    }
+
+    #[test]
     fn refuses_loopback_target() {
         for ip in [
             "127.0.0.1",
@@ -283,7 +308,7 @@ mod tests {
         if nested() {
             return;
         }
-        let proxy = Proxy::start(vec!["localhost".into()]).expect("proxy");
+        let proxy = Proxy::start(vec!["*".into()]).expect("proxy");
         let (head, _) = ask(
             &proxy,
             "CONNECT localhost:443 HTTP/1.1\r\nHost: localhost\r\n\r\n",

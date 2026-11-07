@@ -149,9 +149,10 @@ pub(super) fn argv(
     let mut rw: Vec<&PathBuf> = policy.write.iter().chain(&policy.pinned).collect();
     rw.sort();
     rw.dedup();
-    let binds = rw
-        .into_iter()
-        .map(|p| ("--bind", p))
+    // a role's `writes:` can leave the checkout out of `rw`; under the /tmp tmpfs it would vanish
+    let cwd = super::canon(cwd);
+    let binds = std::iter::once(("--ro-bind", &cwd))
+        .chain(rw.into_iter().map(|p| ("--bind", p)))
         .chain(policy.deny.iter().map(|p| ("--ro-bind", p)));
     for (flag, path) in binds.filter(|(_, p)| p.exists()) {
         let path = path.display().to_string();
@@ -166,10 +167,7 @@ pub(super) fn argv(
             out.extend(["--ro-bind".into(), "/dev/null".into(), p]);
         }
     }
-    out.extend([
-        "--chdir".to_string(),
-        super::canon(cwd).display().to_string(),
-    ]);
+    out.extend(["--chdir".to_string(), cwd.display().to_string()]);
     out.extend([
         exe().display().to_string(),
         "sandbox".to_string(),

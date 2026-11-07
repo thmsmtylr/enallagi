@@ -429,6 +429,7 @@ pub struct StageSpawn<'a> {
     pub stage: String,
     pub task: Option<String>,
     pub preset: Preset,
+    pub role: crate::sandbox::RolePolicy,
 }
 
 #[derive(Debug)]
@@ -612,7 +613,9 @@ fn run_once(
     };
 
     use std::os::unix::process::CommandExt;
-    let mut command = sandbox.wrap(&argv, s.cwd, &s.preset.write).command();
+    let mut command = sandbox
+        .wrap_as(&argv, s.cwd, &s.preset.write, &s.role)
+        .command();
     // a lane commits as the repository's configured identity; left to itself it invents one from
     // whatever the agent's own session knows, and that identity lands in the operator's history
     for (var, key) in [
@@ -1129,6 +1132,7 @@ mod tests {
             stage: "x".into(),
             task: None,
             preset: presets()["claude"].clone(),
+            role: Default::default(),
         }
     }
 
