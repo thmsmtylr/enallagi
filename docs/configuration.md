@@ -34,7 +34,7 @@ A compound check line (`cd sub && pytest`) runs whole inside it.
 
 A lane writes only to its checkout, both repositories' git dirs (never `config`, `hooks/`, `modules/` or worktree pointers), a per-spawn `TMPDIR`, the preset's own state paths and `sandbox.write`.
 It never writes an instance's `enallagi.toml` (or its legacy name), `roles/`, `gitleaks.toml`, `gitleaksignore`, `osv-scanner.toml` or `security/`, which the launcher re-reads.
-No lane or check reads or writes `<harness_dir>/holdouts/`, its own or its parent instance's, or `~/.cache/enallagi/holdouts/`, and renaming a parent does not expose them. No lane reads `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc` or `~/.config/gh`: the launcher, not a lane, pushes and calls GitHub.
+No lane or check reads or writes `<harness_dir>/holdouts/`, its own or its parent instance's, or `~/.cache/enallagi/holdouts/`, and renaming a parent does not expose them. No lane reads `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, `~/.git-credentials`, `~/.config/git/credentials`, `~/.docker/config.json`, `~/.npmrc`, `~/.cargo/credentials.toml`, `~/.cargo/credentials` or `~/.pypirc`: the launcher, not a lane, pushes and calls GitHub, and a registry token would reach a host init allowlists.
 Its only egress is the proxy, reached through `HTTPS_PROXY`; each refused host is logged as `sandbox.denied`, and a red check's output ends with one `sandbox refused <host>:<port> (<reason>)` line per refusal during it.
 Under `native`, a run refuses to start when the sandbox is unavailable, naming the fix.
 

@@ -37,8 +37,21 @@ const ENV: &[&str] = &[
 ];
 const ENV_PREFIXES: &[&str] = &["LC_", "XDG_", "ENALLAGI_"];
 
-// operator credentials no lane reads: the launcher, not a lane, pushes and calls GitHub (ADR 0004)
-const SECRETS: &[&str] = &[".ssh", ".aws", ".gnupg", ".netrc", ".config/gh"];
+// operator credentials no lane reads; a registry token reaches a host init allowlists
+const SECRETS: &[&str] = &[
+    ".ssh",
+    ".aws",
+    ".gnupg",
+    ".netrc",
+    ".config/gh",
+    ".git-credentials",
+    ".config/git/credentials",
+    ".docker/config.json",
+    ".npmrc",
+    ".cargo/credentials.toml",
+    ".cargo/credentials",
+    ".pypirc",
+];
 
 // instance files the launcher re-reads: config, role prompts and policy, the security gate's inputs
 const INSTANCE_DENY: &[&str] = &[

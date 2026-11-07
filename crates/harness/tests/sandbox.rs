@@ -21,12 +21,19 @@ fn nested() -> bool {
 const TOKENS: [&str; 4] = ["GH_TOKEN", "GITHUB_TOKEN", "ENALLAGI_GH_TOKEN", "NPM_TOKEN"];
 
 // the operator's secrets, planted in a home of our own: no test reads the real ones
-const SECRETS: [&str; 5] = [
+const SECRETS: [&str; 12] = [
     ".ssh/id",
     ".aws/credentials",
     ".gnupg/key",
     ".netrc",
     ".config/gh/hosts.yml",
+    ".git-credentials",
+    ".config/git/credentials",
+    ".docker/config.json",
+    ".npmrc",
+    ".cargo/credentials.toml",
+    ".cargo/credentials",
+    ".pypirc",
 ];
 
 fn native(ports: &[u16]) -> Config {
