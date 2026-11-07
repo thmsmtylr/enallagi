@@ -161,7 +161,7 @@ fn parses_tickets(text: &str) -> bool {
 }
 
 #[test]
-fn the_launcher_parses_no_task_blocks_itself() {
+fn launcher_parses_no_blocks() {
     // only the tracker and block.rs read the ticket format; a second parser here would drift from them
     for sample in [
         "## [T-001] a task",
@@ -602,7 +602,7 @@ fn every_github_action_is_pinned_to_a_commit_sha() {
 }
 
 #[test]
-fn the_skill_hook_fires_on_a_headless_lane() {
+fn hook_fires_headless() {
     // UserPromptSubmit, not SessionStart: SessionStart fires once and decays as context grows
     let repo = Repo::new();
     init::install(
@@ -930,7 +930,7 @@ fn one_matcher_answers_both_commit_callers() {
 // main ships the package; what `enallagi init` writes lives only on dogfood/* branches
 #[test]
 #[ignore = "main only: ci.yml runs it on main and on pull requests into main"]
-fn main_tracks_no_instance_file() {
+fn main_tracks_no_instance() {
     let mut instance = std::collections::BTreeSet::from(["test-hashes.json".to_string()]);
     for name in enallagi::agent::presets().keys() {
         let repo = Repo::new();
@@ -1039,7 +1039,7 @@ fn the_trimmed_role_prompts_still_pass_their_evals() {
 }
 
 #[test]
-fn the_licence_is_mit() {
+fn licence_mit() {
     let root = repo_root();
     let licence = read(&root.join("LICENSE"));
     assert!(
@@ -1448,9 +1448,10 @@ fn every_workflow_exact_names_a_declared_test() {
     assert!(reported[0].contains("the_tag_equals_the_crate_versionX"));
     let helper = "      - run: cargo test -p enallagi --test floor -- --include-ignored --exact tag_mismatch\n";
     assert_eq!(undeclared_exact(helper, &root).len(), 1);
-    let no_suite = "      - run: cargo test -p enallagi --test nosuch -- --exact main_tracks_no_instance_file\n";
+    let no_suite =
+        "      - run: cargo test -p enallagi --test nosuch -- --exact main_tracks_no_instance\n";
     assert_eq!(undeclared_exact(no_suite, &root).len(), 1);
-    let unparsed = "      - run: cargo test -- --exact main_tracks_no_instance_file\n";
+    let unparsed = "      - run: cargo test -- --exact main_tracks_no_instance\n";
     assert_eq!(undeclared_exact(unparsed, &root).len(), 1);
 }
 

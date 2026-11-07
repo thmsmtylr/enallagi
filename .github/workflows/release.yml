@@ -54,7 +54,7 @@ jobs:
       - name: the tag matches the crate version
         run: cargo test -p enallagi --test floor -- --include-ignored --exact the_tag_equals_the_crate_version
       - name: the tag tracks no instance file
-        run: cargo test -p enallagi --test floor -- --include-ignored --exact main_tracks_no_instance_file
+        run: cargo test -p enallagi --test floor -- --include-ignored --exact main_tracks_no_instance
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: '0.13.0'

@@ -83,7 +83,7 @@ fn last_line(s: &str) -> &str {
 }
 
 #[test]
-fn the_eval_runner_passes_a_role_that_obeys_its_rule() {
+fn obeying_role_passes() {
     let pkg = package();
     write_eval(
         pkg.path(),
@@ -183,7 +183,7 @@ fn agent_argv_quoted() {
 }
 
 #[test]
-fn the_eval_runner_fails_a_role_that_breaks_its_rule() {
+fn breaking_role_fails() {
     let pkg = package();
     write_eval(
         pkg.path(),
@@ -206,7 +206,7 @@ fn the_eval_runner_fails_a_role_that_breaks_its_rule() {
 }
 
 #[test]
-fn an_eval_argv_carries_dir_and_context() {
+fn argv_carries_context() {
     let pkg = package();
     write_eval(
         pkg.path(),
@@ -232,7 +232,7 @@ fn an_eval_argv_carries_dir_and_context() {
 }
 
 #[test]
-fn evals_need_an_agent() {
+fn evals_need_agent() {
     let pkg = package();
     write_eval(pkg.path(), "case", "do the thing", "true", "true", None);
     // a preset that resolves to nothing: agent resolution fails closed
@@ -321,7 +321,7 @@ fn write_gate_fixture(pkg: &Path, other_assert: &str) -> PathBuf {
 }
 
 #[test]
-fn a_rule_that_misses_its_case_is_rejected() {
+fn rule_missing_case_rejected() {
     let pkg = package();
     write_eval(pkg.path(), "rule", "RULE", "true", "false", Some("true\n"));
     let stub = pkg.path().join("stub.sh");
@@ -340,7 +340,7 @@ fn a_rule_that_misses_its_case_is_rejected() {
 }
 
 #[test]
-fn a_rule_that_changes_nothing_is_rejected() {
+fn inert_rule_rejected() {
     let pkg = package();
     write_eval(pkg.path(), "rule", "RULE", "true", "true", Some("true\n"));
     let stub = pkg.path().join("stub.sh");
@@ -413,7 +413,7 @@ fn promptless_eval_no_agent() {
 }
 
 #[test]
-fn a_prompt_that_is_not_a_file_is_a_fixture_error() {
+fn prompt_dir_fixture_error() {
     let pkg = package();
     let dir = pkg.path().join("evals").join("case");
     exec(&dir.join("setup.sh"), "true");

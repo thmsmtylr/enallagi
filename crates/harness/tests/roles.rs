@@ -210,7 +210,7 @@ fn an_undeclared_role_falls_back() {
 }
 
 #[test]
-fn immutable_refuses_an_edit_to_a_role() {
+fn immutable_refuses_role() {
     let repo = Repo::new();
     repo.write(
         ".enallagi/harness.lock",
@@ -263,7 +263,7 @@ fn the_notes_step_requires_the_author_marker() {
 
 // each phrase is one reproduction rule; losing one lets an unreproduced claim reach done
 #[test]
-fn the_verifier_reproduces_each_claim() {
+fn verifier_reproduces_claims() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/verifier.md");
     let text = fs::read_to_string(&source).expect("read roles/verifier.md");
     for want in [

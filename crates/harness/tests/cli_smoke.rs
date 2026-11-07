@@ -80,7 +80,7 @@ fn tasks_list_prints_the_seeded_queue() {
 }
 
 #[test]
-fn skills_list_prints_every_declared_skill() {
+fn skills_list_prints_all() {
     let repo = installed();
     let out = run(&repo, &["skills", "list"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);

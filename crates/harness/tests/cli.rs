@@ -17,7 +17,7 @@ fn help_exits_0_and_lists_subcommands() {
 }
 
 #[test]
-fn run_help_mentions_iterations_and_budget_usd() {
+fn run_help_names_budget() {
     let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["run", "--help"])
         .output()
@@ -441,7 +441,7 @@ fn cost_in(root: &std::path::Path, window: &[&str]) -> String {
 }
 
 #[test]
-fn skills_cost_counts_loads_against_uses() {
+fn cost_counts_loads() {
     let dir = tempfile::tempdir().unwrap();
     let report = cost_in(dir.path(), &[]);
     let row = |id: &str| -> Vec<String> {
@@ -503,7 +503,7 @@ fn skills_cost_by_period() {
 }
 
 #[test]
-fn skills_cost_names_an_unused_skill_unproven() {
+fn cost_flags_unused_skill() {
     let dir = tempfile::tempdir().unwrap();
     let report = cost_in(dir.path(), &[]);
     let unproven: Vec<&str> = report
@@ -657,7 +657,7 @@ fn run_names_an_unset_check_as_unset() {
 }
 
 #[test]
-fn the_reference_tables_live_in_docs() {
+fn reference_tables_in_docs() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
     let reference =
@@ -732,7 +732,7 @@ fn readme_links_the_three_guides() {
 }
 
 #[test]
-fn the_shipped_documents_describe_and_do_not_argue() {
+fn shipped_docs_describe() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let read = |rel: &str| std::fs::read_to_string(root.join(rel)).expect(rel);
     let argues = regex::Regex::new(
@@ -1897,7 +1897,7 @@ fn issue_requeues_expired() {
 }
 
 #[test]
-fn issue_names_the_gh_command_that_failed() {
+fn issue_names_failed_command() {
     let args = enallagi::issue::gh_args("owner/repo#12").expect("args");
     let failing = |stderr: &str, exit: i32| Response {
         stderr: stderr.to_string(),
@@ -2140,7 +2140,7 @@ fn review_skips_resolved() {
 }
 
 #[test]
-fn review_run_twice_appends_nothing() {
+fn review_rerun_appends_nothing() {
     let f = GhRepo::new(review_twin(SUMMARY));
     assert_eq!(f.review(&["owner/repo#13"]).status.code(), Some(0));
     let once = f.tasks();
@@ -2183,7 +2183,7 @@ fn review_dry_run() {
 }
 
 #[test]
-fn a_generated_and_a_plain_comment_share_a_shape() {
+fn comments_share_shape() {
     let mut shapes = Vec::new();
     for fixture in [GENERATED, PLAIN] {
         let f = GhRepo::new(review_twin(fixture));

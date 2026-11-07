@@ -294,7 +294,7 @@ fn context_says_no_user() {
 }
 
 #[test]
-fn the_project_skill_is_valid_agentskills_frontmatter() {
+fn skill_frontmatter_valid() {
     let repo = Repo::new();
     install(&repo);
     let skill = read(
@@ -313,7 +313,7 @@ fn the_project_skill_is_valid_agentskills_frontmatter() {
 }
 
 #[test]
-fn init_writes_the_harness_gitignore() {
+fn writes_gitignore() {
     let repo = Repo::new();
     install(&repo);
     let ignore = read(&repo, ".enallagi/.gitignore");
@@ -1521,7 +1521,7 @@ fn init_seeds_runner_hosts() {
 }
 
 #[test]
-fn two_runners_in_one_tree_write_no_keys() {
+fn two_runners_no_keys() {
     let repo = node_repo();
     repo.write("Cargo.toml", "[package]\nname = \"fixture\"\n");
     repo.commit_all("two runners");
@@ -1791,7 +1791,7 @@ fn adapter_defaults_to_preset() {
 
 // --sync vendors every declared skill from a stdin that is not a terminal; --frozen vendors none
 #[test]
-fn init_sync_vendors_the_declared_skills() {
+fn sync_vendors_skills() {
     let repo = Repo::new();
     let toml = "[agent]\npreset = \"claude\"\n";
     repo.write(
@@ -1828,7 +1828,7 @@ fn init_sync_vendors_the_declared_skills() {
 
 // --issue appends the block `enallagi issue` writes and commits it, so the first run finds it
 #[test]
-fn init_issue_queues_and_commits() {
+fn issue_queues_and_commits() {
     let repo = Repo::new();
     let tools = tempfile::tempdir().expect("tools");
     let issue = enallagi::fixture::twin::Response::to(
