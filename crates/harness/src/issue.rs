@@ -1,7 +1,6 @@
 //! issue: one GitHub issue, read with gh, becomes one `proposed` block. No model writes it.
 
 use crate::block::{self, QueueError};
-use std::process::Command;
 
 const FIELDS: &str = "number,title,body,url,labels,state";
 
@@ -57,22 +56,14 @@ pub fn gh_args(reference: &str) -> Result<Vec<String>, IssueError> {
 
 pub fn read(reference: &str) -> Result<Issue, IssueError> {
     let args = gh_args(reference)?;
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let failed = |reason: String| IssueError::Gh {
         command: format!("gh {}", args.join(" ")),
         reason,
     };
-    let out = Command::new("gh")
-        .args(&args)
-        .output()
-        .map_err(|e| failed(e.to_string()))?;
-    if !out.status.success() {
-        return Err(failed(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ));
-    }
-    serde_json::from_slice(&out.stdout).map_err(|e| failed(e.to_string()))
+    let out = crate::pr::gh(None, None, &args).map_err(failed)?;
+    serde_json::from_str(&out).map_err(|e| failed(e.to_string()))
 }
-
 // `.../issues/12` is a prefix of `.../issues/123`, so a match followed by a digit is another issue
 pub(crate) fn carries(line: &str, url: &str) -> bool {
     line.match_indices(url).any(|(at, _)| {

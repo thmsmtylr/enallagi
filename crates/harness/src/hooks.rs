@@ -42,7 +42,7 @@ pub fn immutable(root: &Path, input: &str, task: Option<&str>) -> (i32, String) 
 
 // RAILS.md `harness-lane`: a hashed file on the ticket's own scope: line is the lane's to edit and re-cut
 fn own_scope(root: &Path, dir: &str, target: &Path, task: Option<&str>) -> bool {
-    if normalize(root, &config::instance_rel(root, dir, "test-hashes.json")) == *target {
+    if normalize(root, &config::instance_rel(dir, "test-hashes.json")) == *target {
         return false;
     }
     let Some(scope) = task
@@ -109,7 +109,7 @@ fn lexical_normalize(p: &Path) -> PathBuf {
 }
 
 fn hashed_hit(root: &Path, harness_dir: &str, target: &Path) -> Option<String> {
-    let hashes = config::instance_rel(root, harness_dir, "test-hashes.json");
+    let hashes = config::instance_rel(harness_dir, "test-hashes.json");
     let hashes_path = root.join(&hashes);
     if normalize(root, &hashes) == *target {
         if hashes_path.is_file() {
@@ -190,7 +190,7 @@ fn glob_package_jsons(root: &Path, pattern: &str) -> Vec<PathBuf> {
 
 fn locked_hit(root: &Path, cfg: &config::Config, target: &Path) -> Option<String> {
     let dir = &cfg.layout.harness_dir;
-    let lock = config::instance_rel(root, dir, "harness.lock");
+    let lock = config::instance_rel(dir, "harness.lock");
     let lock_path = root.join(&lock);
     if normalize(root, &lock) == *target {
         if lock_path.is_file() {

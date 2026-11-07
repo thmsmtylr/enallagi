@@ -617,7 +617,7 @@ fn age(root: &Path, cfg: &Config, rel: &str, needle: &str) -> usize {
 
 /// Each proposed learning no `killed:` line has decided, with its age in rounds.
 pub fn waiting(root: &Path, cfg: &Config) -> Result<Vec<Waiting>, AuditError> {
-    let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
+    let rel = config::instance_rel(&cfg.layout.harness_dir, "DECISIONS.md");
     let text = read(root, &rel)?;
     Ok(entries(&section(&text, PROPOSED))
         .into_iter()
@@ -637,7 +637,7 @@ pub fn decided(
     before: &[String],
     was: &str,
 ) -> (Vec<String>, Vec<String>) {
-    let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
+    let rel = config::instance_rel(&cfg.layout.harness_dir, "DECISIONS.md");
     let text = read(root, &rel).unwrap_or_default();
     let still: Vec<String> = waiting(root, cfg)
         .unwrap_or_default()
@@ -678,7 +678,7 @@ pub fn expire(root: &Path, cfg: &Config, today: &str) -> Result<Vec<String>, Aud
     if stale.is_empty() {
         return Ok(Vec::new());
     }
-    let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
+    let rel = config::instance_rel(&cfg.layout.harness_dir, "DECISIONS.md");
     let text = read(root, &rel)?;
     let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
     let mut dated = Vec::new();
@@ -809,7 +809,7 @@ fn recurring(root: &Path, cfg: &Config, text: &str) -> Vec<Ineffective> {
 
 /// Each earned rule an instance recurred against after the commit its `promoted:` line names.
 pub fn ineffective(root: &Path, cfg: &Config) -> Result<Vec<Ineffective>, AuditError> {
-    let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
+    let rel = config::instance_rel(&cfg.layout.harness_dir, "DECISIONS.md");
     Ok(recurring(root, cfg, &read(root, &rel)?))
 }
 
@@ -922,8 +922,8 @@ fn refusal(root: &Path, body: &str, learning: &Learning) -> Option<String> {
 /// Hands the signal to the auditor role, and writes each learning whose citations resolve, merged into an entry it overlaps.
 pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, AuditError> {
     let dir = &cfg.layout.harness_dir;
-    let decisions_rel = config::instance_rel(root, dir, "DECISIONS.md");
-    let learnings_rel = config::instance_rel(root, dir, "LEARNINGS.md");
+    let decisions_rel = config::instance_rel(dir, "DECISIONS.md");
+    let learnings_rel = config::instance_rel(dir, "LEARNINGS.md");
     let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
     let mut report = Report {
         decisions: decisions_rel.clone(),
@@ -976,7 +976,7 @@ pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, Aud
     }
     let decisions = kept;
 
-    let mut signal = frictions(root, cfg, &config::instance_rel(root, dir, "PROGRESS.md"))?;
+    let mut signal = frictions(root, cfg, &config::instance_rel(dir, "PROGRESS.md"))?;
     let t = Tracker::open(root, dir);
     let rel = |id: &str| {
         let path = t.path_of(id).unwrap_or_default();

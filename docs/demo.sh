@@ -164,7 +164,7 @@ cat >"$D/twin.json" <<JSON
 }
 JSON
 mkdir -p "$D/bin"
-printf '#!/bin/sh\nexec /usr/bin/env ENALLAGI_TWIN=%s %s twin gh "$@"\n' "$D/twin.json" "$ENALLAGI_BIN" >"$D/bin/gh"
+printf '#!/bin/sh\nexec /usr/bin/env ENALLAGI_TWIN="%s" "%s" twin gh "$@"\n' "$D/twin.json" "$ENALLAGI_BIN" >"$D/bin/gh"
 chmod +x "$D/bin/gh"
 export PATH="$D/bin:$PATH"
 echo "origin $D/origin.git; gh is the twin"

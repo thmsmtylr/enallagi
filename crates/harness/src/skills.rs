@@ -587,13 +587,9 @@ pub fn cost_report(
 
 // a skill that refuses model invocation reaches a lane only as text in its prompt
 fn model_disabled(body: &str) -> bool {
-    body.strip_prefix("---\n")
-        .and_then(|rest| rest.split_once("\n---"))
-        .is_some_and(|(front, _)| {
-            front
-                .lines()
-                .any(|l| l.trim() == "disable-model-invocation: true")
-        })
+    crate::roles::frontmatter(body)
+        .lines()
+        .any(|l| l.trim() == "disable-model-invocation: true")
 }
 
 // unresolved {{skill:<id>}} tokens are left alone; inline presets and model-disabled skills get the body appended, others get the invocation

@@ -234,7 +234,7 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         })
     };
     if unset("context_file") {
-        cfg.layout.context_file = config::instance_rel(root, &dir, "AGENTS.md");
+        cfg.layout.context_file = config::instance_rel(&dir, "AGENTS.md");
     }
     if unset("spec") {
         cfg.layout.spec = String::new();
@@ -248,7 +248,7 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
             config_rel(root)
         ));
     }
-    let at = |name: &str| config::instance_rel(root, &dir, name);
+    let at = |name: &str| config::instance_rel(&dir, name);
     let toml = config_rel(root);
     let sub = |text: &str| {
         let text = text

@@ -369,3 +369,14 @@ pub fn gate(pkg: &Path, name: &str, agent: Option<Vec<String>>) -> anyhow::Resul
     println!("GATE {name} ACCEPT fixes its case, fails without itself, regresses nothing");
     Ok(true)
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn shell_words_quotes() {
+        assert_eq!(
+            super::shell_words(r#"a 'b c' "d\"e" f\ g"#),
+            ["a", "b c", "d\"e", "f g"]
+        );
+    }
+}

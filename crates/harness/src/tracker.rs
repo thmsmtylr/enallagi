@@ -516,10 +516,9 @@ pub fn repo_slug(root: &Path) -> String {
 pub fn spec_rel(root: &Path, cfg: &crate::config::Config) -> String {
     let dir = &cfg.layout.harness_dir;
     if !cfg.layout.spec.is_empty() {
-        return crate::config::instance_rel(root, dir, &cfg.layout.spec);
+        return crate::config::instance_rel(dir, &cfg.layout.spec);
     }
-    let seed =
-        crate::config::instance_rel(root, dir, &format!("{SPECS}/{}/spec.md", repo_slug(root)));
+    let seed = crate::config::instance_rel(dir, &format!("{SPECS}/{}/spec.md", repo_slug(root)));
     let found = spec_paths(root, dir);
     let heading = format!("\n{}", cfg.layout.rows_heading);
     found
@@ -664,8 +663,8 @@ pub fn parse_draft(path: &Path, text: &str) -> Draft {
 pub fn check(root: &Path, cfg: &crate::config::Config, slug: &str) -> Vec<String> {
     let dir = &cfg.layout.harness_dir;
     let t = Tracker::open(root, dir);
-    let issues = crate::config::instance_rel(root, dir, &format!("{SPECS}/{slug}/issues"));
-    let spec = crate::config::instance_rel(root, dir, &format!("{SPECS}/{slug}/spec.md"));
+    let issues = crate::config::instance_rel(dir, &format!("{SPECS}/{slug}/issues"));
+    let spec = crate::config::instance_rel(dir, &format!("{SPECS}/{slug}/spec.md"));
     let mut out = Vec::new();
     let drafts = match t.drafts(slug) {
         Ok(d) => d,
@@ -1110,7 +1109,7 @@ pub fn get_at(root: &Path, harness_dir: &str, id: &str, rev: &str) -> Option<Blo
 }
 
 fn read_at(root: &Path, harness_dir: &str, rev: &str, id: Option<&str>) -> Option<Vec<Block>> {
-    let specs = crate::config::instance_rel(root, harness_dir, SPECS);
+    let specs = crate::config::instance_rel(harness_dir, SPECS);
     let (repo, inner, _) = git::locate(root, harness_dir, &specs);
     let names = git::git(&repo, &["ls-tree", "-r", "--name-only", rev, "--", &inner]).ok()?;
     let mine = |n: &&str| id.is_none_or(|id| n.contains(&format!("/issues/{id}-")));
@@ -1129,7 +1128,7 @@ fn read_at(root: &Path, harness_dir: &str, rev: &str, id: Option<&str>) -> Optio
 
 /// The commits in `range` that touched `id`'s ticket, oldest first.
 pub fn ticket_revs(root: &Path, harness_dir: &str, id: &str, range: &str) -> Option<Vec<String>> {
-    let specs = crate::config::instance_rel(root, harness_dir, SPECS);
+    let specs = crate::config::instance_rel(harness_dir, SPECS);
     let (repo, specs, _) = git::locate(root, harness_dir, &specs);
     let ticket = format!("{specs}/*/issues/{id}-*.md");
     let revs = git::git(
@@ -1142,7 +1141,7 @@ pub fn ticket_revs(root: &Path, harness_dir: &str, id: &str, range: &str) -> Opt
 
 /// The commit that queued a ticket: the one that added its file. None when none did, which a caller may never pass to `git show`: an empty revision reads the index.
 pub fn queued_commit(root: &Path, harness_dir: &str, id: &str) -> Result<Option<String>, String> {
-    let specs = crate::config::instance_rel(root, harness_dir, SPECS);
+    let specs = crate::config::instance_rel(harness_dir, SPECS);
     let (repo, inner, _) = git::locate(root, harness_dir, &specs);
     let added = git::git(
         &repo,

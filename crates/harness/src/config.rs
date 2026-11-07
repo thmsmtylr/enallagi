@@ -268,7 +268,7 @@ pub struct PrConfig {
     pub merge: MergeMode,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RespondConfig {
     /// New in-scope findings past this many rounds hand the ticket to a person.
@@ -279,18 +279,6 @@ pub struct RespondConfig {
     pub rereview: Vec<String>,
     /// The variable whose value replies and resolves pass to gh as `GH_TOKEN`; unset is gh's own auth.
     pub token_env: String,
-}
-
-// the same values as the `[respond]` table in harness.default.toml
-impl Default for RespondConfig {
-    fn default() -> Self {
-        RespondConfig {
-            max_rounds: 3,
-            quiet: "10m".to_string(),
-            rereview: Vec::new(),
-            token_env: "ENALLAGI_GH_TOKEN".to_string(),
-        }
-    }
 }
 
 impl RespondConfig {
@@ -478,7 +466,7 @@ pub fn parse_when(s: &str) -> Result<Predicate, ConfigError> {
 }
 
 // the one place an instance file's path is decided
-pub fn instance_rel(_root: &Path, harness_dir: &str, name: &str) -> String {
+pub fn instance_rel(harness_dir: &str, name: &str) -> String {
     if harness_dir.is_empty() {
         name.to_string()
     } else {
@@ -487,7 +475,7 @@ pub fn instance_rel(_root: &Path, harness_dir: &str, name: &str) -> String {
 }
 
 pub fn instance_path(root: &Path, harness_dir: &str, name: &str) -> PathBuf {
-    root.join(instance_rel(root, harness_dir, name))
+    root.join(instance_rel(harness_dir, name))
 }
 
 // a lane's own STOP, then its parent checkout's: one file there halts every lane
@@ -579,7 +567,7 @@ pub fn load(root: &Path) -> Result<Config, ConfigError> {
             message: e.to_string(),
         })?;
     if cfg.layout.context_file.is_empty() {
-        cfg.layout.context_file = instance_rel(root, &cfg.layout.harness_dir, "AGENTS.md");
+        cfg.layout.context_file = instance_rel(&cfg.layout.harness_dir, "AGENTS.md");
     }
     cfg.layout.spec = crate::tracker::spec_rel(root, &cfg);
     // a dark merge needs a pull request to merge

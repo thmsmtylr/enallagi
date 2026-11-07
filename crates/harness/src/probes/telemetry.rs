@@ -44,17 +44,8 @@ fn cite(log: &Log, events: &[Event], idxs: &[usize], message: &str) -> Finding {
     }
 }
 
-fn normal(text: &str) -> String {
-    let cleaned: String = text
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' })
-        .collect();
-    cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 fn tokens(text: &str) -> HashSet<String> {
-    normal(text)
+    super::common::normal(text)
         .split_whitespace()
         .map(str::to_string)
         .collect()

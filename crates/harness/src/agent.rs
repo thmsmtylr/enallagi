@@ -4,7 +4,6 @@ use crate::config::{AgentConfig, Layout};
 use crate::events::{Kind, Writer};
 use regex::Regex;
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -652,10 +651,10 @@ fn run_once(
     let buffer = Arc::new(Mutex::new(String::new()));
     let mut readers = Vec::new();
     if let Some(out) = child.stdout.take() {
-        readers.push(drain(out, Arc::clone(&buffer)));
+        readers.push(crate::gates::drain(out, Arc::clone(&buffer)));
     }
     if let Some(err) = child.stderr.take() {
-        readers.push(drain(err, Arc::clone(&buffer)));
+        readers.push(crate::gates::drain(err, Arc::clone(&buffer)));
     }
 
     let started = Instant::now();
@@ -702,22 +701,6 @@ fn run_once(
             .unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
     };
     Ok((exit, output, timed_out))
-}
-
-fn drain<R: Read + Send + 'static>(
-    pipe: R,
-    buffer: Arc<Mutex<String>>,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        let mut reader = BufReader::new(pipe);
-        let mut line = Vec::new();
-        while matches!(reader.read_until(b'\n', &mut line), Ok(n) if n > 0) {
-            if let Ok(mut text) = buffer.lock() {
-                text.push_str(&String::from_utf8_lossy(&line));
-            }
-            line.clear();
-        }
-    })
 }
 
 // at most one stage.output a second, or a chatty agent writes more event lines than the TUI can redraw off

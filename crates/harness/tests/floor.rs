@@ -317,7 +317,22 @@ fn the_bootstrap_record_is_derived_from_git() {
 
 #[test]
 fn docs_demo_merges_dark() {
-    let (code, out) = script(&repo_root().join("docs/demo.sh"), &repo_root(), &[]);
+    // a space in the demo's own dir splits an unquoted gh shim
+    let spaced = tempfile::TempDir::new().expect("tempdir");
+    let tmp = spaced.path().join("a b");
+    fs::create_dir(&tmp).expect("mkdir");
+    let out = enallagi::fixture::command(&repo_root().join("docs/demo.sh").display().to_string())
+        .current_dir(repo_root())
+        .env("ENALLAGI_BIN", env!("CARGO_BIN_EXE_enallagi"))
+        .env("TMPDIR", &tmp)
+        .output()
+        .expect("run the demo");
+    let code = out.status.code().unwrap_or(-1);
+    let out = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert_eq!(code, 0, "{out}");
 
     // exit code alone would pass on a demo that printed nothing; check the sequence too

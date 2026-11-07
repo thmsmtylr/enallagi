@@ -35,7 +35,7 @@ pub fn re(pattern: &str) -> Res<Regex> {
 }
 
 pub fn instance(ctx: &ProbeCtx, name: &str) -> String {
-    crate::config::instance_rel(ctx.root, &ctx.cfg.layout.harness_dir, name)
+    crate::config::instance_rel(&ctx.cfg.layout.harness_dir, name)
 }
 
 pub fn read(root: &Path, rel: &str) -> Res<String> {

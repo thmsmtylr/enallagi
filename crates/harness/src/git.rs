@@ -149,22 +149,7 @@ pub fn commit_paths(root: &Path, paths: &[&str], msg: &str) -> Result<bool, GitE
 /// Commits `path` alone, leaving whatever else is staged uncommitted.
 pub fn commit_only(root: &Path, path: &str, msg: &str) -> Result<(), GitError> {
     git(root, &["add", "-A", "--", path])?;
-    let mut args = identity_args(root);
-    args.extend(
-        [
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-q",
-            "-m",
-            msg,
-            "--",
-            path,
-        ]
-        .map(String::from),
-    );
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    git(root, &args)?;
+    git_as(root, root, &["commit", "-q", "-m", msg, "--", path])?;
     Ok(())
 }
 
@@ -214,6 +199,15 @@ pub fn locate(root: &Path, harness_dir: &str, path: &str) -> (PathBuf, String, b
 
 // the state repository configures no identity, so a commit there borrows the product's, and every
 // commit a round makes carries one author for the `commit-identity` gate
+/// `git args` in `dir` under `root`'s identity, never signing.
+pub fn git_as(root: &Path, dir: &Path, args: &[&str]) -> Result<String, GitError> {
+    let mut all = identity_args(root);
+    all.extend(["-c", "commit.gpgsign=false"].map(String::from));
+    all.extend(args.iter().map(|a| a.to_string()));
+    let all: Vec<&str> = all.iter().map(String::as_str).collect();
+    git(dir, &all)
+}
+
 pub fn identity_args(root: &Path) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
     for key in ["user.name", "user.email"] {
@@ -252,7 +246,7 @@ pub fn commit_instance(
     if state == root {
         let paths: Vec<String> = names
             .iter()
-            .map(|name| crate::config::instance_rel(root, harness_dir, name))
+            .map(|name| crate::config::instance_rel(harness_dir, name))
             .collect();
         let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
         return commit_paths(root, &paths, &msg);
@@ -266,10 +260,7 @@ pub fn commit_instance(
     if git_ok(&state, &["diff", "--cached", "--quiet"]) {
         return Ok(false);
     }
-    let mut args = identity_args(root);
-    args.extend(["-c", "commit.gpgsign=false", "commit", "-q", "-m", &msg].map(String::from));
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    git(&state, &args)?;
+    git_as(root, &state, &["commit", "-q", "-m", &msg])?;
     Ok(true)
 }
 
@@ -295,22 +286,9 @@ pub fn commit_instance_only(
     if git_ok(&state, &diff) {
         return Ok(false);
     }
-    let mut args = identity_args(root);
-    args.extend(
-        [
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-q",
-            "-m",
-            &msg,
-            "--",
-        ]
-        .map(String::from),
-    );
-    args.extend(names.iter().map(|n| n.to_string()));
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    git(&state, &args)?;
+    let mut args = vec!["commit", "-q", "-m", &msg, "--"];
+    args.extend(names);
+    git_as(root, &state, &args)?;
     Ok(true)
 }
 
@@ -344,7 +322,7 @@ pub fn state_rev(root: &Path, harness_dir: &str, rev: &str) -> Result<String, St
 
 // the product sha to diff a task against, read off the subject of the commit that queued it
 pub fn task_base(root: &Path, harness_dir: &str, task: &str) -> Result<String, String> {
-    let specs = crate::config::instance_rel(root, harness_dir, crate::tracker::SPECS);
+    let specs = crate::config::instance_rel(harness_dir, crate::tracker::SPECS);
     let (repo, _, nested) = locate(root, harness_dir, &specs);
     let Some(commit) = crate::tracker::queued_commit(root, harness_dir, task)? else {
         return Ok(String::new());

@@ -21,7 +21,6 @@ pub fn command(bin: &str) -> Command {
     cmd
 }
 
-// writes the --report-path or --output it is handed an empty result, as a clean scan would
 /// Every shipped skill id, in the defaults' order.
 pub const SKILL_IDS: [&str; 13] = [
     "to-tickets",
@@ -39,6 +38,7 @@ pub const SKILL_IDS: [&str; 13] = [
     "verification-before-completion",
 ];
 
+// writes the --report-path or --output it is handed an empty result, as a clean scan would
 const STUB_SCANNER: &str = r#"#!/bin/sh
 # stub scanner
 while [ $# -gt 0 ]; do

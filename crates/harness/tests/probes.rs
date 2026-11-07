@@ -675,8 +675,7 @@ fn learning_unenforced_reads_earned_rules() {
     assert_eq!(
         (found[0].path.as_str(), found[0].line),
         (
-            config::instance_rel(&repo.root, &config::harness_dir(&repo.root), "DECISIONS.md")
-                .as_str(),
+            config::instance_rel(&config::harness_dir(&repo.root), "DECISIONS.md").as_str(),
             at + 1
         ),
         "{}",

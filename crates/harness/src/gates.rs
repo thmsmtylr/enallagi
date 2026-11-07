@@ -100,7 +100,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
 }
 
 fn rel(ctx: &GateCtx, name: &str) -> String {
-    crate::config::instance_rel(ctx.root, &ctx.cfg.layout.harness_dir, name)
+    crate::config::instance_rel(&ctx.cfg.layout.harness_dir, name)
 }
 
 // the repository an instance file's history is in, the path inside it, and that repository's base
@@ -2054,7 +2054,7 @@ fn signal(sig: i32, pgid: u32) -> bool {
     unsafe { libc::kill(group, sig) == 0 }
 }
 
-fn drain<R: Read + Send + 'static>(
+pub(crate) fn drain<R: Read + Send + 'static>(
     pipe: R,
     buffer: Arc<Mutex<String>>,
 ) -> std::thread::JoinHandle<()> {

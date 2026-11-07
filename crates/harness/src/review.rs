@@ -2,7 +2,6 @@
 
 use crate::block::{self, QueueError};
 use crate::issue;
-use std::process::Command;
 
 // ponytail: first:100 on each list; a longer pull request is reported short rather than read, and
 // `hasNextPage` is what says so. Follow the cursors when one repository needs it.
@@ -287,22 +286,9 @@ pub fn light(reference: &str) -> Result<Light, ReviewError> {
 }
 
 fn call<T: serde::de::DeserializeOwned>(args: &[String]) -> Result<T, ReviewError> {
-    let failed = |reason: String| ReviewError::Gh {
-        command: format!("gh {}", args.join(" ")),
-        reason,
-    };
-    let out = Command::new("gh")
-        .args(args)
-        .output()
-        .map_err(|e| failed(e.to_string()))?;
-    if !out.status.success() {
-        return Err(failed(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ));
-    }
-    serde_json::from_slice(&out.stdout).map_err(|e| failed(e.to_string()))
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    serde_json::from_str(&write(None, &args)?).map_err(|e| failed(&args, e.to_string()))
 }
-
 const FAILED: [&str; 6] = [
     "FAILURE",
     "ERROR",
@@ -548,26 +534,18 @@ pub const RESOLVE: &str =
 
 // a write runs under `token` as `GH_TOKEN` when one is set, else gh's own auth
 fn write(token: Option<&str>, args: &[&str]) -> Result<String, ReviewError> {
-    let failed = |reason: String| ReviewError::Gh {
-        command: format!(
-            "gh {}",
-            args.iter().take(3).copied().collect::<Vec<_>>().join(" ")
-        ),
-        reason,
-    };
-    let mut gh = Command::new("gh");
-    if let Some(t) = token {
-        gh.env("GH_TOKEN", t);
-    }
-    let out = gh.args(args).output().map_err(|e| failed(e.to_string()))?;
-    if !out.status.success() {
-        return Err(failed(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    crate::pr::gh(None, token, args)
+        .map(|out| out.trim().to_string())
+        .map_err(|reason| failed(args, reason))
 }
 
+fn failed(args: &[&str], reason: String) -> ReviewError {
+    let command = args.iter().take(3).copied().collect::<Vec<_>>().join(" ");
+    ReviewError::Gh {
+        command: format!("gh {command}"),
+        reason,
+    }
+}
 /// Replies `body` on the thread; returns the reply's URL.
 pub fn reply(token: Option<&str>, thread: &str, body: &str) -> Result<String, ReviewError> {
     let out = write(

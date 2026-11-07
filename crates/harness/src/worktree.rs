@@ -225,20 +225,7 @@ fn merge_into(repo: &Path, root: &Path, branch: &str, ff: bool) -> Result<String
             aborted: false,
         });
     }
-    let mut args = git::identity_args(root);
-    args.extend(
-        [
-            "-c",
-            "commit.gpgsign=false",
-            "merge",
-            "--no-ff",
-            "--no-edit",
-            branch,
-        ]
-        .map(String::from),
-    );
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    git::git(repo, &args).map_err(|err| {
+    git::git_as(root, repo, &["merge", "--no-ff", "--no-edit", branch]).map_err(|err| {
         // git leaves the conflict in the index and the tree, and a parent left mid-merge is worse than
         // an unmerged lane; `--abort` itself says whether a merge had started
         let aborted = git::git(repo, &["merge", "--abort"]).is_ok();
@@ -422,12 +409,6 @@ fn claim_all(root: &Path, harness_dir: &str, wt: &Path) -> std::io::Result<()> {
     })
 }
 
-pub fn release(root: &Path, harness_dir: &str, wt: &Path) -> std::io::Result<()> {
-    with_claims(root, harness_dir, |claims| {
-        claims.retain(|c| c.worktree != wt)
-    })
-}
-
 // the lane's commits replayed onto what landed first, then judged again on the tree they now land on
 fn rebase_checked(
     root: &Path,
@@ -437,10 +418,7 @@ fn rebase_checked(
     parent: &str,
 ) -> Result<(), String> {
     let landed = absorbed_by(root, branch);
-    let mut args = git::identity_args(root);
-    args.extend(["-c", "commit.gpgsign=false", "rebase", "-q", parent].map(String::from));
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    if git::git(dir, &args).is_err() {
+    if git::git_as(root, dir, &["rebase", "-q", parent]).is_err() {
         let paths = git::git(dir, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
         let _ = git::git(dir, &["rebase", "--abort"]);
         let tip = git::git(dir, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
@@ -1225,24 +1203,6 @@ mod tests {
         })
         .expect("claims");
         assert!(blocked);
-    }
-
-    #[test]
-    fn release_frees_scope() {
-        let r = scoped_repo();
-        let cfg = cfg(&r);
-        let (one, two) = (
-            tempfile::TempDir::new().unwrap(),
-            tempfile::TempDir::new().unwrap(),
-        );
-        claim(&r.root, &cfg, one.path(), &[]).expect("claim");
-        release(&r.root, ".enallagi", one.path()).expect("release");
-        assert_eq!(
-            claim(&r.root, &cfg, two.path(), &[])
-                .expect("claim")
-                .as_deref(),
-            Some("T-001")
-        );
     }
 
     // two writers and a check that is red only once one.txt and two.txt sit in one tree

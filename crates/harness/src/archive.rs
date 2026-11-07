@@ -32,7 +32,7 @@ pub struct ArchiveReport {
 
 // newest first, each with its round: a loop commit's `Iteration:` trailer, else the commit itself
 fn state_commits(root: &Path, dir: &str) -> (PathBuf, Vec<(String, String)>) {
-    let rel = config::instance_rel(root, dir, tracker::SPECS);
+    let rel = config::instance_rel(dir, tracker::SPECS);
     let (repo, _, _) = git::locate(root, dir, &rel);
     let format = "--format=%H %(trailers:key=Iteration,valueonly,separator=)";
     // a landing merge is no round; topo order lists the queuing commit after every later one
@@ -158,7 +158,7 @@ pub fn archive_done_with(
 
     // An uncommitted verdict folded into an archive commit loses its author and its message.
     let dir = &cfg.layout.harness_dir;
-    let (repo, inner, _) = git::locate(root, dir, &config::instance_rel(root, dir, tracker::SPECS));
+    let (repo, inner, _) = git::locate(root, dir, &config::instance_rel(dir, tracker::SPECS));
     // untracked too: a filed ticket or a halted decompose's drafts
     let status = [
         "status",

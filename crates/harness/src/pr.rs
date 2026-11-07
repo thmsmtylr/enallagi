@@ -752,9 +752,20 @@ pub struct Head {
     pub status_check_rollup: Vec<serde_json::Value>,
 }
 
-fn gh(root: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("gh")
-        .current_dir(root)
+/// `gh args` with `token` as `GH_TOKEN`: its stdout, or why it failed.
+pub(crate) fn gh(
+    root: Option<&Path>,
+    token: Option<&str>,
+    args: &[&str],
+) -> Result<String, String> {
+    let mut cmd = Command::new("gh");
+    if let Some(root) = root {
+        cmd.current_dir(root);
+    }
+    if let Some(t) = token {
+        cmd.env("GH_TOKEN", t);
+    }
+    let out = cmd
         .args(args)
         .output()
         .map_err(|e| format!("gh {}: {e}", args.join(" ")))?;
@@ -766,7 +777,7 @@ fn gh(root: &Path, args: &[&str]) -> Result<String, String> {
 
 pub fn view(root: &Path, url: &str) -> Result<Head, String> {
     let fields = "state,baseRefName,headRefName,headRefOid,statusCheckRollup";
-    let out = gh(root, &["pr", "view", url, "--json", fields])?;
+    let out = gh(Some(root), None, &["pr", "view", url, "--json", fields])?;
     serde_json::from_str(&out).map_err(|e| format!("gh pr view {url}: {e}"))
 }
 
@@ -810,7 +821,12 @@ pub fn blocked(
 
 pub fn merge(root: &Path, url: &str, sha: &str) -> Result<(), String> {
     let args = ["pr", "merge", url, "--merge", "--match-head-commit", sha];
-    gh(root, &[&args[..], &["--delete-branch"]].concat()).map(|_| ())
+    gh(
+        Some(root),
+        None,
+        &[&args[..], &["--delete-branch"]].concat(),
+    )
+    .map(|_| ())
 }
 
 #[cfg(test)]

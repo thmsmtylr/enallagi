@@ -511,7 +511,7 @@ fn auto_refusals(root: &Path, cfg: &Config, opts: &RunOpts) -> Vec<String> {
     {
         out.push(format!(
             "merge = \"auto\": no spec with open work has a holdout set under {}/",
-            config::instance_rel(root, &cfg.layout.harness_dir, "holdouts")
+            config::instance_rel(&cfg.layout.harness_dir, "holdouts")
         ));
     }
     if opts.budget_usd.is_none() && opts.budget_tokens.is_none() {
@@ -519,7 +519,7 @@ fn auto_refusals(root: &Path, cfg: &Config, opts: &RunOpts) -> Vec<String> {
             "merge = \"auto\" needs BUDGET_USD or BUDGET_TOKENS (or --budget-usd / --budget-tokens); BUDGET_SECONDS alone does not bound spend".into(),
         );
     }
-    let rel = config::instance_rel(root, &cfg.layout.harness_dir, "holdouts");
+    let rel = config::instance_rel(&cfg.layout.harness_dir, "holdouts");
     let (state, inner, _) = git::locate(root, &cfg.layout.harness_dir, &rel);
     for (repo, path) in [(root, rel.as_str()), (state.as_path(), inner.as_str())] {
         if git::git(repo, &["ls-files", "--", path]).is_ok_and(|f| !f.is_empty()) {
@@ -632,7 +632,7 @@ enum Flow {
 
 impl<'a> Loop<'a> {
     fn rel(&self, name: &str) -> String {
-        config::instance_rel(self.root, &self.cfg.layout.harness_dir, name)
+        config::instance_rel(&self.cfg.layout.harness_dir, name)
     }
 
     fn file(&self, name: &str) -> PathBuf {
@@ -2432,7 +2432,6 @@ impl<'a> Loop<'a> {
         };
         match (role, task) {
             ("decomposer", Some(slug)) => config::instance_rel(
-                self.root,
                 &self.cfg.layout.harness_dir,
                 &format!("{}/{slug}/spec.md", tracker::SPECS),
             ),
