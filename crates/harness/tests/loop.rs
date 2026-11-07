@@ -4366,7 +4366,7 @@ fn criteria_of(text: &str) -> String {
 
 #[test]
 fn in_scope_finding_returns() {
-    let r = driven_repo(OPEN_TASKS);
+    let r = driven_repo(&OPEN_TASKS.replacen("src/thing.ts", "`src/thing.ts`", 1));
     let criteria = criteria_of(&ticket_file(&r, "T-001"));
     let path = serving(&r, pull_with(vec![thread_on("src/thing.ts", 7)]));
     let out = run_with_path(&r, &path);
@@ -4488,11 +4488,20 @@ fn returned(commit: &str) -> Pulls {
 
 // `answers` are appended to the ticket by the implementer, `runs` under the verdict by the verifier
 fn returned_with(commit: &str, answers: &str, runs: &str, extra: &str) -> Pulls {
-    lane_on(RETURNED, commit, answers, runs, extra)
+    let answer = format!("printf '{answers}' >>\"$f\"");
+    lane_on(RETURNED, commit, &answer, runs, extra, "")
 }
 
-// `ticket` is T-900, its pull request's branch `task/T-900` on the origin
-fn lane_on(ticket: &str, commit: &str, answers: &str, runs: &str, extra: &str) -> Pulls {
+// `ticket` is T-900, its pull request's branch `task/T-900` on the origin; `answer` is shell
+// run in the lane with `$f` the ticket's file; `gates` are verify's beyond the base three
+fn lane_on(
+    ticket: &str,
+    commit: &str,
+    answer: &str,
+    runs: &str,
+    extra: &str,
+    gates: &str,
+) -> Pulls {
     let p = pulls("", "exit 0\n");
     let r = &p.repo;
     let bin = env!("CARGO_BIN_EXE_enallagi");
@@ -4501,7 +4510,7 @@ fn lane_on(ticket: &str, commit: &str, answers: &str, runs: &str, extra: &str) -
         "src/fakeimpl.sh",
         &format!(
             "echo fix >src/thing.ts\n{bin} tasks set-status \"$ENALLAGI_TASK\" review stub\n\
-             printf '{answers}' >>\"$(ls {}/*/issues/$ENALLAGI_TASK-*.md)\"\n\
+             f=$(ls {}/*/issues/$ENALLAGI_TASK-*.md)\n{answer}\n\
              git add -A && git -c commit.gpgsign=false commit -qm {commit}\n{QUIET}",
             queue_path()
         ),
@@ -4516,9 +4525,11 @@ fn lane_on(ticket: &str, commit: &str, answers: &str, runs: &str, extra: &str) -
             queue_path()
         ),
     );
+    let toml = base_toml(&format!("{}{extra}", role_commands(&implement, &verify)));
+    let post = "\"verdict\", \"scope\"]";
     write_toml(
         r,
-        &base_toml(&format!("{}{extra}", role_commands(&implement, &verify))),
+        &toml.replace(post, &format!("\"verdict\", {gates}\"scope\"]")),
     );
     installed(r);
     queue(r, &format!("{TASKS}{ticket}"));
@@ -4873,17 +4884,25 @@ pr: https://github.com/owner/repo/pull/9
 branch: task/T-900
 ";
 
+// round one writes `one_kept` and later rounds `two_kept`, so a round-one accept names a test no
+// later round touched; F-2 is rejected, every other finding accepted, each answered once
+const ANSWERING: &str = "word=one_kept; grep -q '^settled:' \"$f\" && word=two_kept
+echo \"$word\" >src/thing.ts
+for id in $(sed -n 's/^finding: \\(F-[0-9]*\\) .*/\\1/p' \"$f\"); do
+  grep -q \"^answer: $id \" \"$f\" && continue
+  if [ $id = F-2 ]; then echo \"answer: $id reject naming: true\"; else echo \"answer: $id accept $word\"; fi >>\"$f\"
+done";
+
 #[test]
 fn respond_converges_on_twin() {
-    let answers =
-        "answer: F-1 accept fix\\nanswer: F-2 reject naming: true\\nanswer: F-3 accept fix\\n";
     let respond = "\n[respond]\nquiet = \"0s\"\n";
     let p = lane_on(
         CONVERGING,
         "'T-900: fix'",
-        answers,
+        ANSWERING,
         "ran: true\\nexit: 0\\n",
         respond,
+        "\"findings\", ",
     );
     let url = "https://github.com/owner/repo/pull/9";
     let check = |c: &str| serde_json::json!({"name": "test", "status": "COMPLETED", "conclusion": c, "detailsUrl": format!("{url}/checks")});
@@ -4914,32 +4933,36 @@ fn respond_converges_on_twin() {
         }],
         ..Pull::default()
     });
+    let round = |n: u32, checks: Vec<serde_json::Value>, bots: Vec<twin::Finding>| Round {
+        head: "task/T-900".to_string(),
+        round: n,
+        checks,
+        bots,
+        ..Round::default()
+    };
+    // round two: the same check red again, and greptile's summary rewritten with a new row
     state.script = vec![
-        Round {
-            head: "task/T-900".to_string(),
-            round: 1,
-            checks: vec![check("FAILURE")],
-            bots: vec![
+        round(
+            1,
+            vec![check("FAILURE")],
+            vec![
                 found("kilo", "src/thing.ts", "parse drops the offset"),
                 found("greptile", "", "the error path is untested"),
             ],
-            ..Round::default()
-        },
-        Round {
-            head: "task/T-900".to_string(),
-            round: 2,
-            checks: vec![check("SUCCESS")],
-            ..Round::default()
-        },
+        ),
+        round(
+            2,
+            vec![check("FAILURE")],
+            vec![found("greptile", "", "the null path is untested")],
+        ),
+        round(3, vec![check("SUCCESS")], Vec::new()),
     ];
     twin::save(&p.twin, &state);
     let origin = p.origin.path().join("origin.git");
     let base = enallagi::git::git(&origin, &["rev-parse", "task/T-900"]).expect("base");
 
-    // the first run routes round one and pushes the answer; the second judges the re-review
-    let (_, first) = p.run(&[]);
-    let (_, second) = p.run(&[]);
-    let out = format!("{first}{second}");
+    // each run routes the round before it and pushes the answer; the third judges the last re-review
+    let out: String = (0..3).map(|_| p.run(&[]).1).collect();
     let pull = twin::load(&p.twin).pulls.pop().expect("pull 9");
     let head = enallagi::git::git(&origin, &["rev-parse", "task/T-900"]).expect("head");
     let text = ticket_file(&p.repo, "T-900");
@@ -4953,8 +4976,13 @@ fn respond_converges_on_twin() {
         Some(format!("clean at {}", head.trim())),
         "{text}\n{out}"
     );
-    assert_eq!(field_of(&p.repo, "T-900", "rounds").as_deref(), Some("1"));
-    assert_eq!(text.matches("finding:").count(), 3, "{text}");
+    assert_eq!(field_of(&p.repo, "T-900", "rounds").as_deref(), Some("2"));
+    assert_eq!(text.matches("finding:").count(), 5, "{text}");
+    assert!(text.contains("finding: F-4 comment round 2"), "{text}");
+    assert!(text.contains("finding: F-5 check round 2"), "{text}");
+    assert!(text.contains("answer: F-1 accept one_kept"), "{text}");
+    assert!(text.contains("answer: F-5 accept two_kept"), "{text}");
+    assert!(!text.contains("findings gate"), "{text}\n{out}");
     let filed: Vec<String> = enallagi::tracker::Tracker::open(&p.repo.root, ".enallagi")
         .blocks()
         .expect("queue")
@@ -4984,7 +5012,10 @@ fn respond_converges_on_twin() {
     assert_eq!(resolved, ["PRRT_copilot", "PRRT_twin_9_2"], "{out}");
     let range = format!("{}..task/T-900", base.trim());
     let subjects = enallagi::git::git(&origin, &["log", "--format=%s", &range]).expect("log");
-    assert_eq!(subjects.trim(), "T-900: fix", "{out}");
+    assert_eq!(subjects.trim(), "T-900: fix\nT-900: fix", "{out}");
+    let naming = std::fs::read_to_string(p.repo.root.join(".enallagi/.out-of-scope/naming.md"))
+        .unwrap_or_else(|_| panic!("{out}"));
+    assert_eq!(naming.matches("\n- ").count(), 1, "{naming}");
 }
 
 const LEARNING: &str = "- [proposed] `vacuous-test`: a test passed with its logic deleted → watch it fail first\n  instances: `SPEC.md:1`, `PROGRESS.md:1`, `TASKS.md:1`\n";

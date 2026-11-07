@@ -649,9 +649,16 @@ fn findings(ctx: &mut GateCtx) -> GateOutcome {
             .map(|l| l.trim().to_string())
             .collect()
     };
+    // a finding settled on an earlier push was judged against that round's base
+    let settled = lines("settled:");
     let ids: Vec<String> = lines("finding:")
         .iter()
         .filter_map(|l| l.split_whitespace().next().map(String::from))
+        .filter(|id| {
+            !settled
+                .iter()
+                .any(|s| s.split_whitespace().next() == Some(id))
+        })
         .collect();
     if ids.is_empty() {
         return pass("no finding");
@@ -662,8 +669,11 @@ fn findings(ctx: &mut GateCtx) -> GateOutcome {
         .unwrap_or_default();
     let base = ctx.iter_base.clone().unwrap_or_default();
     let globs = &ctx.cfg.layout.test_glob;
-    let tests: String = task_files(ctx, &base, &task, "")
-        .unwrap_or_default()
+    let files = match task_files(ctx, &base, &task, "") {
+        Ok(files) => files,
+        Err(e) => return fail(e.to_string()),
+    };
+    let tests: String = files
         .iter()
         .filter(|f| globs.is_empty() || in_scope(f, globs))
         .filter_map(|f| git(ctx.root, &["show", &format!("HEAD:{f}")]).ok())
@@ -3688,6 +3698,15 @@ echo '{{"results":[]}}' > "$out"
         let (out, text) = findings_of("answer: F-1 accept held\nanswer: F-2 accept held\n", "");
         assert!(out.pass, "{}", out.reason);
         assert!(text.contains("status: done"), "{text}");
+    }
+
+    #[test]
+    fn findings_skips_settled() {
+        let earlier =
+            "answer: F-1 accept gone\nsettled: F-1 https://x/1\nanswer: F-2 accept held\n";
+        let (out, _) = findings_of(earlier, "");
+        assert!(out.pass, "{}", out.reason);
+        assert!(out.reason.starts_with("1 finding"), "{}", out.reason);
     }
 
     #[test]

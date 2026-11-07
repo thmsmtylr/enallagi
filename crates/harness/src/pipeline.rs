@@ -1907,11 +1907,7 @@ impl<'a> Loop<'a> {
                 }
             }
         }
-        let scope: Vec<String> = block::field(ticket, "scope")
-            .unwrap_or_default()
-            .split(',')
-            .map(|g| g.trim().to_string())
-            .collect();
+        let scope = gates::scope_globs(&block::field(ticket, "scope").unwrap_or_default());
         let had = ticket
             .body
             .iter()
@@ -1926,9 +1922,10 @@ impl<'a> Loop<'a> {
         // a ticket of any state, `wontfix` too, or an `.out-of-scope/` request already carries it
         let carried = |f: &review::Finding| {
             let key = format!("  key: {}", f.key);
-            crate::issue::carrier(blocks.iter(), &f.url).is_some()
-                || blocks.iter().any(|b| b.body.iter().any(|(_, l)| *l == key))
-                || prior.iter().any(|l| crate::issue::carries(l, &f.url))
+            blocks.iter().any(|b| b.body.iter().any(|(_, l)| *l == key))
+                || !f.reused
+                    && (crate::issue::carrier(blocks.iter(), &f.url).is_some()
+                        || prior.iter().any(|l| crate::issue::carries(l, &f.url)))
         };
         // a rejected finding's gist, the URL of the reply that rejected it, and its id
         let rejected: Vec<(String, String, &str)> = ticket
@@ -2275,10 +2272,18 @@ impl<'a> Loop<'a> {
         };
         let runs = tracker::verdict(&b).map(|r| r.runs).unwrap_or_default();
         let lines: Vec<&str> = b.body.iter().map(|(_, l)| l.as_str()).collect();
+        // a reject settled on an earlier push is already on file
+        let settled: Vec<&str> = lines
+            .iter()
+            .filter_map(|l| l.strip_prefix("settled: ")?.split_whitespace().next())
+            .collect();
         for answer in lines.iter().filter_map(|l| l.strip_prefix("answer: ")) {
             let Some((id, reject)) = answer.split_once(" reject ") else {
                 continue;
             };
+            if settled.contains(&id) {
+                continue;
+            }
             let Some((concept, cmd)) = reject.split_once(':') else {
                 continue;
             };

@@ -138,10 +138,10 @@ pub(crate) fn carrier<'a>(
     url: &str,
 ) -> Option<String> {
     blocks
+        // gates stack, so a revived ticket still holds its old expiry line
         .filter(|b| {
-            !b.body
-                .iter()
-                .any(|(_, l)| l.starts_with("gate: expired after"))
+            crate::tracker::state(b).as_deref() != Some("wontfix")
+                || !block::field(b, "gate").is_some_and(|g| g.starts_with("expired after"))
         })
         .find(|b| b.body.iter().any(|(_, l)| carries(l, url)))
         .map(|b| b.id.clone())
@@ -231,6 +231,19 @@ mod tests {
         let q = block::parse(&q).unwrap();
         let block = append(&q, "", &issue("https://x/issues/12", "")).unwrap();
         assert!(block.starts_with(&block::heading("T-002", "a title")));
+    }
+
+    #[test]
+    fn revived_ticket_carries() {
+        let q = format!(
+            "{}\nstatus: ready-for-agent\ngate: expired after 5 rounds\nnotes: https://x/issues/12\n",
+            block::heading("T-001", "a")
+        );
+        let q = block::parse(&q).unwrap();
+        assert!(matches!(
+            append(&q, "", &issue("https://x/issues/12", "")),
+            Err(IssueError::Queued { task, .. }) if task == "T-001"
+        ));
     }
 
     #[test]

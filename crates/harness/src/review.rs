@@ -176,6 +176,8 @@ pub struct Finding {
     pub replies: Vec<String>,
     /// The same finding raised again on the same lines: its permalinks.
     pub also: Vec<String>,
+    /// A summary or a check: its URL outlives its words, so the URL carries nothing.
+    pub reused: bool,
 }
 
 #[derive(Debug, Default)]
@@ -324,6 +326,12 @@ fn collect(response: Response) -> Found {
         if !thread.is_resolved {
             found.open.extend(thread.id.clone());
         }
+        // resolved or not, the thread is what the bot's summary counts
+        if let Some(r) = thread.comments.nodes.iter().find(|r| r.path.is_some()) {
+            if !thread.is_outdated {
+                threaded.push(r.who.name());
+            }
+        }
         if thread.is_resolved || thread.is_outdated {
             found.settled += thread.comments.nodes.len();
             continue;
@@ -336,7 +344,6 @@ fn collect(response: Response) -> Found {
         }
         let first = remarks.remove(at);
         let by = first.who.name();
-        threaded.push(by.clone());
         let replies: Vec<String> = remarks.into_iter().skip(at).map(|r| r.body).collect();
         found.folded += replies.len();
         let finding = Finding {
@@ -354,8 +361,10 @@ fn collect(response: Response) -> Found {
             replies,
             ..Finding::default()
         };
+        // a fold drops its thread id, so only a threadless finding folds
         let same = found.findings.iter_mut().find(|a| {
-            a.path.is_some()
+            finding.thread.is_none()
+                && a.path.is_some()
                 && a.path == finding.path
                 && a.lines == finding.lines
                 && plain(&a.body) == plain(&finding.body)
@@ -382,21 +391,32 @@ fn collect(response: Response) -> Found {
                 continue;
             }
         }
-        let key = match &summary {
-            Some((marker, _)) => marker.to_string(),
-            None => gist(&by, None, &note.body),
+        // a summary rewritten with new rows is a new finding; one left alone stays carried
+        let (key, same) = match &summary {
+            Some((marker, _)) => {
+                let words = crate::skills::sha256(plain(&note.body).as_bytes());
+                (format!("{marker} {}", &words[..12]), marker.to_string())
+            }
+            None => {
+                let gist = gist(&by, None, &note.body);
+                (gist.clone(), gist)
+            }
         };
         let finding = Finding {
             source,
             by,
             key,
             url: note.url,
+            reused: summary.is_some(),
             severity: summary.and_then(|(_, count)| count),
             body: note.body,
             ..Finding::default()
         };
         // a summary edited in place, or posted again, is one finding: the newest words win
-        match found.findings.iter_mut().find(|f| f.key == finding.key) {
+        let first = found.findings.iter_mut().find(|f| {
+            f.key == same || (f.by == finding.by && f.key.starts_with(&format!("{same} ")))
+        });
+        match first {
             Some(f) => *f = finding,
             None => found.findings.push(finding),
         }
@@ -419,9 +439,10 @@ fn collect(response: Response) -> Found {
         found.findings.push(Finding {
             source: "check",
             by: name.clone(),
-            key: format!("check {name}"),
+            key: format!("check {name} {}", found.head),
             body: format!("{name}: {conclusion} {url}"),
             url,
+            reused: true,
             ..Finding::default()
         });
     }
@@ -823,18 +844,48 @@ mod tests {
     #[test]
     fn summary_dedups_by_marker() {
         let mut pull = bot_pull("kilo", &["first"]);
-        pull.threads[0].resolved = true;
+        pull.threads.clear();
         let edited = pull.comments[0].body.replace("1 Issues", "2 Issues");
         pull.comments.push(note("kilo-code-bot", "Bot", &edited, 9));
         let found = served(&pull);
         assert_eq!(found.findings.len(), 1, "{:?}", found.findings);
         let f = &found.findings[0];
-        assert_eq!(
-            (f.source, f.by.as_str(), f.key.as_str()),
-            ("comment", "Kilo", "<!-- kilo-review -->")
-        );
+        assert_eq!((f.source, f.by.as_str()), ("comment", "Kilo"));
+        assert!(f.key.starts_with("<!-- kilo-review --> "), "{}", f.key);
         assert_eq!(f.severity, Some(2));
         assert!(f.url.ends_with("#issuecomment-9"));
+    }
+
+    #[test]
+    fn rewritten_summary_rekeyed() {
+        let key = |text: &str| {
+            let mut pull = bot_pull("greptile", &[]);
+            let rec = twin::recordings().into_iter().find(|r| r.bot == "greptile");
+            let row = twin::Finding {
+                bot: "greptile".to_string(),
+                text: text.to_string(),
+                ..twin::Finding::default()
+            };
+            twin::post(&mut pull, &rec.expect("recording"), &[&row]);
+            served(&pull).findings[0].key.clone()
+        };
+        assert_eq!(key("the error path"), key("the error path"));
+        assert_ne!(key("the error path"), key("the null path"));
+    }
+
+    #[test]
+    fn repeat_thread_kept() {
+        let mut pull = bot_pull("kilo", &["drops the offset"]);
+        let mut again = pull.threads[0].clone();
+        again.id = "PRRT_again".to_string();
+        pull.threads.push(again);
+        let threads: Vec<Option<String>> = served(&pull)
+            .findings
+            .into_iter()
+            .map(|f| f.thread)
+            .collect();
+        assert_eq!(threads.len(), 2, "{threads:?}");
+        assert!(threads.iter().all(Option::is_some), "{threads:?}");
     }
 
     #[test]
@@ -845,6 +896,8 @@ mod tests {
         assert_eq!(found.findings[0].by, "Greptile");
 
         let mut pull = bot_pull("kilo", &["x"]);
+        pull.threads[0].resolved = true;
+        assert!(served(&pull).findings.is_empty());
         pull.threads.clear();
         pull.comments[0].body = pull.comments[0].body.replace("1 Issues", "0 Issues");
         assert!(served(&pull).findings.is_empty());
@@ -856,6 +909,7 @@ mod tests {
     #[test]
     fn failed_check_finding() {
         let mut pull = bot_pull("kilo", &[]);
+        pull.head_sha = "abc".to_string();
         pull.checks = vec![
             serde_json::json!({"__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "https://github.com/o/r/actions/runs/7/job/8"}),
             serde_json::json!({"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "https://x/2"}),
@@ -872,10 +926,14 @@ mod tests {
             [
                 (
                     "check",
-                    "check test",
+                    "check test abc",
                     "test: FAILURE https://github.com/o/r/actions/runs/7/job/8"
                 ),
-                ("check", "check ci/legacy", "ci/legacy: ERROR https://x/3"),
+                (
+                    "check",
+                    "check ci/legacy abc",
+                    "ci/legacy: ERROR https://x/3"
+                ),
             ]
         );
     }
