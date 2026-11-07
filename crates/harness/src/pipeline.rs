@@ -518,7 +518,6 @@ fn auto_refusals(root: &Path, cfg: &Config, opts: &RunOpts) -> Vec<String> {
                 "merge = \"auto\": {} tracks a holdout, which any lane can read through git",
                 repo.display()
             ));
-            break;
         }
     }
     if cfg.sandbox.mode == config::SandboxMode::Off {
@@ -1761,7 +1760,7 @@ impl<'a> Loop<'a> {
     // `merge = "auto"`: each open pull request whose ticket is green on every count merges
     fn merge_green(&mut self) {
         let t = Tracker::open(self.root, &self.cfg.layout.harness_dir);
-        let open: Vec<(String, String, Option<String>)> = self
+        let open: Vec<(String, String, Option<String>, Option<String>)> = self
             .blocks()
             .iter()
             .filter(|b| tracker::state(b).as_deref() == Some("open"))
@@ -1770,11 +1769,13 @@ impl<'a> Loop<'a> {
                     b.id.clone(),
                     block::field(b, "pr")?,
                     block::field(b, "respond"),
+                    block::field(b, "pushed"),
                 ))
             })
             .collect();
-        for (id, url, respond) in open {
-            let line = match self.merge_one(&t, &id, &url, respond.as_deref()) {
+        for (id, url, respond, pushed) in open {
+            let fields = (respond.as_deref(), pushed.as_deref());
+            let line = match self.merge_one(&t, &id, &url, fields) {
                 Ok(()) => format!("{id}: merged {url}"),
                 Err(why) => format!("{id}: left open, {why}"),
             };
@@ -1790,7 +1791,7 @@ impl<'a> Loop<'a> {
         t: &Tracker,
         id: &str,
         url: &str,
-        respond: Option<&str>,
+        (respond, pushed): (Option<&str>, Option<&str>),
     ) -> Result<(), String> {
         let slug = t.spec_of(id).unwrap_or_default();
         if gates::holdout_set(self.root, self.cfg, &slug).is_empty() {
@@ -1804,9 +1805,20 @@ impl<'a> Loop<'a> {
         let rev = format!("refs/heads/{}", head.head_ref_name);
         let tip = git::git(self.root, &["ls-remote", "origin", &rev]).unwrap_or_default();
         let tip = tip.split_whitespace().next().unwrap_or_default();
-        let unresolved = review::read(url).map_err(|e| e.to_string())?.open.len();
-        if let Some(why) = pr::blocked(&head, &default, tip, unresolved) {
+        let found = review::read(url).map_err(|e| e.to_string())?;
+        if found.short {
+            return Err("more than 100 reviews, threads or comments; not all read".to_string());
+        }
+        if let Some(why) = pr::blocked(&head, id, &default, tip, found.open.len()) {
             return Err(why);
+        }
+        // GitHub's head and origin's tip agree after a third party's push; the launcher's own push does not
+        let own = match pushed.and_then(|p| p.split_whitespace().next()) {
+            Some(sha) => sha.to_string(),
+            None => git::git(self.root, &["rev-parse", "-q", "--verify", &rev]).unwrap_or_default(),
+        };
+        if tip != own {
+            return Err("head moved".to_string());
         }
         // a clean written before the last push vouches for nothing at this head
         let sha = head.head_ref_oid;
@@ -2027,6 +2039,7 @@ impl<'a> Loop<'a> {
             if fresh.is_empty()
                 && rollup == "SUCCESS"
                 && !left
+                && !found.short
                 && block::field(ticket, "respond").as_deref() != Some(clean.as_str())
             {
                 t.set_field(id, "respond", &clean)

@@ -5419,6 +5419,16 @@ fn auto_refuses_tracked_holdouts() {
         both.contains("tracks a holdout") && both.contains("BUDGET_USD"),
         "{both}"
     );
+    // a state repository tracking one too is named beside the product's
+    let state = r.root.join(".enallagi");
+    for args in [&["init", "-q"][..], &["add", "-A", "-f"]] {
+        enallagi::git::git(&state, args).expect("git");
+    }
+    let ident = ["-c", "user.name=t", "-c", "user.email=t@t"];
+    enallagi::git::git(&state, &[&ident[..], &["commit", "-qm", "state"]].concat())
+        .expect("commit");
+    let err = refused(&r, &usd());
+    assert_eq!(err.matches("tracks a holdout").count(), 2, "{err}");
 }
 
 #[test]
@@ -5737,6 +5747,19 @@ fn auto_merges_green_pull() {
     assert_eq!(state_of(&p.repo, "T-001").as_deref(), Some("done"), "{out}");
     assert!(tasks_text(&p.repo).contains(&format!("merged {PULL_1}")));
     assert!(out.contains(&format!("T-001: merged {PULL_1}")), "{out}");
+    let merge = ["pr", "merge", PULL_1, "--merge", "--match-head-commit"];
+    let sha = [pull.head_sha.as_str(), "--delete-branch"];
+    assert!(
+        p.calls().contains(
+            &[&merge[..], &sha[..]]
+                .concat()
+                .iter()
+                .map(|a| a.to_string())
+                .collect()
+        ),
+        "{:?}",
+        p.calls()
+    );
 }
 
 #[test]
@@ -5821,6 +5844,50 @@ fn moved_head_blocks_merge() {
     twin::save(&p.twin, &state);
     let (_, out) = p.run(&["--budget-usd", "5"]);
     assert!(out.contains("T-001: left open, head moved"), "{out}");
+    assert_eq!(merges(&p), 0, "{out}");
+
+    // a third party's push: GitHub and origin agree on a head the launcher never pushed
+    let mut state = twin::load(&p.twin);
+    state.responses.clear();
+    twin::save(&p.twin, &state);
+    let origin = p.origin.path().join("origin.git");
+    let git = |args: &[&str]| enallagi::git::git(&origin, args).expect("git");
+    let old = git(&["rev-parse", "task/T-001"]);
+    let ident = ["-c", "user.name=t", "-c", "user.email=t@t"];
+    let tree = format!("{old}^{{tree}}");
+    let new = git(&[
+        &ident[..],
+        &["commit-tree", &tree, "-p", &old, "-m", "theirs"],
+    ]
+    .concat());
+    git(&["update-ref", "refs/heads/task/T-001", &new]);
+    let (_, out) = p.run(&["--budget-usd", "5"]);
+    let clean = format!("clean at {new}");
+    assert_eq!(field_of(&p.repo, "T-001", "respond"), Some(clean), "{out}");
+    assert!(out.contains("T-001: left open, head moved"), "{out}");
+    assert_eq!(merges(&p), 0, "{out}");
+}
+
+#[test]
+fn short_read_blocks_merge() {
+    let p = auto_pull(&["SUCCESS"], "exit 0\n");
+    let mut state = twin::load(&p.twin);
+    let empty = serde_json::json!({"pageInfo": {"hasNextPage": false}, "nodes": []});
+    let read = serde_json::json!({"data": {"repository": {"pullRequest": {
+        "headRefOid": state.pulls[0].head_sha,
+        "comments": empty,
+        "reviews": empty,
+        "reviewThreads": {"pageInfo": {"hasNextPage": true}, "nodes": []},
+        "commits": {"nodes": []},
+    }}}});
+    let args = enallagi::review::gh_args(PULL_1).expect("args");
+    state
+        .responses
+        .push(Response::to(&args, &format!("{read}\n")));
+    twin::save(&p.twin, &state);
+    let (_, out) = p.run(&["--budget-usd", "5"]);
+    assert_eq!(field_of(&p.repo, "T-001", "respond"), None, "{out}");
+    assert!(out.contains("T-001: left open, more than 100"), "{out}");
     assert_eq!(merges(&p), 0, "{out}");
 }
 

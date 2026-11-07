@@ -742,7 +742,7 @@ fn open(root: &Path, report: &PrReport) -> Result<String, PrError> {
 }
 
 /// A pull request as the merge step reads it.
-#[derive(Debug, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Head {
     pub state: String,
@@ -771,9 +771,15 @@ pub fn view(root: &Path, url: &str) -> Result<Head, String> {
 }
 
 /// Why a pull request is not merged yet, or None when it is green.
-pub fn blocked(head: &Head, default: &str, tip: &str, unresolved: usize) -> Option<String> {
-    if !head.head_ref_name.starts_with("task/") {
-        return Some(format!("{} is not a task/ branch", head.head_ref_name));
+pub fn blocked(
+    head: &Head,
+    id: &str,
+    default: &str,
+    tip: &str,
+    unresolved: usize,
+) -> Option<String> {
+    if head.head_ref_name != format!("task/{id}") {
+        return Some(format!("{} is not task/{id}", head.head_ref_name));
     }
     if head.base_ref_name != default {
         return Some(format!("stacked on {}", head.base_ref_name));
@@ -805,4 +811,39 @@ pub fn blocked(head: &Head, default: &str, tip: &str, unresolved: usize) -> Opti
 pub fn merge(root: &Path, url: &str, sha: &str) -> Result<(), String> {
     let args = ["pr", "merge", url, "--merge", "--match-head-commit", sha];
     gh(root, &[&args[..], &["--delete-branch"]].concat()).map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blocked_reasons() {
+        let green = Head {
+            state: "OPEN".to_string(),
+            base_ref_name: "main".to_string(),
+            head_ref_name: "task/T-001".to_string(),
+            head_ref_oid: "abc".to_string(),
+            status_check_rollup: vec![serde_json::json!({"context": "ci", "state": "SUCCESS"})],
+        };
+        assert_eq!(blocked(&green, "T-001", "main", "abc", 0), None);
+        let why = |h: &Head| blocked(h, "T-001", "main", "abc", 0).unwrap_or_default();
+        let pending = Head {
+            status_check_rollup: vec![serde_json::json!({"context": "ci", "state": "PENDING"})],
+            ..green.clone()
+        };
+        assert_eq!(why(&pending), "checks: ci PENDING");
+        let stacked = Head {
+            base_ref_name: "task/T-000".to_string(),
+            ..green.clone()
+        };
+        assert_eq!(why(&stacked), "stacked on task/T-000");
+        for name in ["feature/x", "task/T-002"] {
+            let other = Head {
+                head_ref_name: name.to_string(),
+                ..green.clone()
+            };
+            assert_eq!(why(&other), format!("{name} is not task/T-001"));
+        }
+    }
 }
