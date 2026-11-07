@@ -251,6 +251,112 @@ fn untracked_notice(paths: &[String]) -> String {
     )
 }
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Hold {
+    Writer,
+    Reader,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Claim {
+    pub id: String,
+    pub scope: Vec<String>,
+    pub branch: String,
+    pub worktree: PathBuf,
+    pub base: String,
+    pub hold: Hold,
+}
+
+// every lane reaches the parent's `run/` through the main worktree, as `events::Log::open` does
+fn run_file(root: &Path, harness_dir: &str, name: &str) -> PathBuf {
+    let dir = root.join(harness_dir);
+    git::main_worktree_path(&dir)
+        .unwrap_or(dir)
+        .join("run")
+        .join(name)
+}
+
+// advisory, and released with the process, so a crashed launcher leaves no stale lock
+fn lock_file(path: &Path) -> std::io::Result<std::fs::File> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    f.lock()?;
+    Ok(f)
+}
+
+// a claim is live while its worktree exists, so a dead one is dropped on every read
+fn with_claims<T>(
+    root: &Path,
+    harness_dir: &str,
+    f: impl FnOnce(&mut Vec<Claim>) -> T,
+) -> std::io::Result<T> {
+    use std::io::{Read, Seek, Write};
+    let mut file = lock_file(&run_file(root, harness_dir, "claims.json"))?;
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    let mut claims: Vec<Claim> = serde_json::from_str(&text).unwrap_or_default();
+    claims.retain(|c| c.worktree.exists());
+    let out = f(&mut claims);
+    file.set_len(0)?;
+    file.rewind()?;
+    file.write_all(serde_json::to_string_pretty(&claims)?.as_bytes())?;
+    Ok(out)
+}
+
+pub fn claims(root: &Path, harness_dir: &str) -> Vec<Claim> {
+    with_claims(root, harness_dir, |c| c.clone()).unwrap_or_default()
+}
+
+/// Claims the lowest-id takeable ticket in `root`'s queue that no live claim holds and whose scope overlaps no live writer's, for the lane at `wt`.
+pub fn claim(root: &Path, cfg: &Config, wt: &Path) -> std::io::Result<Option<String>> {
+    let dir = &cfg.layout.harness_dir;
+    with_claims(root, dir, |claims| {
+        let blocks = crate::tracker::Tracker::open(root, dir)
+            .blocks()
+            .map_err(std::io::Error::other)?;
+        let scope = |b: &crate::block::Block| {
+            crate::block::field(b, "scope")
+                .map(|l| crate::gates::scope_globs(&l))
+                .unwrap_or_default()
+        };
+        let id = crate::tracker::takeable_by(&blocks, |b| {
+            claims.iter().all(|c| {
+                c.id != b.id
+                    && (c.hold == Hold::Reader || !crate::gates::overlaps(&c.scope, &scope(b)))
+            })
+        });
+        if let Some(id) = &id {
+            let b = blocks
+                .iter()
+                .find(|b| &b.id == id)
+                .expect("taken from blocks");
+            claims.push(Claim {
+                id: id.clone(),
+                scope: scope(b),
+                branch: git::git(wt, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default(),
+                worktree: wt.to_path_buf(),
+                base: git::head(wt).unwrap_or_default(),
+                hold: Hold::Writer,
+            });
+        }
+        Ok(id)
+    })?
+}
+
+pub fn release(root: &Path, harness_dir: &str, wt: &Path) -> std::io::Result<()> {
+    with_claims(root, harness_dir, |claims| {
+        claims.retain(|c| c.worktree != wt)
+    })
+}
+
 // what happens next is decided by the worktrees' own committed state, never run's exit status
 pub fn lane(
     root: &Path,
@@ -570,6 +676,84 @@ mod tests {
         }
         let _ = git::git(&state, &["branch", "-D", &report.branch]);
         let _ = git::git(&r.root, &["branch", "-D", &report.branch]);
+    }
+
+    fn scoped_repo() -> Repo {
+        let r = repo_with_harness_dir();
+        r.queue(
+            ".enallagi",
+            "## [T-001] a\nscope: src/a/**\nstatus: ready-for-agent\n\n## [T-002] b\nscope: src/a/x.rs\nstatus: ready-for-agent\n\n## [T-003] c\nscope: src/b/**\nstatus: ready-for-agent\n",
+        );
+        r
+    }
+
+    #[test]
+    fn claim_skips_overlapping_scope() {
+        let r = scoped_repo();
+        let cfg = cfg(&r);
+        let (one, two) = (
+            tempfile::TempDir::new().unwrap(),
+            tempfile::TempDir::new().unwrap(),
+        );
+
+        let first = claim(&r.root, &cfg, one.path()).expect("claim");
+        let second = claim(&r.root, &cfg, two.path()).expect("claim");
+
+        assert_eq!(first.as_deref(), Some("T-001"));
+        assert_eq!(second.as_deref(), Some("T-003"));
+        let held: Vec<String> = claims(&r.root, ".enallagi")
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(held, ["T-001", "T-003"]);
+    }
+
+    #[test]
+    fn claim_drops_dead_worktree() {
+        let r = scoped_repo();
+        let cfg = cfg(&r);
+        let one = tempfile::TempDir::new().unwrap();
+        claim(&r.root, &cfg, one.path()).expect("claim");
+        drop(one);
+
+        let two = tempfile::TempDir::new().unwrap();
+        assert_eq!(
+            claim(&r.root, &cfg, two.path()).expect("claim").as_deref(),
+            Some("T-001")
+        );
+        let held: Vec<PathBuf> = claims(&r.root, ".enallagi")
+            .into_iter()
+            .map(|c| c.worktree)
+            .collect();
+        assert_eq!(held, [two.path().to_path_buf()]);
+    }
+
+    #[test]
+    fn claim_holds_file_lock() {
+        let r = scoped_repo();
+        let path = run_file(&r.root, ".enallagi", "claims.json");
+        let blocked = with_claims(&r.root, ".enallagi", |_| {
+            let f = std::fs::File::open(&path).expect("open");
+            matches!(f.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+        })
+        .expect("claims");
+        assert!(blocked);
+    }
+
+    #[test]
+    fn release_frees_scope() {
+        let r = scoped_repo();
+        let cfg = cfg(&r);
+        let (one, two) = (
+            tempfile::TempDir::new().unwrap(),
+            tempfile::TempDir::new().unwrap(),
+        );
+        claim(&r.root, &cfg, one.path()).expect("claim");
+        release(&r.root, ".enallagi", one.path()).expect("release");
+        assert_eq!(
+            claim(&r.root, &cfg, two.path()).expect("claim").as_deref(),
+            Some("T-001")
+        );
     }
 
     #[test]

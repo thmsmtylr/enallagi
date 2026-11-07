@@ -230,15 +230,22 @@ pub fn one_writer(root: &Path, _input: &str) -> (i32, String) {
         return (0, String::new());
     }
 
-    let task = crate::tracker::Tracker::open(root, &cfg.layout.harness_dir)
-        .blocks()
-        .ok()
-        .and_then(|blocks| {
-            crate::tracker::ids_in(&blocks, &["review"])
-                .into_iter()
-                .next()
-                .or_else(|| crate::tracker::takeable(&blocks))
-        });
+    let here = root.canonicalize().ok();
+    let claimed = crate::worktree::claims(root, &cfg.layout.harness_dir)
+        .into_iter()
+        .find(|c| c.worktree.canonicalize().ok() == here)
+        .map(|c| c.id);
+    let task = claimed.or_else(|| {
+        crate::tracker::Tracker::open(root, &cfg.layout.harness_dir)
+            .blocks()
+            .ok()
+            .and_then(|blocks| {
+                crate::tracker::ids_in(&blocks, &["review"])
+                    .into_iter()
+                    .next()
+                    .or_else(|| crate::tracker::takeable(&blocks))
+            })
+    });
     let named = task.map(|t| format!(" It is on {t}.")).unwrap_or_default();
     (
         2,
@@ -555,6 +562,36 @@ mod tests {
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("one-writer:"), "{msg}");
         assert!(msg.contains("T-001"), "{msg}");
+    }
+
+    #[test]
+    fn claimed_id_named() {
+        let r = Repo::new();
+        r.queue(
+            ".enallagi",
+            "## [T-001] x\nstatus: review\nblockedBy: none\n\n## [T-002] y\nscope: y.rs\nstatus: ready-for-agent\n",
+        );
+        r.write(".enallagi/enallagi.toml", "");
+        r.commit_all("seed");
+        let cfg = config::load(&r.root).expect("config");
+        // a second lane's claim is not this checkout's
+        let other = tempfile::TempDir::new().expect("tempdir");
+        crate::worktree::claim(&r.root, &cfg, other.path()).expect("claim");
+        r.queue(
+            ".enallagi",
+            "## [T-001] x\nstatus: review\nblockedBy: none\n\n## [T-002] y\nscope: y.rs\nstatus: ready-for-agent\n\n## [T-003] z\nscope: z.rs\nstatus: ready-for-agent\n",
+        );
+        crate::worktree::claim(&r.root, &cfg, &r.root).expect("claim");
+        let child = StdCommand::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        r.write(".enallagi/loop.pid", &child.id().to_string());
+        let _reaper = Reaper(child);
+
+        let (code, msg) = one_writer(&r.root, &input(".enallagi/specs/x/issues/T-001-x.md"));
+        assert_eq!(code, 2, "{msg}");
+        assert!(msg.contains("It is on T-003."), "{msg}");
     }
 
     #[test]

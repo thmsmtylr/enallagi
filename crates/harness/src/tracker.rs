@@ -55,11 +55,16 @@ pub fn ids_in(blocks: &[Block], states: &[&str]) -> Vec<String> {
 
 /// The first `ready-for-agent` ticket, in the order given, whose blockers are all `done`.
 pub fn takeable(blocks: &[Block]) -> Option<String> {
+    takeable_by(blocks, |_| true)
+}
+
+/// `takeable` among the tickets `ok` admits; blockers are still read from every ticket.
+pub fn takeable_by(blocks: &[Block], ok: impl Fn(&Block) -> bool) -> Option<String> {
     let states: HashMap<&str, Option<String>> =
         blocks.iter().map(|b| (b.id.as_str(), state(b))).collect();
     blocks
         .iter()
-        .filter(|b| state(b).as_deref() == Some("ready-for-agent"))
+        .filter(|b| state(b).as_deref() == Some("ready-for-agent") && ok(b))
         .find(|b| {
             block::blockers(b)
                 .iter()
