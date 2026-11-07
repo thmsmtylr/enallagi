@@ -31,6 +31,10 @@ pub struct Runner {
     pub test_only_glob: Vec<String>,
     /// A skip that states no reason.
     pub skip_patterns: Vec<String>,
+    /// Registries the check fetches from, seeded into `[sandbox] hosts`.
+    pub hosts: Vec<String>,
+    /// Caches the check writes, seeded into `[sandbox] write`.
+    pub write: Vec<String>,
 }
 
 pub fn presets() -> Vec<Runner> {
@@ -165,6 +169,8 @@ fn keys(root: &Path, runner: &Runner, origin: &str) -> Vec<Detected> {
             origin,
         ),
         at("layout.skip_patterns", runner.skip_patterns.clone(), origin),
+        at("sandbox.hosts", runner.hosts.clone(), origin),
+        at("sandbox.write", runner.write.clone(), origin),
     ];
     let dirs = source_dirs(root, runner);
     let paths = tracked(root);

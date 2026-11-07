@@ -1484,6 +1484,33 @@ fn init_names_the_file_a_detected_value_came_from() {
 }
 
 #[test]
+fn init_seeds_runner_hosts() {
+    let repo = Repo::new();
+    repo.write("Cargo.toml", "[package]\nname = \"fixture\"\n");
+    repo.write("src/lib.rs", "");
+    repo.commit_all("a cargo tree");
+    let report = install(&repo);
+    let written: toml::Value =
+        toml::from_str(&read(&repo, ".enallagi/enallagi.toml")).expect("parse");
+    let sandbox = &written["sandbox"];
+    let list = |key: &str| -> Vec<String> {
+        sandbox[key]
+            .as_array()
+            .unwrap_or_else(|| panic!("{key}: {sandbox:?}"))
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    };
+    assert_eq!(list("hosts"), ["index.crates.io", "static.crates.io"]);
+    assert_eq!(list("write"), ["~/.cargo/registry", "~/.cargo/git"]);
+    assert!(
+        detected(&report, "sandbox.hosts").contains("(Cargo.toml:1)"),
+        "{:?}",
+        report.notes
+    );
+}
+
+#[test]
 fn two_runners_in_one_tree_write_no_keys() {
     let repo = node_repo();
     repo.write("Cargo.toml", "[package]\nname = \"fixture\"\n");
@@ -1492,6 +1519,8 @@ fn two_runners_in_one_tree_write_no_keys() {
     let written = read(&repo, ".enallagi/enallagi.toml");
     assert!(!written.contains("fail_name"), "{written}");
     assert!(!written.contains("source_root"), "{written}");
+    assert!(!written.contains("crates.io"), "{written}");
+    assert!(!written.contains("registry.npmjs.org"), "{written}");
     assert!(
         !report.notes.iter().any(|n| n.starts_with("detected: ")),
         "{:?}",

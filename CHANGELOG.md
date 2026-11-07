@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- each runner preset gains `hosts` (its registries) and `write` (its caches), and init writes the detected runner's into `[sandbox] hosts` and `[sandbox] write`
 - a red check's output ends with one `sandbox refused <host>:<port> (<reason>)` line per proxy refusal during that check, so the gate's tail names it
 - the adjudicator no longer re-runs a `probe: issue` ticket's `gh issue view` (a lane has no GitHub credentials); it judges the state `enallagi issue` recorded in `output:`
 - a stage's cost and tokens are read from its last `"type":"result"` line when it has one, so claude 2.1.300's trailing `session_state_changed` line no longer halts a run under `BUDGET_USD`

@@ -27,13 +27,13 @@ Every lane, and every check, claims re-run, driver probe and `install-stale` run
 A compound check line (`cd sub && pytest`) runs whole inside it.
 
 - `sandbox.mode`: `"native"` or `"off"`. Default `"native"`. Any other value is refused at load. `off` runs lanes unconfined; `run.start` records the mode in force, and `enallagi events` prints it.
-- `sandbox.hosts`: hosts the egress proxy also allows. An entry is a name or `*.suffix` (subdomains, not the apex), with an optional `:port`, 443 by default. GitHub's API and release hosts and the configured presets' hosts are always allowed.
+- `sandbox.hosts`: hosts the egress proxy also allows. An entry is a name or `*.suffix` (subdomains, not the apex), with an optional `:port`, 443 by default. GitHub's API and release hosts and the configured presets' hosts are always allowed. Init writes the detected runner's registries.
 - `sandbox.ports`: host loopback ports a lane may connect to, for a suite that needs a local database. Default empty.
-- `sandbox.write`: extra writable paths, `~/` expanded. Default empty.
+- `sandbox.write`: extra writable paths, `~/` expanded. Default empty. Init writes the detected runner's caches.
 
 A lane writes only to its checkout, both repositories' git dirs (never `config`, `hooks/` or worktree pointers), a per-spawn `TMPDIR`, the preset's own state paths and `sandbox.write`.
 No lane or check reads or writes `<harness_dir>/holdouts/`, its own or its parent instance's, or `~/.cache/enallagi/holdouts/`, and renaming a parent does not expose them. No lane reads `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc` or `~/.config/gh`: the launcher, not a lane, pushes and calls GitHub.
-Its only egress is the proxy, reached through `HTTPS_PROXY`; each refused host is logged as `sandbox.denied`.
+Its only egress is the proxy, reached through `HTTPS_PROXY`; each refused host is logged as `sandbox.denied`, and a red check's output ends with one `sandbox refused <host>:<port> (<reason>)` line per refusal during it.
 Under `native`, a run refuses to start when the sandbox is unavailable, naming the fix.
 
 ## `[check]`
