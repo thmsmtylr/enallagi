@@ -1284,7 +1284,25 @@ fn security(ctx: &mut GateCtx) -> GateOutcome {
         Err(e) => return halted(ctx, format!("security: {e}")),
     };
     if leaks.is_empty() {
-        return pass(format!("{task} added no secret"));
+        return match advisories(ctx, &base, &task) {
+            Err(e) => halted(ctx, format!("security: {e}")),
+            Ok(new) if new.is_empty() => pass(format!("{task} added no secret and no advisory")),
+            Ok(new) => {
+                let why = format!(
+                    "a dependency change adds an advisory the base did not carry: {}; bump past it",
+                    new.join(", ")
+                );
+                force_back(
+                    ctx,
+                    "security",
+                    &task,
+                    "ready-for-agent",
+                    &format!("the verifier returned done and the security gate rejected it: {why}"),
+                    &format!("chore({task}): harness security gate rejected a done verdict"),
+                    &format!("{task} was forced back to ready by the security gate: {why}."),
+                )
+            }
+        };
     }
     let why = format!(
         "a secret in the task's commits: {}; the history needs rewriting by hand",
@@ -1339,6 +1357,57 @@ fn gitleaks(ctx: &GateCtx, base: &str) -> Result<Vec<String>, String> {
             )
         })
         .collect())
+}
+
+// an advisory charged to the lane is one its lockfile change brought: present at HEAD, not at base
+fn advisories(ctx: &GateCtx, base: &str, task: &str) -> Result<Vec<String>, String> {
+    let locks: Vec<String> = task_files(ctx, base, task, "")
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|f| {
+            let name = Path::new(f).file_name().and_then(|n| n.to_str());
+            name.is_some_and(|n| crate::security::LOCKFILES.contains(&n))
+                && ctx.root.join(f).is_file()
+        })
+        .collect();
+    if locks.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dir = &ctx.cfg.layout.harness_dir;
+    let reports = ctx.cache.join("security");
+    let io = |e: std::io::Error| format!("{}: {e}", reports.display());
+    std::fs::create_dir_all(&reports).map_err(io)?;
+    let scratch = tempfile::Builder::new()
+        .prefix("run-")
+        .tempdir_in(&reports)
+        .map_err(io)?;
+    let mut new = Vec::new();
+    for (i, f) in locks.iter().enumerate() {
+        let out = |side: &str| scratch.path().join(format!("{side}-{i}.json"));
+        let osv = |lock: &Path, report: PathBuf| {
+            crate::security::osv(ctx.root, dir, &ctx.cache, lock, &report)
+        };
+        let head = osv(&ctx.root.join(f), out("head"))?;
+        // the same file name, since osv-scanner picks its parser by name
+        let at_base = match git(ctx.root, &["show", &format!("{base}:{f}")]) {
+            Ok(text) => {
+                let copy = scratch
+                    .path()
+                    .join(format!("base-{i}"))
+                    .join(Path::new(f).file_name().unwrap_or_default());
+                std::fs::create_dir_all(copy.parent().unwrap_or(scratch.path())).map_err(io)?;
+                std::fs::write(&copy, text).map_err(io)?;
+                osv(&copy, out("base"))?
+            }
+            Err(_) => Vec::new(),
+        };
+        for (name, version, id) in head {
+            if !at_base.iter().any(|(n, _, a)| *n == name && *a == id) {
+                new.push(format!("{f}: {name} {version} {id}"));
+            }
+        }
+    }
+    Ok(new)
 }
 
 fn added_ids(base: &[LockEntry], head: &[LockEntry]) -> Vec<String> {
@@ -2476,6 +2545,87 @@ mod tests {
         let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass && out.halt, "{}", out.reason);
         assert!(out.reason.contains("enallagi init"), "{}", out.reason);
+    }
+
+    // records its argv and reports GHSA-test-0001 on `bad 1.0` for a lockfile that names `bad`
+    fn stub_osv(env: &Env) {
+        let cache = env.cache.path();
+        let pin = crate::security::default_pins()
+            .into_iter()
+            .find(|p| p.id == "osv-scanner" && p.platform == crate::security::platform())
+            .expect("an osv-scanner pin for this platform");
+        let c = cache.display();
+        std::fs::write(
+            crate::security::tool_path(&pin, cache),
+            format!(
+                r#"#!/bin/sh
+printf '%s\n' "$@" >> {c}/osv.argv
+lock= out=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --lockfile) lock=$2 ;;
+    --output) out=$2 ;;
+  esac
+  shift
+done
+if grep -q bad "$lock"; then
+  echo '{{"results":[{{"packages":[{{"package":{{"name":"bad","version":"1.0"}},"vulnerabilities":[{{"id":"GHSA-test-0001"}}]}}]}}]}}' > "$out"
+  exit 1
+fi
+echo '{{"results":[]}}' > "$out"
+"#
+            ),
+        )
+        .expect("stub osv-scanner");
+    }
+
+    // Cargo.lock holds `base_lock` at base and `head_lock` at HEAD
+    fn osv_env(base_lock: &str, head_lock: &str) -> (Env, String) {
+        let (env, _) = leak_env("[]", 0);
+        stub_osv(&env);
+        env.repo.write("Cargo.lock", base_lock);
+        env.repo.commit_all("lock");
+        let base = env.head();
+        env.repo.write("Cargo.lock", head_lock);
+        env.repo.commit_all("T-001 bump");
+        (env, base)
+    }
+
+    #[test]
+    fn security_new_advisory() {
+        let (mut env, base) = osv_env("good 1.0\n", "bad 1.0\n");
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass && !out.halt, "{}", out.reason);
+        assert!(
+            out.reason.contains("bad 1.0 GHSA-test-0001"),
+            "{}",
+            out.reason
+        );
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
+    }
+
+    #[test]
+    fn security_base_advisory() {
+        let (mut env, base) = osv_env("bad 1.0\n", "bad 1.0\nother 2.0\n");
+        env.repo.write(".enallagi/osv-scanner.toml", "");
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        let argv = std::fs::read_to_string(env.cache.path().join("osv.argv")).expect("argv");
+        let config = env.repo.root.join(".enallagi/osv-scanner.toml");
+        assert!(
+            argv.contains(&format!("--config\n{}\n", config.display())),
+            "{argv}"
+        );
+        assert!(argv.contains("--format\njson\n"), "{argv}");
+    }
+
+    #[test]
+    fn security_skips_osv_untouched() {
+        let (mut env, base) = leak_env("[]", 0);
+        stub_osv(&env);
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        assert!(!env.cache.path().join("osv.argv").exists());
     }
 
     #[test]

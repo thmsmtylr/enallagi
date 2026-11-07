@@ -138,16 +138,91 @@ pub fn gitleaks(
         .arg(at("gitleaksignore"))
         .output()
         .map_err(|e| format!("{}: {e}", bin.display()))?;
-    let findings = fs::read_to_string(report)
+    read_report("gitleaks", &out, report)
+}
+
+// ponytail: the common lockfiles and manifests by name; one osv-scanner reads that is missing here goes unscanned
+pub const LOCKFILES: &[&str] = &[
+    "Cargo.lock",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "bun.lock",
+    "composer.lock",
+    "Gemfile.lock",
+    "go.mod",
+    "gradle.lockfile",
+    "pom.xml",
+    "mix.lock",
+    "Pipfile.lock",
+    "poetry.lock",
+    "pdm.lock",
+    "uv.lock",
+    "requirements.txt",
+    "pubspec.lock",
+    "renv.lock",
+    "packages.lock.json",
+    "conan.lock",
+];
+
+/// `(package, version, advisory id)` for each advisory the pinned osv-scanner reports on `lockfile`,
+/// which it reads by file name.
+pub fn osv(
+    root: &Path,
+    dir: &str,
+    cache: &Path,
+    lockfile: &Path,
+    report: &Path,
+) -> Result<Vec<(String, String, String)>, String> {
+    let pins = crate::skills::read_lock(root, dir)
+        .map_err(|e| e.to_string())?
+        .tool;
+    let bin = tool(&pins, "osv-scanner", &platform(), cache)?;
+    let mut cmd = Command::new(&bin);
+    cmd.current_dir(root)
+        .args(["scan", "source", "--lockfile"])
+        .arg(lockfile)
+        .args(["--format", "json", "--output"])
+        .arg(report);
+    let config = crate::config::instance_path(root, dir, "osv-scanner.toml");
+    if config.is_file() {
+        cmd.arg("--config").arg(config);
+    }
+    let out = cmd
+        .output()
+        .map_err(|e| format!("{}: {e}", bin.display()))?;
+    let report: serde_json::Value = read_report("osv-scanner", &out, report)?;
+    let mut found = Vec::new();
+    let none = Vec::new();
+    for result in report["results"].as_array().unwrap_or(&none) {
+        for pkg in result["packages"].as_array().unwrap_or(&none) {
+            let s = |k: &str| pkg["package"][k].as_str().unwrap_or("?").to_string();
+            for vuln in pkg["vulnerabilities"].as_array().unwrap_or(&none) {
+                let id = vuln["id"].as_str().unwrap_or("?").to_string();
+                found.push((s("name"), s("version"), id));
+            }
+        }
+    }
+    Ok(found)
+}
+
+// exit 0 or 1 with a report that parses is a result; anything else names the exit and the stderr tail
+fn read_report<T: serde::de::DeserializeOwned>(
+    name: &str,
+    out: &std::process::Output,
+    report: &Path,
+) -> Result<T, String> {
+    let parsed = fs::read_to_string(report)
         .ok()
-        .and_then(|t| serde_json::from_str::<Vec<serde_json::Value>>(&t).ok());
-    match (out.status.code(), findings) {
-        (Some(0 | 1), Some(findings)) => Ok(findings),
+        .and_then(|t| serde_json::from_str::<T>(&t).ok());
+    match (out.status.code(), parsed) {
+        (Some(0 | 1), Some(parsed)) => Ok(parsed),
         (code, _) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
             let tail: Vec<&str> = stderr.lines().rev().take(5).collect();
             Err(format!(
-                "gitleaks exited {} with no readable report: {}",
+                "{name} exited {} with no readable report: {}",
                 code.map_or("on a signal".to_string(), |c| c.to_string()),
                 tail.into_iter().rev().collect::<Vec<_>>().join(" / ")
             ))
@@ -246,6 +321,91 @@ mod tests {
         crate::skills::write_lock(&repo.root, ".enallagi", &lock).unwrap();
         let again = fs::read_to_string(repo.root.join(".enallagi/harness.lock")).unwrap();
         assert_eq!(again, text);
+    }
+
+    // run by hand: the real scanners on a planted token and a known-vulnerable smallvec
+    #[test]
+    #[ignore = "downloads gitleaks and osv-scanner"]
+    fn live_scan_planted_key() {
+        use crate::events::{Log, Writer};
+        let repo = crate::fixture::Repo::new();
+        let cache = tempfile::tempdir().unwrap();
+        let lock = |v: &str| {
+            format!("version = 3\n\n[[package]]\nname = \"smallvec\"\nversion = \"{v}\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n")
+        };
+        repo.write(".enallagi/.gitignore", "events.jsonl\n");
+        repo.write(".enallagi/enallagi.toml", "[check]\ncommand = \"true\"\n");
+        repo.write(".enallagi/gitleaks.toml", "[extend]\nuseDefault = true\n");
+        let pins = crate::skills::Lock {
+            tool: default_pins(),
+            ..Default::default()
+        };
+        crate::skills::write_lock(&repo.root, ".enallagi", &pins).unwrap();
+        repo.write("Cargo.lock", &lock("1.13.2"));
+        let done = "## [T-001] bump\nstatus: done\nverdict: verified by verifier\n";
+        repo.queue(".enallagi", done);
+        repo.commit_all("setup");
+        let baseline = repo.root.join(".enallagi").join(BASELINE);
+        fs::create_dir_all(baseline.parent().unwrap()).unwrap();
+        let old =
+            gitleaks(&repo.root, ".enallagi", cache.path(), &[], &baseline).expect("baseline");
+        println!("baseline: {} finding(s)", old.len());
+        repo.commit_all("baseline");
+
+        let cfg = crate::config::load(&repo.root).unwrap();
+        let mut writer = Writer::new(Log::open(&repo.root.join(".enallagi")));
+        let (mut warnings, mut halts, mut dry) = (Vec::new(), Vec::new(), 0);
+        let mut gate = |base: &str| {
+            let out = crate::gates::run(
+                "security",
+                &mut crate::gates::GateCtx {
+                    root: &repo.root,
+                    cfg: &cfg,
+                    task: Some("T-001".into()),
+                    iter_base: Some(base.into()),
+                    state_base: Some(base.into()),
+                    stage_output: String::new(),
+                    events: &mut writer,
+                    dry_run: false,
+                    warnings: &mut warnings,
+                    halts: &mut halts,
+                    dry_rounds: &mut dry,
+                    cache: cache.path().to_path_buf(),
+                },
+            );
+            println!("pass={} halt={} {}", out.pass, out.halt, out.reason);
+            out
+        };
+
+        let base = crate::git::head(&repo.root).unwrap();
+        repo.write("Cargo.lock", &lock("1.6.0"));
+        repo.commit_all("T-001 bump smallvec");
+        let out = gate(&base);
+        assert!(!out.pass && !out.halt && out.reason.contains("smallvec 1.6.0"));
+
+        repo.queue(".enallagi", done);
+        repo.commit_all("verdict");
+        let base = crate::git::head(&repo.root).unwrap();
+        // split so this file never holds a token-shaped string
+        let token = format!("{}{}", "gh", "p_R8xQ2mZ7vK4pL9wN3tY6uH1jB5cF0dG2sA8eX");
+        repo.write("src/token.txt", &format!("GITHUB_TOKEN={token}\n"));
+        repo.commit_all("T-001 token");
+        let out = gate(&base);
+        assert!(out.halt && !out.reason.contains(&token), "{}", out.reason);
+        let ticket = crate::tracker::Tracker::open(&repo.root, ".enallagi")
+            .get("T-001")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            crate::block::field(&ticket, "status").as_deref(),
+            Some("ready-for-human")
+        );
+
+        // a redacted baseline holding the leak lets the same range pass
+        let all = gitleaks(&repo.root, ".enallagi", cache.path(), &[], &baseline).expect("rescan");
+        println!("rebaselined: {} finding(s)", all.len());
+        repo.queue(".enallagi", done);
+        assert!(gate(&base).pass);
     }
 
     #[test]
