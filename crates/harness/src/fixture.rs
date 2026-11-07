@@ -72,7 +72,7 @@ pub fn seed_scanners(cache: &Path) {
 }
 
 /// A gitleaks at the pinned path: it records its argv in `<cache>/gitleaks.argv`, then writes `report`
-/// to `--report-path` and exits `exit`, or writes `[]` and exits 0 when `--baseline-path` holds a finding.
+/// to `--report-path` and exits `exit`, or writes `[]` and exits 0 when `--baseline-path` holds that report.
 pub fn stub_gitleaks(cache: &Path, report: &str, exit: i32) {
     seed_scanners(cache);
     fs::write(cache.join("gitleaks.json"), report).expect("write the stub report");
@@ -96,7 +96,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 echo scanner-stderr >&2
-if [ -n "$base" ] && grep -q RuleID "$base" 2>/dev/null; then echo '[]' > "$out"; exit 0; fi
+if [ -n "$base" ] && cmp -s "$base" {c}/gitleaks.json; then echo '[]' > "$out"; exit 0; fi
 cp {c}/gitleaks.json "$out"
 exit {exit}
 "#

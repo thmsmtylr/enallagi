@@ -3024,19 +3024,26 @@ mod tests {
 
     #[test]
     fn security_baselined_leak() {
-        let (mut env, base) = leak_env(LEAK, 1);
-        let baseline = env
-            .repo
-            .root
-            .join(".enallagi/security/gitleaks-baseline.json");
-        std::fs::write(&baseline, LEAK).expect("baseline");
-        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
-        assert!(out.pass, "{}", out.reason);
-        let argv = std::fs::read_to_string(env.cache.path().join("gitleaks.argv")).expect("argv");
-        assert!(
-            argv.contains(&format!("--baseline-path\n{}\n", baseline.display())),
-            "{argv}"
-        );
+        // the stub drops findings only when the baseline holds them, as gitleaks does
+        for (held, passes) in [
+            (LEAK.replace("abc123", "def456"), false),
+            (LEAK.into(), true),
+        ] {
+            let (mut env, base) = leak_env(LEAK, 1);
+            let baseline = env
+                .repo
+                .root
+                .join(".enallagi/security/gitleaks-baseline.json");
+            std::fs::write(&baseline, held).expect("baseline");
+            let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+            assert_eq!(out.pass, passes, "{}", out.reason);
+            let argv =
+                std::fs::read_to_string(env.cache.path().join("gitleaks.argv")).expect("argv");
+            assert!(
+                argv.contains(&format!("--baseline-path\n{}\n", baseline.display())),
+                "{argv}"
+            );
+        }
     }
 
     #[test]

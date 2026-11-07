@@ -3537,6 +3537,17 @@ fn run_start_records_sandbox() {
         "bwrap"
     };
     assert_eq!(sandbox, Some(want), "{events:#?}");
+
+    let toml = r.root.join(".enallagi/enallagi.toml");
+    let text = std::fs::read_to_string(&toml).expect("toml");
+    std::fs::write(&toml, format!("{text}\n[sandbox]\nmode = \"off\"\n")).expect("toml");
+    r.commit_all("off");
+    let (_, events) = try_go(&r, &opts(1));
+    let off = events.iter().rev().find_map(|e| match &e.kind {
+        Kind::RunStart { sandbox, .. } => Some(sandbox.as_str()),
+        _ => None,
+    });
+    assert_eq!(off, Some("off"), "{events:#?}");
 }
 
 const EXTRA_SKILL: &str = "
@@ -5661,13 +5672,16 @@ fn denial_emits_event() {
     }
     let toml = format!("{}\n[sandbox]\nmode = \"native\"\n", base_toml(""));
     let r = repo(&toml, TASKS);
-    let curl = "curl -s -o /dev/null -x \"$HTTPS_PROXY\" https://example.com/\n";
+    let curl = "curl -s -o /dev/null -w '%{http_connect}' -x \"$HTTPS_PROXY\" https://example.com/ >connect.txt\n";
     script(&r, "src/fakeagent.sh", &format!("{curl}{QUIET}"));
     r.commit_all("agent");
     let (_, events) = try_go(&r, &opts(1));
+    let code = std::fs::read_to_string(r.root.join("connect.txt")).unwrap_or_default();
+    assert_eq!(code, "403");
     assert!(
         events.iter().any(|e| matches!(&e.kind,
-            Kind::SandboxDenied { host, port: 443, .. } if host == "example.com")),
+            Kind::SandboxDenied { host, port: 443, reason }
+                if host == "example.com" && reason == "not on the allowlist")),
         "{events:#?}"
     );
 }
