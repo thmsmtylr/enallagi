@@ -34,8 +34,6 @@ const IMPLEMENTER: &str = "Read __CONTEXT_FILE__, __SPEC__, LEARNINGS.md, your t
 
 const VERIFIER: &str = "Read __CONTEXT_FILE__, __SPEC__ and every ticket at review (`enallagi tasks ids-at review`). Read the rules this loop earned with `sed -n '/^## Earned rules/,/^## /p' __ENALLAGI_DIR__/DECISIONS.md`. Your role is defined in __ENALLAGI_DIR__/run/roles/verifier.md: read that file first and follow it exactly. Verify every ticket at review. Promote to done or reject to ready-for-agent with concrete reasons; this loop commits the verdict. If nothing is at review, say so in one line and stop; that is a valid outcome, not something to escalate. Then stop.";
 
-const DECOMPOSER: &str = "Read __CONTEXT_FILE__. Your role is defined in __ENALLAGI_DIR__/run/roles/decomposer.md: read that file first and follow it exactly. Break __SPEC__ into `to-tickets` drafts, `NN-<slug>.md` in the `issues/` directory beside it, and run `enallagi tasks check` on the spec until it exits 0. Never edit __SPEC__, never write a trailer, never commit: this loop numbers, queues and commits your drafts. Then report one line per quiz question and stop.";
-
 const GENERIC: &str = "Read __CONTEXT_FILE__ and LEARNINGS.md. Your role is defined in __ENALLAGI_DIR__/run/roles/__ROLE__.md: read that file first and follow it exactly. Then stop.";
 
 // one ticket reads its own spec; any other count reads the spec beside each
@@ -56,7 +54,6 @@ fn prompt_for(role: &str, cfg: &Config, spec: &str) -> String {
         "adjudicator" => ADJUDICATOR.to_string(),
         "implementer" => IMPLEMENTER.to_string(),
         "verifier" => VERIFIER.to_string(),
-        "decomposer" => DECOMPOSER.to_string(),
         other => GENERIC.replace("__ROLE__", other),
     };
     config::subst(&format!("{LANE} {body}").replace("__SPEC__", spec), cfg)
@@ -1575,6 +1572,10 @@ impl<'a> Loop<'a> {
             _ => spec_for(self.root, self.cfg, &ticket),
         };
         let mut prompt = prompt_for(role, self.cfg, &spec);
+        // the protocol lives in the role alone, so the decomposer eval's ablation measures it
+        if role == "decomposer" {
+            prompt.push_str(&format!(" The spec to decompose is {spec}."));
+        }
         if role == "implementer" {
             if let Some(clause) = task.and_then(|t| self.prior_attempts(t)) {
                 prompt.push(' ');

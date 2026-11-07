@@ -557,12 +557,18 @@ fn decomposer_ablate_strips_role() {
         .output()
         .expect("run ablate.sh");
     assert!(out.status.success(), "{out:?}");
-    let role = fs::read_to_string(fixture.root.join(".enallagi/roles/decomposer.md")).unwrap();
     let shipped = fs::read_to_string(repo.join("roles/decomposer.md")).unwrap();
     let body = shipped.split("\n---\n").nth(1).expect("frontmatter");
-    let kept: Vec<&str> = body
-        .lines()
-        .filter(|l| !l.trim().is_empty() && role.contains(l))
-        .collect();
-    assert!(kept.is_empty(), "{kept:?}");
+    // the adapter's agent file is a second copy an agent reads as readily as the role
+    for rel in [
+        ".enallagi/roles/decomposer.md",
+        ".enallagi/adapters/claude/agents/decomposer.md",
+    ] {
+        let role = fs::read_to_string(fixture.root.join(rel)).expect(rel);
+        let kept: Vec<&str> = body
+            .lines()
+            .filter(|l| !l.trim().is_empty() && role.contains(l))
+            .collect();
+        assert!(kept.is_empty(), "{rel}: {kept:?}");
+    }
 }

@@ -4443,7 +4443,10 @@ fn decomposing(r: &Repo, second_blocked: &str, adjudicate: &str) {
     let decompose = script(
         r,
         "src/fakedecompose.sh",
-        &format!("{}{QUIET}", drafts(r, second_blocked)),
+        &format!(
+            "printf '%s' \"$1\" >.git/decompose-prompt\n{}{QUIET}",
+            drafts(r, second_blocked)
+        ),
     );
     let adj = adjudicator(r, adjudicate);
     let roles = format!(
@@ -4467,6 +4470,11 @@ fn decompose_queues_spec() {
     let (digest, events) = go(&r, &opts(1));
     assert!(digest.halts.is_empty(), "{digest:#?}");
     assert_eq!(stages_started(&events), ["decompose", "adjudicate"]);
+    let prompt = std::fs::read_to_string(r.root.join(".git/decompose-prompt")).expect("the prompt");
+    assert!(
+        prompt.contains(&format!("The spec to decompose is {}.", spec(&r))),
+        "{prompt}"
+    );
     let t = enallagi::tracker::Tracker::open(&r.root, ".enallagi");
     let two = t.get("T-002").unwrap().expect("T-002");
     assert_eq!(enallagi::block::blockers(&two), ["T-001"]);
