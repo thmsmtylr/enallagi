@@ -213,7 +213,7 @@ The state is one object, declared in `crates/harness/src/fixture/twin.rs`:
 
 - `repo` (`owner/name`), `origin` (the bare remote's path) and `default_branch`.
 - `pulls`: `number`, `url`, `title`, `body`, `head`, `base`, `head_sha`, `state` (`OPEN`, `MERGED` or `CLOSED`), `round`, `checks` (in `statusCheckRollup`'s shape), `reviews` and `comments` (`author`, `typename`, `body`, `url`), and `threads` (`id`, `resolved`, `outdated`, and `comments` with `author`, `typename`, `path`, `line`, `start_line`, `body` and `url`).
-- `script`: `{head, round, checks}` entries; `head` is a branch or `*`. When a pull reaches the round, its checks are replaced.
+- `script`: `{head, round, checks, bots}` entries; `head` is a branch or `*`. When a pull reaches the round, its checks are replaced and each of `bots` (`{bot, path, line, text}`) is posted.
 - `responses`: `{args, stdout, stderr, exit, sleep}`, matched on exact argv before any served call. `sleep` hangs the call that many seconds in a child `sleep`, whose pid goes in `sleepers`.
 - `calls`: every argv the twin was handed, in order.
 
@@ -228,3 +228,28 @@ Served calls:
 - `api graphql` dispatched on the document's operation name: `ReviewThreads` (the review read) and `SettleThread` (reply and resolve).
 
 Any other call, or an operation no handler names, exits 1 with `twin: no response for gh <args>`.
+
+### Review-bot twins
+
+A scripted finding is rendered through its bot's recording in `crates/harness/src/fixture/bots.json`.
+Each finding becomes a review thread in the bot's shape.
+A bot whose marker sits in an issue comment also rewrites that one comment in place, listing the round's findings.
+
+| Bot | Login | Marker | Where the marker sits | Source | Date |
+| --- | --- | --- | --- | --- | --- |
+| Kilo | `kilo-code-bot` | `<!-- kilo-review -->` | issue comment | thmsmtylr/enallagi#94, recorded | 2026-11-07 |
+| Greptile | `greptile-apps` | `<!-- greptile_summary -->` | issue comment | thmsmtylr/enallagi#92, recorded | 2026-11-07 |
+| Bugbot | `cursor` | `<!-- BUGBOT_BUG_ID -->` | review thread | marker table, unrecorded | 2026-11-06 |
+| CodeRabbit | `coderabbitai` | `<!-- cr-comment:v1 -->` | review thread | marker table, unrecorded | 2026-11-06 |
+| Claude | `claude` | `<!-- bhfn:1:... -->` | review thread | marker table, unrecorded | 2026-11-06 |
+
+An unrecorded shape carries `"recorded": false`, and its login is a guess.
+
+To refresh a recording, read the bot's newest comments on a real pull request:
+
+```sh
+gh api repos/<owner>/<repo>/pulls/<n>/comments --jq '.[] | select(.user.type == "Bot")'
+gh api repos/<owner>/<repo>/issues/<n>/comments --jq '.[] | select(.user.type == "Bot")'
+```
+
+Then replace the bot's `thread`, `summary` and `row` with the new text, put `{path}`, `{line}`, `{text}`, `{url}`, `{count}` and `{rows}` where the finding's values were, and set `source`, `date` and `recorded`.

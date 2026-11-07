@@ -3884,6 +3884,42 @@ fn a_run_without_pr_per_task_opens_nothing() {
 }
 
 #[test]
+fn bot_finding_read() {
+    let p = pulls("", "exit 0\n");
+    let mut state = twin::load(&p.twin);
+    state.script = vec![twin::Round {
+        head: "*".to_string(),
+        round: 0,
+        bots: vec![twin::Finding {
+            bot: "kilo".to_string(),
+            path: "src/thing.ts".to_string(),
+            line: 1,
+            text: "the thing drops its offset".to_string(),
+        }],
+        ..twin::Round::default()
+    }];
+    twin::save(&p.twin, &state);
+    let (_, out) = p.run(&["--pr-per-task"]);
+    assert!(out.contains("pull/1"), "{out}");
+    let (_, out) = p.run(&[]);
+    let tasks = tasks_text(&p.repo);
+    assert!(
+        tasks.contains("the thing drops its offset")
+            && tasks.contains("Reply with `@kilocode-bot fix it`"),
+        "{tasks}\n{out}"
+    );
+    let pull = &twin::load(&p.twin).pulls[0];
+    assert_eq!(pull.threads[0].comments[0].author, "kilo-code-bot");
+    assert!(
+        pull.comments
+            .iter()
+            .any(|c| c.author == "kilo-code-bot" && c.body.starts_with("<!-- kilo-review -->")),
+        "{:?}",
+        pull.comments
+    );
+}
+
+#[test]
 fn pr_per_task_config_opens_one() {
     let p = pulls("\n[pr]\nper_task = true\n", "exit 0\n");
     let (_, out) = p.run(&[]);

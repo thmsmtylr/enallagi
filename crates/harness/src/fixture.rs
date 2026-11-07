@@ -271,6 +271,41 @@ mod tests {
     }
 
     #[test]
+    fn bot_recordings_are_dated() {
+        let bots = twin::recordings();
+        let names: Vec<&str> = bots.iter().map(|b| b.bot.as_str()).collect();
+        assert_eq!(
+            names,
+            ["kilo", "greptile", "bugbot", "coderabbit", "claude"]
+        );
+        for b in &bots {
+            let template = if b.posts == "thread" {
+                &b.thread
+            } else {
+                &b.summary
+            };
+            assert!(template.contains(&b.marker), "{} carries no marker", b.bot);
+            assert!(b.source.starts_with("https://github.com/"), "{}", b.bot);
+            let date = b.date.as_bytes();
+            assert!(
+                date.len() == 10
+                    && date[4] == b'-'
+                    && date[7] == b'-'
+                    && date.iter().filter(|c| c.is_ascii_digit()).count() == 8,
+                "{}: {}",
+                b.bot,
+                b.date
+            );
+        }
+        let recorded: Vec<&str> = bots
+            .iter()
+            .filter(|b| b.recorded)
+            .map(|b| b.bot.as_str())
+            .collect();
+        assert_eq!(recorded, ["kilo", "greptile"]);
+    }
+
+    #[test]
     fn queue_reads_back() {
         let r = Repo::new();
         r.queue(

@@ -79,6 +79,40 @@ pub struct Round {
     pub head: String,
     pub round: u32,
     pub checks: Vec<Value>,
+    pub bots: Vec<Finding>,
+}
+
+// one finding a review bot posts, rendered through that bot's recording
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Finding {
+    pub bot: String,
+    pub path: String,
+    pub line: u64,
+    pub text: String,
+}
+
+/// A review bot's recorded shape: `thread` renders each finding as a review thread, and `summary`
+/// (with `{count}` and `{rows}`, one `row` per finding) is the issue comment it edits in place.
+/// `posts` is where its marker sits: `comment` or `thread`. `recorded` is false for a shape taken
+/// from the marker table rather than a `gh api` response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Recording {
+    pub bot: String,
+    pub login: String,
+    pub typename: String,
+    pub recorded: bool,
+    pub source: String,
+    pub date: String,
+    pub marker: String,
+    pub posts: String,
+    pub summary: String,
+    pub row: String,
+    pub thread: String,
+}
+
+pub fn recordings() -> Vec<Recording> {
+    serde_json::from_str(include_str!("bots.json")).expect("twin: bots.json")
 }
 
 // a canned answer for a call with no state, matched on exact argv
@@ -226,8 +260,76 @@ fn apply(state: &mut State, i: usize) {
         .filter(|r| (r.head == "*" || r.head == pull.head) && r.round == pull.round)
         .cloned()
         .collect();
+    let bots = recordings();
     for round in due {
         state.pulls[i].checks = round.checks;
+        for b in &bots {
+            let found: Vec<&Finding> = round.bots.iter().filter(|f| f.bot == b.bot).collect();
+            if !found.is_empty() {
+                post(&mut state.pulls[i], b, &found);
+            }
+        }
+        if let Some(f) = round
+            .bots
+            .iter()
+            .find(|f| !bots.iter().any(|b| b.bot == f.bot))
+        {
+            panic!("twin: no recording for bot {}", f.bot);
+        }
+    }
+}
+
+fn render(template: &str, f: &Finding, url: &str) -> String {
+    template
+        .replace("{path}", &f.path)
+        .replace("{line}", &f.line.to_string())
+        .replace("{text}", &f.text)
+        .replace("{url}", url)
+}
+
+// a thread per finding, then the bot's one summary rewritten in place
+fn post(pull: &mut Pull, b: &Recording, found: &[&Finding]) {
+    let mut rows = Vec::new();
+    for f in found {
+        let n = pull.threads.len() + 1;
+        let url = format!("{}#discussion_r{n}", pull.url);
+        pull.threads.push(Thread {
+            id: format!("PRRT_twin_{}_{n}", pull.number),
+            comments: vec![Remark {
+                author: b.login.clone(),
+                typename: b.typename.clone(),
+                path: Some(f.path.clone()),
+                line: Some(f.line),
+                body: render(&b.thread, f, &url),
+                url: url.clone(),
+                ..Remark::default()
+            }],
+            ..Thread::default()
+        });
+        rows.push(render(&b.row, f, &url));
+    }
+    if b.summary.is_empty() {
+        return;
+    }
+    let body = b
+        .summary
+        .replace("{count}", &found.len().to_string())
+        .replace("{rows}", &rows.join("\n"));
+    match pull
+        .comments
+        .iter_mut()
+        .find(|c| c.body.contains(&b.marker))
+    {
+        Some(c) => c.body = body,
+        None => {
+            let url = format!("{}#issuecomment-{}", pull.url, pull.comments.len() + 1);
+            pull.comments.push(Note {
+                author: b.login.clone(),
+                typename: b.typename.clone(),
+                body,
+                url,
+            });
+        }
     }
 }
 

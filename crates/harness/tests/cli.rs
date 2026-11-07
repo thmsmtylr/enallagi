@@ -2572,8 +2572,24 @@ fn twin_push_round() {
         checks: vec![
             serde_json::json!({"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}),
         ],
+        bots: vec![enallagi::fixture::twin::Finding {
+            bot: "greptile".to_string(),
+            path: "src/date.rs".to_string(),
+            line: 4,
+            text: "The offset is dropped".to_string(),
+        }],
     }];
     let (_, path) = enallagi::fixture::twin::install(&dir.path().join("tools"), BIN, &state);
+    let greptile = |path: &std::path::Path| {
+        let state = enallagi::fixture::twin::load(path);
+        state.pulls[0]
+            .comments
+            .iter()
+            .any(|c| c.author == "greptile-apps" && c.body.contains("<!-- greptile_summary -->"))
+    };
+    let out = twin_call(&path, &["pr", "view", "7", "--json", "url"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(!greptile(&path), "posted before the push");
 
     git(
         &work,
@@ -2603,6 +2619,11 @@ fn twin_push_round() {
     assert_eq!(pull.head_sha, git(&work, &["rev-parse", "HEAD"]));
     assert_eq!(pull.checks[0]["conclusion"], "SUCCESS");
     assert!(String::from_utf8_lossy(&out.stdout).contains(&pull.head_sha));
+    assert!(greptile(&path), "{:?}", pull.comments);
+    assert_eq!(pull.threads.len(), 2, "{:?}", pull.threads);
+    assert!(pull.threads[1].comments[0]
+        .body
+        .contains("The offset is dropped"));
 }
 
 #[test]
