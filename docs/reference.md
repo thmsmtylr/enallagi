@@ -37,6 +37,13 @@ After verify passes, the launcher fast-forward pushes the round's commits to `<b
 A range holding a state commit, or a remote head that moved, refuses the push: the ticket goes back to `open` with the reason under `gate:`.
 The implementer answers each `finding:` with one `answer:` line, `accept <test>` or `reject <concept>: <command>`, and the `findings` gate forces back a `done` that leaves one unanswered.
 After the push, each reject is appended to `.out-of-scope/<concept>.md` in Pocock's format; a concept file that exists gains only a `## Prior requests` line.
+The launcher then replies once per finding answered since the last push, marked `<!-- enallagi:F-<n> -->`: a thread reply on a thread (an accept names the fixing sha and the test, a reject the concept and the command), and one comment listing the other findings by URL. Each reply's URL is written as `settled: F-<n> <url>`.
+Each push also asks every `[respond] rereview` reviewer again with `gh pr edit <pr> --add-reviewer <r>`; a failure is a warning.
+Replies, comments, resolves and re-review requests run with `GH_TOKEN` set to the value of the variable `[respond] token_env` names, when it is set.
+The poll judges nothing on a ticket whose `pushed:` time is less than `[respond] quiet` ago. When no pipeline's `when` holds and a pushed ticket is inside its window, the launcher sleeps until the earliest window closes and iterates.
+Once judged, the poll re-reads each answered thread and resolves only the ones still unresolved, so a thread a bot resolved itself is never resolved again.
+A new finding with the same author, path and words as one the ticket rejected is not routed: the launcher replies with the rejection's URL, resolves its thread, writes `settled: F-<n> <url> for <new url>` and starts no round.
+The loop stops on the first rule that holds: new in-scope findings on a ticket that has had `[respond] max_rounds` rounds set it `ready-for-human` with gate `respond: max_rounds (<n>) reached, <k> findings open` and `respond: max_rounds`; no new finding, a `SUCCESS` check rollup and every thread resolved write `respond: clean at <sha>` and leave it `open` for a person, or spec 6's merge mode, to merge.
 A finding is already carried, and not routed again, when any ticket (`wontfix` included) holds its URL or its key, or an `.out-of-scope/` file lists its URL under `## Prior requests`.
 `enallagi review <pr>` reads a pull request no ticket owns, and every finding there lands as one `needs-triage` ticket: an unresolved thread (carrying its thread id), a review body, a plain comment, or a failed check on the head.
 The same finding raised twice on the same lines is one ticket.
@@ -263,9 +270,9 @@ The state is one object, declared in `crates/harness/src/fixture/twin.rs`:
 
 - `repo` (`owner/name`), `origin` (the bare remote's path) and `default_branch`.
 - `pulls`: `number`, `url`, `title`, `body`, `head`, `base`, `head_sha`, `state` (`OPEN`, `MERGED` or `CLOSED`), `round`, `checks` (in `statusCheckRollup`'s shape), `reviews` and `comments` (`author`, `typename`, `body`, `url`), and `threads` (`id`, `resolved`, `outdated`, and `comments` with `author`, `typename`, `path`, `line`, `start_line`, `body` and `url`).
-- `script`: `{head, round, checks, bots}` entries; `head` is a branch or `*`. When a pull reaches the round, its checks are replaced and each of `bots` (`{bot, path, line, text}`) is posted.
+- `script`: `{head, round, checks, bots, resolve}` entries; `head` is a branch or `*`. When a pull reaches the round, its checks are replaced, each of `bots` (`{bot, path, line, text}`) is posted, and each thread id in `resolve` is resolved, as a bot resolving its own thread.
 - `responses`: `{args, stdout, stderr, exit, sleep}`, matched on exact argv before any served call. `sleep` hangs the call that many seconds in a child `sleep`, whose pid goes in `sleepers`.
-- `calls`: every argv the twin was handed, in order.
+- `calls`: every argv the twin was handed, in order, and `tokens`: each call's `GH_TOKEN`, empty when unset.
 
 On every call the twin reads each open pull's head from `origin`.
 A moved head is a push: `head_sha` follows it, `round` goes up by one, and that round's script applies.
@@ -275,14 +282,14 @@ Served calls:
 
 - `pr create` (`--head`, `--base`, `--title`, `--body` or `--body-file`), `pr list --json` (`--state`), `pr view <url|number|branch> --json`, and `pr comment <pull> --body`.
 - `--json` takes `number`, `url`, `title`, `body`, `state`, `headRefName`, `baseRefName`, `headRefOid`, `statusCheckRollup`, `reviews` and `comments`.
-- `api graphql` dispatched on the document's operation name: `ReviewThreads` (the review read: head sha, comments, reviews and threads with their authors, and the head's check rollup), `PullState` (the poll's light read, its check rollup derived from `checks`) and `SettleThread` (reply and resolve).
+- `api graphql` dispatched on the document's operation name: `ReviewThreads` (the review read: head sha, comments, reviews and threads with their authors, and the head's check rollup), `PullState` (the poll's light read, its check rollup derived from `checks`), `ReplyThread` (a thread reply, answering its URL) and `ResolveThread`.
 
 Any other call, or an operation no handler names, exits 1 with `twin: no response for gh <args>`.
 
 ### Review-bot twins
 
 A scripted finding is rendered through its bot's recording in `crates/harness/src/fixture/bots.json`.
-Each finding becomes a review thread in the bot's shape.
+Each finding becomes a review thread in the bot's shape; one with an empty `path` is a row of the bot's summary only.
 A bot whose marker sits in an issue comment also rewrites that one comment in place, listing the round's findings.
 
 | Bot | Login | Marker | Where the marker sits | Source | Date |

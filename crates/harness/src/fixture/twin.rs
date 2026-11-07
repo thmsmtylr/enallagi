@@ -86,7 +86,8 @@ pub struct Round {
     pub resolve: Vec<String>,
 }
 
-// one finding a review bot posts, rendered through that bot's recording
+// one finding a review bot posts, rendered through that bot's recording; with no `path` it is a
+// row in the bot's summary only
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Finding {
@@ -301,6 +302,10 @@ fn render(template: &str, f: &Finding, url: &str) -> String {
 pub fn post(pull: &mut Pull, b: &Recording, found: &[&Finding]) {
     let mut rows = Vec::new();
     for f in found {
+        if f.path.is_empty() {
+            rows.push(render(&b.row, f, &pull.url));
+            continue;
+        }
         let n = pull.threads.len() + 1;
         let url = format!("{}#discussion_r{n}", pull.url);
         pull.threads.push(Thread {

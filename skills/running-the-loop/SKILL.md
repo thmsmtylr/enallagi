@@ -28,6 +28,13 @@ Read the one for the role you are playing. Ticket states and every field are in
 Under `[pr] per_task`, `done` means merged: the launcher sets a verified ticket `open` when it opens its
 pull request, and `done` only when that pull request merges.
 
+Review findings on that pull request come back to the ticket as `finding:` entries, and the ticket
+returns to `ready-for-agent` with `rounds:` bumped. The round runs on the pull request's branch and
+answers each finding with one `answer:` line. After the push the launcher replies on each finding
+(`settled:`) and resolves its thread. The loop stops at `respond: clean at <sha>` (no new finding,
+green checks, every thread resolved), or hands the ticket to a person at `[respond] max_rounds`.
+A finding raised again after a reject gets a pointer to the rejection and no round.
+
 `__CHECK__` passes, verified on **delta** against `__ENALLAGI_DIR__/.check-baseline` — a failure listed there is
 inherited, a failure not listed there is a rejection, and the file only ever shrinks. Adding a line
 to it is weakening a test by another name.

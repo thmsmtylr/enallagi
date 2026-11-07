@@ -4472,6 +4472,11 @@ fn returned(commit: &str) -> Pulls {
 
 // `answers` are appended to the ticket by the implementer, `runs` under the verdict by the verifier
 fn returned_with(commit: &str, answers: &str, runs: &str, extra: &str) -> Pulls {
+    lane_on(RETURNED, commit, answers, runs, extra)
+}
+
+// `ticket` is T-900, its pull request's branch `task/T-900` on the origin
+fn lane_on(ticket: &str, commit: &str, answers: &str, runs: &str, extra: &str) -> Pulls {
     let p = pulls("", "exit 0\n");
     let r = &p.repo;
     let bin = env!("CARGO_BIN_EXE_enallagi");
@@ -4500,7 +4505,7 @@ fn returned_with(commit: &str, answers: &str, runs: &str, extra: &str) -> Pulls 
         &base_toml(&format!("{}{extra}", role_commands(&implement, &verify))),
     );
     installed(r);
-    queue(r, &format!("{TASKS}{RETURNED}"));
+    queue(r, &format!("{TASKS}{ticket}"));
     // as an install leaves it: the harness directory is its own repository, the product never tracks it
     let git = |root: &std::path::Path, args: &[&str]| {
         enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
@@ -4838,6 +4843,125 @@ fn recurring_rejection_gets_pointer() {
     let thread = &pull.threads[1];
     assert!(thread.resolved, "{thread:?}");
     assert!(thread.comments[1].body.contains(first), "{thread:?}");
+}
+
+const CONVERGING: &str = "
+## [T-900] answer the review
+
+scope: src/thing.ts
+rows: none — harness
+status: open
+criteria:
+  - it happens
+pr: https://github.com/owner/repo/pull/9
+branch: task/T-900
+";
+
+#[test]
+fn respond_converges_on_twin() {
+    let answers =
+        "answer: F-1 accept fix\\nanswer: F-2 reject naming: true\\nanswer: F-3 accept fix\\n";
+    let respond = "\n[respond]\nquiet = \"0s\"\n";
+    let p = lane_on(
+        CONVERGING,
+        "'T-900: fix'",
+        answers,
+        "ran: true\\nexit: 0\\n",
+        respond,
+    );
+    let url = "https://github.com/owner/repo/pull/9";
+    let check = |c: &str| serde_json::json!({"name": "test", "status": "COMPLETED", "conclusion": c, "detailsUrl": format!("{url}/checks")});
+    let found = |bot: &str, path: &str, text: &str| twin::Finding {
+        bot: bot.to_string(),
+        path: path.to_string(),
+        line: 1,
+        text: text.to_string(),
+    };
+    let mut state = twin::load(&p.twin);
+    state.pulls.push(Pull {
+        number: 9,
+        url: url.to_string(),
+        head: "task/T-900".to_string(),
+        state: "OPEN".to_string(),
+        threads: vec![Thread {
+            id: "PRRT_copilot".to_string(),
+            comments: vec![Remark {
+                author: "copilot-pull-request-reviewer".to_string(),
+                typename: "Bot".to_string(),
+                path: Some("src/elsewhere.ts".to_string()),
+                line: Some(2),
+                body: "This helper is unused.".to_string(),
+                url: format!("{url}#discussion_copilot"),
+                ..Remark::default()
+            }],
+            ..Thread::default()
+        }],
+        ..Pull::default()
+    });
+    state.script = vec![
+        Round {
+            head: "task/T-900".to_string(),
+            round: 1,
+            checks: vec![check("FAILURE")],
+            bots: vec![
+                found("kilo", "src/thing.ts", "parse drops the offset"),
+                found("greptile", "", "the error path is untested"),
+            ],
+            ..Round::default()
+        },
+        Round {
+            head: "task/T-900".to_string(),
+            round: 2,
+            checks: vec![check("SUCCESS")],
+            ..Round::default()
+        },
+    ];
+    twin::save(&p.twin, &state);
+    let origin = p.origin.path().join("origin.git");
+    let base = enallagi::git::git(&origin, &["rev-parse", "task/T-900"]).expect("base");
+
+    // the first run routes round one and pushes the answer; the second judges the re-review
+    let (_, first) = p.run(&[]);
+    let (_, second) = p.run(&[]);
+    let out = format!("{first}{second}");
+    let pull = twin::load(&p.twin).pulls.pop().expect("pull 9");
+    let head = enallagi::git::git(&origin, &["rev-parse", "task/T-900"]).expect("head");
+    let text = ticket_file(&p.repo, "T-900");
+    assert_eq!(
+        state_of(&p.repo, "T-900").as_deref(),
+        Some("open"),
+        "{text}\n{out}"
+    );
+    assert_eq!(
+        field_of(&p.repo, "T-900", "respond"),
+        Some(format!("clean at {}", head.trim())),
+        "{text}\n{out}"
+    );
+    assert_eq!(field_of(&p.repo, "T-900", "rounds").as_deref(), Some("1"));
+    assert_eq!(text.matches("finding:").count(), 3, "{text}");
+    // filed at needs-triage; the second run's state commits may already have expired it
+    let filed: Vec<String> = enallagi::tracker::Tracker::open(&p.repo.root, ".enallagi")
+        .blocks()
+        .expect("queue")
+        .into_iter()
+        .filter(|b| {
+            b.id != "T-900"
+                && b.body
+                    .iter()
+                    .any(|(_, l)| l.contains("#discussion_copilot"))
+        })
+        .map(|b| b.id)
+        .collect();
+    assert_eq!(filed, ["T-901"], "{}", tasks_text(&p.repo));
+    assert!(out.contains("proposed: T-901 from"), "{out}");
+    assert_eq!(pull.threads.len(), 2, "{pull:?}");
+    assert!(pull.threads.iter().all(|t| t.resolved), "{pull:?}");
+    let mut resolved = resolves(&p.calls());
+    resolved.sort();
+    assert_eq!(resolved, ["PRRT_copilot", "PRRT_twin_9_2"], "{out}");
+    let range = format!("{}..task/T-900", base.trim());
+    let subjects = enallagi::git::git(&origin, &["log", "--format=%s", &range]).expect("log");
+    assert_eq!(subjects.trim(), "T-900: fix", "{out}");
 }
 
 const LEARNING: &str = "- [proposed] `vacuous-test`: a test passed with its logic deleted → watch it fail first\n  instances: `SPEC.md:1`, `PROGRESS.md:1`, `TASKS.md:1`\n";
