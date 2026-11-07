@@ -126,6 +126,9 @@ pub enum Command {
         /// Push each landed task to its own branch and open its pull request, as `[pr] per_task` does
         #[arg(long)]
         pr_per_task: bool,
+        /// Take only this ticket, and skip the stages that write the queue (scout, adjudicator, decomposer)
+        #[arg(long, value_name = "T-NNN")]
+        task: Option<String>,
     },
     /// Attach read-only to a running loop's event log and queue
     Watch,
@@ -356,6 +359,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             dry_run,
             frozen,
             pr_per_task,
+            task,
         } => run::run(&run::Args {
             iterations,
             pipelines: pipeline,
@@ -366,6 +370,7 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             dry_run,
             frozen,
             pr_per_task,
+            task,
         }),
         Command::Watch => watch::run(),
         Command::Probe { names } => probe::run(&probe::Args { names }),
@@ -458,7 +463,7 @@ mod tests {
         "hook", "skills", "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 40] = [
+    const FLAGS: [&str; 41] = [
         "init --adapter",
         "init --dry-run",
         "init --prune-defaults",
@@ -483,6 +488,7 @@ mod tests {
         "run --dry-run",
         "run --frozen",
         "run --pr-per-task",
+        "run --task",
         "pr --push",
         "pr --policy-read",
         "issue --dry-run",

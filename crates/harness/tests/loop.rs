@@ -2811,6 +2811,64 @@ fn a_longer_id_is_not_read_as_a_prior_attempt() {
 }
 
 #[test]
+fn pinned_run_own_ticket() {
+    let r = repo(
+        &base_toml(""),
+        "## [T-001] one\nscope: src/one.ts\nstatus: ready-for-agent\n\n## [T-002] two\nscope: src/thing.ts\nstatus: ready-for-agent\n\n## [T-003] three\nstatus: needs-triage\n",
+    );
+    let bin = env!("CARGO_BIN_EXE_enallagi");
+    let implement = script(
+        &r,
+        "src/fakeimpl.sh",
+        &format!(
+            "printf '%s' \"$1\" >>implement-prompt\n\
+             echo work >src/thing.ts\n\
+             {bin} tasks set-status T-002 review 'stub implemented'\n\
+             echo 'iteration' >>{progress}\n\
+             git add -- src/thing.ts >/dev/null 2>&1\n\
+             git -c commit.gpgsign=false commit -qm 'T-002: stub' >/dev/null 2>&1\n\
+             {QUIET}",
+            progress = instance("PROGRESS.md"),
+        ),
+    );
+    let verify = script(
+        &r,
+        "src/fakeverify.sh",
+        &format!(
+            "{bin} tasks set-status T-002 done 'stub verified'\n{verified}{QUIET}",
+            verified = verdict("verified by verifier").replace("T-001", "T-002"),
+        ),
+    );
+    write_toml(&r, &(base_toml("") + &role_commands(&implement, &verify)));
+    r.write(".gitignore", "implement-prompt\n");
+    r.commit_all("stubs");
+
+    let (_, events) = go(
+        &r,
+        &RunOpts {
+            task: Some("T-002".into()),
+            ..opts(3)
+        },
+    );
+
+    assert_eq!(state_of(&r, "T-002").as_deref(), Some("done"));
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("ready-for-agent"));
+    let stages: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            Kind::StageStart { stage, .. } => Some(stage.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stages, ["implement", "verify"], "{events:#?}");
+    let prompt = std::fs::read_to_string(r.root.join("implement-prompt")).expect("prompt");
+    assert!(
+        prompt.contains("Complete exactly ONE ticket: T-002."),
+        "{prompt}"
+    );
+}
+
+#[test]
 fn a_task_round_does_not_spend_the_discovery_budget() {
     let r = repo("", "");
     let implement = implementer(&r, "");

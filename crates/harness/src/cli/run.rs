@@ -18,6 +18,7 @@ pub struct Args {
     pub dry_run: bool,
     pub frozen: bool,
     pub pr_per_task: bool,
+    pub task: Option<String>,
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
@@ -47,6 +48,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         budget_seconds: args.budget_seconds,
         budget_tokens: args.budget_tokens,
         pr_per_task: args.pr_per_task,
+        task: args.task.clone(),
     }
     .with_env_budgets();
 

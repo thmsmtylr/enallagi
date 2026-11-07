@@ -106,6 +106,8 @@ pub struct RunOpts {
     pub budget_tokens: Option<u64>,
     // overrides [pr] per_task only toward true
     pub pr_per_task: bool,
+    // a writer lane's one ticket: no other is taken and no queue-writing stage runs
+    pub task: Option<String>,
 }
 
 impl Default for RunOpts {
@@ -120,6 +122,7 @@ impl Default for RunOpts {
             budget_usd: None,
             budget_tokens: None,
             pr_per_task: false,
+            task: None,
         }
     }
 }
@@ -267,6 +270,16 @@ fn queue_blocks(root: &Path, cfg: &Config) -> Vec<block::Block> {
     queue_read(root, cfg).unwrap_or_default()
 }
 
+fn taken(blocks: &[block::Block], pin: Option<&str>) -> Option<String> {
+    tracker::takeable_by(blocks, |b| pin.is_none_or(|p| b.id == p))
+}
+
+fn reviewed(blocks: &[block::Block], pin: Option<&str>) -> Option<String> {
+    tracker::ids_in(blocks, &["review"])
+        .into_iter()
+        .find(|id| pin.is_none_or(|p| id == p))
+}
+
 // the same task the round would take, so the plan prices the stage the run will actually spawn
 fn plan_task(blocks: &[block::Block], when: &Predicate) -> Option<String> {
     match when {
@@ -329,7 +342,7 @@ pub fn plan(root: &Path, cfg: &Config, pipelines: &[String]) -> Result<String, C
             continue;
         }
         let when = config::parse_when(&pipeline.when)?;
-        if !holds(&sandbox, root, cfg, &when, &mut warnings) {
+        if !holds(&sandbox, root, cfg, &when, None, &mut warnings) {
             continue;
         }
         let blocks = queue_blocks(root, cfg);
@@ -727,7 +740,14 @@ impl<'a> Loop<'a> {
         let ready_before = self.ids_at(&tracker::READY);
         self.proposed_at_start = self.ids_at(&["needs-triage"]);
         let rejections_before = self.rejections();
-        let takeable = tracker::takeable(&self.blocks());
+        let pin = self.opts.task.clone();
+        let takeable = taken(&self.blocks(), pin.as_deref());
+        if let Some(id) = pin.filter(|_| takeable.is_none() && self.first_at_review().is_none()) {
+            self.digest.warnings.push(format!(
+                "{id} is neither takeable nor at review; the pinned run ends."
+            ));
+            return false;
+        }
         let iter_base = git::head(self.root);
         let state_base = git::head(&self.state_root());
         let progress_before = file_len(&self.file("PROGRESS.md"));
@@ -777,6 +797,15 @@ impl<'a> Loop<'a> {
             let Some(stage) = self.cfg.stage.iter().find(|s| &s.name == name).cloned() else {
                 continue;
             };
+            // a pinned lane's filings wait for the unpinned round, so two lanes never edit one entry
+            if self.opts.task.is_some()
+                && matches!(
+                    stage.role.as_deref(),
+                    Some("scout" | "adjudicator" | "decomposer")
+                )
+            {
+                continue;
+            }
             let bases = (iter_base.clone(), state_base.clone());
             match self.stage(&stage, task.clone(), bases) {
                 Flow::Go => {}
@@ -1464,6 +1493,7 @@ impl<'a> Loop<'a> {
                 self.root,
                 self.cfg,
                 &when,
+                self.opts.task.as_deref(),
                 &mut self.digest.warnings,
             ) {
                 return Some(self.cfg.pipeline[i].clone());
@@ -1663,7 +1693,7 @@ impl<'a> Loop<'a> {
     }
 
     fn first_at_review(&self) -> Option<String> {
-        self.ids_at(&["review"]).into_iter().next()
+        reviewed(&self.blocks(), self.opts.task.as_deref())
     }
 
     // the prompt carries the ids the stage was sized for, so it decides those and no others
@@ -1681,6 +1711,9 @@ impl<'a> Loop<'a> {
             _ => spec_for(self.root, self.cfg, &ticket),
         };
         let mut prompt = prompt_for(role, self.cfg, &spec);
+        if let (Some(id), "implementer") = (&self.opts.task, role) {
+            prompt = prompt.replace("the one `enallagi tasks ready` prints.", &format!("{id}."));
+        }
         if role == "decomposer" {
             prompt.push_str(&format!(" The spec to decompose is {spec}."));
         }
@@ -1976,14 +2009,15 @@ fn holds(
     root: &Path,
     cfg: &Config,
     when: &Predicate,
+    pin: Option<&str>,
     warnings: &mut Vec<String>,
 ) -> bool {
     match when {
-        Predicate::Not(inner) => !holds(sandbox, root, cfg, inner, warnings),
-        Predicate::QueueTakeable => tracker::takeable(&queue_blocks(root, cfg)).is_some(),
+        Predicate::Not(inner) => !holds(sandbox, root, cfg, inner, pin, warnings),
+        Predicate::QueueTakeable => taken(&queue_blocks(root, cfg), pin).is_some(),
         // an unreadable or unparseable queue is not evidence of a task at review, so this fails closed like `takeable`
         Predicate::QueueReviewing => match queue_read(root, cfg) {
-            Ok(blocks) => !tracker::ids_in(&blocks, &["review"]).is_empty(),
+            Ok(blocks) => reviewed(&blocks, pin).is_some(),
             Err(err) => {
                 warnings.push(format!(
                     "the queue: {err}; queue.reviewing treated as false (fail closed)"
@@ -2118,7 +2152,7 @@ mod tests {
         cfg.layout.harness_dir = ".enallagi".into();
         let when = config::parse_when("spec.undecomposed").expect("a predicate");
         let sandbox = Sandbox::start(&repo.root, &cfg);
-        let held = || holds(&sandbox, &repo.root, &cfg, &when, &mut Vec::new());
+        let held = || holds(&sandbox, &repo.root, &cfg, &when, None, &mut Vec::new());
         repo.write(
             ".enallagi/specs/app/spec.md",
             "# App\n\n**Status:** needs-triage\n",

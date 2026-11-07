@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `enallagi run --task T-NNN` takes only that ticket, ends once it is neither takeable nor at review, skips the scout, adjudicator and decomposer stages, and names the ticket in the implementer prompt
 - `init` writes `.enallagi/.gitattributes` with `PROGRESS.md merge=union`, so two lanes appending progress entries merge without conflict
 - `[parallel] writers`, default `1`; `0` is refused at load
 - `enallagi watch` scrolls the focused pane by `PgUp`/`PgDn`, `Home`/`End` and the mouse wheel, opens the output pane on the event feed (one line per stage and gate event and per tool call), and `r` shows the raw stream
