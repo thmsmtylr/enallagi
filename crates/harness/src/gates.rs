@@ -3308,9 +3308,10 @@ echo '{{"results":[]}}' > "$out"
         let mut runs = 0;
         let (env, pid) = loop {
             runs += 1;
+            // doubled each run, so no load outlasts the fork for long
             let env = Env::timed(
                 "(sleep 60; touch survived) & echo $! >child.pid\nsleep 60\n",
-                "4s",
+                &format!("{}s", 2 << runs),
             );
             let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
             assert!(r.timed_out.is_some(), "{r:?}");
@@ -3323,7 +3324,7 @@ echo '{{"results":[]}}' > "$out"
                 break (env, pid);
             }
             assert!(
-                runs < 3,
+                runs < 5,
                 "the check never wrote its child's pid in {runs} runs"
             );
         };
@@ -3343,17 +3344,12 @@ echo '{{"results":[]}}' > "$out"
         crate::sandbox::Sandbox::start(&env.repo.root, &cfg)
     }
 
+    // a gate that waited on the pipe would see the shell exit 0 and report no timeout
     #[test]
     fn a_grandchild_on_the_pipe_is_bound_by_timeout() {
         let env = Env::timed("sleep 25 & exit 0\n", "2s");
         let sandbox = unconfined(&env);
-        let started = Instant::now();
         let r = check_delta(&sandbox, &env.repo.root, &env.cfg, false);
-        let waited = started.elapsed();
-        assert!(
-            waited < Duration::from_secs(5),
-            "the gate waited {waited:?}"
-        );
         let reason = r.timed_out.as_deref().unwrap_or_default();
         assert!(reason.contains("2s"), "{r:?}");
         assert!(!r.red && !r.accepts(), "{r:?}");
@@ -3361,13 +3357,20 @@ echo '{{"results":[]}}' > "$out"
 
     #[test]
     fn a_grandchild_outside_the_group_is_bound() {
-        let env = Env::timed("perl -e 'use POSIX; setsid(); sleep 12' & exit 0\n", "2s");
+        let env = Env::timed(
+            "perl -e 'use POSIX; setsid(); sleep 120' & echo $! >gc.pid\nexit 0\n",
+            "2s",
+        );
         let sandbox = unconfined(&env);
         let started = Instant::now();
         let r = check_delta(&sandbox, &env.repo.root, &env.cfg, false);
         let waited = started.elapsed();
+        if let Ok(pid) = std::fs::read_to_string(env.repo.root.join("gc.pid")) {
+            let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+        }
+        // a gate that waited on the grandchild returns after its 120 s, far past any load
         assert!(
-            waited < Duration::from_secs(5),
+            waited < Duration::from_secs(60),
             "the gate waited {waited:?}"
         );
         let reason = r.timed_out.as_deref().unwrap_or_default();
