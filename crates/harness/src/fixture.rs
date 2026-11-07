@@ -107,7 +107,9 @@ exit {exit}
 fn stub_cache() -> &'static Path {
     static CACHE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
-        let xdg = std::env::temp_dir().join("enallagi-fixture-cache");
+        // per uid: a root run would leave a shared path unwritable to the next user
+        let uid = unsafe { libc::getuid() };
+        let xdg = std::env::temp_dir().join(format!("enallagi-fixture-cache-{uid}"));
         seed_scanners(&xdg.join("enallagi"));
         xdg
     })
