@@ -24,6 +24,8 @@ pub enum WorktreeError {
     },
     #[error(transparent)]
     Git(#[from] git::GitError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 pub struct LaneReport {
@@ -37,6 +39,8 @@ pub struct LaneReport {
     pub run_error: Option<String>,
     // the checkout did not follow its upstream: the lane's own work may still have merged
     pub follow_error: Option<String>,
+    // the ticket the lane's claim held, under `writers > 1`
+    pub task: Option<String>,
 }
 
 // (parent repository, lane worktree) pairs, the state repository first: it sits inside the product worktree
@@ -357,8 +361,95 @@ pub fn release(root: &Path, harness_dir: &str, wt: &Path) -> std::io::Result<()>
     })
 }
 
+// the lane's commits replayed onto what landed first, then judged again on the tree they now land on
+fn rebase_checked(
+    root: &Path,
+    cfg: &Config,
+    dir: &Path,
+    branch: &str,
+    parent: &str,
+) -> Result<(), String> {
+    let landed = absorbed_by(root, branch);
+    let mut args = git::identity_args(root);
+    args.extend(["-c", "commit.gpgsign=false", "rebase", "-q", parent].map(String::from));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    if git::git(dir, &args).is_err() {
+        let paths = git::git(dir, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
+        let _ = git::git(dir, &["rebase", "--abort"]);
+        let tip = git::git(dir, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
+        return Err(format!(
+            "integrate: {branch} conflicts with {parent} over {} after {landed}; see `git show {tip}`",
+            paths.lines().collect::<Vec<_>>().join(" ")
+        ));
+    }
+    let report =
+        crate::gates::check_delta(&crate::sandbox::Sandbox::start(dir, cfg), dir, cfg, false);
+    if report.accepts() {
+        return Ok(());
+    }
+    let tip = git::git(dir, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
+    let named = if report.unforgiven.is_empty() {
+        "no failure could be named".to_string()
+    } else {
+        report.unforgiven.join(", ")
+    };
+    Err(format!(
+        "integrate: the check was red (exit {}) on {branch} rebased onto {parent} after {landed}: {named}; see `git show {tip}`",
+        report.exit
+    ))
+}
+
+// the reason is committed in the parent and the branch kept, so the reason's `git show` resolves
+fn send_back(
+    root: &Path,
+    cfg: &Config,
+    id: &str,
+    pairs: &Pairs,
+    reason: &str,
+) -> Result<(), String> {
+    let dir = &cfg.layout.harness_dir;
+    crate::tracker::Tracker::open(root, dir)
+        .set_status(id, "ready-for-agent", reason)
+        .map_err(|e| e.to_string())?;
+    git::commit_instance(
+        root,
+        dir,
+        &[crate::tracker::SPECS],
+        &format!("chore({id}): integrate sent it back"),
+    )
+    .map_err(|e| e.to_string())?;
+    for (repo, wt) in pairs {
+        let _ = git::git(
+            repo,
+            &["worktree", "remove", "--force", &wt.to_string_lossy()],
+        );
+    }
+    Ok(())
+}
+
 // what happens next is decided by the worktrees' own committed state, never run's exit status
 pub fn lane(
+    root: &Path,
+    cfg: &Config,
+    run: &mut dyn FnMut(&Path) -> anyhow::Result<()>,
+) -> Result<LaneReport, WorktreeError> {
+    let report = landed(root, cfg, run)?;
+    if cfg.parallel.writers.get() > 1 {
+        let mut w = crate::events::Writer::new(crate::events::Log::open(
+            &root.join(&cfg.layout.harness_dir),
+        ));
+        w.emit(crate::events::Kind::Gate {
+            gate: "integrate".to_string(),
+            task: report.task.clone().unwrap_or_default(),
+            pass: report.merged,
+            reason: report.reason.clone(),
+            tally: None,
+        });
+    }
+    Ok(report)
+}
+
+fn landed(
     root: &Path,
     cfg: &Config,
     run: &mut dyn FnMut(&Path) -> anyhow::Result<()>,
@@ -420,6 +511,16 @@ pub fn lane(
     let state = (pairs.len() > 1).then(|| pairs[0].1.clone());
 
     let run_error = run(&dir).err().map(|e| e.to_string());
+    let parallel = cfg.parallel.writers.get() > 1;
+    let held = if parallel {
+        claims(root, &cfg.layout.harness_dir)
+    } else {
+        Vec::new()
+    }
+    .into_iter()
+    .find(|c| c.worktree == dir)
+    .map(|c| c.id)
+    .filter(|id| !id.is_empty());
     let left = |reason: String| LaneReport {
         merged: false,
         left: Some(dir.clone()),
@@ -428,6 +529,20 @@ pub fn lane(
         branch: branch.clone(),
         run_error: run_error.clone(),
         follow_error: follow_error.clone(),
+        task: held.clone(),
+    };
+    // a writer lane's failed landing goes back to the queue; an unpinned one is left as under one writer
+    let back = |reason: String| match held
+        .as_deref()
+        .map(|id| send_back(root, cfg, id, &pairs, &reason))
+    {
+        Some(Ok(())) => LaneReport {
+            left: None,
+            state: None,
+            ..left(reason)
+        },
+        Some(Err(e)) => left(format!("{reason}; it was not sent back: {e}")),
+        None => left(reason),
     };
 
     // Uncommitted work in the lane is the lane's to finish, not ours to throw away.
@@ -437,6 +552,16 @@ pub fn lane(
             wt.display()
         )));
     }
+
+    // ponytail: one landing at a time, each paying one check, and held before the ancestry check; a merge queue pays off only once the check is slow next to a lane
+    let _landing = match parallel {
+        true => Some(lock_file(&run_file(
+            root,
+            &cfg.layout.harness_dir,
+            "land.lock",
+        ))?),
+        false => None,
+    };
 
     let merging: Pairs = pairs
         .iter()
@@ -452,7 +577,11 @@ pub fn lane(
         .filter(|(repo, _)| !git::git_ok(repo, &["merge-base", "--is-ancestor", "HEAD", &branch]))
         .map(|(repo, _)| format!("{branch} cannot fast-forward into {}", repo.display()))
         .collect();
-    if !stuck.is_empty() {
+    if !stuck.is_empty() && parallel {
+        if let Err(reason) = rebase_checked(root, cfg, &dir, &branch, &parent_branch) {
+            return Ok(back(reason));
+        }
+    } else if !stuck.is_empty() {
         return Ok(left(stuck.join("\n")));
     }
 
@@ -493,6 +622,7 @@ pub fn lane(
                     }
                 }
                 match reason {
+                    Some(reason) if aborted => return Ok(back(reason)),
                     Some(reason) => return Ok(left(reason)),
                     None => return Err(err.into()),
                 }
@@ -513,6 +643,7 @@ pub fn lane(
         branch,
         run_error,
         follow_error,
+        task: held,
     })
 }
 
@@ -754,6 +885,161 @@ mod tests {
             claim(&r.root, &cfg, two.path()).expect("claim").as_deref(),
             Some("T-001")
         );
+    }
+
+    // two writers and a check that is red only once one.txt and two.txt sit in one tree
+    fn parallel_repo(check: &str) -> Repo {
+        let r = nested_repo();
+        let cmd = r.stub_check(check);
+        commit_in(&r.root, "check");
+        let toml = crate::config::config_path(&r.root);
+        let text = std::fs::read_to_string(&toml).expect("enallagi.toml");
+        std::fs::write(
+            &toml,
+            format!("{text}\n[parallel]\nwriters = 2\n\n[check]\ncommand = \"{cmd}\"\nfail_name = '\\(fail\\) (.+)$'\n"),
+        )
+        .expect("write");
+        commit_in(&r.root.join(".enallagi"), "parallel");
+        r
+    }
+
+    fn claimed(r: &Repo, cfg: &Config, wt: &Path, id: &str) {
+        assert_eq!(claim(&r.root, cfg, wt).expect("claim").as_deref(), Some(id));
+    }
+
+    // lane B's run lands lane A first, so B's parent moved under it
+    fn after_first(r: &Repo, files: (&str, &str)) -> LaneReport {
+        let cfg = cfg(r);
+        lane(&r.root, &cfg, &mut |wt| {
+            claimed(r, &cfg, wt, "T-001");
+            let first = lane(&r.root, &cfg, &mut |wt| {
+                claimed(r, &cfg, wt, "T-002");
+                land(wt, "T-002", files.1);
+                Ok(())
+            })
+            .expect("first lane");
+            assert!(first.merged, "{}", first.reason);
+            land(wt, "T-001", files.0);
+            Ok(())
+        })
+        .expect("lane")
+    }
+
+    fn integrations(r: &Repo) -> Vec<(String, bool, String)> {
+        crate::events::Log::open(&r.root.join(".enallagi"))
+            .read()
+            .expect("events")
+            .into_iter()
+            .filter_map(|e| match e.kind {
+                crate::events::Kind::Gate {
+                    gate,
+                    task,
+                    pass,
+                    reason,
+                    ..
+                } if gate == "integrate" => Some((task, pass, reason)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn gate_line(r: &Repo, id: &str) -> String {
+        let b = Tracker::open(&r.root, ".enallagi")
+            .get(id)
+            .expect("queue")
+            .expect("ticket");
+        crate::block::field(&b, "gate").unwrap_or_default()
+    }
+
+    fn kept(r: &Repo, report: &LaneReport) {
+        assert!(report.left.is_none(), "{}", report.reason);
+        let listed = git::git(&r.root, &["branch", "--list", &report.branch]).expect("branches");
+        assert!(!listed.trim().is_empty(), "{} was deleted", report.branch);
+        let worktrees = git::git(&r.root, &["worktree", "list"]).expect("worktrees");
+        assert!(!worktrees.contains("lane-"), "{worktrees}");
+    }
+
+    #[test]
+    fn moved_parent_lands() {
+        let r = parallel_repo("exit 0\n");
+        let report = after_first(&r, ("one.txt", "two.txt"));
+
+        assert!(report.merged, "{}", report.reason);
+        assert_eq!(report.task.as_deref(), Some("T-001"));
+        assert!(r.root.join("one.txt").exists() && r.root.join("two.txt").exists());
+        for id in ["T-001", "T-002"] {
+            assert_eq!(state_of(&r.root, id).as_deref(), Some("done"), "{id}");
+        }
+        let passes: Vec<(String, bool)> = integrations(&r)
+            .into_iter()
+            .map(|(t, p, _)| (t, p))
+            .collect();
+        assert_eq!(passes, [("T-002".into(), true), ("T-001".into(), true)]);
+    }
+
+    #[test]
+    fn rebase_conflict_sends_back() {
+        let r = parallel_repo("exit 0\n");
+        let report = after_first(&r, ("shared.txt", "shared.txt"));
+
+        assert!(!report.merged, "{}", report.reason);
+        assert_eq!(
+            state_of(&r.root, "T-001").as_deref(),
+            Some("ready-for-agent")
+        );
+        let gate = gate_line(&r, "T-001");
+        for want in ["T-002", "shared.txt", "git show"] {
+            assert!(gate.contains(want), "{want}: {gate}");
+        }
+        kept(&r, &report);
+        assert!(git::porcelain(&r.root.join(".enallagi")).is_empty());
+        let last = integrations(&r).pop().expect("an integrate event");
+        assert_eq!((last.0.as_str(), last.1), ("T-001", false), "{}", last.2);
+    }
+
+    #[test]
+    fn rebase_red_returns() {
+        let r = parallel_repo(
+            "if [ -f one.txt ] && [ -f two.txt ]; then echo '(fail) combo'; exit 1; fi\nexit 0\n",
+        );
+        let report = after_first(&r, ("one.txt", "two.txt"));
+
+        assert!(!report.merged, "{}", report.reason);
+        assert_eq!(
+            state_of(&r.root, "T-001").as_deref(),
+            Some("ready-for-agent")
+        );
+        assert!(!r.root.join("one.txt").exists());
+        let gate = gate_line(&r, "T-001");
+        for want in ["combo", "T-002", "git show"] {
+            assert!(gate.contains(want), "{want}: {gate}");
+        }
+        kept(&r, &report);
+        let last = integrations(&r).pop().expect("an integrate event");
+        assert_eq!((last.0.as_str(), last.1), ("T-001", false), "{}", last.2);
+    }
+
+    #[test]
+    fn state_conflict_sends_back() {
+        let r = parallel_repo("exit 0\n");
+        let cfg = cfg(&r);
+        let state = r.root.join(".enallagi");
+        let report = lane(&r.root, &cfg, &mut |wt| {
+            claimed(&r, &cfg, wt, "T-001");
+            land(wt, "T-001", "one.txt");
+            decide_in_the_parent(&state, "needs-info");
+            Ok(())
+        })
+        .expect("lane");
+
+        assert!(!report.merged, "{}", report.reason);
+        assert_eq!(
+            state_of(&r.root, "T-001").as_deref(),
+            Some("ready-for-agent")
+        );
+        assert!(gate_line(&r, "T-001").contains("conflicts with"));
+        assert!(!r.root.join("one.txt").exists());
+        kept(&r, &report);
     }
 
     #[test]

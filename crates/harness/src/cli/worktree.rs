@@ -102,6 +102,7 @@ mod tests {
             branch: "lane/x".to_string(),
             run_error: None,
             follow_error: None,
+            task: None,
         };
         let msg = left_message(Path::new("/r"), ".enallagi", "main", &report);
         for want in [
