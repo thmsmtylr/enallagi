@@ -485,8 +485,191 @@ fn ticket_files(specs: &Path) -> Vec<PathBuf> {
                 files
                     .flatten()
                     .map(|f| f.path())
-                    .filter(|p| p.extension().is_some_and(|e| e == "md")),
+                    .filter(|p| p.extension().is_some_and(|e| e == "md") && !draft_name(p)),
             );
+        }
+    }
+    out
+}
+
+/// A `to-tickets` draft, `issues/NN-<slug>.md`, before the `tickets` gate numbers it.
+pub struct Draft {
+    pub path: PathBuf,
+    pub num: Option<u32>,
+    pub title: String,
+    pub status: bool,
+    /// `NN` for a draft, `T-NNN` for a ticket; None without a `**Blocked by:**` line.
+    pub blockers: Option<Vec<String>>,
+    pub what: bool,
+    pub criteria: Vec<String>,
+}
+
+const WHAT: &str = "**What to build:**";
+
+fn draft_name(p: &Path) -> bool {
+    p.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with(|c: char| c.is_ascii_digit()) && n.ends_with(".md"))
+}
+
+fn local(blocker: &str) -> Option<u32> {
+    blocker.parse().ok()
+}
+
+pub fn parse_draft(path: &Path, text: &str) -> Draft {
+    let heading = text
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .and_then(|l| l.strip_prefix("# ")?.split_once(':'))
+        .and_then(|(num, title)| Some((local(num.trim())?, title.trim().to_string())))
+        .filter(|(_, title)| !title.is_empty());
+    let mut d = Draft {
+        path: path.to_path_buf(),
+        num: heading.as_ref().map(|h| h.0),
+        title: heading.map(|h| h.1).unwrap_or_default(),
+        status: false,
+        blockers: None,
+        what: false,
+        criteria: Vec::new(),
+    };
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix(STATUS) {
+            d.status = !v.trim().is_empty();
+        } else if let Some(v) = line.strip_prefix(BLOCKED_BY) {
+            let ids = v.split(|c: char| c == ',' || c.is_whitespace());
+            d.blockers = Some(
+                ids.filter(|w| local(w).is_some() || number(w) != u64::MAX)
+                    .map(String::from)
+                    .collect(),
+            );
+        } else if let Some(v) = line.strip_prefix(WHAT) {
+            d.what = !v.trim().is_empty();
+        } else if let Some(c) = line.strip_prefix("- [ ] ") {
+            d.criteria.push(c.to_string());
+        }
+    }
+    d
+}
+
+/// What `enallagi tasks check` and the `tickets` gate refuse in a spec's drafts, one line each.
+pub fn check(root: &Path, cfg: &crate::config::Config, slug: &str) -> Vec<String> {
+    let dir = &cfg.layout.harness_dir;
+    let t = Tracker::open(root, dir);
+    let issues = crate::config::instance_rel(root, dir, &format!("{SPECS}/{slug}/issues"));
+    let spec = crate::config::instance_rel(root, dir, &format!("{SPECS}/{slug}/spec.md"));
+    let mut out = Vec::new();
+    let drafts = match t.drafts(slug) {
+        Ok(d) => d,
+        Err(e) => return vec![format!("{issues}: {e}")],
+    };
+    if drafts.is_empty() {
+        out.push(format!("{issues}: no drafts"));
+    }
+    let open: HashMap<String, bool> = match t.blocks() {
+        Ok(b) => b
+            .iter()
+            .map(|b| (b.id.clone(), state(b).as_deref() != Some("done")))
+            .collect(),
+        Err(e) => {
+            out.push(e.to_string());
+            HashMap::new()
+        }
+    };
+    let nums: Vec<u32> = drafts.iter().filter_map(|d| d.num).collect();
+    let name = |d: &Draft| d.path.file_name().unwrap_or_default().display().to_string();
+    for d in &drafts {
+        let n = name(d);
+        for (ok, what) in [
+            (d.num.is_some(), "`# NN: title` heading"),
+            (d.status, "**Status:** line"),
+            (d.blockers.is_some(), "**Blocked by:** line"),
+            (d.what, "**What to build:** paragraph"),
+            (!d.criteria.is_empty(), "`- [ ]` criterion"),
+        ] {
+            if !ok {
+                out.push(format!("{n}: no {what}"));
+            }
+        }
+        for b in d.blockers.iter().flatten() {
+            let known = local(b).map_or(open.contains_key(b), |l| nums.contains(&l));
+            if !known {
+                out.push(format!("{n}: blocked by {b}, which is no draft or ticket"));
+            }
+        }
+    }
+    let locals = |d: &Draft| -> Vec<u32> {
+        d.blockers
+            .iter()
+            .flatten()
+            .filter_map(|b| local(b))
+            .collect()
+    };
+    let mut left: Vec<&Draft> = drafts.iter().filter(|d| d.num.is_some()).collect();
+    loop {
+        let held: Vec<Option<u32>> = left.iter().map(|d| d.num).collect();
+        let before = left.len();
+        left.retain(|d| locals(d).iter().any(|b| held.contains(&Some(*b))));
+        if left.len() == before {
+            break;
+        }
+    }
+    if !left.is_empty() {
+        let through: Vec<String> = left
+            .iter()
+            .filter_map(|d| d.num)
+            .map(|n| format!("{n:02}"))
+            .collect();
+        out.push(format!("blocking cycle through {}", through.join(", ")));
+    }
+    let free = |d: &Draft| {
+        d.blockers
+            .iter()
+            .flatten()
+            .all(|b| local(b).is_none() && open.get(b) == Some(&false))
+    };
+    if !drafts.is_empty() && !drafts.iter().any(free) {
+        out.push("no draft is free to start".to_string());
+    }
+    let text = std::fs::read_to_string(root.join(&spec)).unwrap_or_default();
+    match crate::probes::common::spec_table(cfg, &spec, &text) {
+        Ok(rows) => {
+            for row in rows.into_iter().flatten() {
+                if !drafts
+                    .iter()
+                    .any(|d| d.criteria.iter().any(|c| c.contains(&row.test)))
+                {
+                    out.push(format!("`{}` is named by no draft's criteria", row.test));
+                }
+            }
+        }
+        Err(e) => out.push(e),
+    }
+    let (state_repo, inner, _) = git::locate(root, dir, &issues);
+    let (_, inner_spec, _) = git::locate(root, dir, &spec);
+    let mut repos = vec![root.to_path_buf()];
+    if state_repo != root {
+        repos.push(state_repo.clone());
+    }
+    for repo in &repos {
+        let status = git::git(repo, &["status", "--porcelain", "--untracked-files=all"]);
+        for line in status.unwrap_or_default().lines() {
+            let path = line.get(3..).unwrap_or_default();
+            let mine = *repo == state_repo;
+            let draft = mine
+                && line.starts_with("?? ")
+                && path
+                    .strip_prefix(&format!("{inner}/"))
+                    .is_some_and(|f| !f.contains('/') && draft_name(Path::new(f)));
+            if draft || (!mine && path.starts_with(&format!("{dir}/"))) {
+                continue;
+            }
+            if mine && path == inner_spec {
+                out.push(format!(
+                    "{spec}: changed; the decomposer never edits the spec"
+                ));
+            } else {
+                out.push(format!("{path}: changed beside the drafts"));
+            }
         }
     }
     out
@@ -598,6 +781,23 @@ impl Tracker {
         Ok(path)
     }
 
+    /// A spec's drafts in file-name order; none when it has no `issues/`.
+    pub fn drafts(&self, slug: &str) -> std::io::Result<Vec<Draft>> {
+        let Ok(files) = std::fs::read_dir(self.0.join(slug).join("issues")) else {
+            return Ok(Vec::new());
+        };
+        let mut paths: Vec<PathBuf> = files
+            .flatten()
+            .map(|f| f.path())
+            .filter(|p| draft_name(p))
+            .collect();
+        paths.sort();
+        paths
+            .into_iter()
+            .map(|p| Ok(parse_draft(&p, &std::fs::read_to_string(&p)?)))
+            .collect()
+    }
+
     pub fn next_id(&self, archived: &[Block]) -> Result<String, QueueError> {
         Ok(block::next_id(&self.blocks()?, archived))
     }
@@ -624,7 +824,7 @@ fn read_at(root: &Path, harness_dir: &str, rev: &str, id: Option<&str>) -> Optio
     let mut found = Vec::new();
     for name in names
         .lines()
-        .filter(|n| n.contains("/issues/") && n.ends_with(".md"))
+        .filter(|n| n.contains("/issues/") && n.ends_with(".md") && !draft_name(Path::new(n)))
         .filter(mine)
     {
         let text = git::git(&repo, &["show", &format!("{rev}:{name}")]).ok()?;

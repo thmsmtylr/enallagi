@@ -172,16 +172,23 @@ pub fn spec_rows(ctx: &ProbeCtx) -> Res<Vec<SpecRow>> {
     let mut tables = 0;
     for spec in crate::tracker::spec_files(ctx.root, cfg) {
         let text = read(ctx.root, &spec)?;
-        let Some(start) = text.find(&format!("\n{heading}")) else {
-            continue;
-        };
-        tables += 1;
-        rows.extend(table_rows(cfg, &spec, &text, start)?);
+        if let Some(found) = spec_table(cfg, &spec, &text)? {
+            tables += 1;
+            rows.extend(found);
+        }
     }
     if tables == 0 {
         return Err(format!("{}: no \"{heading}\" heading", cfg.layout.spec));
     }
     Ok(rows)
+}
+
+/// One spec's exit-criteria rows; None when it has no rows heading.
+pub fn spec_table(cfg: &Config, spec: &str, text: &str) -> Res<Option<Vec<SpecRow>>> {
+    match text.find(&format!("\n{}", cfg.layout.rows_heading)) {
+        Some(start) => table_rows(cfg, spec, text, start).map(Some),
+        None => Ok(None),
+    }
 }
 
 // must slice and read cells the same way the floor's own row parser does, or the two disagree

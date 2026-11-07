@@ -2240,3 +2240,118 @@ fn run_refuses_unfilled() {
     }
     assert!(!r.root.join(".enallagi/worktrees").exists());
 }
+
+const SPEC: &str = "# App\n\n**Status:** ready-for-agent\n\n### Exit criteria\n\n| Behaviour | Test |\n|---|---|\n| sums | `src/a.test.ts::adds` |\n\n## Out of Scope\n";
+
+fn draft(num: &str, blocked: &str, criterion: &str) -> String {
+    format!("# {num}: Step {num}\n\n**What to build:** step {num}.\n\n**Blocked by:** {blocked}\n\n**Status:** ready-for-agent\n\n- [ ] {criterion}\n")
+}
+
+// a committed accepted spec `app` and a ticket T-001 still open
+fn decompose_repo() -> enallagi::fixture::Repo {
+    let r = enallagi::fixture::Repo::new();
+    r.queue(".enallagi", "## [T-001] open\nstatus: ready-for-agent\n");
+    r.write(".enallagi/specs/app/spec.md", SPEC);
+    r.commit_all("spec");
+    r
+}
+
+type Drafts<'a> = Vec<(&'a str, String)>;
+
+fn check(r: &enallagi::fixture::Repo, drafts: &[(&str, String)]) -> (Option<i32>, String) {
+    let issues = r.root.join(".enallagi/specs/app/issues");
+    let _ = std::fs::remove_dir_all(&issues);
+    for (name, text) in drafts {
+        r.write(&format!(".enallagi/specs/app/issues/{name}"), text);
+    }
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["tasks", "check", "app"])
+        .current_dir(&r.root)
+        .output()
+        .expect("run enallagi tasks check");
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).to_string(),
+    )
+}
+
+#[test]
+fn check_flags_drafts() {
+    let r = decompose_repo();
+    let good = [
+        (
+            "01-first.md",
+            draft("01", "None (can start immediately)", "`adds` passes"),
+        ),
+        ("02-second.md", draft("02", "01, T-001", "it shows")),
+    ];
+    assert_eq!(check(&r, &good), (Some(0), String::new()));
+
+    let cases: Vec<(Drafts, &[&str])> = vec![
+        (vec![], &["no drafts"]),
+        (
+            vec![("01-bare.md", "01 untitled\n".to_string())],
+            &[
+                "01-bare.md: no `# NN: title` heading",
+                "01-bare.md: no **Status:** line",
+                "01-bare.md: no **Blocked by:** line",
+                "01-bare.md: no **What to build:** paragraph",
+                "01-bare.md: no `- [ ]` criterion",
+            ],
+        ),
+        (
+            vec![("01-first.md", draft("01", "07", "`adds` passes"))],
+            &["01-first.md: blocked by 07, which is no draft or ticket"],
+        ),
+        (
+            vec![
+                ("01-first.md", draft("01", "02", "`adds` passes")),
+                ("02-second.md", draft("02", "01", "it shows")),
+            ],
+            &["blocking cycle through 01, 02"],
+        ),
+        (
+            vec![("01-first.md", draft("01", "T-001", "`adds` passes"))],
+            &["no draft is free to start"],
+        ),
+        (
+            vec![("01-first.md", draft("01", "None", "it shows"))],
+            &["`adds` is named by no draft's criteria"],
+        ),
+        (
+            vec![good[0].clone(), ("notes.md", "scratch\n".to_string())],
+            &[".enallagi/specs/app/issues/notes.md: changed beside the drafts"],
+        ),
+    ];
+    for (drafts, want) in cases {
+        let (code, out) = check(&r, &drafts);
+        assert_eq!(code, Some(2), "{drafts:?}: {out}");
+        for line in want {
+            assert!(
+                out.lines().any(|l| l.ends_with(line)),
+                "{line} not in:\n{out}"
+            );
+        }
+    }
+
+    r.write("src/b.ts", "export const y = 2\n");
+    let (code, out) = check(&r, &good);
+    assert_eq!(code, Some(2), "{out}");
+    assert!(out.contains("src/b.ts: changed beside the drafts"), "{out}");
+}
+
+#[test]
+fn check_refuses_spec_edit() {
+    let r = decompose_repo();
+    r.write(
+        ".enallagi/specs/app/spec.md",
+        &SPEC.replace("sums", "adds up"),
+    );
+    let good = [("01-first.md", draft("01", "None", "`adds` passes"))];
+    let (code, out) = check(&r, &good);
+    assert_eq!(code, Some(2), "{out}");
+    assert_eq!(
+        out.trim(),
+        ".enallagi/specs/app/spec.md: changed; the decomposer never edits the spec"
+    );
+}

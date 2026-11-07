@@ -227,7 +227,7 @@ pub enum Command {
     /// Query or edit the queue
     ///
     /// Subcommands: list, ready, ids-at, block, field, set-status, rejections, archive,
-    /// landed [--built].
+    /// landed [--built], check `<spec>`.
     Tasks {
         /// Subcommand to run
         cmd: String,

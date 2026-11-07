@@ -10,7 +10,7 @@ pub struct Args {
     pub args: Vec<String>,
 }
 
-const USAGE: &str = "enallagi tasks: usage: enallagi tasks <list|ready|ids-at|block|field|set-status|rejections|archive|landed [--built]> [args] [file]";
+const USAGE: &str = "enallagi tasks: usage: enallagi tasks <list|ready|ids-at|block|field|set-status|rejections|archive|landed [--built]|check <spec>> [args] [file]";
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
     let a = &args.args;
@@ -132,6 +132,19 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 println!("{}\t{}\t{}\t{}", row.id, row.title, commits, row.state);
             }
             Ok(0)
+        }
+        "check" => {
+            let Some(slug) = a.first() else {
+                eprintln!("{USAGE}");
+                return Ok(2);
+            };
+            let root = toplevel()?;
+            let cfg = crate::config::load(&root)?;
+            let problems = tracker::check(&root, &cfg, slug);
+            for line in &problems {
+                println!("{line}");
+            }
+            Ok(if problems.is_empty() { 0 } else { 2 })
         }
         "rejections" => {
             let path = file_arg(a, 0, "DECISIONS.md");
