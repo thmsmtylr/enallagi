@@ -12,4 +12,4 @@ test_only_glob = ["**/test_*.py", "**/*_test.py"]
 # no lookahead in the regex crate, so the parenthesised arguments are spelled out to exclude `reason=`
 skip_patterns = ['^\s*@pytest\.mark\.(skip|xfail)(\(([^r]|r[^e]|re[^a]|rea[^s]|reas[^o]|reaso[^n]|reason[^=])*\))?\s*$']
 hosts = ["pypi.org", "files.pythonhosted.org"]
-write = ["~/.cache/uv", "~/.cache/pip", "~/Library/Caches/pip"]
+caches = ["PIP_CACHE_DIR", "UV_CACHE_DIR"]

@@ -33,8 +33,8 @@ pub struct Runner {
     pub skip_patterns: Vec<String>,
     /// Registries the check fetches from, seeded into `[sandbox] hosts`.
     pub hosts: Vec<String>,
-    /// Caches the check writes, seeded into `[sandbox] write`.
-    pub write: Vec<String>,
+    /// Cache variables the check reads, each seeded into `[sandbox] caches` with a per-install dir.
+    pub caches: Vec<String>,
 }
 
 pub fn presets() -> Vec<Runner> {
@@ -139,6 +139,18 @@ fn detect_at(root: &Path, runner: &Runner) -> Option<String> {
     None
 }
 
+fn caches(root: &Path, vars: &[String]) -> toml::Table {
+    let dir = crate::config::cache_root()
+        .join("caches")
+        .join(crate::tracker::repo_slug(root));
+    vars.iter()
+        .map(|v| {
+            let path = dir.join(v.to_ascii_lowercase());
+            (v.clone(), path.display().to_string().into())
+        })
+        .collect()
+}
+
 fn at(key: &str, value: impl Into<toml::Value>, origin: &str) -> Detected {
     Detected {
         key: key.to_string(),
@@ -170,7 +182,7 @@ fn keys(root: &Path, runner: &Runner, origin: &str) -> Vec<Detected> {
         ),
         at("layout.skip_patterns", runner.skip_patterns.clone(), origin),
         at("sandbox.hosts", runner.hosts.clone(), origin),
-        at("sandbox.write", runner.write.clone(), origin),
+        at("sandbox.caches", caches(root, &runner.caches), origin),
     ];
     let dirs = source_dirs(root, runner);
     let paths = tracked(root);

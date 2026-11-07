@@ -1514,7 +1514,14 @@ fn init_seeds_runner_hosts() {
             .collect()
     };
     assert_eq!(list("hosts"), ["index.crates.io", "static.crates.io"]);
-    assert_eq!(list("write"), ["~/.cargo/registry", "~/.cargo/git"]);
+    assert!(sandbox.get("write").is_none(), "{sandbox:?}");
+    let cache = enallagi::config::cache_root()
+        .join("caches")
+        .join(enallagi::tracker::repo_slug(&repo.root));
+    assert_eq!(
+        sandbox["caches"]["CARGO_HOME"].as_str(),
+        Some(cache.join("cargo_home").to_str().expect("utf8"))
+    );
     assert!(
         detected(&report, "sandbox.hosts").contains("(Cargo.toml:1)"),
         "{:?}",

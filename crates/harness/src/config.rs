@@ -157,6 +157,8 @@ pub struct SandboxConfig {
     pub ports: Vec<u16>,
     pub write: Vec<String>,
     pub env: Vec<String>,
+    /// Runner cache variable to its per-install dir; never the operator's own cache.
+    pub caches: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]

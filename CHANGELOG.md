@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- a lane's runner caches live under `~/.cache/enallagi/caches/<repo>/`, set through the new `[sandbox] caches` (`CARGO_HOME`, `GOMODCACHE`, `GOCACHE`, `npm_config_cache`, `BUN_INSTALL_CACHE_DIR`, `PIP_CACHE_DIR`, `UV_CACHE_DIR`); init seeds those and no longer makes the operator's own caches lane-writable
 - with no `bwrap` outside the product, or no `enallagi` binary found for the bridge, a Linux spawn fails instead of running whatever a PATH lookup finds
 - osv-scanner always gets `--config` (an empty one when the instance has none), so it never reads an `osv-scanner.toml` a lane left beside the lockfile; a scanner fetch gives up after 300 s
 - a lane also cannot read `~/.git-credentials`, `~/.config/git/credentials`, `~/.docker/config.json`, `~/.npmrc`, `~/.cargo/credentials.toml`, `~/.cargo/credentials` or `~/.pypirc`

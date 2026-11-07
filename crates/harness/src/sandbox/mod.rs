@@ -96,6 +96,7 @@ pub struct Sandbox {
     ports: Vec<u16>,
     write: Vec<String>,
     env: Vec<String>,
+    caches: Vec<(String, PathBuf)>,
     // `[respond] token_env`, kept from a lane though it carries the ENALLAGI_ prefix
     token: String,
     dir: String,
@@ -171,6 +172,16 @@ impl Sandbox {
             ports: cfg.sandbox.ports.clone(),
             write: cfg.sandbox.write.clone(),
             env: cfg.sandbox.env.clone(),
+            caches: cfg
+                .sandbox
+                .caches
+                .iter()
+                .map(|(var, dir)| {
+                    let dir = home(dir);
+                    let _ = std::fs::create_dir_all(&dir);
+                    (var.clone(), dir)
+                })
+                .collect(),
             token: cfg.respond.token_env.clone(),
             dir: cfg.layout.harness_dir.clone(),
             run: live.then(|| dir_in("tmp")).flatten(),
@@ -233,7 +244,16 @@ impl Sandbox {
                 .ok()
                 .map(tempfile::TempDir::keep)
         });
-        let extra = self.write.iter().chain(write).map(|w| home(w));
+        for (var, dir) in &self.caches {
+            env.push((var.clone(), dir.display().to_string()));
+        }
+        let caches = self.caches.iter().map(|(_, dir)| dir.clone());
+        let extra = self
+            .write
+            .iter()
+            .chain(write)
+            .map(|w| home(w))
+            .chain(caches);
         let mut policy = policy(
             &cwd,
             &self.dir,

@@ -444,6 +444,53 @@ fn claude_config_unwritable() {
     }
 }
 
+// a crate planted in the operator's cargo cache runs its build.rs at their next build
+#[test]
+fn runner_cache_per_install() {
+    if nested() {
+        return;
+    }
+    let r = Repo::new();
+    let dir = outside();
+    let cache = dir.path().join("caches/repo/cargo_home");
+    let mut cfg = native(&[]);
+    cfg.sandbox
+        .caches
+        .insert("CARGO_HOME".into(), cache.display().to_string());
+    let sb = Sandbox::start(&r.root, &cfg);
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("home"));
+    std::fs::create_dir_all(home.join(".cargo/registry")).expect("mkdir");
+    let out = sh(&sb, &r.root, "echo x > \"$CARGO_HOME/planted\"");
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(cache.join("planted").exists());
+    let out = sh(&sb, &r.root, "echo x > ~/.cargo/registry/planted");
+    assert!(!out.status.success(), "{}", text(&out));
+}
+
+#[test]
+#[ignore = "live: fetches a crate from crates.io"]
+fn runner_cache_live() {
+    let r = Repo::new();
+    r.write(
+        "Cargo.toml",
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nitoa = \"1\"\n",
+    );
+    r.write("src/lib.rs", "");
+    let dir = outside();
+    let cache = dir.path().join("cargo_home");
+    let mut cfg = native(&[]);
+    cfg.sandbox.hosts = vec!["index.crates.io".into(), "static.crates.io".into()];
+    // the test's own HOME has no ~/.rustup; rustup names the real one to its children
+    cfg.sandbox.env = vec!["RUSTUP_HOME".into(), "RUSTUP_TOOLCHAIN".into()];
+    cfg.sandbox
+        .caches
+        .insert("CARGO_HOME".into(), cache.display().to_string());
+    let sb = Sandbox::start(&r.root, &cfg);
+    let out = sh(&sb, &r.root, "cargo fetch");
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(cache.join("registry/cache").is_dir());
+}
+
 // what the launcher re-reads at the next spawn or run: a lane edit would widen its own sandbox
 #[test]
 fn instance_config_unwritable() {

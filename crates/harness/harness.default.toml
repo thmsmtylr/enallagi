@@ -30,13 +30,14 @@ per_task = false
 # "auto" merges a ticket's pull request on green; it needs a holdout set, a USD or token budget and the sandbox.
 merge = "human"
 
-# mode "native" confines every lane (Seatbelt or bwrap); hosts, ports, write and env widen it.
+# mode "native" confines every lane (Seatbelt or bwrap); hosts, ports, write, env and caches widen it.
 [sandbox]
 mode = "native"
 hosts = []
 ports = []
 write = []
 env = []
+caches = {}
 
 # writers is how many writer lanes `enallagi worktree` runs at once, each on a ticket whose scope overlaps no other's.
 [parallel]
