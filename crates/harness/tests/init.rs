@@ -342,6 +342,16 @@ fn init_writes_the_harness_gitignore() {
 }
 
 #[test]
+fn init_writes_state_gitattributes() {
+    let repo = Repo::new();
+    install(&repo);
+    assert_eq!(
+        read(&repo, ".enallagi/.gitattributes"),
+        "PROGRESS.md merge=union\n"
+    );
+}
+
+#[test]
 fn init_ignores_holdouts() {
     let repo = Repo::new();
     install(&repo);
@@ -1214,7 +1224,8 @@ fn instance_mentions(planned: &[(String, String)]) -> Vec<(String, String)> {
     .expect("regex");
     let mut out = Vec::new();
     for (path, text) in planned {
-        if path.ends_with(".toml") || path.ends_with(".json") {
+        // a .gitattributes pattern is relative to its own directory
+        if path.ends_with(".toml") || path.ends_with(".json") || path.ends_with(".gitattributes") {
             continue;
         }
         for found in mention.captures_iter(text) {

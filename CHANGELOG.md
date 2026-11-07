@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `init` writes `.enallagi/.gitattributes` with `PROGRESS.md merge=union`, so two lanes appending progress entries merge without conflict
 - `[parallel] writers`, default `1`; `0` is refused at load
 - `enallagi watch` scrolls the focused pane by `PgUp`/`PgDn`, `Home`/`End` and the mouse wheel, opens the output pane on the event feed (one line per stage and gate event and per tool call), and `r` shows the raw stream
 - `STOP` is never committed to the state repository (it joins the harness `.gitignore`, and every state commit drops it), `init` untracks one already tracked, and a `STOP` in the main checkout's harness directory halts every lane before its next stage

@@ -76,6 +76,8 @@ const CLAUDE_HOOKS: &str = include_str!("../../../adapters/claude/hooks/hooks.js
 // vendored skills are committed (controller ruling), so skills/ is not ignored here
 const GITIGNORE: &str =
     "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\nholdouts/\nSTOP\n";
+// two lanes each append a PROGRESS.md entry; union is a built-in driver, so no git config is written
+const GITATTRIBUTES: &str = "PROGRESS.md merge=union\n";
 
 #[derive(Debug, Default, Clone)]
 pub struct InitOpts {
@@ -281,6 +283,10 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     }
     plan.push(write(format!("{dir}/RAILS.md"), sub(RAILS)));
     plan.push(write(format!("{dir}/.gitignore"), GITIGNORE.to_string()));
+    plan.push(write(
+        format!("{dir}/.gitattributes"),
+        GITATTRIBUTES.to_string(),
+    ));
     // per tool, not per repo: this ships the project's own skill in the shared format
     for (name, text) in SKILL {
         let path = skills_dir.join("running-the-loop").join(name);

@@ -893,6 +893,39 @@ mod tests {
         remove_left(&r, &report);
     }
 
+    fn append_progress(state: &Path, entry: &str) {
+        let path = state.join("PROGRESS.md");
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        std::fs::write(&path, format!("{text}\n{entry}\n")).expect("append");
+        commit_in(state, entry);
+    }
+
+    #[test]
+    fn progress_appends_union_merge() {
+        let r = nested_repo();
+        let cfg = cfg(&r);
+        let state = r.root.join(".enallagi");
+
+        let report = lane(&r.root, &cfg, &mut |wt| {
+            let second = lane(&r.root, &cfg, &mut |wt| {
+                append_progress(&wt.join(".enallagi"), "entry two");
+                Ok(())
+            })
+            .expect("second lane");
+            assert!(second.merged, "{}", second.reason);
+            land(wt, "T-001", "one.txt");
+            append_progress(&wt.join(".enallagi"), "entry one");
+            Ok(())
+        })
+        .expect("lane");
+
+        assert!(report.merged, "{}", report.reason);
+        let progress = std::fs::read_to_string(state.join("PROGRESS.md")).expect("progress");
+        for entry in ["entry one", "entry two"] {
+            assert!(progress.contains(entry), "{entry}:\n{progress}");
+        }
+    }
+
     #[test]
     fn a_moved_state_parent_merges_with_a_commit() {
         let r = nested_repo();
