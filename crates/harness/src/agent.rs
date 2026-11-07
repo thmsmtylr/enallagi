@@ -5,7 +5,7 @@ use crate::events::{Kind, Writer};
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -525,7 +525,7 @@ pub fn spawn(
     s: &StageSpawn,
     sandbox: &crate::sandbox::Sandbox,
     events: &mut Writer,
-    stop_file: &Path,
+    stop_files: &[PathBuf],
     rate_limit: &Regex,
 ) -> Result<StageResult, AgentError> {
     let mut attempt = 0u32;
@@ -564,16 +564,16 @@ pub fn spawn(
             sleep_seconds,
             attempt,
         });
-        sleep_until(sleep_seconds, stop_file)?;
+        sleep_until(sleep_seconds, stop_files)?;
         attempt += 1;
     }
 }
 
-fn sleep_until(seconds: u64, stop_file: &Path) -> Result<(), AgentError> {
+fn sleep_until(seconds: u64, stop_files: &[PathBuf]) -> Result<(), AgentError> {
     let deadline = Instant::now() + Duration::from_secs(seconds);
     while let Some(left) = deadline.checked_duration_since(Instant::now()) {
         // the same predicate the halt reads: every writer of the marker writes a file, never a directory
-        if stop_file.is_file() || stop_signal().is_some() {
+        if stop_files.iter().any(|f| f.is_file()) || stop_signal().is_some() {
             return Err(AgentError::Stopped);
         }
         std::thread::sleep(left.min(POLL));
@@ -1097,7 +1097,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let stop = dir.path().join("STOP");
         std::fs::create_dir(&stop).expect("mkdir");
-        assert!(sleep_until(1, &stop).is_ok());
+        assert!(sleep_until(1, &[stop]).is_ok());
     }
 
     #[test]
@@ -1106,7 +1106,7 @@ mod tests {
         let stop = dir.path().join("STOP");
         std::fs::write(&stop, b"").expect("write");
         let started = Instant::now();
-        assert!(matches!(sleep_until(60, &stop), Err(AgentError::Stopped)));
+        assert!(matches!(sleep_until(60, &[stop]), Err(AgentError::Stopped)));
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 
@@ -1149,7 +1149,7 @@ mod tests {
             &s,
             &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -1183,7 +1183,7 @@ mod tests {
             &s,
             &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -1204,7 +1204,7 @@ mod tests {
             &spawner(argv, &r.root),
             &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -1222,7 +1222,7 @@ mod tests {
             &s,
             &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -1248,7 +1248,7 @@ mod tests {
             &spawner(argv, &r.root),
             &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap_err();
@@ -1282,7 +1282,7 @@ mod tests {
             &spawner(argv, &r.root),
             &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap_err();
@@ -1316,7 +1316,7 @@ mod tests {
             &spawner(argv, &r.root),
             &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap();
@@ -1348,7 +1348,7 @@ mod tests {
             &spawner(argv, &r.root),
             &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap();
@@ -1391,7 +1391,7 @@ mod tests {
             &spawner(argv, &r.root),
             &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap();
@@ -1419,7 +1419,7 @@ mod tests {
             &s,
             &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -1435,7 +1435,7 @@ mod tests {
             &spawner(argv, &r.root),
             &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap();
@@ -1465,7 +1465,7 @@ mod tests {
             &spawner(argv, &r.root),
             &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("hit your weekly limit").unwrap(),
         )
         .unwrap();

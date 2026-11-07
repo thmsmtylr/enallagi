@@ -435,6 +435,14 @@ pub fn instance_path(root: &Path, harness_dir: &str, name: &str) -> PathBuf {
     root.join(instance_rel(root, harness_dir, name))
 }
 
+// a lane's own STOP, then its parent checkout's: one file there halts every lane
+pub fn stop_files(root: &Path, harness_dir: &str) -> Vec<PathBuf> {
+    let dir = root.join(harness_dir);
+    let mut files = vec![dir.join("STOP")];
+    files.extend(crate::git::main_worktree_path(&dir).map(|p| p.join("STOP")));
+    files
+}
+
 // honoured only inside the root, so a fixture or other repository a lane's child process opens never inherits it
 fn env_harness_dir(root: &Path) -> Option<String> {
     let dir = std::env::var_os("ENALLAGI_DIR")?;

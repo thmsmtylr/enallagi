@@ -175,3 +175,99 @@ fn a_lanes_events_land_in_the_parents_log() {
 
     remove_lanes(&r);
 }
+
+// the operator's halt marker is local to one checkout: tracked, it reaches every later lane
+#[test]
+fn stop_never_committed() {
+    let tools = tempfile::tempdir().expect("tools");
+    let r = lane_repo(tools.path());
+    let state = r.root.join(".enallagi");
+    let once = tools.path().join("stopped");
+    exec(
+        &tools.path().join("agent.sh"),
+        &format!(
+            "if [ ! -e '{once}' ]; then touch '{once}' .enallagi/STOP; d=$(dirname .enallagi/specs/*/spec.md)/issues; mkdir -p \"$d\"; printf '# T-001: edited\\n\\n**Status:** wontfix\\n**Blocked by:** None\\n' > \"$d/T-001-edited.md\"; fi\necho '{{\"total_cost_usd\":0}}'\n",
+            once = once.display()
+        ),
+    );
+
+    let (_code, out) = harness(&r.root, &["worktree", "1"]);
+    assert!(once.exists(), "the stub agent never ran:\n{out}");
+    let tracked = git(&state, &["ls-files"]);
+    assert!(
+        tracked.contains("issues/T-001-edited.md"),
+        "the lane's state never merged:\n{tracked}\n{out}"
+    );
+    assert_eq!(git(&state, &["ls-files", "STOP"]), "", "{out}");
+    assert!(!state.join("STOP").exists(), "{out}");
+
+    let (_code, out) = harness(&r.root, &["worktree", "1"]);
+    assert!(!out.contains("STOP file found"), "{out}");
+
+    remove_lanes(&r);
+}
+
+#[test]
+fn init_untracks_stop() {
+    let tools = tempfile::tempdir().expect("tools");
+    let r = lane_repo(tools.path());
+    let state = r.root.join(".enallagi");
+    std::fs::write(state.join("STOP"), "").expect("stop");
+    git(&state, &["add", "-f", "STOP"]);
+    git(
+        &state,
+        &["-c", "commit.gpgsign=false", "commit", "-q", "-m", "stop"],
+    );
+
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+
+    assert_eq!(git(&state, &["ls-files", "STOP"]), "", "{out}");
+    assert!(out.contains("STOP"), "init did not say so:\n{out}");
+    assert!(state.join("STOP").exists(), "the operator's file is kept");
+    let ignore = std::fs::read_to_string(state.join(".gitignore")).expect("ignore");
+    assert!(ignore.lines().any(|l| l == "STOP"), "{ignore}");
+}
+
+// one STOP in the operator's checkout halts every lane, not only a lane that writes its own
+#[test]
+fn parent_stop_halts_lane() {
+    let tools = tempfile::tempdir().expect("tools");
+    let r = lane_repo(tools.path());
+    let state = r.root.join(".enallagi");
+    let toml = std::fs::read_to_string(state.join("enallagi.toml")).expect("config");
+    let toml = toml.replace(r#"stages = ["scout"]"#, r#"stages = ["scout", "again"]"#)
+        + "\n[[stage]]\nname = \"again\"\nrole = \"scout\"\nturns = 1\n";
+    std::fs::write(state.join("enallagi.toml"), toml).expect("config");
+    let (code, out) = harness(&r.root, &["init"]);
+    assert_eq!(code, 0, "{out}");
+    git(&state, &["add", "-A"]);
+    git(
+        &state,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "two stages",
+        ],
+    );
+    let calls = tools.path().join("calls");
+    exec(
+        &tools.path().join("agent.sh"),
+        &format!(
+            "echo x >> '{calls}'; touch '{stop}'\necho '{{\"total_cost_usd\":0}}'\n",
+            calls = calls.display(),
+            stop = state.join("STOP").display()
+        ),
+    );
+
+    let (_code, out) = harness(&r.root, &["worktree", "1"]);
+    let ran = std::fs::read_to_string(&calls).unwrap_or_default();
+    assert_eq!(ran.lines().count(), 1, "{out}");
+    assert!(out.contains("STOP file found"), "{out}");
+
+    remove_lanes(&r);
+}

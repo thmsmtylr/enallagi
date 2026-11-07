@@ -798,9 +798,6 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let lock = rel(ctx, "harness.lock");
     let hashes = rel(ctx, "test-hashes.json");
     let bookkeeping: Vec<String> = BOOKKEEPING.iter().map(|name| rel(ctx, name)).collect();
-    // not in BOOKKEEPING, which the launcher commits by name, but its state commit carries a STOP
-    // written mid-run into whatever task the lane held
-    let stop = rel(ctx, "STOP");
     // the lane's own ticket is the one queue path it may edit; another ticket's file is out of scope
     let tickets = format!("{}/", rel(ctx, SPECS));
     let own = queue_of(ctx).path_of(&task).and_then(|p| {
@@ -839,7 +836,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         .iter()
         .any(|f| f.ends_with("Cargo.toml") && in_scope(f, &pats));
     for f in changed {
-        if bookkeeping.contains(&f) || f == lock || f == stop || own.as_ref() == Some(&f) {
+        if bookkeeping.contains(&f) || f == lock || own.as_ref() == Some(&f) {
             continue;
         }
         // a ticket the range adds is a filed finding, as appending a block was, so only untriaged
@@ -1353,8 +1350,7 @@ fn commit_task(ctx: &mut GateCtx) -> GateOutcome {
         return pass("no base");
     };
     let id = regex::Regex::new(r"\bT-[0-9]+\b").expect("task id pattern");
-    let mut state: Vec<String> = BOOKKEEPING.iter().map(|name| rel(ctx, name)).collect();
-    state.push(rel(ctx, "STOP"));
+    let state: Vec<String> = BOOKKEEPING.iter().map(|name| rel(ctx, name)).collect();
     let skills_dir = format!("{}/", skills_dir_for(ctx.cfg));
     // the launcher's own state and vendoring commits name no task, and touch nothing a lane writes
     let launcher = |files: &[&str]| {

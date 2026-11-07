@@ -178,7 +178,12 @@ pub fn commit_instance(
         let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
         return commit_paths(root, &paths, &msg);
     }
+    // an install whose .gitignore predates the STOP line would commit the operator's halt into every later lane
     git(&state, &["add", "-A"])?;
+    git(
+        &state,
+        &["rm", "--cached", "-q", "--ignore-unmatch", "--", "STOP"],
+    )?;
     if git_ok(&state, &["diff", "--cached", "--quiet"]) {
         return Ok(false);
     }
@@ -439,6 +444,25 @@ mod tests {
             crate::tracker::queued_commit(&r.root, ".enallagi", "T-001"),
             Ok(Some(queued))
         );
+    }
+
+    // an install whose .gitignore predates the STOP line still keeps it out of the state repository
+    #[test]
+    fn state_commit_skips_stop() {
+        let r = Repo::new();
+        r.write(".git/info/exclude", ".enallagi/\n");
+        r.queue(
+            ".enallagi",
+            "## [T-001] first\nscope: src/a.ts\nstatus: ready-for-agent\n",
+        );
+        let state = r.root.join(".enallagi");
+        git(&state, &["init", "-q"]).expect("state repo");
+        r.write(".enallagi/STOP", "");
+
+        assert!(commit_instance(&r.root, ".enallagi", &[], "round").expect("commit"));
+        let tracked = git(&state, &["ls-files"]).expect("ls-files");
+        assert!(tracked.contains("issues/T-001"), "{tracked}");
+        assert!(!tracked.lines().any(|l| l == "STOP"), "{tracked}");
     }
 
     #[test]

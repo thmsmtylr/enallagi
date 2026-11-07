@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `STOP` is never committed to the state repository (it joins the harness `.gitignore`, and every state commit drops it), `init` untracks one already tracked, and a `STOP` in the main checkout's harness directory halts every lane before its next stage
 - `[pr] merge = "human" | "auto"`, default `human`; `auto` opens a pull request per ticket and refuses to start without a holdout set for open work, a USD or token budget, untracked holdouts and the sandbox on
 - a lane whose transcript or diff names a holdout set's path sets its ticket to `ready-for-human` and halts the run, after every stage whatever its `post` list
 - a new `holdout` gate, last on verify, runs the executable files in `.enallagi/holdouts/<spec>/` in a scratch worktree and sends a `done` back with only `holdouts: <k> of <n> red`; a second red for one ticket halts the run

@@ -75,7 +75,7 @@ const CLAUDE_HOOKS: &str = include_str!("../../../adapters/claude/hooks/hooks.js
 // scoped to the harness dir, never touches the repo's own .gitignore
 // vendored skills are committed (controller ruling), so skills/ is not ignored here
 const GITIGNORE: &str =
-    "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\nholdouts/\n";
+    "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\nholdouts/\nSTOP\n";
 
 #[derive(Debug, Default, Clone)]
 pub struct InitOpts {
@@ -200,6 +200,9 @@ pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
     }
     if !opts.dry_run && own_repository(root, &dir) {
         state_repository(root, &dir, &report.excluded)?;
+        if let Some(note) = untrack_stop(root, &dir)? {
+            report.notes.push(note);
+        }
         if let Some(note) = ignore_in_product(root, &dir)? {
             report.notes.push(note);
         }
@@ -448,6 +451,21 @@ fn state_repository(root: &Path, dir: &str, entries: &[String]) -> Result<(), In
     }
     fs::write(&exclude, out).map_err(io(exclude.display()))?;
     Ok(())
+}
+
+// the file stays on disk: it is the operator's halt, and only its place in the history goes
+fn untrack_stop(root: &Path, dir: &str) -> Result<Option<String>, InitError> {
+    let state = root.join(dir);
+    if git::git(&state, &["ls-files", "--", "STOP"]).map_or(true, |out| out.is_empty()) {
+        return Ok(None);
+    }
+    git::git(&state, &["rm", "--cached", "-q", "--", "STOP"]).map_err(|e| InitError::Io {
+        path: format!("{dir}/STOP"),
+        source: std::io::Error::other(e.to_string()),
+    })?;
+    Ok(Some(format!(
+        "untracked: {dir}/STOP, which the state repository tracked"
+    )))
 }
 
 // linters and formatters read .gitignore and never info/exclude, and a lane checks out HEAD, so the

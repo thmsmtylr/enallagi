@@ -493,7 +493,7 @@ fn ask(
     };
     let rate_limit = Regex::new(&format!("(?i){}", cfg.agent.rate_limit_pattern))
         .map_err(|e| AuditError::Agent(e.to_string()))?;
-    let stop_file = config::instance_path(root, dir, "STOP");
+    let stop_files = config::stop_files(root, dir);
     events.emit(Kind::StageStart {
         stage: spawn.stage.clone(),
         role: Some("auditor".to_string()),
@@ -501,7 +501,7 @@ fn ask(
         task: None,
     });
     let sandbox = crate::sandbox::Sandbox::start(root, cfg);
-    let result = crate::agent::spawn(&spawn, &sandbox, events, &stop_file, &rate_limit)
+    let result = crate::agent::spawn(&spawn, &sandbox, events, &stop_files, &rate_limit)
         .map_err(|e| AuditError::Agent(e.to_string()))?;
     events.emit(Kind::StageEnd {
         stage: spawn.stage.clone(),

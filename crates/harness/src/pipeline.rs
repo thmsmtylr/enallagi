@@ -565,6 +565,12 @@ impl<'a> Loop<'a> {
         config::instance_path(self.root, &self.cfg.layout.harness_dir, name)
     }
 
+    fn stop_found(&self) -> bool {
+        config::stop_files(self.root, &self.cfg.layout.harness_dir)
+            .iter()
+            .any(|f| f.is_file())
+    }
+
     fn go(&mut self) -> anyhow::Result<Digest> {
         self.needs_spec_at_start = self.ids_at(&["needs-info"]);
         self.learnings_at_start = waiting_classes(self.root, self.cfg);
@@ -641,9 +647,8 @@ impl<'a> Loop<'a> {
             Err(err) => self.digest.warnings.push(err.to_string()),
         }
         // the auditor is a paid call, so a stop or a spent budget skips it like a stage
-        let stopped = agent::stop_signal().is_some()
-            || self.file("STOP").is_file()
-            || self.over_budget().is_some();
+        let stopped =
+            agent::stop_signal().is_some() || self.stop_found() || self.over_budget().is_some();
         let audited = (!stopped).then(|| audit::run(self.root, self.cfg, &mut self.writer));
         let spent = match &audited {
             Some(Ok(report)) => report.spent,
@@ -920,12 +925,12 @@ impl<'a> Loop<'a> {
                 .or_else(|| git::head(repo))
         };
         let stage_bases = (snapshot(self.root), snapshot(&self.state_root()));
-        let stop_file = self.file("STOP");
+        let stop_files = config::stop_files(self.root, &self.cfg.layout.harness_dir);
         let mut result = match agent::spawn(
             &spawn,
             self.sandbox,
             &mut self.writer,
-            &stop_file,
+            &stop_files,
             &self.rate_limit,
         ) {
             Ok(result) => result,
@@ -1310,7 +1315,7 @@ impl<'a> Loop<'a> {
             self.halt("signal", format!("stopped by {signal}, exiting."));
             return true;
         }
-        if self.file("STOP").is_file() {
+        if self.stop_found() {
             self.halt("stop", "STOP file found, exiting.".to_string());
             return true;
         }

@@ -291,11 +291,11 @@ fn ask_as<T: serde::de::DeserializeOwned>(
     };
     let rate_limit = regex::Regex::new(&format!("(?i){}", cfg.agent.rate_limit_pattern))?;
     let mut events = crate::events::Writer::new(crate::events::Log::open(&root.join(dir)));
-    let stop_file = config::instance_path(root, dir, "STOP");
+    let stop_files = config::stop_files(root, dir);
     let label = format!("asking the {} agent", spawn.preset.name);
     let result = step(&label, || {
         let sandbox = crate::sandbox::Sandbox::start(root, cfg);
-        crate::agent::spawn(&spawn, &sandbox, &mut events, &stop_file, &rate_limit)
+        crate::agent::spawn(&spawn, &sandbox, &mut events, &stop_files, &rate_limit)
     })?;
     parse_as(&result.output).ok_or_else(|| {
         anyhow::anyhow!(

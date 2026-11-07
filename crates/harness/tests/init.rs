@@ -336,6 +336,7 @@ fn init_writes_the_harness_gitignore() {
             "run/",
             "__pycache__/",
             "holdouts/",
+            "STOP",
         ]
     );
 }
