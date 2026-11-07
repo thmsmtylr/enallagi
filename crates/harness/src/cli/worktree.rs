@@ -70,6 +70,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
 fn writers(root: &Path, cfg: &config::Config, n: u32) -> anyhow::Result<i32> {
     // a stop reaches every lane's run, and the launcher still lands what came back
     crate::agent::catch_stop_signals();
+    crate::pipeline::vendor_lanes(root, cfg).map_err(anyhow::Error::msg)?;
     let n = n.to_string();
     let reports = worktree::launch(root, cfg, &|wt, task, env| {
         eprintln!("worktree: cd {} && enallagi watch", wt.display());

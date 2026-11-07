@@ -577,6 +577,74 @@ struct Loop<'a> {
     noted: std::cell::RefCell<Option<String>>,
 }
 
+/// Vendors every declared skill and role in the parent, so parallel lanes never both write `harness.lock`.
+pub fn vendor_lanes(root: &Path, cfg: &Config) -> Result<(), String> {
+    let presets = agent::presets();
+    let preset = presets.get(&cfg.agent.preset);
+    let opts = ResolveOpts::default();
+    let mut events = Writer::new(Log::open(&root.join(&cfg.layout.harness_dir)));
+    let ids: Vec<String> = cfg.skill.iter().map(|s| s.id.clone()).collect();
+    let names: Vec<String> = cfg.role.iter().map(|r| r.name.clone()).collect();
+    // ponytail: skills vendor for the default preset; a role on another agent still vendors in its lane
+    let skills =
+        skills::resolve(root, cfg, preset, &ids, &opts, &mut events).map_err(|e| e.to_string())?;
+    let roles = roles::resolve(root, cfg, &names, &opts, &mut events).map_err(|e| e.to_string())?;
+    commit_vendored(root, cfg, &skills, &roles)
+}
+
+// a fetched skill or role and its lock entry are new to the tree; committed so a gate never reads them as left work
+fn commit_vendored(
+    root: &Path,
+    cfg: &Config,
+    skills: &[skills::ResolvedSkill],
+    roles: &[roles::ResolvedRole],
+) -> Result<(), String> {
+    let vendored: Vec<(&str, &Path, &str)> = skills
+        .iter()
+        .map(|s| (s.id.as_str(), s.dir.as_path(), s.result.as_str()))
+        .chain(
+            roles
+                .iter()
+                .map(|r| (r.name.as_str(), r.path.as_path(), r.result.as_str())),
+        )
+        .collect();
+    if vendored.is_empty() || !vendored_dirty(root, cfg, &vendored) {
+        return Ok(());
+    }
+    let dir = &cfg.layout.harness_dir;
+    let mut paths = vec![config::instance_rel(dir, "harness.lock")];
+    for (_, path, _) in &vendored {
+        if let Ok(rel) = path.strip_prefix(root) {
+            paths.push(rel.to_string_lossy().to_string());
+        }
+    }
+    paths.retain(|p| !git::locate(root, dir, p).2);
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let ids: Vec<&str> = vendored.iter().map(|(id, _, _)| *id).collect();
+    let msg = format!("chore(vendor): {}", ids.join(" "));
+    git::commit_paths(root, &refs, &msg)
+        .and_then(|_| git::commit_instance(root, dir, &[], &msg))
+        .map(|_| ())
+        .map_err(|err| format!("vendored skills could not be committed: {err}"))
+}
+
+// "fetched" is the ordinary signal; porcelain also catches a vendored path an earlier run left untracked
+fn vendored_dirty(root: &Path, cfg: &Config, vendored: &[(&str, &Path, &str)]) -> bool {
+    if vendored.iter().any(|(_, _, result)| *result == "fetched") {
+        return true;
+    }
+    let lock = config::instance_rel(&cfg.layout.harness_dir, "harness.lock");
+    git::porcelain(root).iter().any(|line| {
+        let path = line.get(3..).unwrap_or("");
+        path == lock
+            || vendored.iter().any(|(_, dir, _)| {
+                dir.strip_prefix(root)
+                    .map(|rel| path.starts_with(rel.to_string_lossy().as_ref()))
+                    .unwrap_or(false)
+            })
+    })
+}
+
 // other lanes' landings on `parent` since this lane's base, each named once per run
 fn landings(root: &Path, parent: &str, noted: &mut Option<String>) -> Option<String> {
     let tip = git::git(root, &["rev-parse", parent]).ok()?;
@@ -631,10 +699,6 @@ enum Flow {
 }
 
 impl<'a> Loop<'a> {
-    fn rel(&self, name: &str) -> String {
-        config::instance_rel(&self.cfg.layout.harness_dir, name)
-    }
-
     fn file(&self, name: &str) -> PathBuf {
         config::instance_path(self.root, &self.cfg.layout.harness_dir, name)
     }
@@ -1340,7 +1404,8 @@ impl<'a> Loop<'a> {
             }
         };
 
-        if let Err(reason) = self.commit_vendored(&resolved_skills, &resolved_roles) {
+        if let Err(reason) = commit_vendored(self.root, self.cfg, &resolved_skills, &resolved_roles)
+        {
             self.halt("skill", reason);
             return Err(Flow::Stop);
         }
@@ -1366,60 +1431,6 @@ impl<'a> Loop<'a> {
             task,
             preset: resolved.preset,
             role: roles::policy(&source),
-        })
-    }
-
-    // a fetched skill or role and its lock entry are new to the tree; committed here so the verdict
-    // gate sees them as part of the branch, not as work the implementer or verifier left uncommitted.
-    fn commit_vendored(
-        &mut self,
-        skills: &[skills::ResolvedSkill],
-        roles: &[roles::ResolvedRole],
-    ) -> Result<(), String> {
-        let vendored: Vec<(&str, &Path, &str)> = skills
-            .iter()
-            .map(|s| (s.id.as_str(), s.dir.as_path(), s.result.as_str()))
-            .chain(
-                roles
-                    .iter()
-                    .map(|r| (r.name.as_str(), r.path.as_path(), r.result.as_str())),
-            )
-            .collect();
-        if vendored.is_empty() || !self.vendored_dirty(&vendored) {
-            return Ok(());
-        }
-        let dir = &self.cfg.layout.harness_dir;
-        let mut paths = vec![self.rel("harness.lock")];
-        for (_, path, _) in &vendored {
-            if let Ok(rel) = path.strip_prefix(self.root) {
-                paths.push(rel.to_string_lossy().to_string());
-            }
-        }
-        paths.retain(|p| !git::locate(self.root, dir, p).2);
-        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
-        let ids: Vec<&str> = vendored.iter().map(|(id, _, _)| *id).collect();
-        let msg = format!("chore(vendor): {}", ids.join(" "));
-        git::commit_paths(self.root, &refs, &msg)
-            .and_then(|_| git::commit_instance(self.root, dir, &[], &msg))
-            .map(|_| ())
-            .map_err(|err| format!("vendored skills could not be committed: {err}"))
-    }
-
-    // "fetched" is the ordinary signal; the porcelain fallback also catches a vendored path left
-    // untracked by an earlier run.
-    fn vendored_dirty(&self, vendored: &[(&str, &Path, &str)]) -> bool {
-        if vendored.iter().any(|(_, _, result)| *result == "fetched") {
-            return true;
-        }
-        let lock = self.rel("harness.lock");
-        git::porcelain(self.root).iter().any(|line| {
-            let path = line.get(3..).unwrap_or("");
-            path == lock
-                || vendored.iter().any(|(_, dir, _)| {
-                    dir.strip_prefix(self.root)
-                        .map(|rel| path.starts_with(rel.to_string_lossy().as_ref()))
-                        .unwrap_or(false)
-                })
         })
     }
 

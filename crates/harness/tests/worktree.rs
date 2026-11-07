@@ -317,8 +317,8 @@ role = "verifier"
 turns = 1
 "#;
     std::fs::write(state.join("enallagi.toml"), toml).expect("config");
-    // vendored up front; lanes vendoring different role sets conflict on harness.lock
-    let (code, out) = harness(&r.root, &["init", "--sync"]);
+    // no --sync: the parent vendors before the first lane
+    let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
     r.queue(".enallagi", queue);
     git(&state, &["add", "-A"]);
