@@ -29,8 +29,8 @@ the `setup.sh` exits non-zero and the eval reports `ERROR`, not a result.
 `decomposer` checks the decompose stage end to end. Its fixture is one accepted spec, `calc`, with
 three exit criteria, the third needing the other two. It passes when `enallagi tasks check calc`
 exits 0 on at least two drafts and `spec.md` is unchanged. It has no `ablate.sh`: the role carries
-no rule of its own, only `to-tickets` and the check, so there is nothing to ablate (ADR 0008,
-amendment 2026-11-07), and `--gate decomposer` rejects for that reason.
+no rule of its own, only `to-tickets` and the check, so there is nothing to ablate, and
+`--gate decomposer` rejects for that reason.
 
 ## cold-start
 

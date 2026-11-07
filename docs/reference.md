@@ -185,7 +185,7 @@ or halts the run. The names are matched in `crates/harness/src/gates.rs`.
 | `integrate` | under `[parallel] writers` above 1, a lane whose rebase onto the parent branch conflicts, whose check is red after the rebase, or whose state merge conflicts; the ticket goes back to `ready-for-agent` with a reason naming the paths or tests, what landed first and `git show <tip>`, and the lane branch is kept | landing |
 | `holdout` | a `done` whose spec's holdouts are red at HEAD; the ticket goes back to `ready-for-agent` with `holdouts: <k> of <n> red`, and a second red for one ticket in a run halts | verify |
 
-Holdouts are tests the operator writes and no lane may read (ADR 0006).
+Holdouts are tests the operator writes and no lane may read, so a writer cannot fit the code to them.
 A spec's set is the executable regular files in `.enallagi/holdouts/<spec>/`, where `<spec>` is the ticket's directory under `specs/`; other files there are data the holdouts read.
 Each holdout runs in name order, in a scratch worktree of the commit under test under `.enallagi/worktrees/`, with `ENALLAGI_HOLDOUTS` set to the set's absolute path and `[check] timeout` as its bound.
 Exit 0 passes it and anything else is red.
@@ -300,7 +300,7 @@ Those two commits are what an install leaves in the product's history.
 
 ## Twins
 
-The GitHub twin stands in for `gh` in tests and the demo (ADR 0010).
+The GitHub twin stands in for `gh` in tests and the demo, so neither needs network, spend or a real pull request.
 `enallagi twin gh <args>` is a hidden subcommand that serves one call from the JSON state file `ENALLAGI_TWIN` names.
 `fixture::twin::install(dir, bin, state)` writes the state as `dir/twin.json` and a two-line `gh` shim that execs the binary.
 It returns the `PATH` to use and the state's path; `twin::load` reads the state back.

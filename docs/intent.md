@@ -92,8 +92,9 @@ engineer reading the repository cold.
 - **Self-hosting is the validation.** Anything the loop cannot demonstrate on this repository is
   not evidence.
 - **No daemon, no durable-execution engine, no hosting.** Recorded refusals.
-- **Parallel lanes: lifted 2026-11-06, see ADR 0003.** Writers run at once only when their `scope:`
-  globs cannot overlap, and they never message each other.
+- **Parallel lanes: lifted 2026-11-06.** Writers run at once only when their `scope:` globs cannot
+  overlap, and they never message each other: measured, messaging recovers little of what conflicting
+  parallel coding work loses, while a one-shot note of landed changes recovers most of it.
 - **Stack.** One Rust binary, statically linked, targets `x86_64` and `aarch64` on `linux-musl` and
   `apple-darwin`. Runtime dependencies: `git`, the agent CLI named in the configuration, and the check
   command named in the configuration. Crate dependencies: `clap`, `serde`, `serde_json`, `toml`,
