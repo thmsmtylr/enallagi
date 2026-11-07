@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- the adjudicator no longer re-runs a `probe: issue` ticket's `gh issue view` (a lane has no GitHub credentials); it judges the state `enallagi issue` recorded in `output:`
 - a stage's cost and tokens are read from its last `"type":"result"` line when it has one, so claude 2.1.300's trailing `session_state_changed` line no longer halts a run under `BUDGET_USD`
 - under `[sandbox] mode = "native"` no lane or check reads or writes `<harness_dir>/holdouts/` (its own instance's and the parent's) or `~/.cache/enallagi/holdouts/`, a renamed parent included, and no lane reads `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc` or `~/.config/gh`; init's state-repository `.gitignore` gains `holdouts/`
 - `[sandbox] mode` defaults to `"native"` and every lane carries its preset's bypass flag; `agent.dangerously_skip_permissions` and `run --dangerously-skip-permissions` are gone (the key is refused at load, naming `[sandbox] mode`), and so are the claude preset's own sandbox settings, its allow list and the context file's run-the-check-alone line
