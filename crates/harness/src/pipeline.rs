@@ -732,7 +732,7 @@ impl<'a> Loop<'a> {
             return false;
         }
 
-        self.read_reviews();
+        self.poll();
         // a block a human queued by hand is recorded against the product HEAD it was written at
         self.commit_state("queue");
         self.archive();
@@ -1579,49 +1579,76 @@ impl<'a> Loop<'a> {
         }
     }
 
-    // the loop cannot wait on a reviewer: an anchored comment becomes a proposed block the next lane takes
-    fn read_reviews(&mut self) {
-        let pulls = match review::open_pulls(self.root) {
-            Ok(pulls) => pulls,
-            Err(err) => {
-                self.digest.warnings.push(err.to_string());
-                return;
-            }
-        };
+    // each `open` ticket's pull request: merged is `done`, closed is `wontfix`, and only a changed one is read
+    fn poll(&mut self) {
         let t = Tracker::open(self.root, &self.cfg.layout.harness_dir);
         let spec = tracker::repo_slug(self.root);
         let decisions = std::fs::read_to_string(self.file("DECISIONS.md")).unwrap_or_default();
-        for pull in &pulls {
-            let found = match review::read(&pull.url) {
-                Ok(found) => found,
+        let open: Vec<(String, String, Option<String>)> = self
+            .blocks()
+            .iter()
+            .filter(|b| tracker::state(b).as_deref() == Some("open"))
+            .filter_map(|b| {
+                Some((
+                    b.id.clone(),
+                    block::field(b, "pr")?,
+                    block::field(b, "polled"),
+                ))
+            })
+            .collect();
+        for (id, url, polled) in open {
+            let light = match review::light(&url) {
+                Ok(light) => light,
                 Err(err) => {
                     self.digest.warnings.push(err.to_string());
                     continue;
                 }
             };
-            if found.short {
-                self.digest.warnings.push(format!(
-                    "{}: only the first 100 reviews, threads and comments were read",
-                    pull.url
-                ));
+            let moved = match light.state.as_str() {
+                "MERGED" => t.set_status(&id, "done", ""),
+                "CLOSED" => t.set_status(&id, "wontfix", "pull request closed unmerged"),
+                _ if polled.as_deref() == Some(light.key.as_str()) => Ok(()),
+                _ => {
+                    self.read_pull(&t, &spec, &decisions, &url);
+                    t.set_field(&id, "polled", &light.key)
+                }
+            };
+            if let Err(err) = moved {
+                self.digest.warnings.push(format!("{id}: {err}"));
             }
-            let appended = t
-                .blocks()
-                .map_err(|e| e.to_string())
-                .and_then(|blocks| {
-                    review::append(&blocks, &decisions, &found).map_err(|e| e.to_string())
-                })
-                .and_then(|a| {
-                    for block in &a.blocks {
-                        t.append(&spec, block).map_err(|e| e.to_string())?;
-                    }
-                    Ok(a.blocks.len())
-                });
-            match appended {
-                Ok(0) => {}
-                Ok(n) => println!("  proposed: {n} from {}", pull.url),
-                Err(err) => self.digest.warnings.push(format!("the queue: {err}")),
+        }
+    }
+
+    // the loop cannot wait on a reviewer: an anchored comment becomes a proposed block the next lane takes
+    fn read_pull(&mut self, t: &Tracker, spec: &str, decisions: &str, url: &str) {
+        let found = match review::read(url) {
+            Ok(found) => found,
+            Err(err) => {
+                self.digest.warnings.push(err.to_string());
+                return;
             }
+        };
+        if found.short {
+            self.digest.warnings.push(format!(
+                "{url}: only the first 100 reviews, threads and comments were read"
+            ));
+        }
+        let appended = t
+            .blocks()
+            .map_err(|e| e.to_string())
+            .and_then(|blocks| {
+                review::append(&blocks, decisions, &found).map_err(|e| e.to_string())
+            })
+            .and_then(|a| {
+                for block in &a.blocks {
+                    t.append(spec, block).map_err(|e| e.to_string())?;
+                }
+                Ok(a.blocks.len())
+            });
+        match appended {
+            Ok(0) => {}
+            Ok(n) => println!("  proposed: {n} from {url}"),
+            Err(err) => self.digest.warnings.push(format!("the queue: {err}")),
         }
     }
 
@@ -1636,6 +1663,17 @@ impl<'a> Loop<'a> {
             Ok(report) => {
                 self.built.push(task.to_string());
                 let opened = report.opened.unwrap_or_default();
+                if opened.starts_with("http") {
+                    let t = Tracker::open(self.root, &self.cfg.layout.harness_dir);
+                    let set = t
+                        .set_status(task, "open", "")
+                        .and_then(|_| t.set_field(task, "pr", &opened))
+                        .and_then(|_| t.set_field(task, "branch", &report.branch));
+                    match set {
+                        Ok(()) => self.commit_state(&format!("queue: {task} open")),
+                        Err(err) => self.digest.warnings.push(format!("{task}: {err}")),
+                    }
+                }
                 self.digest.pulls.push(format!("{task}: {opened}"));
             }
             Err(err) => {

@@ -24,12 +24,15 @@ triages them in the same round. With several such specs, the lowest slug goes fi
 `triage` has one: a round that leaves its `needs-triage` ticket undecided hands the next round to
 `discover`, and a round that leaves takeable work reopens it.
 
-Before selecting a task, an iteration reads the review comments on open pull requests
-from its own `task/` branches.
+When the launcher opens a ticket's pull request, it sets the ticket `open` and writes `pr:` (the URL) and `branch:` (its head) under `## Harness`.
+`done` then means merged: no lane takes an `open` ticket, and a blocker at `open` already lets its dependent go, since `enallagi pr` stacks on the blocker's branch.
+Before selecting a task, an iteration polls each `open` ticket's pull request with one light read (state, head sha, newest comment and review, check rollup).
+A merged pull request sets `done`, and a closed one sets `wontfix` with gate `pull request closed unmerged`.
+The full review read runs only when that key differs from the ticket's `polled:`, which then takes the new key.
 Each unresolved thread lands as one `needs-triage` ticket carrying its thread id, and the same
 finding raised twice on the same lines is one ticket.
 When that ticket lands, the launcher replies on the thread with the sha and resolves it.
-No host tool, no such branch, or a failed host call is a warning, never a halt.
+No host tool or a failed host call is a warning, never a halt.
 
 `enallagi audit` reads review findings, frictions and rejections, and writes proposed learnings to DECISIONS.md: a model names each class, and code checks each citation.
 `enallagi run` runs it once when a round ends, after its last iteration.
@@ -259,7 +262,7 @@ Served calls:
 
 - `pr create` (`--head`, `--base`, `--title`, `--body` or `--body-file`), `pr list --json` (`--state`), `pr view <url|number|branch> --json`, and `pr comment <pull> --body`.
 - `--json` takes `number`, `url`, `title`, `body`, `state`, `headRefName`, `baseRefName`, `headRefOid`, `statusCheckRollup`, `reviews` and `comments`.
-- `api graphql` dispatched on the document's operation name: `ReviewThreads` (the review read) and `SettleThread` (reply and resolve).
+- `api graphql` dispatched on the document's operation name: `ReviewThreads` (the review read), `PullState` (the poll's light read, its check rollup derived from `checks`) and `SettleThread` (reply and resolve).
 
 Any other call, or an operation no handler names, exits 1 with `twin: no response for gh <args>`.
 

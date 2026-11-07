@@ -25,6 +25,9 @@ Read the one for the role you are playing. Ticket states and every field are in
 
 ## What done means
 
+Under `[pr] per_task`, `done` means merged: the launcher sets a verified ticket `open` when it opens its
+pull request, and `done` only when that pull request merges.
+
 `__CHECK__` passes, verified on **delta** against `__ENALLAGI_DIR__/.check-baseline` — a failure listed there is
 inherited, a failure not listed there is a rejection, and the file only ever shrinks. Adding a line
 to it is weakening a test by another name.

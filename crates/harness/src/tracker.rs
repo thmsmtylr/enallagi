@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 pub const SPECS: &str = "specs";
 
 // `__TRACKER__`: stands in for what `/setup-matt-pocock-skills` would write into the client repo
-pub const ABOUT: &str = "The tracker is local files, already set up: never run `/setup-matt-pocock-skills`. Each spec is `__ENALLAGI_DIR__/specs/<spec>/spec.md` and each of its tickets is `__ENALLAGI_DIR__/specs/<spec>/issues/T-NNN-<slug>.md`; a `T-NNN` id is global across specs and the launcher assigns it. A ticket's `**Status:**` is one of `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human` and `wontfix`, then `review` and `done`. Notes go under its `## Comments`; the fields the launcher reads go under its `## Harness`.";
+pub const ABOUT: &str = "The tracker is local files, already set up: never run `/setup-matt-pocock-skills`. Each spec is `__ENALLAGI_DIR__/specs/<spec>/spec.md` and each of its tickets is `__ENALLAGI_DIR__/specs/<spec>/issues/T-NNN-<slug>.md`; a `T-NNN` id is global across specs and the launcher assigns it. A ticket's `**Status:**` is one of `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human` and `wontfix`, then `review`, `open` (its pull request is open) and `done` (merged). Notes go under its `## Comments`; the fields the launcher reads go under its `## Harness`.";
 
 const STATUS: &str = "**Status:**";
 const BLOCKED_BY: &str = "**Blocked by:**";
@@ -32,6 +32,9 @@ pub const HARNESS_KEYS: &[&str] = &[
     "ran",
     "exit",
     "deferred",
+    "pr",
+    "branch",
+    "polled",
 ];
 
 /// The specs directory.
@@ -53,7 +56,7 @@ pub fn ids_in(blocks: &[Block], states: &[&str]) -> Vec<String> {
         .collect()
 }
 
-/// The first `ready-for-agent` ticket, in the order given, whose blockers are all `done`.
+/// The first `ready-for-agent` ticket, in the order given, whose blockers are all `done` or `open`; `pr` stacks on an open blocker's branch.
 pub fn takeable(blocks: &[Block]) -> Option<String> {
     takeable_by(blocks, |_| true)
 }
@@ -66,9 +69,12 @@ pub fn takeable_by(blocks: &[Block], ok: impl Fn(&Block) -> bool) -> Option<Stri
         .iter()
         .filter(|b| state(b).as_deref() == Some("ready-for-agent") && ok(b))
         .find(|b| {
-            block::blockers(b)
-                .iter()
-                .all(|id| states.get(id.as_str()).and_then(|s| s.as_deref()) == Some("done"))
+            block::blockers(b).iter().all(|id| {
+                matches!(
+                    states.get(id.as_str()).and_then(|s| s.as_deref()),
+                    Some("done" | "open")
+                )
+            })
         })
         .map(|b| b.id.clone())
 }
@@ -823,6 +829,32 @@ impl Tracker {
         Ok(())
     }
 
+    /// Sets `key: value` in `## Harness`, replacing the key's first line or appending one.
+    pub fn set_field(&self, id: &str, key: &str, value: &str) -> Result<(), QueueError> {
+        let path = self
+            .path_of(id)
+            .ok_or_else(|| QueueError::NoSuchTask(id.to_string()))?;
+        let text = std::fs::read_to_string(&path)?;
+        let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+        let line = format!("{key}: {value}");
+        let harness = lines.iter().position(|l| l.trim_end() == HARNESS);
+        let prefix = format!("{key}:");
+        match harness.and_then(|h| (h..lines.len()).find(|&i| lines[i].starts_with(&prefix))) {
+            Some(at) => lines[at] = line,
+            None => {
+                while lines.last().is_some_and(|l| l.is_empty()) {
+                    lines.pop();
+                }
+                if harness.is_none() {
+                    lines.extend([String::new(), HARNESS.to_string(), String::new()]);
+                }
+                lines.extend([line, String::new()]);
+            }
+        }
+        std::fs::write(&path, lines.join("\n"))?;
+        Ok(())
+    }
+
     /// Appends a block as a ticket file under `specs/<spec>/issues/`, and returns the path written.
     pub fn append(&self, spec: &str, text: &str) -> Result<PathBuf, QueueError> {
         let b = block::parse(text)?
@@ -1023,6 +1055,30 @@ mod tests {
         assert_eq!(takeable(&t.blocks().unwrap()).as_deref(), Some("T-002"));
         t.set_status("T-001", "review", "").unwrap();
         assert_eq!(takeable(&t.blocks().unwrap()), None);
+    }
+
+    #[test]
+    fn open_blocker_takeable() {
+        let r = Repo::new();
+        let t = files(&r);
+        t.set_status("T-001", "open", "").unwrap();
+        assert_eq!(takeable(&t.blocks().unwrap()).as_deref(), Some("T-002"));
+        t.set_status("T-002", "open", "").unwrap();
+        assert_eq!(takeable(&t.blocks().unwrap()), None);
+    }
+
+    #[test]
+    fn field_replaced_once() {
+        let r = Repo::new();
+        let t = files(&r);
+        t.set_field("T-001", "polled", "a").unwrap();
+        t.set_field("T-001", "polled", "b").unwrap();
+        let text = std::fs::read_to_string(t.path_of("T-001").unwrap()).unwrap();
+        assert_eq!(text.matches("polled:").count(), 1, "{text}");
+        assert_eq!(
+            block::field(&t.get("T-001").unwrap().unwrap(), "polled").as_deref(),
+            Some("b")
+        );
     }
 
     #[test]

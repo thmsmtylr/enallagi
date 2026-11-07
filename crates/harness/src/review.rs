@@ -171,54 +171,52 @@ pub fn gh_args(reference: &str) -> Result<Vec<String>, ReviewError> {
     ])
 }
 
-// the head branch `enallagi pr` builds; an open pull request on any other head is not this loop's
-const BRANCH_PREFIX: &str = "task/";
+// the poll's skip key in one small read: state, head, newest comment and review, check rollup
+const LIGHT: &str = concat!(
+    "query PullState($owner:String!,$repo:String!,$number:Int!){",
+    "repository(owner:$owner,name:$repo){pullRequest(number:$number){",
+    "state headRefOid comments(last:1){nodes{url}} reviews(last:1){nodes{url}} ",
+    "commits(last:1){nodes{commit{statusCheckRollup{state}}}}",
+    "}}}",
+);
 
-#[derive(Debug, serde::Deserialize)]
-pub struct Open {
-    pub url: String,
-    #[serde(rename = "headRefName")]
-    pub head: String,
+#[derive(Debug, PartialEq)]
+pub struct Light {
+    /// `OPEN`, `MERGED` or `CLOSED`.
+    pub state: String,
+    /// What `polled` holds: equal keys mean nothing new to read.
+    pub key: String,
 }
 
-/// The open pull requests whose head branch this checkout built. No such branch is no host call.
-pub fn open_pulls(root: &Path) -> Result<Vec<Open>, ReviewError> {
-    let pattern = format!("refs/heads/{BRANCH_PREFIX}*");
-    let refs = crate::git::git(
-        root,
-        &["for-each-ref", "--format=%(refname:short)", &pattern],
-    )
-    .map_err(|e| ReviewError::Gh {
-        command: format!("git for-each-ref {pattern}"),
-        reason: e.to_string(),
-    })?;
-    // a branch whose tip HEAD already carries was merged, and its pull request is closed
-    let built: Vec<&str> = refs
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .filter(|b| !crate::git::git_ok(root, &["merge-base", "--is-ancestor", b, "HEAD"]))
-        .collect();
-    if built.is_empty() {
-        return Ok(Vec::new());
-    }
-    let args = [
-        "pr",
-        "list",
-        "--state",
-        "open",
-        "--limit",
-        "100",
-        "--json",
-        "url,headRefName",
+pub fn light(reference: &str) -> Result<Light, ReviewError> {
+    let mut args = gh_args(reference)?;
+    args[3] = format!("query={LIGHT}");
+    let v: serde_json::Value = call(&args)?;
+    let pull = &v["data"]["repository"]["pullRequest"];
+    // `polled` is read back trimmed, so an empty part is written `-`
+    let word = |v: &serde_json::Value| match v.as_str() {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => "-".to_string(),
+    };
+    let key = [
+        word(&pull["headRefOid"]),
+        word(&pull["comments"]["nodes"][0]["url"]),
+        word(&pull["reviews"]["nodes"][0]["url"]),
+        word(&pull["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"]),
     ];
+    Ok(Light {
+        state: pull["state"].as_str().unwrap_or_default().to_string(),
+        key: key.join(" "),
+    })
+}
+
+fn call<T: serde::de::DeserializeOwned>(args: &[String]) -> Result<T, ReviewError> {
     let failed = |reason: String| ReviewError::Gh {
         command: format!("gh {}", args.join(" ")),
         reason,
     };
     let out = Command::new("gh")
         .args(args)
-        .current_dir(root)
         .output()
         .map_err(|e| failed(e.to_string()))?;
     if !out.status.success() {
@@ -226,11 +224,7 @@ pub fn open_pulls(root: &Path) -> Result<Vec<Open>, ReviewError> {
             String::from_utf8_lossy(&out.stderr).trim().to_string(),
         ));
     }
-    let open: Vec<Open> = serde_json::from_slice(&out.stdout).map_err(|e| failed(e.to_string()))?;
-    Ok(open
-        .into_iter()
-        .filter(|p| built.contains(&p.head.as_str()))
-        .collect())
+    serde_json::from_slice(&out.stdout).map_err(|e| failed(e.to_string()))
 }
 
 fn collect(response: Response) -> Found {
@@ -302,23 +296,7 @@ fn plain(body: &str) -> String {
 }
 
 pub fn read(reference: &str) -> Result<Found, ReviewError> {
-    let args = gh_args(reference)?;
-    let failed = |reason: String| ReviewError::Gh {
-        command: format!("gh {}", args.join(" ")),
-        reason,
-    };
-    let out = Command::new("gh")
-        .args(&args)
-        .output()
-        .map_err(|e| failed(e.to_string()))?;
-    if !out.status.success() {
-        return Err(failed(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ));
-    }
-    let response: Response =
-        serde_json::from_slice(&out.stdout).map_err(|e| failed(e.to_string()))?;
-    Ok(collect(response))
+    Ok(collect(call(&gh_args(reference)?)?))
 }
 
 // a comment has no title, so the block takes its first line without the marker that opens it

@@ -532,9 +532,70 @@ fn graphql(state: &mut State, args: &[String]) -> Option<Response> {
                 )),
             }
         }
+        "PullState" => {
+            let repo = format!("{}/{}", var("owner"), var("repo"));
+            match state
+                .pulls
+                .iter()
+                .find(|p| repo == state.repo && p.number.to_string() == var("number"))
+            {
+                Some(p) => Response::ok(format!("{}\n", pull_state(p))),
+                None => Response::err(format!(
+                    "GraphQL: Could not resolve to a PullRequest with the number of {}. (repository.pullRequest)\n",
+                    var("number")
+                )),
+            }
+        }
         "SettleThread" => settle(state, var("thread"), var("body")),
         _ => return None,
     })
+}
+
+// GitHub's rollup: any failure fails it, any unfinished check holds it pending, none is null
+fn rollup(checks: &[Value]) -> Value {
+    if checks.is_empty() {
+        return Value::Null;
+    }
+    let word = |c: &Value, k: &str| c[k].as_str().unwrap_or_default().to_uppercase();
+    let failed = [
+        "FAILURE",
+        "ERROR",
+        "TIMED_OUT",
+        "CANCELLED",
+        "ACTION_REQUIRED",
+    ];
+    let state = if checks.iter().any(|c| {
+        failed.contains(&word(c, "conclusion").as_str())
+            || failed.contains(&word(c, "state").as_str())
+    }) {
+        "FAILURE"
+    } else if checks.iter().any(|c| {
+        let s = word(c, "status");
+        (!s.is_empty() && s != "COMPLETED")
+            || matches!(word(c, "state").as_str(), "PENDING" | "EXPECTED")
+    }) {
+        "PENDING"
+    } else {
+        "SUCCESS"
+    };
+    json!({"state": state})
+}
+
+fn pull_state(pull: &Pull) -> Value {
+    let last = |notes: &[Note]| -> Vec<Value> {
+        notes
+            .last()
+            .map(|n| json!({"url": n.url}))
+            .into_iter()
+            .collect()
+    };
+    json!({"data": {"repository": {"pullRequest": {
+        "state": pull.state,
+        "headRefOid": pull.head_sha,
+        "comments": {"nodes": last(&pull.comments)},
+        "reviews": {"nodes": last(&pull.reviews)},
+        "commits": {"nodes": [{"commit": {"statusCheckRollup": rollup(&pull.checks)}}]},
+    }}}})
 }
 
 fn page(nodes: Vec<Value>) -> Value {

@@ -4106,7 +4106,7 @@ fn an_iteration_lands_under_a_protection_finding() {
     assert_eq!(state_of(&r, "T-001").as_deref(), Some("done"));
 }
 
-// the second head is a branch this checkout never built, so the step must not read it
+// pull 14 is T-002's in OPEN_TASKS and no ticket's elsewhere
 fn open_pulls() -> Vec<Pull> {
     [(13, "task/T-001"), (14, "feature/elsewhere")]
         .map(|(number, head)| Pull {
@@ -4185,55 +4185,103 @@ fn driven_repo(tasks: &str) -> Repo {
     r
 }
 
-// one commit past HEAD, since a branch HEAD already carries is a merged pull request
-fn pull_branch(r: &Repo) {
-    enallagi::git::git(&r.root, &["branch", "task/T-001"]).expect("branch");
-    advance(r, "task/T-001");
+const OPEN_TASKS: &str = "\
+## [T-001] do the thing
+
+scope: src/thing.ts
+rows: none — harness
+status: open
+pr: https://github.com/owner/repo/pull/13
+branch: task/T-001
+criteria:
+  - it happens
+
+## [T-002] do the other thing
+
+scope: src/other.ts
+rows: none — harness
+status: open
+pr: https://github.com/owner/repo/pull/14
+branch: task/T-002
+criteria:
+  - it happens
+";
+
+fn field_of(r: &Repo, id: &str, key: &str) -> Option<String> {
+    let t = enallagi::tracker::Tracker::open(&r.root, ".enallagi");
+    enallagi::block::field(&t.get(id).expect("the queue")?, key)
 }
 
-fn advance(r: &Repo, branch: &str) {
-    let git = |args: &[&str]| enallagi::git::git(&r.root, args).expect("git");
-    let tree = git(&["rev-parse", &format!("{branch}^{{tree}}")]);
-    let commit = git(&[
-        "-c",
-        "user.name=t",
-        "-c",
-        "user.email=t@t",
-        "commit-tree",
-        tree.trim(),
-        "-p",
-        branch,
-        "-m",
-        "T-001: more",
-    ]);
-    git(&["update-ref", &format!("refs/heads/{branch}"), commit.trim()]);
+fn graphql_ops(calls: &[Vec<String>]) -> Vec<String> {
+    calls
+        .iter()
+        .filter(|c| c[..2] == ["api", "graphql"])
+        .filter_map(|c| c.iter().find_map(|a| a.strip_prefix("query=")))
+        .map(|q| {
+            q.split(['(', '{'])
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        })
+        .collect()
 }
 
 #[test]
-fn a_merged_pull_branch_calls_no_host() {
-    let r = driven_repo(DONE_TASK);
-    enallagi::git::git(&r.root, &["branch", "task/T-001"]).expect("branch");
-    let path = recording(&r, open_pulls(), PLAIN_REVIEW);
-    let out = run_with_path(&r, &path);
-    assert!(recorded(&r).is_empty(), "{out}");
+fn opened_pull_sets_open() {
+    let p = pulls("", "exit 0\n");
+    let (_, out) = p.run(&["--pr-per-task"]);
+    assert_eq!(state_of(&p.repo, "T-001").as_deref(), Some("open"), "{out}");
+    assert_eq!(
+        field_of(&p.repo, "T-001", "pr").as_deref(),
+        Some("https://github.com/owner/repo/pull/1")
+    );
+    assert_eq!(
+        field_of(&p.repo, "T-001", "branch").as_deref(),
+        Some("task/T-001")
+    );
+    let state = p.repo.root.join(".enallagi");
+    let dirty = enallagi::git::porcelain(&state);
+    assert!(dirty.is_empty(), "{dirty:?}");
 }
 
 #[test]
-fn an_unmerged_pull_branch_is_still_asked_about() {
-    let r = driven_repo(DONE_TASK);
-    enallagi::git::git(&r.root, &["branch", "task/T-001"]).expect("branch");
-    advance(&r, "task/T-001");
-    let path = recording(&r, Vec::new(), PLAIN_REVIEW);
+fn merged_pull_sets_done() {
+    let r = driven_repo(OPEN_TASKS);
+    let mut pulls = open_pulls();
+    pulls[0].state = "MERGED".to_string();
+    pulls[1].state = "CLOSED".to_string();
+    let path = recording(&r, pulls, PLAIN_REVIEW);
     let out = run_with_path(&r, &path);
-    let calls = recorded(&r);
-    assert_eq!(calls.len(), 1, "{calls:?}\n{out}");
-    assert_eq!(calls[0][..2], ["pr", "list"], "{calls:?}");
+    assert_eq!(state_of(&r, "T-001").as_deref(), Some("done"), "{out}");
+    assert_eq!(state_of(&r, "T-002").as_deref(), Some("wontfix"), "{out}");
+    assert_eq!(
+        field_of(&r, "T-002", "gate").as_deref(),
+        Some("pull request closed unmerged")
+    );
+    assert_eq!(graphql_ops(&recorded(&r)), ["query PullState"; 2]);
+}
+
+#[test]
+fn unchanged_pull_skipped() {
+    let r = driven_repo(OPEN_TASKS);
+    let mut pulls = open_pulls();
+    pulls[1].state = "MERGED".to_string();
+    let path = recording(&r, pulls, PLAIN_REVIEW);
+    run_with_path(&r, &path);
+    let first = graphql_ops(&recorded(&r));
+    assert_eq!(
+        first,
+        ["query PullState", "query ReviewThreads", "query PullState"]
+    );
+    let out = run_with_path(&r, &path);
+    let second = graphql_ops(&recorded(&r));
+    assert_eq!(second[first.len()..], ["query PullState"], "{out}");
 }
 
 #[test]
 fn iteration_queues_review() {
-    let r = driven_repo(DONE_TASK);
-    pull_branch(&r);
+    let r = driven_repo(OPEN_TASKS);
     let path = recording(&r, open_pulls(), PLAIN_REVIEW);
     let out = run_with_path(&r, &path);
 
@@ -4244,15 +4292,11 @@ fn iteration_queues_review() {
     );
     assert!(tasks.contains("#discussion_r1000000003"), "{tasks}");
     assert!(tasks.contains("status: needs-triage"), "{tasks}");
-
-    let calls = recorded(&r);
-    assert_eq!(calls.len(), 2, "{calls:?}");
-    assert_eq!(calls[0][..2], ["pr", "list"], "{calls:?}");
-    assert_eq!(calls[1][..2], ["api", "graphql"], "{calls:?}");
+    assert!(field_of(&r, "T-001", "polled").is_some(), "{tasks}");
 }
 
 #[test]
-fn a_checkout_with_no_pull_branch_calls_no_host() {
+fn no_open_pull_no_host() {
     let r = driven_repo(DONE_TASK);
     let path = recording(&r, open_pulls(), PLAIN_REVIEW);
     let out = run_with_path(&r, &path);
@@ -4260,11 +4304,10 @@ fn a_checkout_with_no_pull_branch_calls_no_host() {
 }
 
 #[test]
-fn a_missing_host_tool_warns_and_the_run_goes_on() {
-    let r = driven_repo(DONE_TASK);
-    pull_branch(&r);
+fn missing_gh_warns() {
+    let r = driven_repo(OPEN_TASKS);
     let out = run_with_path(&r, &without_gh(&r));
-    assert!(out.contains("gh pr list"), "{out}");
+    assert!(out.contains("gh api graphql"), "{out}");
     assert!(!out.contains("HALT"), "{out}");
     let log = std::fs::read_to_string(r.root.join(".enallagi/events.jsonl")).unwrap_or_default();
     assert!(log.contains("stage.start"), "{out}");

@@ -29,8 +29,8 @@ queue. No line under `## Comments` opens with `## `: that ends the section.
 
 | Part | Meaning |
 | --- | --- |
-| `**Status:**` | `needs-triage` (the scout's or the verifier's filing, inert to the loop) · `ready-for-agent` · `ready-for-human` (needs a person or a human credential; no launcher takes it) · `review` (the implementer's last act) · `done` (the verifier's, and the launcher re-runs the gate behind it) · `needs-info` (the spec does not answer a question the ticket hit; the run halts) · `wontfix` (killed, with its reason; the file stays). |
-| `**Blocked by:**` | `None`, or comma-separated ticket ids. The launcher takes no ticket whose blockers are not all `done`. |
+| `**Status:**` | `needs-triage` (the scout's or the verifier's filing, inert to the loop) · `ready-for-agent` · `ready-for-human` (needs a person or a human credential; no launcher takes it) · `review` (the implementer's last act) · `open` (the launcher's, once it opens the ticket's pull request under `[pr] per_task`; no lane takes it) · `done` (the verifier's, and the launcher re-runs the gate behind it; under `[pr] per_task` the launcher's, when the pull request merges) · `needs-info` (the spec does not answer a question the ticket hit; the run halts) · `wontfix` (killed, with its reason; the file stays). |
+| `**Blocked by:**` | `None`, or comma-separated ticket ids. The launcher takes no ticket whose blockers are not all `done` or `open`. |
 | `## Acceptance criteria` | `- [ ]` items, runnable by an agent that has read only the context file, the spec, __ENALLAGI_DIR__/LEARNINGS.md and this ticket. Criteria assuming conversational context are unrunnable. |
 | `## Comments` | the evidence, quoted as found, including another repository's identifiers, then each role's notes and verdicts in turn. The criteria describe a finding from another repository by its shape, never by those identifiers, and so do the fixtures, test names and evals written from it. |
 | `scope:` | comma-separated globs. A directory is written `dir/**`, since a bare `dir` matches none of its files. The `one-scope` rail: touching anything outside them is a rejection. Write the line from the consumers the criteria's own commands list, never from a count. Those are the files `grep -rln <symbol>` finds over the tree, the rendered copy of every template named, and the test that hashes a file named. A path added later needs a one-line `widened:` reason, which the verifier grades. |
@@ -40,6 +40,7 @@ queue. No line under `## Comments` opens with `## `: that ends the section.
 | `verdict:` | `verified by verifier`, `rejected by verifier: <reason>` or `answered by implementer`, replaced each time. The `verdict` gate checks it against `**Status:**`. |
 | `spec:` `standards:` | directly under `verdict:`, the verifier's findings on each review axis, or `none`. A `done` missing either goes back to `ready-for-agent`. |
 | `ran:` `exit:` | pairs under the verdict: a command a claim rests on and the exit it gave. The `claims` gate re-runs them. |
+| `pr:` `branch:` `polled:` | written by the launcher: the open pull request's URL, its head branch, and the poll's last key (head sha, newest comment and review, check rollup). |
 | `deferred:` | the verifier's `needs-triage` filing for a defect outside the criteria, by id and reason. The `commit-verdict` gate reads it. |
 
 A lane edits only its own ticket file. The one other file it may add is a new ticket at

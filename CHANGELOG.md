@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- under `[pr] per_task` an opened pull request sets its ticket `open` with `pr:` and `branch:`; each iteration polls every `open` ticket with one light read, sets `done` on merge and `wontfix` on close, and re-reads reviews only when the head, newest comment or review, or check rollup changed (`polled:`); a blocker at `open` frees its dependent; pull requests are no longer found through local `task/` branches
 - `enallagi pr` and `tasks landed` skip a state commit (a subject ending ` at <sha>`) that names the ticket, so an in-tree install's queue commits never reach a pull request
 - under `[parallel] writers = N` (N > 1), `enallagi worktree` runs up to N lanes at once, each pinned to a ticket its claim holds (`run/claims.json`, no two overlapping scopes), with the budget left split across the slots, and falls back to one unpinned lane when nothing can be claimed
 - under `writers > 1` lanes land one at a time: a lane whose parent moved is rebased and its check re-run, and a conflict or a red check sends its ticket back to `ready-for-agent` with an `integrate` gate event
