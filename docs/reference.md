@@ -143,9 +143,11 @@ Each run in the log is a lane: the stages and output panes show the focused lane
 ### Parallel lanes
 
 Under `[parallel] writers = N` above 1, `enallagi worktree` runs up to N writer lanes, each pinned to one ticket with `run --task`.
+Before the first lane, the parent vendors every declared skill and role and commits them, so no two lanes write `harness.lock`.
 A lane takes its ticket through a claim in `.enallagi/run/claims.json`, under a file lock: the lowest-id takeable ticket no live claim holds and whose `scope:` overlaps no live writer's.
 A ticket with no `scope:`, or a glob with no literal prefix, overlaps every other.
 A claim is live while its lane's worktree exists.
+A lane claims after its worktree is created; a ticket another lane landed in between is missing from that worktree, and waits for the next `enallagi worktree`.
 A reader lane (`run --task <id> --pipeline review`) takes a reader claim on a `review` ticket no claim holds; it blocks no writer and does not count toward N.
 When nothing can be claimed and no lane is live, one unpinned lane runs as under one writer.
 Each lane's `BUDGET_USD` and `BUDGET_TOKENS` are what is left divided by N.

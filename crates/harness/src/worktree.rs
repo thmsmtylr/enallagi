@@ -770,6 +770,7 @@ fn landed(
     let (branch, dir, pairs) = create_worktree(root, cfg, &base)?;
     let state = (pairs.len() > 1).then(|| pairs[0].1.clone());
 
+    // ponytail: claim follows the lock, a landing between can outrun the base; claim under the lock
     drop(setup);
     let run_error = run(&dir).err().map(|e| e.to_string());
     let parallel = cfg.parallel.writers.get() > 1;
