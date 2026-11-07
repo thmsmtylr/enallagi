@@ -49,6 +49,15 @@ fn spec_for(root: &Path, cfg: &Config, ids: &[&str]) -> String {
     own.unwrap_or_else(|| "the `spec.md` beside each ticket's `issues/` directory".into())
 }
 
+// an installed role file already names the default spec, so the ticket's replaces it at render
+fn role_text(source: &str, cfg: &Config, spec: &str) -> String {
+    let text = config::subst(source, cfg);
+    match cfg.layout.spec.is_empty() {
+        true => text,
+        false => text.replace(&cfg.layout.spec, spec),
+    }
+}
+
 fn prompt_for(role: &str, cfg: &Config, spec: &str) -> String {
     let body = match role {
         "scout" => SCOUT.to_string(),
@@ -1309,7 +1318,11 @@ impl<'a> Loop<'a> {
             self.halt("stage", format!("role {role} has no prompt file"));
             return Err(Flow::Stop);
         };
-        let source = config::subst(&source, self.cfg);
+        let source = role_text(
+            &source,
+            self.cfg,
+            &self.stage_spec(role, handed, task.as_deref()),
+        );
         let ids = skills::required_ids(&source);
         let resolved_skills = match skills::resolve(
             self.root,
@@ -2412,19 +2425,23 @@ impl<'a> Loop<'a> {
     }
 
     // the prompt carries the ids the stage was sized for, so it decides those and no others
-    fn stage_prompt(&self, role: &str, ids: &[String], task: Option<&str>) -> String {
+    fn stage_spec(&self, role: &str, ids: &[String], task: Option<&str>) -> String {
         let ticket: Vec<&str> = match task {
             Some(t) => vec![t],
             None => ids.iter().map(String::as_str).collect(),
         };
-        let spec = match (role, task) {
+        match (role, task) {
             ("decomposer", Some(slug)) => config::instance_rel(
                 self.root,
                 &self.cfg.layout.harness_dir,
                 &format!("{}/{slug}/spec.md", tracker::SPECS),
             ),
             _ => spec_for(self.root, self.cfg, &ticket),
-        };
+        }
+    }
+
+    fn stage_prompt(&self, role: &str, ids: &[String], task: Option<&str>) -> String {
+        let spec = self.stage_spec(role, ids, task);
         let mut prompt = prompt_for(role, self.cfg, &spec);
         if let (Some(id), "implementer") = (&self.opts.task, role) {
             prompt = prompt.replace("the one `enallagi tasks ready` prints.", &format!("{id}."));
@@ -2924,6 +2941,13 @@ mod tests {
             two.contains("the `spec.md` beside each ticket's `issues/` directory"),
             "{two}"
         );
+        // the role file as init installs it names the default spec until the stage renders it
+        let installed = config::subst(include_str!("../../../roles/implementer.md"), &cfg);
+        repo.write(".enallagi/roles/implementer.md", &installed);
+        let source = role_source(&repo.root, &cfg, "implementer").expect("role");
+        let role = role_text(&source, &cfg, &spec_for(&repo.root, &cfg, &["T-002"]));
+        assert!(role.contains(".enallagi/specs/c/spec.md"), "{role}");
+        assert!(!role.contains("specs/a/"), "{role}");
     }
 
     #[test]

@@ -1019,6 +1019,33 @@ fn harness(root: &std::path::Path, args: &[&str]) -> (i32, String) {
     (out.status.code().unwrap_or(-1), text)
 }
 
+// a lane under ENALLAGI_PARENT hears in its implementer prompt what landed on the parent
+#[test]
+fn prompt_names_landing() {
+    let r = repo("", TASKS);
+    let implement = implementer(&r, "printf '%s' \"$1\" >.git/impl-prompt\n");
+    let verify = verifier(&r);
+    write_toml(&r, &base_toml(&role_commands(&implement, &verify)));
+    r.commit_all("stubs");
+    installed(&r);
+    r.commit_all("installed");
+    let git = |args: &[&str]| enallagi::git::git(&r.root, args).expect("git");
+    let lane = git(&["rev-parse", "--abbrev-ref", "HEAD"]);
+    git(&["checkout", "-q", "-b", "parent"]);
+    r.write("one.rs", "x");
+    r.commit_all("feat: landed elsewhere");
+    git(&["checkout", "-q", &lane]);
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["run", "--iterations", "1", "--no-tui"])
+        .current_dir(&r.root)
+        .env_remove("CI")
+        .env("ENALLAGI_PARENT", "parent")
+        .output()
+        .expect("run enallagi");
+    let prompt = std::fs::read_to_string(r.root.join(".git/impl-prompt")).unwrap_or_default();
+    assert!(prompt.contains("landed elsewhere"), "{prompt}\n{out:?}");
+}
+
 // the first external run's shape: enallagi.toml's check was edited and no one re-ran init
 #[test]
 fn stale_install_refuses_run() {
@@ -4743,18 +4770,28 @@ fn self_resolved_skipped() {
 fn token_env_reaches_gh() {
     let p = answered(&[]);
     let (_, out) = p.run_env(&[], &[("ENALLAGI_GH_TOKEN", "tok")]);
+    p.run_env(&[], &[("ENALLAGI_GH_TOKEN", "tok")]);
     let state = twin::load(&p.twin);
-    let tokens: Vec<&String> = state
+    // every write: thread replies and resolves, and the comment listing the rest
+    let writes: Vec<(String, &String)> = state
         .calls
         .iter()
         .zip(&state.tokens)
-        .filter(|(c, _)| {
-            c.iter()
-                .any(|a| a.starts_with("query=mutation ReplyThread"))
+        .filter_map(|(c, t)| {
+            let mutation = c.iter().find_map(|a| a.strip_prefix("query=mutation "));
+            let op = match mutation {
+                Some(m) => m.split('(').next()?.to_string(),
+                None if c[..2] == ["pr", "comment"] => "comment".to_string(),
+                None => return None,
+            };
+            Some((op, t))
         })
-        .map(|(_, t)| t)
         .collect();
-    assert_eq!(tokens, ["tok"], "{out}");
+    let ops: Vec<&str> = writes.iter().map(|(op, _)| op.as_str()).collect();
+    for op in ["ReplyThread", "ResolveThread", "comment"] {
+        assert!(ops.contains(&op), "{op} not in {ops:?}\n{out}");
+    }
+    assert!(writes.iter().all(|(_, t)| *t == "tok"), "{writes:?}");
 }
 
 #[test]

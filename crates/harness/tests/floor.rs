@@ -592,6 +592,7 @@ fn the_skill_hook_fires_on_a_headless_lane() {
     assert_eq!(cfg.skill.len(), 13);
     for skill in &cfg.skill {
         assert!(skill.rev.is_some(), "{} is unpinned", skill.id);
+        assert!(!skill.gate.is_empty(), "{} has no gate", skill.id);
         assert!(
             skill.path.ends_with(&format!("/{}", skill.id)),
             "{} is not its upstream name",
@@ -1831,6 +1832,21 @@ fn role_restated(text: &str) -> Vec<String> {
             .filter(|l| l.starts_with("| Role |"))
             .map(String::from),
     );
+    // three tracker states on one line is a status list the ticket reference owns
+    let states = [
+        "needs-triage",
+        "ready-for-agent",
+        "ready-for-human",
+        "needs-info",
+        "wontfix",
+        "review",
+        "done",
+    ];
+    found.extend(
+        text.lines()
+            .filter(|l| states.iter().filter(|s| l.contains(*s)).count() >= 3)
+            .map(String::from),
+    );
     found
 }
 
@@ -1842,6 +1858,8 @@ fn skill_points_roles() {
     assert!(skill.contains("references/ticket.md"), "{skill}");
     assert_eq!(role_restated("the four roles"), ["four roles"]);
     assert_eq!(role_restated("| Role | Does |\n"), ["| Role | Does |"]);
+    let list = "`needs-triage`, `ready-for-agent`, `done`";
+    assert_eq!(role_restated(list), [list]);
 }
 
 fn keys_missing(text: &str) -> Vec<&'static str> {
