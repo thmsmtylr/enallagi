@@ -1024,6 +1024,61 @@ impl Tracker {
     pub fn next_id(&self, archived: &[Block]) -> Result<String, QueueError> {
         Ok(block::next_id(&self.blocks()?, archived))
     }
+
+    /// Renames each of this queue's ticket files whose id `parent` holds at another path to the next free id, rewriting the id in it and in `own`'s file. Returns (old, new) pairs.
+    pub fn renumber(
+        &self,
+        parent: &Tracker,
+        own: Option<&str>,
+    ) -> std::io::Result<Vec<(String, String)>> {
+        let id_of = |p: &Path| {
+            let rest = p.file_name()?.to_str()?.strip_prefix("T-")?;
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            (!digits.is_empty()).then(|| format!("T-{digits}"))
+        };
+        let rel = |t: &Tracker, p: &Path| p.strip_prefix(&t.0).map(Path::to_path_buf).ok();
+        let held: Vec<(String, PathBuf)> = ticket_files(&parent.0)
+            .iter()
+            .filter_map(|p| Some((id_of(p)?, rel(parent, p)?)))
+            .collect();
+        let mine = ticket_files(&self.0);
+        let mut high = held
+            .iter()
+            .map(|(id, _)| id.clone())
+            .chain(mine.iter().filter_map(|p| id_of(p)))
+            .map(|id| number(&id))
+            .max()
+            .unwrap_or(0);
+        let own_path = own.and_then(|id| self.path_of(id));
+        let mut out = Vec::new();
+        for path in mine {
+            let (Some(id), Some(at)) = (id_of(&path), rel(self, &path)) else {
+                continue;
+            };
+            if !held.iter().any(|(h, p)| *h == id && *p != at) || Some(&path) == own_path.as_ref() {
+                continue;
+            }
+            high += 1;
+            let new = format!("T-{high:03}");
+            let word = regex::Regex::new(&format!(r"\b{id}\b")).expect("an id is a valid pattern");
+            let text = std::fs::read_to_string(&path)?;
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            std::fs::write(
+                path.with_file_name(name.replacen(&id, &new, 1)),
+                word.replace_all(&text, new.as_str()).as_ref(),
+            )?;
+            std::fs::remove_file(&path)?;
+            if let Some(own) = &own_path {
+                let text = std::fs::read_to_string(own)?;
+                std::fs::write(own, word.replace_all(&text, new.as_str()).as_ref())?;
+            }
+            out.push((id, new));
+        }
+        Ok(out)
+    }
 }
 
 /// Every ticket as the instance repository held it at `rev`.

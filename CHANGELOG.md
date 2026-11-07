@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- under `writers > 1` a ticket a lane filed whose id another lane landed first is renamed to the next free id at landing, and the old id is rewritten in it and in the lane's own ticket
 - the GitHub twin serves `ReplyThread` and `ResolveThread` in place of `SettleThread`, records each call's `GH_TOKEN` under `tokens`, resolves the thread ids a script round's `resolve` names, and posts a scripted finding with no `path` as a summary row only
 - a new finding with the same author, path and words as one the ticket rejected is not routed: the launcher replies with the rejection's URL, resolves its thread, records `settled: F-<n> <url> for <new url>` and starts no round
 - the respond loop stops: inside `[respond] quiet` (default `10m`) after a push the poll judges nothing, and the launcher sleeps to the window's end when nothing else can run; new in-scope findings after `[respond] max_rounds` (default `3`) set `ready-for-human` and `respond: max_rounds`; no new finding, green checks and every thread resolved write `respond: clean at <sha>`; each push asks every `[respond] rereview` reviewer again

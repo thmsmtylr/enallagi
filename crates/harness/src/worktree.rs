@@ -765,6 +765,32 @@ fn landed(
     } else if !stuck.is_empty() {
         return Ok(left(stuck.join("\n")));
     }
+    if parallel {
+        let hd = &cfg.layout.harness_dir;
+        let lane_queue = crate::tracker::Tracker::open(&dir, hd);
+        let renamed = lane_queue
+            .renumber(&crate::tracker::Tracker::open(root, hd), held.as_deref())
+            .map_err(|e| e.to_string())
+            .and_then(|pairs| {
+                let names: Vec<String> = pairs.iter().map(|(o, n)| format!("{o} as {n}")).collect();
+                match names.is_empty() {
+                    true => Ok(()),
+                    false => git::commit_instance(
+                        &dir,
+                        hd,
+                        &[crate::tracker::SPECS],
+                        &format!("chore: integrate renumbered {}", names.join(", ")),
+                    )
+                    .map(drop)
+                    .map_err(|e| e.to_string()),
+                }
+            });
+        if let Err(e) = renamed {
+            return Ok(back(format!(
+                "integrate: renumbering {branch}'s tickets failed: {e}"
+            )));
+        }
+    }
 
     let mut said: Vec<String> = followed.into_iter().collect();
     let mut merged: Vec<(&PathBuf, String)> = Vec::new();
@@ -1228,6 +1254,54 @@ mod tests {
         assert!(gate_line(&r, "T-001").contains("conflicts with"));
         assert!(!r.root.join("one.txt").exists());
         kept(&r, &report);
+    }
+
+    fn file_in(wt: &Path, id: &str, title: &str) {
+        let t = Tracker::open(wt, ".enallagi");
+        let spec = t.spec_of("T-001").expect("the fixture spec");
+        t.append(&spec, &format!("## [{id}] {title}\nstatus: needs-triage\n"))
+            .expect("file");
+    }
+
+    #[test]
+    fn colliding_filed_id_renumbered() {
+        let r = parallel_repo("exit 0\n");
+        let cfg = cfg(&r);
+        let report = lane(&r.root, &cfg, &mut |wt| {
+            claimed(&r, &cfg, wt, "T-001");
+            let first = lane(&r.root, &cfg, &mut |wt| {
+                claimed(&r, &cfg, wt, "T-002");
+                file_in(wt, "T-003", "a finding");
+                land(wt, "T-002", "two.txt");
+                Ok(())
+            })
+            .expect("first lane");
+            assert!(first.merged, "{}", first.reason);
+            file_in(wt, "T-003", "b finding");
+            Tracker::open(wt, ".enallagi")
+                .set_field("T-001", "deferred", "T-003 b finding")
+                .expect("deferred");
+            land(wt, "T-001", "one.txt");
+            Ok(())
+        })
+        .expect("lane");
+
+        assert!(report.merged, "{}", report.reason);
+        let t = Tracker::open(&r.root, ".enallagi");
+        let blocks = t.blocks().expect("ids unique");
+        let titles: Vec<(&str, &str)> = blocks
+            .iter()
+            .map(|b| (b.id.as_str(), b.title.as_str()))
+            .collect();
+        assert!(titles.contains(&("T-003", "a finding")), "{titles:?}");
+        assert!(titles.contains(&("T-004", "b finding")), "{titles:?}");
+        let name = t.path_of("T-004").expect("T-004 file");
+        assert!(name.ends_with("T-004-b-finding.md"), "{}", name.display());
+        let own = t.get("T-001").expect("queue").expect("T-001");
+        assert_eq!(
+            crate::block::field(&own, "deferred").as_deref(),
+            Some("T-004 b finding")
+        );
     }
 
     #[test]
