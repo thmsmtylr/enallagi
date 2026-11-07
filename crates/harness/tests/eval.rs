@@ -545,3 +545,31 @@ fn decomposer_assert_holds() {
         r.stderr
     );
 }
+
+// the claude adapter's agent file is a second copy of the role, read as readily as the role
+#[test]
+fn ablate_reaches_agent_copy() {
+    let pkg = package();
+    write_eval(
+        pkg.path(),
+        "rule",
+        "RULE",
+        "true",
+        "grep -q . .enallagi/adapters/claude/agents/verifier.md",
+        Some(": >.enallagi/roles/verifier.md\n"),
+    );
+    let stub = pkg.path().join("stub.sh");
+    write_exec(&stub, ":\n");
+    let r = run_gate(
+        pkg.path(),
+        Some(&format!("{} {{prompt}}", stub.display())),
+        "rule",
+    );
+    assert_eq!(
+        last_line(&r.stdout),
+        "GATE rule ACCEPT fixes its case, fails without itself, regresses nothing",
+        "{} {}",
+        r.stdout,
+        r.stderr
+    );
+}

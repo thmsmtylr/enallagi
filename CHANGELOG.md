@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `enallagi eval --gate`: an ablated role is copied over the adapter's agent file too, so the ablated agent never reads the full role
 - new eval `decomposer`: an accepted spec's drafts pass `tasks check` with `spec.md` unchanged; no ablation, the role is `to-tickets` plus `tasks check`
 - new pipeline `decompose` (`when = "spec.undecomposed"`, after `review`): a `spec.md` at `**Status:** ready-for-agent` with no tickets is broken into drafts by the new `decomposer` role, numbered and committed by the `tickets` gate, and triaged by the adjudicator in the same round; `tickets` now commits the round
 - new gate `tickets` (`enallagi gate tickets <spec>` by hand): a spec's drafts that pass `tasks check` become `T-NNN-<slug>.md` tickets at `needs-triage` with `probe: decompose` and mapped blockers; a failing check halts and leaves the drafts; a ticket file's bare `- [ ]` lines read as its criteria

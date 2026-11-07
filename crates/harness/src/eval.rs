@@ -168,6 +168,27 @@ fn run_agent(argv: &[String], prompt: &str, cwd: &Path) -> bool {
         .unwrap_or(false)
 }
 
+// an adapter's agent file is a second copy of its role, so an ablated role is ablated there too
+fn agents_follow_roles(root: &Path) {
+    let dir = config::harness_dir(root);
+    let at = |rel: &str| config::instance_path(root, &dir, rel);
+    let (Ok(roles), Ok(adapters)) = (
+        std::fs::read_dir(at("roles")),
+        std::fs::read_dir(at("adapters")),
+    ) else {
+        return;
+    };
+    let roles: Vec<_> = roles.flatten().map(|e| e.path()).collect();
+    for agents in adapters.flatten().map(|a| a.path().join("agents")) {
+        for role in &roles {
+            let copy = agents.join(role.file_name().unwrap_or_default());
+            if copy.is_file() {
+                let _ = std::fs::copy(role, copy);
+            }
+        }
+    }
+}
+
 fn run_one(pkg: &Path, name: &str, agent_argv: &[String], ablate: bool) -> Outcome {
     let dir = eval_dir(pkg, name);
 
@@ -188,6 +209,7 @@ fn run_one(pkg: &Path, name: &str, agent_argv: &[String], ablate: bool) -> Outco
         if !run_script(&ablate_sh, &repo.root, Some(pkg)) {
             return Outcome::FixtureError;
         }
+        agents_follow_roles(&repo.root);
     }
 
     // committed before setup.sh, so a setup that leaves work uncommitted on purpose is what the agent sees
