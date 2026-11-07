@@ -475,6 +475,7 @@ pub fn run(root: &Path, opts: &RunOpts, sink: Sink) -> anyhow::Result<Digest> {
         refusals: std::collections::HashMap::new(),
         stopped: false,
         built: Vec::new(),
+        noted: Default::default(),
     };
     looper.go()
 }
@@ -561,6 +562,45 @@ struct Loop<'a> {
     stopped: bool,
     // tasks whose pull-request branch this run built, in order, so a dependent task stacks on one
     built: Vec<String>,
+    // the parent tip the last concurrent-change note reached
+    noted: std::cell::RefCell<Option<String>>,
+}
+
+// other lanes' landings on `parent` since this lane's base, each named once per run
+fn landings(root: &Path, parent: &str, noted: &mut Option<String>) -> Option<String> {
+    let tip = git::git(root, &["rev-parse", parent]).ok()?;
+    let from = match noted.take() {
+        Some(sha) => sha,
+        None => git::git(root, &["merge-base", "HEAD", parent]).ok()?,
+    };
+    *noted = Some(tip.clone());
+    let log = git::git(
+        root,
+        &[
+            "log",
+            "--format=%x00%h %s",
+            "--name-only",
+            &format!("{from}..{tip}"),
+        ],
+    )
+    .ok()?;
+    let lines: Vec<String> = log
+        .split('\0')
+        .filter_map(|c| {
+            let mut lines = c.lines().filter(|l| !l.trim().is_empty());
+            let head = lines.next()?;
+            Some(format!(
+                "- {head} ({})",
+                lines.collect::<Vec<_>>().join(", ")
+            ))
+        })
+        .collect();
+    (!lines.is_empty()).then(|| {
+        format!(
+            "Other lanes landed these commits on {parent} since your base; build on them and do not redo them:\n{}",
+            lines.join("\n")
+        )
+    })
 }
 
 // a respond round's worktree on its pull request's branch, and the checkout the loop returns to
@@ -2269,6 +2309,12 @@ impl<'a> Loop<'a> {
                 prompt.push(' ');
                 prompt.push_str(&clause);
             }
+            if let Ok(parent) = std::env::var("ENALLAGI_PARENT") {
+                if let Some(note) = landings(self.root, &parent, &mut self.noted.borrow_mut()) {
+                    prompt.push(' ');
+                    prompt.push_str(&note);
+                }
+            }
         }
         if ids.is_empty() {
             return prompt;
@@ -2739,6 +2785,35 @@ mod tests {
             two.contains("the `spec.md` beside each ticket's `issues/` directory"),
             "{two}"
         );
+    }
+
+    #[test]
+    fn note_lists_landings() {
+        let r = crate::fixture::Repo::new();
+        let parent = git::git(&r.root, &["rev-parse", "--abbrev-ref", "HEAD"]).expect("branch");
+        git::git(&r.root, &["checkout", "-q", "-b", "lane"]).expect("lane");
+        let land = |file: &str, msg: &str| {
+            git::git(&r.root, &["checkout", "-q", &parent]).expect("parent");
+            r.write(file, "x");
+            r.commit_all(msg);
+            git::git(&r.root, &["checkout", "-q", "lane"]).expect("lane");
+        };
+        let mut noted = None;
+        assert_eq!(landings(&r.root, &parent, &mut noted), None);
+        land("one.rs", "feat: first landing");
+        let first = landings(&r.root, &parent, &mut noted).expect("a note");
+        assert!(
+            first.contains("first landing") && first.contains("one.rs"),
+            "{first}"
+        );
+        land("two.rs", "feat: second landing");
+        let second = landings(&r.root, &parent, &mut noted).expect("a note");
+        assert!(
+            second.contains("second landing") && second.contains("two.rs"),
+            "{second}"
+        );
+        assert!(!second.contains("first landing"), "{second}");
+        assert_eq!(landings(&r.root, &parent, &mut noted), None);
     }
 
     #[test]

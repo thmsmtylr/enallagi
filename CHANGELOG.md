@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- a writer lane's implementer prompt lists the commits other lanes landed on the parent branch since its base (short sha, subject, files), each once per run
 - under `writers > 1` a ticket a lane filed whose id another lane landed first is renamed to the next free id at landing, and the old id is rewritten in it and in the lane's own ticket
 - the GitHub twin serves `ReplyThread` and `ResolveThread` in place of `SettleThread`, records each call's `GH_TOKEN` under `tokens`, resolves the thread ids a script round's `resolve` names, and posts a scripted finding with no `path` as a summary row only
 - a new finding with the same author, path and words as one the ticket rejected is not routed: the launcher replies with the rejection's URL, resolves its thread, records `settled: F-<n> <url> for <new url>` and starts no round
