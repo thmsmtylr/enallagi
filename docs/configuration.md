@@ -30,6 +30,7 @@ A compound check line (`cd sub && pytest`) runs whole inside it.
 - `sandbox.hosts`: hosts the egress proxy also allows. An entry is a name or `*.suffix` (subdomains, not the apex), with an optional `:port`, 443 by default. GitHub's API and release hosts and the configured presets' hosts are always allowed. Init writes the detected runner's registries.
 - `sandbox.ports`: host loopback ports a lane may connect to, for a suite that needs a local database. Default empty.
 - `sandbox.write`: extra writable paths, `~/` expanded. Default empty. Init writes the detected runner's caches.
+- `sandbox.env`: launcher variables a lane also inherits, by name. Default empty. A lane otherwise sees only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `COLORTERM`, `LANG`, `LANGUAGE`, `TZ`, `LC_*`, `XDG_*`, `ENALLAGI_*` except `[respond] token_env`, and the agent keys `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY` and `GEMINI_API_KEY`; `GH_TOKEN` and every other credential stay with the launcher.
 
 A lane writes only to its checkout, both repositories' git dirs (never `config`, `hooks/` or worktree pointers), a per-spawn `TMPDIR`, the preset's own state paths and `sandbox.write`.
 No lane or check reads or writes `<harness_dir>/holdouts/`, its own or its parent instance's, or `~/.cache/enallagi/holdouts/`, and renaming a parent does not expose them. No lane reads `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc` or `~/.config/gh`: the launcher, not a lane, pushes and calls GitHub.

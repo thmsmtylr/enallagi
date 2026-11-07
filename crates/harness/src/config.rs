@@ -155,6 +155,7 @@ pub struct SandboxConfig {
     pub hosts: Vec<String>,
     pub ports: Vec<u16>,
     pub write: Vec<String>,
+    pub env: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]

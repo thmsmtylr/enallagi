@@ -17,6 +17,9 @@ fn nested() -> bool {
     set
 }
 
+// operator credentials in the launcher's env, which no lane may inherit
+const TOKENS: [&str; 4] = ["GH_TOKEN", "GITHUB_TOKEN", "ENALLAGI_GH_TOKEN", "NPM_TOKEN"];
+
 // the operator's secrets, planted in a home of our own: no test reads the real ones
 const SECRETS: [&str; 5] = [
     ".ssh/id",
@@ -36,6 +39,9 @@ fn native(ports: &[u16]) -> Config {
             std::fs::write(path, "secret\n").expect("write");
         }
         std::env::set_var("HOME", home);
+        for var in TOKENS {
+            std::env::set_var(var, "planted-token");
+        }
     });
     let mut cfg = Config::default();
     cfg.layout.harness_dir = ".enallagi".into();
@@ -115,6 +121,20 @@ fn direct_egress_refused() {
         "curl -s --max-time 5 --noproxy '*' http://1.1.1.1/",
     );
     assert!(!out.status.success(), "{}", text(&out));
+}
+
+#[test]
+fn credentials_unset() {
+    if nested() {
+        return;
+    }
+    let r = Repo::new();
+    let sb = Sandbox::start(&r.root, &native(&[]));
+    let out = text(&sh(&sb, &r.root, "env"));
+    assert!(!out.contains("planted-token"), "{out}");
+    for var in ["HOME=", "PATH="] {
+        assert!(out.lines().any(|l| l.starts_with(var)), "{out}");
+    }
 }
 
 #[test]

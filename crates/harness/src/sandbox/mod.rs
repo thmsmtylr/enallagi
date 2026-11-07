@@ -18,6 +18,25 @@ pub const BASE_HOSTS: &[&str] = &[
 
 const VAR: &str = "ENALLAGI_SANDBOX";
 
+// the only launcher env a lane inherits, beside `[sandbox] env`; agent keys reach only agent hosts
+const ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TERM",
+    "COLORTERM",
+    "LANG",
+    "LANGUAGE",
+    "TZ",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+];
+const ENV_PREFIXES: &[&str] = &["LC_", "XDG_", "ENALLAGI_"];
+
 // operator credentials no lane reads: the launcher, not a lane, pushes and calls GitHub (ADR 0004)
 const SECRETS: &[&str] = &[".ssh", ".aws", ".gnupg", ".netrc", ".config/gh"];
 
@@ -52,6 +71,9 @@ pub struct Sandbox {
     bwrap: PathBuf,
     ports: Vec<u16>,
     write: Vec<String>,
+    env: Vec<String>,
+    // `[respond] token_env`, kept from a lane though it carries the ENALLAGI_ prefix
+    token: String,
     dir: String,
     // removed on drop with every spawn's TMPDIR under it
     run: Option<tempfile::TempDir>,
@@ -63,6 +85,8 @@ pub struct Wrapped {
     pub argv: Vec<String>,
     pub cwd: PathBuf,
     pub env: Vec<(String, String)>,
+    // the launcher's env is cleared, so `env` is all the spawn sees
+    clear: bool,
 }
 
 // what one spawn may write, and the paths inside that it may not
@@ -121,6 +145,8 @@ impl Sandbox {
             bwrap: bwrap::find(root).unwrap_or_else(|| "bwrap".into()),
             ports: cfg.sandbox.ports.clone(),
             write: cfg.sandbox.write.clone(),
+            env: cfg.sandbox.env.clone(),
+            token: cfg.respond.token_env.clone(),
             dir: cfg.layout.harness_dir.clone(),
             run: live.then(|| dir_in("tmp")).flatten(),
             socks,
@@ -156,11 +182,19 @@ impl Sandbox {
                 argv,
                 cwd,
                 env: Vec::new(),
+                clear: false,
             };
         }
         let port = self.port_for(&role.hosts);
         let url = format!("http://127.0.0.1:{port}");
-        let mut env = Vec::new();
+        let mut env: Vec<(String, String)> = std::env::vars()
+            .filter(|(k, _)| {
+                *k != self.token
+                    && (ENV.contains(&k.as_str())
+                        || self.env.contains(k)
+                        || ENV_PREFIXES.iter().any(|p| k.starts_with(p)))
+            })
+            .collect();
         for var in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
             env.push((var.to_string(), url.clone()));
             env.push((var.to_ascii_lowercase(), url.clone()));
@@ -200,7 +234,12 @@ impl Sandbox {
             }
             _ => seatbelt(&policy, port, &self.ports, argv),
         };
-        Wrapped { argv, cwd, env }
+        Wrapped {
+            argv,
+            cwd,
+            env,
+            clear: true,
+        }
     }
 
     fn port_for(&self, hosts: &[String]) -> u16 {
@@ -236,6 +275,9 @@ impl Sandbox {
 impl Wrapped {
     pub fn command(&self) -> Command {
         let mut c = Command::new(&self.argv[0]);
+        if self.clear {
+            c.env_clear();
+        }
         c.args(&self.argv[1..])
             .current_dir(&self.cwd)
             .envs(self.env.iter().cloned());

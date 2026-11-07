@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- a confined lane inherits only an allowlist of the launcher's env (`PATH`, `HOME`, locale, `XDG_*`, `ENALLAGI_*`, the agent keys) plus the names in the new `[sandbox] env`; `GH_TOKEN`, `GITHUB_TOKEN`, `[respond] token_env` and every other credential stay with the launcher; `harness.default.toml` gains the `[sandbox]` table
 - the security gate reads its scanner pins from the binary, never from `harness.lock`, which a lane can write; `[[tool]]` entries are ignored and init no longer writes them
 - `docs/demo.sh` runs one spec from decompose to a dark merge against the GitHub twin, with Kilo and Greptile scripted; `merge = "auto"` counts an accepted spec not yet decomposed as open work; holdout sets resolve through the main worktree, so a respond lane's `holdout` gate runs them
 - under `[pr] merge = "auto"` each iteration merges an `open` ticket's pull request when its spec has holdouts, its base is the default branch, its head is the origin tip, every check passed, no thread is unresolved, `respond: clean at` names the head and the holdouts pass there; otherwise the digest names why it was left open; the GitHub twin serves `pr merge`
