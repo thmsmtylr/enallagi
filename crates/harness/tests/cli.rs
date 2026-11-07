@@ -1435,6 +1435,23 @@ fn legacy_config_name_warns() {
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
 }
 
+#[test]
+fn rejections_out_of_scope() {
+    let r = enallagi::fixture::Repo::new();
+    let kill = "- [2026-11-07] T-009 claimed a marker — refuted by a re-run: settled.";
+    r.write(
+        ".enallagi/.out-of-scope/marker.md",
+        &format!("# marker\n\n## Prior requests\n\n{kill}\n"),
+    );
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["tasks", "rejections"])
+        .current_dir(&r.root)
+        .output()
+        .expect("run tasks rejections");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{kill}\n"));
+}
+
 const DOC_UNRUNNABLE: [(&str, &str); 10] = [
     (
         "enallagi init --issue https://github.com/owner/repo/issues/12",

@@ -148,14 +148,11 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         }
         "rejections" => {
             let path = file_arg(a, 0, "DECISIONS.md");
-            if !path.exists() {
-                return Ok(0);
-            }
-            let text = match read_text(&path) {
-                Ok(t) => t,
-                Err(code) => return Ok(code),
+            let lines = match tracker::kill_lines(path.parent().unwrap_or(Path::new("."))) {
+                Ok(l) => l,
+                Err(e) => return Ok(fail(&e.into())),
             };
-            for line in block::rejections(&text) {
+            for line in lines {
                 println!("{line}");
             }
             Ok(0)
@@ -177,10 +174,6 @@ fn file_arg(a: &[String], pos: usize, default: &str) -> PathBuf {
         let root = super::root().unwrap_or_else(|_| PathBuf::from("."));
         crate::config::instance_path(&root, &crate::config::harness_dir(&root), default)
     })
-}
-
-fn read_text(path: &Path) -> Result<String, i32> {
-    std::fs::read_to_string(path).map_err(|e| fail(&e.into()))
 }
 
 // an argument is a specs tree

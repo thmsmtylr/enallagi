@@ -155,7 +155,7 @@ enallagi tasks rejections
 enallagi events --task T-001
 ```
 
-`tasks block T-001` prints the ticket with its reasons, and `tasks rejections` the kill lines under
-`## Rejected findings` in `DECISIONS.md`.
+`tasks block T-001` prints the ticket with its reasons, and `tasks rejections` the kill lines in
+`.out-of-scope/*.md`, then those under `## Rejected findings` in `DECISIONS.md`.
 `events --task` prints each stage and gate the task went through.
 Answer each point in the criteria or the scope, commit, and run again.

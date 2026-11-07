@@ -5,6 +5,7 @@ tagged. The release procedure is stated in `.github/workflows/release.yml`.
 
 ## Unreleased
 
+- `enallagi tasks rejections` prints the kill lines in `.out-of-scope/*.md` as well as those in `DECISIONS.md`
 - on Linux the holdout gate runs a set kept under `/tmp`, which bwrap's `/tmp` tmpfs used to hide; a holdout run cannot write its own set
 - `verifier.md` drops step 0 (uncommitted source is a rejection), which three `--gate verifier` runs found not load-bearing; the `verifier` eval has no `ablate.sh`
 - under `writers > 1` the launcher vendors every declared skill and role before the first lane, so two lanes never both write `harness.lock` and conflict at landing

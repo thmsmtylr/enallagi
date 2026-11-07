@@ -172,24 +172,6 @@ pub fn block_text(b: &Block) -> String {
     lines.join("\n")
 }
 
-pub fn rejections(decisions: &str) -> Vec<String> {
-    let mut inside = false;
-    let mut out = Vec::new();
-    for line in decisions.split('\n') {
-        if line.starts_with("## Rejected findings") {
-            inside = true;
-            continue;
-        }
-        if inside && match_heading(line).is_some() {
-            break;
-        }
-        if inside && line.starts_with("- [") {
-            out.push(line.to_string());
-        }
-    }
-    out
-}
-
 // id order is queue priority: takeable takes the first ready-for-agent ticket
 pub fn list(blocks: &[Block]) -> String {
     blocks
@@ -288,15 +270,6 @@ mod tests {
     fn list_shows_question_mark_for_empty_status_value() {
         let b = parse("## [T-1] a\nstatus:\n").unwrap();
         assert_eq!(list(&b), "T-1  a  \u{2192} ?");
-    }
-
-    #[test]
-    fn rejections_kill_lines() {
-        let d = "# DECISIONS\n\n## Rejected findings\n- [2026-09-01] a claim \u{2014} refuted by `x`: y\n\n## [T-001] done\n";
-        assert_eq!(
-            rejections(d),
-            vec!["- [2026-09-01] a claim \u{2014} refuted by `x`: y"]
-        );
     }
 
     const FIXTURE: &str = "# Blocks\n\n## Block format\n\n```\n## [T-042] the example in the documentation, which is not a task\nblockedBy:\nstatus: ready-for-agent\n```\n\n---\n\n## [T-001] a blocker that is done\nblockedBy:\nstatus: done\n\n## [T-002] ready, and its blocker is not\nblockedBy: T-009\nstatus: ready-for-agent\n\n## [T-003] ready, attended, not a lane's\nblockedBy: T-001\nstatus: ready-for-human\n\n## [T-004] the one a lane may take\nblockedBy: T-001\nstatus: ready-for-agent\nrows: none \u{2014} harness\n\n## [T-005] blocked, and every blocker is done\nblockedBy: T-001\nstatus: ready-for-agent\n\n## [T-006] blockedBy spelled none\nblockedBy: none\nstatus: review\n\n## [T-007] blocked, and its blocker is not done\nblockedBy: T-009\nstatus: ready-for-agent\n\n## [T-009] the blocker T-002 waits on\nblockedBy:\nstatus: ready-for-agent\n";
