@@ -26,7 +26,7 @@ without it their `setup.sh` exits non-zero and the eval reports `ERROR`, not a r
 
 ## A REJECT
 
-Run against `claude -p` on 2026-09-02, `--gate verifier` rejected the rule it was holding:
+Run against `claude -p`, `--gate verifier` rejected the rule it was holding:
 
 ```
 GATE verifier REJECT the case passes with the rule ablated, so the rule changed no outcome
