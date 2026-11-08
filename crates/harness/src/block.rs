@@ -1,0 +1,351 @@
+//! the `## [T-NNN] title` block; a heading in a fenced code block is not one
+
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct Block {
+    pub id: String,
+    pub title: String,
+    pub line: usize,
+    pub body: Vec<(usize, String)>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum QueueError {
+    #[error(
+        "enallagi tasks: duplicate id {id} at lines {first} and {second} -- the queue is \
+         ambiguous and nothing here will guess"
+    )]
+    DuplicateId {
+        id: String,
+        first: usize,
+        second: usize,
+    },
+    #[error(
+        "enallagi tasks: the code fence opened at line {opened} never closes, so every block \
+         after it would be invisible. Close it."
+    )]
+    UnterminatedFence { opened: usize },
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("enallagi tasks: {id} is in both {first} and {second} -- the queue is ambiguous")]
+    DuplicateTicket {
+        id: String,
+        first: String,
+        second: String,
+    },
+    #[error("enallagi tasks: no such task {0}")]
+    NoSuchTask(String),
+}
+
+fn match_heading(line: &str) -> Option<(String, String)> {
+    let rest = line.strip_prefix("## [")?;
+    let close = rest.find(']')?;
+    let id = &rest[..close];
+    let digits = id.strip_prefix("T-")?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let title = rest[close + 1..].trim().to_string();
+    Some((id.to_string(), title))
+}
+
+fn is_fence(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("```") || trimmed.starts_with("~~~")
+}
+
+pub fn parse(text: &str) -> Result<Vec<Block>, QueueError> {
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut current: Option<usize> = None;
+    let mut fenced = false;
+    let mut opened = 0usize;
+    let mut seen: HashMap<String, usize> = HashMap::new();
+
+    for (index, line) in text.split('\n').enumerate() {
+        if is_fence(line) {
+            fenced = !fenced;
+            opened = index + 1;
+        }
+        if !fenced {
+            if let Some((id, title)) = match_heading(line) {
+                if let Some(&first) = seen.get(&id) {
+                    return Err(QueueError::DuplicateId {
+                        id,
+                        first,
+                        second: index + 1,
+                    });
+                }
+                seen.insert(id.clone(), index + 1);
+                blocks.push(Block {
+                    id,
+                    title,
+                    line: index + 1,
+                    body: Vec::new(),
+                });
+                current = Some(blocks.len() - 1);
+                continue;
+            }
+            if line.starts_with("## ") || line.starts_with("# ") {
+                current = None;
+                continue;
+            }
+        }
+        if let Some(i) = current {
+            blocks[i].body.push((index + 1, line.to_string()));
+        }
+    }
+    if fenced {
+        return Err(QueueError::UnterminatedFence { opened });
+    }
+    Ok(blocks)
+}
+
+/// a field's whole first line and the line it sits on
+pub fn field_at(b: &Block, key: &str) -> Option<(usize, String)> {
+    let prefix = format!("{key}:");
+    b.body.iter().find_map(|(at, line)| {
+        line.strip_prefix(&prefix)
+            .map(|rest| (*at, rest.trim().to_string()))
+    })
+}
+
+// status is its first word: everything after it is the reason (`deferred -- out of scope`)
+pub fn field(b: &Block, key: &str) -> Option<String> {
+    let (_, value) = field_at(b, key)?;
+    if key == "status" && !value.is_empty() {
+        return value.split_whitespace().next().map(str::to_string);
+    }
+    Some(value)
+}
+
+pub fn blockers(b: &Block) -> Vec<String> {
+    let raw = field(b, "blockedBy").unwrap_or_default().replace(' ', "");
+    if raw.is_empty() || raw == "none" {
+        return Vec::new();
+    }
+    raw.split(',')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// what an import writes where only the adjudicator can decide: a fix's scope and criteria
+pub const SCOPE_PLACEHOLDER: &str = "<written by the adjudicator at promotion>";
+pub const CRITERIA_PLACEHOLDER: &str =
+    "<objective, and naming the command whose output changes when it is done>";
+
+/// the `ready` blocks whose scope or criteria are still an import's placeholder
+pub fn unfilled_ready(blocks: &[Block]) -> Vec<String> {
+    blocks
+        .iter()
+        .filter(|b| {
+            crate::tracker::state(b).is_some_and(|s| crate::tracker::READY.contains(&s.as_str()))
+        })
+        .filter(|b| {
+            b.body.iter().any(|(_, line)| {
+                line.contains(SCOPE_PLACEHOLDER) || line.contains(CRITERIA_PLACEHOLDER)
+            })
+        })
+        .map(|b| b.id.clone())
+        .collect()
+}
+
+// a finished block's id is never free again: without DECISIONS.md a live task takes an archived id
+pub fn next_id(blocks: &[Block], archived: &[Block]) -> String {
+    let high = blocks
+        .iter()
+        .chain(archived)
+        .filter_map(|b| b.id.strip_prefix("T-")?.parse::<u64>().ok())
+        .max()
+        .unwrap_or(0);
+    format!("T-{:03}", high + 1)
+}
+
+pub fn heading(id: &str, title: &str) -> String {
+    format!("## [{id}] {title}")
+}
+
+pub fn block_text(b: &Block) -> String {
+    let mut lines = vec![heading(&b.id, &b.title)];
+    lines.extend(b.body.iter().map(|(_, l)| l.clone()));
+    lines.join("\n")
+}
+
+// id order is queue priority: takeable takes the first ready-for-agent ticket
+pub fn list(blocks: &[Block]) -> String {
+    blocks
+        .iter()
+        .map(|b| {
+            let status = field(b, "status")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "?".to_string());
+            let head = format!("{}  {:<44.44}", b.id, b.title);
+            format!("{}  \u{2192} {}", head.trim_end(), status)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unfilled_placeholder() {
+        let text = format!(
+            "## [T-001] a\nscope: {SCOPE_PLACEHOLDER}\nstatus: ready-for-agent\n\n\
+             ## [T-002] b\nscope: a.rs\nstatus: ready-for-agent\ncriteria:\n  - {CRITERIA_PLACEHOLDER}\n\n\
+             ## [T-003] c\nscope: {SCOPE_PLACEHOLDER}\nstatus: needs-triage\n\n\
+             ## [T-004] d\nscope: a.rs\nstatus: ready-for-agent\ncriteria:\n  - `cargo test` passes\n"
+        );
+        assert_eq!(unfilled_ready(&parse(&text).unwrap()), ["T-001", "T-002"]);
+    }
+
+    const Q: &str = "## [T-001] first\nscope: src/a.ts\nblockedBy: none\nstatus: ready-for-agent\ncriteria:\n  - x\n\n## [T-002] second\nscope: src/b.ts\nblockedBy: T-001\nstatus: ready-for-agent\n\n```\n## [T-999] not a task\nstatus: ready-for-agent\n```\n\n## [T-003] attended\nscope: src/c.ts\nblockedBy:\nstatus: ready-for-human\n";
+
+    #[test]
+    fn next_id_follows_the_highest_id() {
+        assert_eq!(next_id(&parse(Q).unwrap(), &[]), "T-004");
+        assert_eq!(next_id(&[], &[]), "T-001");
+        let wide = parse("## [T-1204] a\n\n## [T-7] b\n").unwrap();
+        assert_eq!(next_id(&wide, &[]), "T-1205");
+    }
+
+    #[test]
+    fn next_id_never_reissues_an_archived_id() {
+        let live = parse(Q).unwrap();
+        let archived = parse("## [T-050] landed\nstatus: done\n").unwrap();
+        assert_eq!(next_id(&live, &archived), "T-051");
+    }
+
+    #[test]
+    fn fenced_heading_is_not_a_task() {
+        let b = parse(Q).unwrap();
+        assert_eq!(
+            b.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(),
+            ["T-001", "T-002", "T-003"]
+        );
+    }
+
+    #[test]
+    fn duplicate_id_is_refused() {
+        assert!(matches!(
+            parse("## [T-1] a\n## [T-1] b\n"),
+            Err(QueueError::DuplicateId { .. })
+        ));
+    }
+
+    #[test]
+    fn unterminated_fence_is_refused() {
+        assert!(matches!(
+            parse("## [T-1] a\n```\n## [T-2] b\n"),
+            Err(QueueError::UnterminatedFence { opened: 2 })
+        ));
+    }
+
+    #[test]
+    fn status_first_word() {
+        let b = parse("## [T-1] a\nstatus: wontfix -- later\n").unwrap();
+        assert_eq!(field(&b[0], "status").as_deref(), Some("wontfix"));
+    }
+
+    #[test]
+    fn list_cuts_title() {
+        let b = parse(
+            "## [T-1] 0123456789012345678901234567890123456789012345678\nstatus: ready-for-agent\n",
+        )
+        .unwrap();
+        let l = list(&b);
+        assert!(l.starts_with("T-1  01234567890123456789012345678901234567890123  \u{2192} ready"));
+    }
+
+    #[test]
+    fn heading_title_trimmed() {
+        let b = parse("## [T-1]   a title   \nstatus: ready-for-agent\n").unwrap();
+        assert_eq!(b[0].title, "a title");
+    }
+
+    #[test]
+    fn list_shows_question_mark_for_empty_status_value() {
+        let b = parse("## [T-1] a\nstatus:\n").unwrap();
+        assert_eq!(list(&b), "T-1  a  \u{2192} ?");
+    }
+
+    const FIXTURE: &str = "# Blocks\n\n## Block format\n\n```\n## [T-042] the example in the documentation, which is not a task\nblockedBy:\nstatus: ready-for-agent\n```\n\n---\n\n## [T-001] a blocker that is done\nblockedBy:\nstatus: done\n\n## [T-002] ready, and its blocker is not\nblockedBy: T-009\nstatus: ready-for-agent\n\n## [T-003] ready, attended, not a lane's\nblockedBy: T-001\nstatus: ready-for-human\n\n## [T-004] the one a lane may take\nblockedBy: T-001\nstatus: ready-for-agent\nrows: none \u{2014} harness\n\n## [T-005] blocked, and every blocker is done\nblockedBy: T-001\nstatus: ready-for-agent\n\n## [T-006] blockedBy spelled none\nblockedBy: none\nstatus: review\n\n## [T-007] blocked, and its blocker is not done\nblockedBy: T-009\nstatus: ready-for-agent\n\n## [T-009] the blocker T-002 waits on\nblockedBy:\nstatus: ready-for-agent\n";
+
+    #[test]
+    fn a_title_is_read_off_the_heading() {
+        let blocks = parse(FIXTURE).unwrap();
+        let t004 = blocks.iter().find(|b| b.id == "T-004").unwrap();
+        assert_eq!(t004.title, "the one a lane may take");
+    }
+
+    #[test]
+    fn a_heading_inside_a_code_fence_is_not_a_task() {
+        let blocks = parse(FIXTURE).unwrap();
+        assert!(!blocks.iter().any(|b| b.id == "T-042"));
+    }
+
+    #[test]
+    fn real_blocks_parsed() {
+        let blocks = parse(FIXTURE).unwrap();
+        assert_eq!(blocks.len(), 8);
+    }
+
+    #[test]
+    fn blocked_by_none_is_no_blocker() {
+        let blocks = parse(FIXTURE).unwrap();
+        let t006 = blocks.iter().find(|b| b.id == "T-006").unwrap();
+        assert_eq!(blockers(t006), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_field_is_read_off_its_own_block() {
+        let blocks = parse(FIXTURE).unwrap();
+        let t004 = blocks.iter().find(|b| b.id == "T-004").unwrap();
+        assert_eq!(
+            field(t004, "rows").as_deref(),
+            Some("none \u{2014} harness")
+        );
+    }
+
+    #[test]
+    fn missing_field_none() {
+        let blocks = parse(FIXTURE).unwrap();
+        assert_eq!(field(&blocks[0], "rows"), None);
+    }
+
+    #[test]
+    fn a_status_is_its_first_word_the_rest_is_the_reason() {
+        let suffixed = FIXTURE.replace(
+            "status: done",
+            "status: done \u{2014} VERIFIED, the check was green",
+        );
+        let blocks = parse(&suffixed).unwrap();
+        let t001 = blocks.iter().find(|b| b.id == "T-001").unwrap();
+        assert_eq!(field(t001, "status").as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn a_duplicate_id_is_refused_not_resolved() {
+        let text = FIXTURE.replace("## [T-002]", "## [T-001]");
+        assert!(matches!(
+            parse(&text),
+            Err(QueueError::DuplicateId {
+                first: 13,
+                second: 17,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn fixture_unterminated_fence() {
+        let text = FIXTURE.replace("## [T-004]", "```\n## [T-004]");
+        assert!(matches!(
+            parse(&text),
+            Err(QueueError::UnterminatedFence { opened: 25 })
+        ));
+    }
+}

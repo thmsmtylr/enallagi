@@ -1,6 +1,4 @@
-//! `enallagi events` -- replays the log through the filters, keeping a matched stage's surrounding events and not the matching lines alone.
-
-use std::path::Path;
+//! `enallagi events` -- the log through the filters; a matched stage keeps its surrounding events
 
 use crate::events::{prefix_report, render_line, stage_of, task_of, Event, Kind, Log};
 
@@ -13,7 +11,7 @@ pub struct Args {
     pub prefix: bool,
 }
 
-// --role isn't here: it needs the whole stream (a stage's surrounding events, not just matches), so it's a separate pass in run
+// --role is a separate pass in run: it needs the whole stream, not just the matching lines
 pub struct Filter {
     pub task: Option<String>,
     pub since: Option<String>,
@@ -34,9 +32,8 @@ pub(crate) fn keep(e: &Event, opts: &Filter) -> bool {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let log = Log::open(Path::new(
-        &crate::config::load(Path::new("."))?.layout.harness_dir,
-    ));
+    let root = super::root()?;
+    let log = Log::open(&root.join(crate::config::load(&root)?.layout.harness_dir));
     let (pairs, _skipped) = match log.read_lines() {
         Ok(pairs) => pairs,
         Err(err) => {

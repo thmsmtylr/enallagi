@@ -1,10 +1,11 @@
-//! audit: review findings, frictions and rejections the repository already holds, handed to the `auditor` role, which names each class that recurs. The binary writes a learning only when every citation it carries resolves.
+//! audit: recurring findings go to the `auditor` role; a learning lands only if its cites resolve
 
+use crate::block::{self, QueueError};
 use crate::config::{self, Config};
 use crate::events::{Kind, Writer};
 use crate::git;
 use crate::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
-use crate::queue::{self, QueueError};
+use crate::tracker::Tracker;
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -164,20 +165,20 @@ fn frictions(root: &Path, cfg: &Config, rel: &str) -> Result<Vec<Signal>, AuditE
     Ok(out)
 }
 
-// a block `enallagi review` queued carries its comment's permalink
-fn reviewed(text: &str, rel: &str) -> Result<Vec<Signal>, AuditError> {
+// a block `enallagi review` queued carries its comment's permalink; `rel` names its file
+fn reviewed(blocks: Vec<block::Block>, rel: impl Fn(&str) -> String) -> Vec<Signal> {
     let permalink = Regex::new(r"/pull/\d+#(discussion_r|pullrequestreview)").expect("pattern");
-    Ok(queue::parse(text)?
+    blocks
         .into_iter()
         .filter(|b| b.body.iter().any(|(_, l)| permalink.is_match(l)))
         .map(|b| Signal {
-            at: format!("{rel}:{}", b.line),
+            at: format!("{}:{}", rel(&b.id), b.line),
             text: std::iter::once(b.title)
                 .chain(b.body.into_iter().map(|(_, l)| l))
                 .collect::<Vec<_>>()
                 .join("\n"),
         })
-        .collect())
+        .collect()
 }
 
 fn rejections(text: &str, rel: &str) -> Result<Vec<Signal>, AuditError> {
@@ -189,7 +190,7 @@ fn rejections(text: &str, rel: &str) -> Result<Vec<Signal>, AuditError> {
             text,
         })
         .collect();
-    for block in queue::parse(text)? {
+    for block in block::parse(text)? {
         out.extend(
             block
                 .body
@@ -296,7 +297,7 @@ fn words(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// Two texts overlap when they share two or more words and those make half of the smaller word set.
+/// two or more shared words that make half of the smaller word set
 pub fn overlaps(a: &str, b: &str) -> bool {
     let (a, b) = (words(a), words(b));
     let shared = a.intersection(&b).count();
@@ -450,17 +451,17 @@ fn prompt(role: &str, signal: &[Signal], rel: &str, handed: &[Ineffective]) -> S
 }
 
 // an installed role file overrides the shipped one, so an empty one leaves the agent no role
-fn role(root: &Path, cfg: &Config) -> String {
+fn source(root: &Path, cfg: &Config) -> String {
     let installed = root
         .join(&cfg.layout.harness_dir)
         .join("roles")
         .join("auditor.md");
     let text = fs::read_to_string(installed)
         .unwrap_or_else(|_| include_str!("../../../roles/auditor.md").to_string());
-    config::subst(body(&text), cfg)
+    config::subst(&text, cfg)
 }
 
-// an agent CLI reads a prompt that starts with `-` as an option, and the frontmatter starts with `---`
+// an agent CLI reads a leading `-` as an option, and the frontmatter starts with `---`
 fn body(role: &str) -> &str {
     role.strip_prefix("---\n")
         .and_then(|rest| rest.split_once("\n---\n"))
@@ -488,17 +489,19 @@ fn ask(
         stage: "auditor".to_string(),
         task: None,
         preset: resolved.preset,
+        role: crate::roles::policy(&source(root, cfg)),
     };
     let rate_limit = Regex::new(&format!("(?i){}", cfg.agent.rate_limit_pattern))
         .map_err(|e| AuditError::Agent(e.to_string()))?;
-    let stop_file = config::instance_path(root, dir, "STOP");
+    let stop_files = config::stop_files(root, dir);
     events.emit(Kind::StageStart {
         stage: spawn.stage.clone(),
         role: Some("auditor".to_string()),
         command: Some(spawn.preset.name.clone()),
         task: None,
     });
-    let result = crate::agent::spawn(&spawn, events, &stop_file, &rate_limit)
+    let sandbox = crate::sandbox::Sandbox::start(root, cfg);
+    let result = crate::agent::spawn(&spawn, &sandbox, events, &stop_files, &rate_limit)
         .map_err(|e| AuditError::Agent(e.to_string()))?;
     events.emit(Kind::StageEnd {
         stage: spawn.stage.clone(),
@@ -593,8 +596,7 @@ fn class_of(entry: &str) -> Option<String> {
     rest.split_once('`').map(|(class, _)| class.to_string())
 }
 
-// a class can be proposed again after its last proposal left, so count from the newest commit that added it;
-// if that commit removed it instead, this entry is uncommitted and as new as an entry gets
+// count from the newest commit adding the class; if it removed it, the entry is uncommitted
 fn age(root: &Path, cfg: &Config, rel: &str, needle: &str) -> usize {
     let (repo, inner, _) = git::locate(root, &cfg.layout.harness_dir, rel);
     let commits = git::git(&repo, &["log", "--format=%H"]).unwrap_or_default();
@@ -612,9 +614,9 @@ fn age(root: &Path, cfg: &Config, rel: &str, needle: &str) -> usize {
     .unwrap_or(0)
 }
 
-/// Each proposed learning no `killed:` line has decided, with its age in rounds.
+/// each proposed learning no `killed:` line has decided, with its age in rounds
 pub fn waiting(root: &Path, cfg: &Config) -> Result<Vec<Waiting>, AuditError> {
-    let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
+    let rel = config::instance_rel(&cfg.layout.harness_dir, "DECISIONS.md");
     let text = read(root, &rel)?;
     Ok(entries(&section(&text, PROPOSED))
         .into_iter()
@@ -627,14 +629,14 @@ pub fn waiting(root: &Path, cfg: &Config) -> Result<Vec<Waiting>, AuditError> {
         .collect())
 }
 
-/// Of the classes that were waiting, those with an `## Earned rules` entry `was` lacked, and those with a kill it lacked.
+/// of the waiting classes, those newly earned and those newly killed against `was`
 pub fn decided(
     root: &Path,
     cfg: &Config,
     before: &[String],
     was: &str,
 ) -> (Vec<String>, Vec<String>) {
-    let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
+    let rel = config::instance_rel(&cfg.layout.harness_dir, "DECISIONS.md");
     let text = read(root, &rel).unwrap_or_default();
     let still: Vec<String> = waiting(root, cfg)
         .unwrap_or_default()
@@ -666,7 +668,7 @@ pub fn decided(
     (promoted, killed)
 }
 
-/// Moves each learning waiting `queue.proposed_rounds` rounds or more out of `## Proposed learnings`, as a dated line under `## Expired findings`.
+/// moves learnings waiting `queue.proposed_rounds` rounds to dated `## Expired findings` lines
 pub fn expire(root: &Path, cfg: &Config, today: &str) -> Result<Vec<String>, AuditError> {
     let stale: Vec<Waiting> = waiting(root, cfg)?
         .into_iter()
@@ -675,7 +677,7 @@ pub fn expire(root: &Path, cfg: &Config, today: &str) -> Result<Vec<String>, Aud
     if stale.is_empty() {
         return Ok(Vec::new());
     }
-    let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
+    let rel = config::instance_rel(&cfg.layout.harness_dir, "DECISIONS.md");
     let text = read(root, &rel)?;
     let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
     let mut dated = Vec::new();
@@ -753,7 +755,7 @@ pub struct Ineffective {
     pub adopted: Vec<String>,
 }
 
-// ponytail: a sha cite never reads as recurred; judging one needs commit order across both repositories
+// ponytail: a sha cite never reads as recurred; judging one needs cross-repo commit order
 fn recurred(root: &Path, cfg: &Config, sha: &str, cite: &str) -> bool {
     let Some((file, line)) = cite.rsplit_once(':') else {
         return false;
@@ -804,13 +806,13 @@ fn recurring(root: &Path, cfg: &Config, text: &str) -> Vec<Ineffective> {
         .collect()
 }
 
-/// Each earned rule an instance recurred against after the commit its `promoted:` line names.
+/// earned rules an instance recurred against after the commit their `promoted:` line names
 pub fn ineffective(root: &Path, cfg: &Config) -> Result<Vec<Ineffective>, AuditError> {
-    let rel = config::instance_rel(root, &cfg.layout.harness_dir, "DECISIONS.md");
+    let rel = config::instance_rel(&cfg.layout.harness_dir, "DECISIONS.md");
     Ok(recurring(root, cfg, &read(root, &rel)?))
 }
 
-// `old` and `new` are one file before and after an edit: each `instances:` cite into it moves to its line's same copy in `new`
+// `old`/`new` are one file around an edit; each `instances:` cite moves to its line's copy in `new`
 fn rehome(old: &str, new: &str, rel: &str) -> String {
     let old: Vec<&str> = old.split('\n').collect();
     let now: Vec<&str> = new.split('\n').collect();
@@ -864,7 +866,7 @@ fn stamp(root: &Path, cfg: &Config, rel: &str, text: &str) -> String {
     lines.join("\n")
 }
 
-// a rule whose last revision was promoted under `## Earned rules` gives way to it, which carries its adoptions on
+// a rule whose last revision is earned gives way to that entry, which carries its adoptions on
 fn supersede(text: &str) -> String {
     let mut text = text.to_string();
     'again: loop {
@@ -916,12 +918,11 @@ fn refusal(root: &Path, body: &str, learning: &Learning) -> Option<String> {
     })
 }
 
-/// Hands the signal to the auditor role, and writes each learning whose citations resolve, merged into an entry it overlaps.
+/// hands the signal to the auditor; writes each learning whose cites resolve, merged on overlap
 pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, AuditError> {
     let dir = &cfg.layout.harness_dir;
-    let decisions_rel = config::instance_rel(root, dir, "DECISIONS.md");
-    let learnings_rel = config::instance_rel(root, dir, "LEARNINGS.md");
-    let tasks_rel = config::instance_rel(root, dir, "TASKS.md");
+    let decisions_rel = config::instance_rel(dir, "DECISIONS.md");
+    let learnings_rel = config::instance_rel(dir, "LEARNINGS.md");
     let today = jiff::Zoned::now().strftime("%Y-%m-%d").to_string();
     let mut report = Report {
         decisions: decisions_rel.clone(),
@@ -974,9 +975,19 @@ pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, Aud
     }
     let decisions = kept;
 
-    let mut signal = frictions(root, cfg, &config::instance_rel(root, dir, "PROGRESS.md"))?;
-    signal.extend(reviewed(&read(root, &tasks_rel)?, &tasks_rel)?);
-    signal.extend(reviewed(&decisions, &decisions_rel)?);
+    let mut signal = frictions(root, cfg, &config::instance_rel(dir, "PROGRESS.md"))?;
+    let t = Tracker::open(root, dir);
+    let rel = |id: &str| {
+        let path = t.path_of(id).unwrap_or_default();
+        path.strip_prefix(root)
+            .unwrap_or(&path)
+            .display()
+            .to_string()
+    };
+    signal.extend(reviewed(t.blocks()?, rel));
+    signal.extend(reviewed(block::parse(&decisions)?, |_| {
+        decisions_rel.clone()
+    }));
     signal.extend(rejections(&decisions, &decisions_rel)?);
     let mut seen = BTreeSet::new();
     signal.retain(|s| seen.insert(s.at.clone()));
@@ -989,7 +1000,7 @@ pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, Aud
     let result = ask(
         root,
         cfg,
-        prompt(&role(root, cfg), &signal, &decisions_rel, &handed),
+        prompt(body(&source(root, cfg)), &signal, &decisions_rel, &handed),
         events,
     )?;
     let spent = (result.seconds, result.usage.cost);
@@ -1084,7 +1095,7 @@ pub fn run(root: &Path, cfg: &Config, events: &mut Writer) -> Result<Report, Aud
     Ok(report)
 }
 
-/// A class two or more installs earned and none killed, with each install's dated line.
+/// a class two or more installs earned and none killed, with each install's dated line
 #[derive(Debug)]
 pub struct Shared {
     pub class: String,
@@ -1134,7 +1145,7 @@ fn seed(text: &str) -> String {
     lines.join("\n")
 }
 
-/// Each class earned under `## Earned rules` in two or more of the installs' DECISIONS.md and killed in none. Reads only.
+/// classes earned in two or more installs' DECISIONS.md and killed in none; reads only
 pub fn shared(dirs: &[PathBuf]) -> Result<Vec<Shared>, AuditError> {
     let mut rules = Vec::new();
     for (install, dir) in dirs.iter().enumerate() {

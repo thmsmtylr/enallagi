@@ -1,0 +1,1 @@
+Read .enallagi/AGENTS.md and .enallagi/LEARNINGS.md. Your role is defined in .enallagi/roles/decomposer.md: read that file first and follow it exactly. Then stop. The spec to decompose is .enallagi/specs/calc/spec.md.

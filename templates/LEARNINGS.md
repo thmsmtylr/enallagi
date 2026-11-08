@@ -12,11 +12,11 @@
   gives a green nobody ran → a document a test reads is declared as a cache input in the same commit
   (`turbo.json` `globalDependencies`, or your tool's equivalent), and a number quoted to a human comes
   from `__CHECK_FORCE__`, never the cached form.
-- [seed] One checkout is one writer. Two sessions editing __ENALLAGI_DIR__/TASKS.md in one working directory ships
-  two blocks with the same id → work in a worktree, and never `git add -A` when a second session may
+- [seed] One checkout is one writer. Two sessions filing tickets in one working directory ships
+  two tickets with the same id → work in a worktree, and never `git add -A` when a second session may
   hold the same file. Stage the paths the task named.
 - [seed] An implementation that is not committed is a lost iteration: a lane killed at a wait ceiling
-  leaves the work in the tree with the task still reading `ready` → `enallagi run` makes the commit
+  leaves the work in the tree with the ticket still reading `ready-for-agent` → `enallagi run` makes the commit
   the last required step in its implement prompt, and warns when an iteration left `__ENALLAGI_DIR__/PROGRESS.md`
   unchanged (`git status --porcelain` after a lane is the check).
 - [seed] Never use a harness control token as an English word in an agent prompt. "STOP" as prose

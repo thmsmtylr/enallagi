@@ -1,4 +1,4 @@
-//! `enallagi pr <tasks>` -- builds the branch and the description, and prints a refusal or a conflict instead of raising it.
+//! `enallagi pr <tasks>` -- builds branch and body; a refusal or conflict prints, never raises
 
 use crate::pr::{self, PrError, PrOpts};
 
@@ -9,7 +9,7 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let root = std::env::current_dir()?;
+    let root = super::root()?;
     let opts = PrOpts {
         push: args.push,
         policy_read: args.policy_read,

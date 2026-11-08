@@ -15,23 +15,29 @@ The re-run rewrites this file's key in `test-hashes.json` to its new sha256 and 
 - `agent.model`, `agent.effort`: passed to the preset. No default. A task's `model:` and `effort:` win.
 - `agent.usage`: JSON paths to `cost`, `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens` and `turns` in the agent's output. The preset's own by default.
 - `agent.rate_limit_pattern`: output that means the agent hit a rate limit, matched without case. Default `"hit your session limit"`.
-- `agent.dangerously_skip_permissions`: adds the preset's bypass flag to every lane. Default `false`.
-  The `claude` preset needs no bypass: its lanes run in the Claude Code sandbox, described below.
-- `[agent.<role>]`: `preset`, `command`, `model`, `effort` and `usage` for one role. The role is one of `scout`, `adjudicator`, `implementer`, `verifier` or `researcher`.
+- `[agent.<role>]`: `preset`, `command`, `model`, `effort` and `usage` for one role. The role is one of `decomposer`, `scout`, `adjudicator`, `implementer`, `verifier` or `researcher`.
 
-### The `claude` preset's sandbox
+Every confined lane carries its preset's bypass flag. The sandbox below is the boundary; under `mode = "off"` the flag is dropped and the CLI keeps its own permission prompts.
+`agent.dangerously_skip_permissions` is refused at load.
+A `claude` lane loads no MCP server: `--strict-mcp-config` keeps the operator's own out, as the settings keep their plugins out. Its preset's deny list stays.
 
-A `claude` lane runs with the Claude Code sandbox on and file edits accepted.
-The harness fills in the rules when it starts each stage:
+## `[sandbox]`
 
-- each command in `check.command` and `check.force` runs outside the sandbox, since a suite may need a terminal
-- `gh issue view` runs outside the sandbox too
-- no MCP server is loaded: `--strict-mcp-config` keeps the operator's own out, as the settings keep their plugins out
-- `git add`, `git commit` and `git -C <harness_dir>` are allowed, and the state repository's `.git` is writable
-- network, writes outside the lane and the preset's deny list stay blocked
+Every lane, and every check, claims re-run, driver probe and `install-stale` run, is confined by the binary: Seatbelt (`/usr/bin/sandbox-exec`) on macOS, bwrap with a private network namespace and a seccomp filter on Linux.
+A compound check line (`cd sub && pytest`) runs whole inside it.
 
-Only a command run alone in its shell call matches these rules.
-The context file tells each lane to run the check that way.
+- `sandbox.mode`: `"native"` or `"off"`. Default `"native"`. Any other value is refused at load. `off` runs lanes unconfined; `run.start` records the mode in force, and `enallagi events` prints it.
+- `sandbox.hosts`: hosts the egress proxy also allows. An entry is a name or `*.suffix` (subdomains, not the apex), with an optional `:port`, 443 by default. GitHub's API and release hosts and the configured presets' hosts are always allowed. Init writes the detected runner's registries.
+- `sandbox.ports`: host loopback ports a lane may connect to, for a suite that needs a local database. Default empty.
+- `sandbox.write`: extra writable paths, `~/` expanded. Default empty.
+- `sandbox.caches`: runner cache variables, each set for a lane to its dir, which the lane may write. Default empty. Init writes the detected runner's variables (`CARGO_HOME`, `GOMODCACHE` and `GOCACHE`, `npm_config_cache`, `BUN_INSTALL_CACHE_DIR`, `PIP_CACHE_DIR` and `UV_CACHE_DIR`), each under `~/.cache/enallagi/caches/<repo>/`, so no lane writes the operator's own caches.
+- `sandbox.env`: launcher variables a lane also inherits, by name. Default empty. A lane otherwise sees only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `COLORTERM`, `LANG`, `LANGUAGE`, `TZ`, `LC_*`, `XDG_*`, `ENALLAGI_*` except `[respond] token_env`, and the agent keys `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY` and `GEMINI_API_KEY`; `GH_TOKEN` and every other credential stay with the launcher.
+
+A lane writes only to its checkout, both repositories' git dirs (never `config`, `hooks/`, `modules/` or worktree pointers), a per-spawn `TMPDIR`, the preset's own state paths, `sandbox.write` and `sandbox.caches`.
+It never writes an instance's `enallagi.toml` (or its legacy name), `roles/`, `gitleaks.toml`, `gitleaksignore`, `osv-scanner.toml` or `security/`, which the launcher re-reads.
+No lane or check reads or writes `<harness_dir>/holdouts/`, its own or its parent instance's, or `~/.cache/enallagi/holdouts/`, and renaming a parent does not expose them. No lane reads `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, `~/.git-credentials`, `~/.config/git/credentials`, `~/.docker/config.json`, `~/.npmrc`, `~/.cargo/credentials.toml`, `~/.cargo/credentials` or `~/.pypirc`: the launcher, not a lane, pushes and calls GitHub, and a registry token would reach a host init allowlists.
+Its only egress is the proxy, reached through `HTTPS_PROXY`; each refused host is logged as `sandbox.denied`, and a red check's output ends with one `sandbox refused <host>:<port> (<reason>)` line per refusal during it.
+Under `native`, a run refuses to start when the sandbox is unavailable, naming the fix.
 
 ## `[check]`
 
@@ -40,7 +46,7 @@ The context file tells each lane to run the check that way.
 - `check.fail_name`: a regex over the check's output whose group 1 is a failing test's name. Empty by default. Init writes the detected runner's pattern below, or the verified proposal's. It reads the output with ANSI escape sequences removed.
 - `check.tally`: a regex over each line of the check's output. Every match's named groups `passed` and `failed` are summed into the gate's tally. Empty by default, which reads cargo's `test result:` lines. The verified proposal writes one, and so does init for a detected runner other than cargo. A runner with neither records no tally, rather than a tally of zero.
 - `check.timeout`: `<n>s`, `<n>m` or `<n>h`. Default `"30m"`. A check that runs past it halts the run.
-- `check.claims_allow`: command prefixes the `claims` gate may re-run from a verdict's `ran:` lines. Default empty, which re-runs nothing. Each allowed command runs twice under `check.timeout`. A command carrying `;`, `&`, `|`, a backtick, `$`, `<`, `>` or a newline never runs, whatever its prefix. A command that runs past the timeout halts the run.
+- `check.claims_allow`: command prefixes the `claims` gate may re-run from a verdict's `ran:` lines. A command matches an entry it equals, or one followed by whitespace, so `cargo test` admits `cargo test -q` and not `cargo testx`. Default empty, which re-runs nothing. Each allowed command runs twice under `check.timeout`. A command carrying `;`, `&`, `|`, a backtick, `$`, `<`, `>` or a newline never runs, whatever its prefix. A command that runs past the timeout halts the run.
 
 ### `check.fail_name`
 
@@ -93,14 +99,28 @@ go test, from go1.26.2:
 
 ## `[queue]`
 
-- `queue.drain`: how many standing `proposed` blocks one adjudicate stage takes, oldest first. Default `3`.
-- `queue.turns_per_block`: turns added to that stage for each block. Default `25`.
-- `queue.proposed_rounds`: how many state commits a `proposed` block stands before it expires. Default `6`.
-- `queue.title_cap_from`: the first block id `title-length` holds to the 72-character cap; titles below it are the record as written. Default `1`.
+- `queue.drain`: how many standing `needs-triage` tickets one adjudicate stage takes, oldest first. Default `3`.
+- `queue.turns_per_block`: turns added to that stage for each ticket. Default `25`.
+- `queue.proposed_rounds`: how many rounds a `needs-triage` ticket stands before it expires to `wontfix`. A round is one loop iteration (its state commits carry one `Iteration:` trailer) or one commit made outside the loop. Default `6`.
+- `queue.title_cap_from`: the first ticket id `title-length` holds to the 72-character cap; titles below it are the record as written. Default `1`.
 
 ## `[pr]`
 
 - `pr.per_task`: `enallagi run` opens one pull request per landed task, as `--pr-per-task` does. Default `false`.
+- `pr.merge`: `human` or `auto`. Default `human`, under which nobody but a person merges. Any other value is refused at load.
+  Under `auto` the launcher merges a ticket's pull request on green, with holdouts no lane can read in place of a person reading the code, and `per_task` is on whatever it says.
+  `enallagi run` refuses to start under `auto`, listing every reason, when no spec holding a ticket that is not `done` or `wontfix` has a holdout set (see the reference's Gates), when neither `BUDGET_USD` nor `BUDGET_TOKENS` (or `--budget-usd` / `--budget-tokens`) is set (`BUDGET_SECONDS` alone does not count), when the product or state repository tracks a path under `.enallagi/holdouts/`, or when `[sandbox] mode = "off"`.
+
+## `[parallel]`
+
+- `parallel.writers`: how many writer lanes `enallagi worktree` runs at once. Default `1`, which takes no claim and runs one lane. `0` is refused at load.
+
+## `[respond]`
+
+- `respond.max_rounds`: when new in-scope findings reach an `open` ticket that has already had this many respond rounds, the ticket goes to `ready-for-human` with gate reason `respond: max_rounds (<n>) reached, <k> findings open`. Default `3`.
+- `respond.quiet`: `<n>s`, `<n>m` or `<n>h` after a push during which the poll judges nothing on the pull request, so bots can review again. When no pipeline's `when` holds and a pushed ticket is inside its window, the launcher sleeps until the earliest window closes and iterates. Default `10m`.
+- `respond.rereview`: reviewers the launcher asks again on each push with `gh pr edit <pr> --add-reviewer <r>`, for bots that do not re-review on push (for example `@copilot`, `@greptileai`). A failure is a warning. Default `[]`.
+- `respond.token_env`: the name of the environment variable whose value the launcher passes to `gh` as `GH_TOKEN` when it replies on, comments on or resolves a ticket's pull request. Unset means `gh`'s own auth. A write refused for permissions names this key in its warning. Default `ENALLAGI_GH_TOKEN`.
 
 ## `[layout]`
 
@@ -116,9 +136,9 @@ Where the documents live:
 
 The spec and its exit criteria:
 
-- `layout.spec`: the spec file. Default `"SPEC.md"`.
-- `layout.rows_heading`: the heading that opens the exit-criteria rows. Default `"## 11. Exit criteria"`.
-- `layout.rows_end_heading`: the heading that closes them. Default `"## 12."`.
+- `layout.spec`: the spec file, relative to the harness directory. Default `""`: the first `specs/*/spec.md` holding `layout.rows_heading`, else `specs/<repo>/spec.md`, which init seeds. The probes read exit-criteria rows from it and from every other `specs/*/spec.md`; a lane's `__SPEC__` is its ticket's own `spec.md`.
+- `layout.rows_heading`: the heading that opens the exit-criteria rows. Default `"### Exit criteria"`.
+- `layout.rows_end_heading`: the heading that closes them. Default `"## Out of Scope"`.
 - `layout.contract_file`: the file the roles name as the one home of every shared shape. Default `"src/schema.ts"`.
 
 The source and its tests, which init sets from a detected runner or a verified proposal:
@@ -128,40 +148,43 @@ The source and its tests, which init sets from a detected runner or a verified p
 - `layout.test_file_suffix_re`: a regex naming a test file. Empty by default. Init writes the detected runner's or the proposal's.
 - `layout.test_decl_patterns`: how a test is declared, with `{name}` for its name. Empty by default. Init writes the detected runner's or the proposal's.
 - `layout.test_glob`: git pathspecs holding test code, which the verifier diffs as `__TEST_GLOB__`. Empty by default.
+- `layout.test_only_glob`: globs naming files that hold only tests. The `red-first` gate keeps them and reverts every other file the task changed to the iteration base, and an empty list skips the gate. Empty by default. Init writes the detected runner's.
+- `layout.skip_patterns`: regexes over the lines a task adds to `layout.test_glob` files (every changed file when that is empty). A match is a skip with no stated reason, and the `skip-added` gate forces the task back; an empty list skips the gate. Empty by default. Init writes the detected runner's.
 
 The allowlists the `litter` and `rail-unenforced` probes read:
 
 - `layout.harness_files`: build files that can run a rail's enforcement. Default `package.json`, `turbo.json`, `check.ts`, `Makefile` and `pyproject.toml`.
 - `layout.harness_globs`: globs for more of the same. Default `["packages/*/package.json"]`.
-- `layout.allowed_prefixes`: path prefixes a tracked file may sit under. Default `src/`, `packages/`, `evals/`, `.enallagi/` and one directory per agent CLI.
+- `layout.allowed_prefixes`: path prefixes a tracked file may sit under. Default `src/`, `packages/`, `evals/`, `.enallagi/`, `.claude/`, `.github/`, `.codex/`, `.gemini/`, `.cursor/`, `.qwen/` and `.omp/`. Init writes them from the tracked tree.
+- `layout.strict_prefixes`: `litter` reports every tracked path outside `layout.allowed_prefixes`, instead of only the paths the repository treats as disposable. Default `false`.
 - `layout.docs`: file names that are documents, not litter. Default is the 25 names in `harness.default.toml`, from `.check-baseline` to `test-hashes.json`.
 - `layout.harness_allow`: build files that are not litter. Default is the 9 names in `harness.default.toml`, from `package.json` to `pyproject.toml`.
 - `layout.machinery`: path parts that are build output or scratch. Default `.DS_Store`, `.check`, `.turbo`, `.venv`, `STOP`, `__pycache__`, `build`, `dist`, `node_modules`, `out` and `target`.
 
 ## `[[pipeline]]`
 
-Declaring one `[[pipeline]]` replaces all three defaults. [pipeline.md](pipeline.md) shows an override.
+Declaring one `[[pipeline]]` replaces all five defaults. [pipeline.md](pipeline.md) shows an override.
 
-- `pipeline.name`: what `enallagi run --pipeline` names. The defaults are `review`, `task` and `discover`.
+- `pipeline.name`: what `enallagi run --pipeline` names. The defaults are `review`, `decompose`, `task`, `triage` and `discover`, tried in that order.
 - `pipeline.when`: the predicate that picks it, such as `queue.takeable`. The list is in [reference.md](reference.md#configuration).
 - `pipeline.stages`: the `[[stage]]` names it runs, in order.
-- `pipeline.end_after_dry_rounds`: dry rounds in a row that end the run. Default `0`, which never ends it. `discover` sets `2`.
+- `pipeline.end_after_dry_rounds`: dry rounds in a row that end the run. Default `0`, which never ends it. `triage` sets `1` and `discover` sets `2`.
 
 ## `[[stage]]`
 
-Declaring one `[[stage]]` replaces all four defaults.
+Declaring one `[[stage]]` replaces all five defaults.
 
 - `stage.name`: what a pipeline's `stages` names.
 - `stage.role`: the role prompt `<harness_dir>/roles/<role>.md` the agent runs. Set this or `stage.command`.
 - `stage.command`: a shell command run with `sh -c`. Set this or `stage.role`.
-- `stage.turns`: the agent's turn cap. Default `40`. The shipped stages set 120, 100, 30 and 40.
+- `stage.turns`: the agent's turn cap. Default `40`. The shipped `implement`, `verify`, `scout`, `decompose` and `adjudicate` set 120, 100, 30, 60 and 40.
 - `stage.timeout`: `<n>s`, `<n>m` or `<n>h`. No default. Required for a preset with no turn cap.
 - `stage.env`: variables added to the stage's environment. Default `{}`. `scout` sets `ENALLAGI_DRIVER = "1"`.
 - `stage.post`: the gates run after the stage. Default `[]`. The gates are in [reference.md](reference.md#gates).
 
 ## `[[skill]]`
 
-Declaring one `[[skill]]` replaces all eight defaults.
+Declaring one `[[skill]]` replaces all thirteen defaults.
 
 - `skill.id`: the name a role writes as `{{skill:<id>}}`.
 - `skill.source`: `github:owner/repo`, `git+<url>` or `path:<dir>`.
@@ -176,3 +199,11 @@ No role is declared by default.
 
 - `role.name`, `role.source`, `role.path` and `role.rev` fetch `<path>/<name>.md` as a skill is fetched.
 - The file lands at `<harness_dir>/roles/<name>.md` and is pinned in `harness.lock`.
+
+## Scanner pins
+
+The `security` gate's scanners, gitleaks and osv-scanner, are pinned per platform (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`) in the enallagi binary, not in `harness.lock`, which a lane can write. Bumping one is an enallagi release.
+
+- The binary lands at `$XDG_CACHE_HOME/enallagi/tools/<id>-<version>/<id>` (`~/.cache/enallagi` when the variable is unset).
+- It is fetched with `curl` on first use; a `.tar.gz` is unpacked with `tar`.
+- The download's sha256 is checked at fetch. A mismatch deletes the download and the gate halts.

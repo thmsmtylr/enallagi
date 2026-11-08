@@ -1,4 +1,4 @@
-//! The answers substituted into roles, gates and probes.
+//! the answers substituted into roles, gates and probes
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -9,20 +9,34 @@ use crate::agent::{Presets, TurnCap};
 
 pub const DEFAULT_TOML: &str = include_str!("../harness.default.toml");
 
-// read when layout.harness_dir is unset and the default directory is absent, so installs made before the rename keep running
-const LEGACY_DIR: &str = ".harness";
-
 pub const CONFIG: &str = "enallagi.toml";
 pub const ENV: &str = "ENALLAGI_";
 pub const DIR_TOKEN: &str = "__ENALLAGI_DIR__";
 
 // the names installs and templates written before the rename still carry
 pub const LEGACY_CONFIG: &str = "harness.toml";
-pub const LEGACY_ENV: &str = "HARNESS_";
 pub const LEGACY_DIR_TOKEN: &str = "__HARNESS_DIR__";
-// what a seeded document says in place of an unset check, never an empty pair a resync would match everywhere
+// a seeded document's stand-in for an unset check; an empty pair would match everywhere on resync
 pub const UNSET_CHECK: &str = "check.command is unset";
 pub const UNSET_FORCE: &str = "check.force is unset";
+
+pub fn cache_root() -> PathBuf {
+    cache_root_in(
+        std::env::var_os("XDG_CACHE_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+}
+
+pub(crate) fn cache_root_in(
+    xdg: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+) -> PathBuf {
+    // an empty XDG_CACHE_HOME is unset, not the current directory
+    match xdg.filter(|x| !x.is_empty()) {
+        Some(x) => PathBuf::from(x).join("enallagi"),
+        None => PathBuf::from(home.unwrap_or_default()).join(".cache/enallagi"),
+    }
+}
 
 pub const ROLE_NAMES: &[&str] = &[
     "scout",
@@ -30,6 +44,7 @@ pub const ROLE_NAMES: &[&str] = &[
     "implementer",
     "verifier",
     "researcher",
+    "decomposer",
 ];
 
 pub const GATE_NAMES: &[&str] = &[
@@ -37,7 +52,11 @@ pub const GATE_NAMES: &[&str] = &[
     "commit-verdict",
     "verdict",
     "claims",
+    "findings",
+    "skip-added",
+    "security",
     "scope",
+    "red-first",
     "queue-intact",
     "commit-identity",
     "commit-task",
@@ -46,6 +65,8 @@ pub const GATE_NAMES: &[&str] = &[
     "adjudicator-halt",
     "dry-round",
     "install-stale",
+    "tickets",
+    "holdout",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -55,7 +76,7 @@ pub enum ConfigError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(
-        "when: `{0}` is not a predicate (one of queue.takeable, queue.reviewing, queue.proposed, queue.empty, task.attended, check.red, probe.<name>, optionally prefixed with !)"
+        "when: `{0}` is not a predicate (one of queue.takeable, queue.reviewing, queue.proposed, queue.empty, task.attended, spec.undecomposed, check.red, probe.<name>, optionally prefixed with !)"
     )]
     BadWhen(String),
     #[error("pipeline {pipeline}: stage `{stage}` is not defined by any [[stage]]")]
@@ -68,6 +89,8 @@ pub enum ConfigError {
     MissingRole { stage: String, role: String },
     #[error("role {role}: {{{{skill:{id}}}}} has no matching [[skill]] entry")]
     UndeclaredSkill { role: String, id: String },
+    #[error("role {role}: `tools:` is gone and enforces nothing; declare `writes:` and `hosts:`, which the sandbox enforces")]
+    RoleTools { role: String },
     #[error(
         "stage {stage}: preset {preset} caps turns by neither a flag nor its own config, so the stage needs a timeout"
     )]
@@ -77,10 +100,8 @@ pub enum ConfigError {
     UnknownPreset(String),
     #[error("agent preset custom needs a command list ({0})")]
     CustomWithoutCommand(String),
-    #[error(
-        "agent preset {0} declares no bypass flag, so dangerously_skip_permissions cannot apply"
-    )]
-    NoBypassFlag(String),
+    #[error("agent.dangerously_skip_permissions is gone: every lane runs under [sandbox] mode, and mode = \"off\" runs lanes unconfined")]
+    SkipPermissions,
     #[error("check.command is empty: set it in enallagi.toml, then run `enallagi init`")]
     EmptyCheck,
     #[error("[agent.{role}] is not a role ({})", ROLE_NAMES.join(", "))]
@@ -105,6 +126,8 @@ pub enum ConfigError {
     BadTimeout { stage: String, value: String },
     #[error("[check] timeout `{0}` is not <n>s, <n>m or <n>h")]
     BadCheckTimeout(String),
+    #[error("[respond] quiet `{0}` is not <n>s, <n>m or <n>h")]
+    BadQuiet(String),
     #[error("pipeline {pipeline}: when references probe `{probe}`, not one of {}", crate::probes::NAMES.join(", "))]
     UnknownProbe { pipeline: String, probe: String },
 }
@@ -116,11 +139,34 @@ pub struct Config {
     pub check: CheckConfig,
     pub queue: QueueConfig,
     pub pr: PrConfig,
+    pub parallel: ParallelConfig,
+    pub respond: RespondConfig,
     pub layout: Layout,
     pub pipeline: Vec<Pipeline>,
     pub stage: Vec<Stage>,
     pub skill: Vec<SkillDecl>,
     pub role: Vec<RoleDecl>,
+    pub sandbox: SandboxConfig,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SandboxConfig {
+    pub mode: SandboxMode,
+    pub hosts: Vec<String>,
+    pub ports: Vec<u16>,
+    pub write: Vec<String>,
+    pub env: Vec<String>,
+    /// runner cache variable to its per-install dir; never the operator's own cache
+    pub caches: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SandboxMode {
+    Off,
+    #[default]
+    Native,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -132,7 +178,6 @@ pub struct AgentConfig {
     pub effort: Option<String>,
     pub usage: Option<UsagePaths>,
     pub rate_limit_pattern: String,
-    pub dangerously_skip_permissions: bool,
     #[serde(flatten)]
     pub roles: BTreeMap<String, AgentOverride>,
 }
@@ -151,19 +196,18 @@ pub struct AgentOverride {
 #[serde(default, deny_unknown_fields)]
 pub struct CheckConfig {
     pub command: String,
-    /// The check with its cache defeated. Follows `command` unless pinned.
+    /// the check with its cache defeated; follows `command` unless pinned
     pub force: String,
     pub fail_name: String,
-    /// A regex over each output line whose named groups `passed` and `failed` are summed into the
-    /// tally; empty reads cargo's `test result:` lines.
+    /// regex whose `passed`/`failed` groups sum into the tally; empty reads cargo's `test result:` lines
     pub tally: String,
-    /// `<n>s`, `<n>m` or `<n>h`; empty means `DEFAULT_CHECK_TIMEOUT`.
+    /// `<n>s`, `<n>m` or `<n>h`; empty means `DEFAULT_CHECK_TIMEOUT`
     pub timeout: String,
-    /// Command prefixes the `claims` gate may re-run from a verdict's `ran:` lines; a command with a shell operator never runs.
+    /// prefixes `claims` may re-run from a verdict's `ran:` lines; one with a shell operator never runs
     pub claims_allow: Vec<String>,
 }
 
-/// The bound on `command` and `force` when `[check] timeout` is unset.
+/// the bound on `command` and `force` when `[check] timeout` is unset
 pub const DEFAULT_CHECK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 impl CheckConfig {
@@ -176,7 +220,7 @@ impl CheckConfig {
     }
 }
 
-// `18446744073709551615h` is a config typo, not a duration.
+// `18446744073709551615h` is a config typo, not a duration
 fn parse_timeout(value: &str) -> Option<Duration> {
     // char, not byte: a multibyte last char must be refused, not split mid-scalar
     let unit = value.chars().last()?;
@@ -193,13 +237,13 @@ fn parse_timeout(value: &str) -> Option<Duration> {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct QueueConfig {
-    /// Standing `proposed` blocks one adjudicate stage is handed, oldest first.
+    /// standing `proposed` blocks one adjudicate stage is handed, oldest first
     pub drain: usize,
-    /// Turns added to that stage for each block it is handed.
+    /// turns added to that stage for each block it is handed
     pub turns_per_block: u32,
-    /// State commits a `proposed` block may stand for before it expires.
+    /// state commits a `proposed` block may stand for before it expires
     pub proposed_rounds: usize,
-    /// The first block id the 72-character title cap applies to; earlier titles are the record as written.
+    /// the first block id the 72-character title cap applies to; earlier titles stay as written
     pub title_cap_from: u32,
 }
 
@@ -218,15 +262,59 @@ impl Default for QueueConfig {
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PrConfig {
-    /// `enallagi run` opens one pull request per landed task, as `--pr-per-task` does.
+    /// `enallagi run` opens one pull request per landed task, as `--pr-per-task` does
     pub per_task: bool,
+    pub merge: MergeMode,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RespondConfig {
+    /// new in-scope findings past this many rounds hand the ticket to a person
+    pub max_rounds: u64,
+    /// `<n>s`, `<n>m` or `<n>h` after a push before the poll judges the pull request
+    pub quiet: String,
+    /// reviewers asked again on each push, as `gh pr edit --add-reviewer` takes them
+    pub rereview: Vec<String>,
+    /// the variable replies and resolves pass to gh as `GH_TOKEN`; unset is gh's own auth
+    pub token_env: String,
+}
+
+impl RespondConfig {
+    pub fn quiet_duration(&self) -> Result<Duration, ConfigError> {
+        parse_timeout(self.quiet.trim()).ok_or_else(|| ConfigError::BadQuiet(self.quiet.clone()))
+    }
+}
+
+/// who merges a ticket's pull request: a person, or the launcher on green
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MergeMode {
+    #[default]
+    Human,
+    Auto,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ParallelConfig {
+    /// how many writer lanes `enallagi worktree` runs at once; 0 is refused by the type
+    pub writers: std::num::NonZeroU32,
+}
+
+impl Default for ParallelConfig {
+    fn default() -> Self {
+        ParallelConfig {
+            writers: std::num::NonZeroU32::MIN,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Layout {
     pub harness_dir: String,
-    /// None means the agent preset's own skills directory.
+    /// none means the agent preset's own skills directory
     pub skills_dir: Option<String>,
     pub spec: String,
     pub rows_heading: String,
@@ -239,10 +327,12 @@ pub struct Layout {
     pub test_file_suffix_re: String,
     pub test_decl_patterns: Vec<String>,
     pub test_glob: Vec<String>,
+    pub test_only_glob: Vec<String>,
+    pub skip_patterns: Vec<String>,
     pub harness_files: Vec<String>,
     pub harness_globs: Vec<String>,
     pub allowed_prefixes: Vec<String>,
-    /// `litter` reports every tracked path outside `allowed_prefixes`, not only the disposable ones.
+    /// `litter` reports every tracked path outside `allowed_prefixes`, not only the disposable ones
     pub strict_prefixes: bool,
     pub docs: Vec<String>,
     pub harness_allow: Vec<String>,
@@ -302,7 +392,7 @@ impl Stage {
     }
 }
 
-// the digest and the turns-exhausted probe both read a cap through this, so one run never reads two ways
+// the digest and the turns-exhausted probe both read a cap here, so one run never reads it two ways
 pub fn spent_turn_cap(cap: u32, turns: u64) -> bool {
     turns >= u64::from(cap)
 }
@@ -318,7 +408,7 @@ pub struct SkillDecl {
     pub why: String,
 }
 
-/// A role prompt fetched and pinned like a skill; `<path>/<name>.md` in the source lands at `<harness_dir>/roles/<name>.md`.
+/// a role prompt pinned like a skill; `<path>/<name>.md` lands at `<harness_dir>/roles/<name>.md`
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RoleDecl {
@@ -346,6 +436,7 @@ pub enum Predicate {
     QueueProposed,
     QueueEmpty,
     TaskAttended,
+    SpecUndecomposed,
     CheckRed,
     Probe(String),
     Not(Box<Predicate>),
@@ -362,6 +453,7 @@ pub fn parse_when(s: &str) -> Result<Predicate, ConfigError> {
         "queue.proposed" => Ok(Predicate::QueueProposed),
         "queue.empty" => Ok(Predicate::QueueEmpty),
         "task.attended" => Ok(Predicate::TaskAttended),
+        "spec.undecomposed" => Ok(Predicate::SpecUndecomposed),
         "check.red" => Ok(Predicate::CheckRed),
         _ => match s.strip_prefix("probe.") {
             Some(name) if !name.is_empty() && !name.contains(char::is_whitespace) => {
@@ -372,11 +464,9 @@ pub fn parse_when(s: &str) -> Result<Predicate, ConfigError> {
     }
 }
 
-// the one place an instance file's path is decided; a root TASKS.md with none in the harness directory keeps the root layout
-pub fn instance_rel(root: &Path, harness_dir: &str, name: &str) -> String {
-    let legacy =
-        !root.join(harness_dir).join("TASKS.md").is_file() && root.join("TASKS.md").is_file();
-    if harness_dir.is_empty() || legacy {
+// the one place an instance file's path is decided
+pub fn instance_rel(harness_dir: &str, name: &str) -> String {
+    if harness_dir.is_empty() {
         name.to_string()
     } else {
         format!("{harness_dir}/{name}")
@@ -384,38 +474,18 @@ pub fn instance_rel(root: &Path, harness_dir: &str, name: &str) -> String {
 }
 
 pub fn instance_path(root: &Path, harness_dir: &str, name: &str) -> PathBuf {
-    root.join(instance_rel(root, harness_dir, name))
+    root.join(instance_rel(harness_dir, name))
 }
 
-// an ENALLAGI_-less HARNESS_ variable is read by nothing, so a run configured with it would look green and honour none of it
-pub fn legacy_env() -> Option<String> {
-    let mut names: Vec<String> = std::env::vars_os()
-        .filter_map(|(key, _)| key.into_string().ok())
-        .filter(|key| key.starts_with(LEGACY_ENV))
-        .filter(|key| std::env::var_os(renamed(key)).is_none())
-        .collect();
-    names.sort();
-    let name = names.first()?;
-    Some(format!(
-        "enallagi: {name} is no longer read; set {} instead",
-        renamed(name)
-    ))
+// a lane's own STOP, then its parent checkout's: one file there halts every lane
+pub fn stop_files(root: &Path, harness_dir: &str) -> Vec<PathBuf> {
+    let dir = root.join(harness_dir);
+    let mut files = vec![dir.join("STOP")];
+    files.extend(crate::git::main_worktree_path(&dir).map(|p| p.join("STOP")));
+    files
 }
 
-// the launcher refuses a legacy variable for itself, so it may not hand one to a child either
-pub fn drop_legacy_env(cmd: &mut std::process::Command) {
-    for (key, _) in std::env::vars() {
-        if key.starts_with(LEGACY_ENV) {
-            cmd.env_remove(key);
-        }
-    }
-}
-
-fn renamed(legacy: &str) -> String {
-    format!("{ENV}{}", &legacy[LEGACY_ENV.len()..])
-}
-
-// honoured only inside the root, so a fixture or other repository a lane's child process opens never inherits it
+// honoured only inside the root, so a fixture or other repo a lane's child opens never inherits it
 fn env_harness_dir(root: &Path) -> Option<String> {
     let dir = std::env::var_os("ENALLAGI_DIR")?;
     let root = std::fs::canonicalize(root).ok()?;
@@ -424,45 +494,30 @@ fn env_harness_dir(root: &Path) -> Option<String> {
     (!rel.is_empty()).then(|| rel.to_string())
 }
 
-fn unconfigured_harness_dir(root: &Path) -> Result<(String, bool), ConfigError> {
+fn unconfigured_harness_dir(root: &Path) -> Result<String, ConfigError> {
     if let Some(dir) = env_harness_dir(root) {
-        return Ok((dir, false));
+        return Ok(dir);
     }
     let base = parse_toml(DEFAULT_TOML, "harness.default.toml")?;
-    let default = base["layout"]["harness_dir"]
+    Ok(base["layout"]["harness_dir"]
         .as_str()
         .unwrap_or_default()
-        .to_string();
-    if !root.join(&default).exists() && root.join(LEGACY_DIR).is_dir() {
-        return Ok((LEGACY_DIR.to_string(), true));
-    }
-    Ok((default, false))
+        .to_string())
 }
 
-// a refused config falls back to the default directory, never the root, or the default layout's guards go dark
+// a refused config falls back to the default dir, never the root, or the default guards go dark
 pub fn harness_dir(root: &Path) -> String {
     load(root)
         .map(|cfg| cfg.layout.harness_dir)
-        .unwrap_or_else(|_| {
-            unconfigured_harness_dir(root)
-                .map(|(dir, _)| dir)
-                .unwrap_or_default()
-        })
+        .unwrap_or_else(|_| unconfigured_harness_dir(root).unwrap_or_default())
 }
 
 pub fn config_path(root: &Path) -> PathBuf {
-    let dir = unconfigured_harness_dir(root)
-        .map(|(dir, _)| dir)
-        .unwrap_or_default();
-    let found = [
-        (dir.as_str(), CONFIG),
-        (dir.as_str(), LEGACY_CONFIG),
-        ("", CONFIG),
-        ("", LEGACY_CONFIG),
-    ]
-    .into_iter()
-    .map(|(at, name)| (name, instance_path(root, at, name)))
-    .find(|(_, path)| path.is_file());
+    let dir = unconfigured_harness_dir(root).unwrap_or_default();
+    let found = [CONFIG, LEGACY_CONFIG]
+        .into_iter()
+        .map(|name| (name, instance_path(root, &dir, name)))
+        .find(|(_, path)| path.is_file());
     let Some((name, path)) = found else {
         return instance_path(root, &dir, CONFIG);
     };
@@ -470,30 +525,23 @@ pub fn config_path(root: &Path) -> PathBuf {
         static WARNED: std::sync::Once = std::sync::Once::new();
         WARNED.call_once(|| eprintln!("enallagi: reading {LEGACY_CONFIG}; rename it to {CONFIG}"));
     }
-    if path != instance_path(root, &dir, name) {
-        static WARNED: std::sync::Once = std::sync::Once::new();
-        WARNED.call_once(|| {
-            eprintln!(
-                "enallagi: reading {name} at the repository root; `enallagi init --move` moves it to {dir}/"
-            )
-        });
-    }
     path
 }
 
 pub fn load(root: &Path) -> Result<Config, ConfigError> {
     let mut base: toml::Value = parse_toml(DEFAULT_TOML, "harness.default.toml")?;
-    let (dir, legacy) = unconfigured_harness_dir(root)?;
     let path = config_path(root);
-    let mut dir_configured = false;
     if path.is_file() {
         let text = std::fs::read_to_string(&path)?;
         let user: toml::Value = parse_toml(&text, CONFIG)?;
-        dir_configured = user
-            .get("layout")
-            .and_then(|l| l.get("harness_dir"))
-            .is_some();
-        // check.force follows check.command, so overriding the check without pinning force can't leave the old tool behind
+        if user
+            .get("agent")
+            .and_then(|a| a.get("dangerously_skip_permissions"))
+            .is_some()
+        {
+            return Err(ConfigError::SkipPermissions);
+        }
+        // force follows command, so overriding the check without pinning force can't keep the old tool
         let user_check = user.get("check");
         if let (Some(command), None) = (
             user_check.and_then(|c| c.get("command")),
@@ -511,21 +559,6 @@ pub fn load(root: &Path) -> Result<Config, ConfigError> {
     ) {
         layout.insert("harness_dir".into(), dir.into());
     }
-    if legacy && !dir_configured {
-        if let Some(layout) = base.get_mut("layout").and_then(|l| l.as_table_mut()) {
-            let default = layout["harness_dir"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            layout.insert("harness_dir".into(), dir.into());
-            static WARNED: std::sync::Once = std::sync::Once::new();
-            WARNED.call_once(|| {
-                eprintln!(
-                    "enallagi: using the legacy {LEGACY_DIR}/ directory; `enallagi init --move` moves it to {default}/"
-                )
-            });
-        }
-    }
     let mut cfg: Config = base
         .try_into()
         .map_err(|e: toml::de::Error| ConfigError::Parse {
@@ -533,18 +566,12 @@ pub fn load(root: &Path) -> Result<Config, ConfigError> {
             message: e.to_string(),
         })?;
     if cfg.layout.context_file.is_empty() {
-        cfg.layout.context_file = instance_rel(root, &cfg.layout.harness_dir, "AGENTS.md");
+        cfg.layout.context_file = instance_rel(&cfg.layout.harness_dir, "AGENTS.md");
     }
-    root_layout_skills(root, &mut cfg);
+    cfg.layout.spec = crate::tracker::spec_rel(root, &cfg);
+    // a dark merge needs a pull request to merge
+    cfg.pr.per_task |= cfg.pr.merge == MergeMode::Auto;
     Ok(cfg)
-}
-
-// the claude plugin lives in the harness directory; a root-layout install keeps the skills where claude reads them natively
-pub fn root_layout_skills(root: &Path, cfg: &mut Config) {
-    let root_layout = instance_rel(root, &cfg.layout.harness_dir, "TASKS.md") == "TASKS.md";
-    if root_layout && cfg.layout.skills_dir.is_none() && cfg.agent.preset == "claude" {
-        cfg.layout.skills_dir = Some(".claude/skills".to_string());
-    }
 }
 
 fn parse_toml(text: &str, path: &str) -> Result<toml::Value, ConfigError> {
@@ -554,11 +581,11 @@ fn parse_toml(text: &str, path: &str) -> Result<toml::Value, ConfigError> {
     })
 }
 
-/// The one line a written enallagi.toml carries above its keys.
+/// the one line a written enallagi.toml carries above its keys
 pub const DEFAULTS_NOTE: &str =
     "# Keys left out take their value from harness.default.toml, the embedded defaults.\n";
 
-/// Drops every key that already equals the embedded default and names each one it dropped.
+/// drops every key that already equals the embedded default and names each one it dropped
 pub fn prune_defaults(text: &str) -> Result<(String, Vec<String>), ConfigError> {
     let default = parse_toml(DEFAULT_TOML, "harness.default.toml")?;
     let mut user: toml::Value = parse_toml(text, CONFIG)?;
@@ -571,7 +598,7 @@ pub fn prune_defaults(text: &str) -> Result<(String, Vec<String>), ConfigError> 
     } else {
         DEFAULTS_NOTE
     };
-    // a key the line walk cannot place (an inline table, a quoted dotted key) falls back to the serializer
+    // a key the line walk cannot place (inline table, quoted dotted key) falls back to the serializer
     if parse_toml(&body, CONFIG).ok().as_ref() == Some(&user) {
         return Ok((format!("{note}{body}"), dropped));
     }
@@ -582,7 +609,7 @@ pub fn prune_defaults(text: &str) -> Result<(String, Vec<String>), ConfigError> 
     Ok((format!("{DEFAULTS_NOTE}{body}"), dropped))
 }
 
-// removes each dropped key's lines and the comment lines directly above it, so every other line survives
+// removes each dropped key's lines and the comments right above, so every other line survives
 fn drop_lines(text: &str, dropped: &[String]) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let mut keep = vec![true; lines.len()];
@@ -624,7 +651,7 @@ fn drop_lines(text: &str, dropped: &[String]) -> String {
     }
     drop_empty_tables(&lines, &mut keep);
     let mut out = String::new();
-    // a blank run collapses only where a cut sat inside it, so an operator's own spacing survives; the head of the file counts as a cut, which is what drops a leading blank line
+    // a blank run collapses only where a cut sat; the file head counts as a cut, dropping a leading blank
     let mut blank = true;
     let mut cut_above = true;
     for (line, kept) in lines.iter().zip(&keep) {
@@ -775,7 +802,7 @@ pub fn validate(
         if !declared.insert(sk.id.as_str()) {
             errs.push(ConfigError::DuplicateSkill(sk.id.clone()));
         }
-        // both become filesystem paths in skills::resolve, so checked here before anything is fetched or written
+        // both become paths in skills::resolve, so checked here before anything is fetched or written
         if !crate::skills::valid_id(&sk.id) {
             errs.push(ConfigError::BadSkillId(sk.id.clone()));
         }
@@ -787,6 +814,9 @@ pub fn validate(
         }
     }
     if let Err(e) = cfg.check.timeout_duration() {
+        errs.push(e);
+    }
+    if let Err(e) = cfg.respond.quiet_duration() {
         errs.push(e);
     }
     let mut declared_roles: BTreeSet<&str> = BTreeSet::new();
@@ -813,7 +843,6 @@ pub fn validate(
         }
     }
     let mut checked_roles: BTreeSet<&str> = BTreeSet::new();
-    let mut unbypassed: BTreeSet<String> = BTreeSet::new();
 
     for st in &cfg.stage {
         match (&st.role, &st.command) {
@@ -842,6 +871,12 @@ pub fn validate(
             }),
             Some(text) => {
                 if checked_roles.insert(role.as_str()) {
+                    if crate::roles::frontmatter(&text)
+                        .lines()
+                        .any(|l| l.starts_with("tools:"))
+                    {
+                        errs.push(ConfigError::RoleTools { role: role.clone() });
+                    }
                     for id in crate::skills::required_ids(&text) {
                         if !declared.contains(id.as_str()) {
                             errs.push(ConfigError::UndeclaredSkill {
@@ -858,13 +893,6 @@ pub fn validate(
         let preset = over
             .and_then(|o| o.preset.clone())
             .unwrap_or_else(|| cfg.agent.preset.clone());
-        let bypass = presets.get(&preset).map(|p| p.bypass_flag.is_some());
-        if cfg.agent.dangerously_skip_permissions
-            && (preset == "custom" || bypass == Some(false))
-            && unbypassed.insert(preset.clone())
-        {
-            errs.push(ConfigError::NoBypassFlag(preset.clone()));
-        }
         if preset == "custom" {
             let command = over
                 .and_then(|o| o.command.as_ref())
@@ -875,7 +903,7 @@ pub fn validate(
         } else {
             match presets.get(&preset) {
                 None => errs.push(ConfigError::UnknownPreset(preset)),
-                // TurnCap::Time is grouped with None: it spends its {timeout} word on the stage's timeout, so without one there's nothing to substitute
+                // TurnCap::Time spends {timeout} on the stage's timeout, so without one nothing is substituted
                 Some(p)
                     if matches!(p.turn_cap, TurnCap::None | TurnCap::Time)
                         && st.timeout.is_none() =>
@@ -897,7 +925,7 @@ pub fn validate(
     }
 }
 
-/// The keys a repository must set before a lane runs that still have no value.
+/// the keys a repository must set before a lane runs that still have no value
 pub fn unset_keys(cfg: &Config) -> Vec<&'static str> {
     let (c, l) = (&cfg.check, &cfg.layout);
     [
@@ -917,7 +945,9 @@ pub fn unset_keys(cfg: &Config) -> Vec<&'static str> {
 }
 
 pub fn subst(text: &str, cfg: &Config) -> String {
-    let text = text.replace(LEGACY_DIR_TOKEN, DIR_TOKEN);
+    let text = text
+        .replace(LEGACY_DIR_TOKEN, DIR_TOKEN)
+        .replace("__TRACKER__", crate::tracker::ABOUT);
     let l = &cfg.layout;
     let cap = l.learnings_cap.to_string();
     let or = |value: &str, unset: &str| match value.is_empty() {
@@ -926,8 +956,7 @@ pub fn subst(text: &str, cfg: &Config) -> String {
     };
     let check = or(&cfg.check.command, UNSET_CHECK);
     let force = or(&cfg.check.force, UNSET_FORCE);
-    // quoted one by one: the verifier pastes the value into a shell command, and a pathspec may
-    // hold an apostrophe, which ends the quoting unless it is closed, escaped and reopened
+    // quoted one by one for the verifier's shell; an apostrophe is closed, escaped and reopened
     let test_glob = l
         .test_glob
         .iter()
@@ -949,7 +978,7 @@ pub fn subst(text: &str, cfg: &Config) -> String {
         ("__LEARNINGS_CAP__", &cap),
         ("__TEST_GLOB__", &test_glob),
     ];
-    // unset means the preset's own directory, which only skills::skills_dir knows -- leave the token standing, not empty
+    // unset is the preset's own dir, which only skills::skills_dir knows; leave the token, not empty
     if let Some(dir) = l.skills_dir.as_deref() {
         tokens.push(("__SKILLS_DIR__", dir));
     }
@@ -1033,7 +1062,7 @@ pub fn migrate_json(json: &str) -> Result<(String, Vec<String>), ConfigError> {
             _ => {
                 let snake = snake_case(key);
                 let line = json_to_toml(value).map(|v| format!("{snake} = {v}"));
-                // a key with no Layout field would make the migrated file unloadable now unknown keys are refused; report it dropped instead
+                // a key with no Layout field would make the migrated file unloadable; report it dropped instead
                 match line.filter(|l| toml::from_str::<Layout>(l).is_ok()) {
                     Some(line) => {
                         layout.push(line);
@@ -1117,7 +1146,7 @@ fn fail_name_from_sed(sed: &str) -> Option<String> {
             (false, c) => out.push(c),
         }
     }
-    // no group in the sed pattern means it deleted the prefix and kept the rest; the regex must capture that rest instead
+    // a sed pattern with no group deleted the prefix and kept the rest; the regex must capture that rest
     if !pattern.contains("\\(") {
         out.push_str("(.+)$");
     }
@@ -1214,7 +1243,7 @@ mod tests {
     }
 
     const INSTANCE_FILES: [&str; 10] = [
-        "TASKS.md",
+        "specs",
         "PROGRESS.md",
         "PROGRESS.archive.md",
         "LEARNINGS.md",
@@ -1249,34 +1278,10 @@ mod tests {
     }
 
     #[test]
-    fn a_root_queue_keeps_the_root_layout() {
-        let d = tempfile::tempdir().unwrap();
-        let root = d.path();
-        std::fs::write(instance_path(root, "", "TASKS.md"), "# TASKS\n").unwrap();
-        for name in INSTANCE_FILES.iter().chain([&"SPEC.md"]) {
-            assert_eq!(instance_path(root, ".enallagi", name), root.join(name));
-        }
-        assert_eq!(
-            crate::skills::lock_path(root, ".enallagi"),
-            instance_path(root, "", "harness.lock")
-        );
-        assert_eq!(load(root).unwrap().layout.context_file, "AGENTS.md");
-
-        std::fs::create_dir(root.join(".enallagi")).unwrap();
-        std::fs::write(root.join(".enallagi/TASKS.md"), "").unwrap();
-        assert_eq!(
-            instance_rel(root, ".enallagi", "PROGRESS.md"),
-            ".enallagi/PROGRESS.md",
-            "a queue in the harness directory wins over a root one"
-        );
-    }
-
-    #[test]
-    fn the_new_config_name_wins_over_the_legacy_one() {
+    fn new_config_name_wins() {
         let d = tempfile::tempdir().unwrap();
         let root = d.path();
         std::fs::create_dir(root.join(".enallagi")).unwrap();
-        std::fs::write(root.join(".enallagi/TASKS.md"), "").unwrap();
         assert_eq!(config_path(root), root.join(".enallagi/enallagi.toml"));
 
         std::fs::write(
@@ -1297,28 +1302,11 @@ mod tests {
     }
 
     #[test]
-    fn a_root_config_is_read_when_the_dir_has_none() {
-        let d = tempfile::tempdir().unwrap();
-        let root = d.path();
-        std::fs::write(instance_path(root, "", CONFIG), "[check]\ncommand='make'\n").unwrap();
-        assert_eq!(load(root).unwrap().check.command, "make");
-
-        std::fs::create_dir(root.join(".enallagi")).unwrap();
-        std::fs::write(
-            instance_path(root, ".enallagi", CONFIG),
-            "[check]\ncommand='just'\n",
-        )
-        .unwrap();
-        assert_eq!(config_path(root), root.join(".enallagi/enallagi.toml"));
-        assert_eq!(load(root).unwrap().check.command, "just");
-    }
-
-    #[test]
-    fn defaults_load_when_no_file() {
+    fn defaults_without_file() {
         let d = tempfile::tempdir().unwrap();
         let c = load(d.path()).unwrap();
         assert_eq!(c.check.command, "");
-        assert_eq!(c.pipeline.len(), 4);
+        assert_eq!(c.pipeline.len(), 5);
         assert_eq!(c.stage[0].turns, 120);
     }
 
@@ -1348,11 +1336,55 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_mode_unknown_refused() {
+        let d = tempfile::tempdir().unwrap();
+        write_config(d.path(), "[sandbox]\nmode = 'docker'\n");
+        let err = load(d.path()).unwrap_err().to_string();
+        assert!(err.contains("docker"), "{err}");
+        write_config(d.path(), "[sandbox]\nmode = 'native'\n");
+        assert!(load(d.path()).is_ok());
+    }
+
+    #[test]
+    fn merge_rejects_unknown_mode() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(load(d.path()).unwrap().pr.merge, MergeMode::Human);
+        write_config(d.path(), "[pr]\nmerge = 'yolo'\n");
+        let err = load(d.path()).unwrap_err().to_string();
+        for word in ["merge", "yolo", "human", "auto"] {
+            assert!(err.contains(word), "{word}: {err}");
+        }
+        write_config(d.path(), "[pr]\nmerge = 'auto'\n");
+        let cfg = load(d.path()).unwrap();
+        assert!(cfg.pr.merge == MergeMode::Auto && cfg.pr.per_task);
+    }
+
+    #[test]
+    fn writers_default_one() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(load(d.path()).unwrap().parallel.writers.get(), 1);
+        write_config(d.path(), "[parallel]\nwriters = 3\n");
+        assert_eq!(load(d.path()).unwrap().parallel.writers.get(), 3);
+        write_config(d.path(), "[parallel]\nwriters = 0\n");
+        let err = load(d.path()).unwrap_err().to_string();
+        assert!(err.contains("writers"), "{err}");
+    }
+
+    #[test]
+    fn skip_permissions_key_refused() {
+        let d = tempfile::tempdir().unwrap();
+        write_config(d.path(), "[agent]\ndangerously_skip_permissions = true\n");
+        let err = load(d.path()).unwrap_err().to_string();
+        assert!(err.contains("[sandbox] mode"), "{err}");
+    }
+
+    #[test]
     fn unknown_gate_is_refused() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
-        c.stage[0].post.push("nope".into());
+        c.stage[0].post.extend(["nope".into(), "tickets".into()]);
         let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
-        assert!(errs.iter().any(|e| e.to_string().contains("nope")));
+        assert!(errs.iter().any(|e| e.to_string().contains("`nope`")));
+        assert!(!errs.iter().any(|e| e.to_string().contains("`tickets`")));
     }
 
     #[test]
@@ -1369,26 +1401,6 @@ mod tests {
         c.agent.preset = "aider".into();
         let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
         assert!(errs.iter().any(|e| e.to_string().contains("timeout")));
-    }
-
-    #[test]
-    fn a_skip_with_no_bypass_flag_is_refused() {
-        let mut c = checked();
-        c.agent.dangerously_skip_permissions = true;
-        assert!(validate(&c, &crate::agent::presets(), &|_| Some(String::new())).is_ok());
-        c.agent.roles.insert(
-            "scout".into(),
-            AgentOverride {
-                preset: Some("pi".into()),
-                ..AgentOverride::default()
-            },
-        );
-        let errs = validate(&c, &crate::agent::presets(), &|_| Some(String::new())).unwrap_err();
-        assert!(
-            errs.iter()
-                .any(|e| e.to_string().contains("pi declares no bypass flag")),
-            "{errs:?}"
-        );
     }
 
     #[test]
@@ -1459,7 +1471,28 @@ mod tests {
     }
 
     #[test]
-    fn the_defaults_validate() {
+    fn role_tools_refused() {
+        let roles = |_: &str| Some("---\nname: x\ntools: Read, Bash\n---\nbody\n".to_string());
+        let errs = validate(&checked(), &crate::agent::presets(), &roles).unwrap_err();
+        let text = errs
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("writes:") && text.contains("hosts:"),
+            "{text}"
+        );
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles");
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let role = std::fs::read_to_string(&path).unwrap();
+            assert!(!role.lines().any(|l| l.starts_with("tools:")), "{path:?}");
+        }
+    }
+
+    #[test]
+    fn defaults_validate() {
         let c = load(tempfile::tempdir().unwrap().path()).unwrap();
         let roles = |_: &str| Some(String::new());
         let errs = validate(&c, &crate::agent::presets(), &roles).unwrap_err();
@@ -1468,24 +1501,24 @@ mod tests {
             "{errs:?}"
         );
         assert!(validate(&checked(), &crate::agent::presets(), &roles).is_ok());
-        assert_eq!(c.skill.len(), 8);
+        assert_eq!(c.skill.len(), 13);
         assert_eq!(c.layout.learnings_cap, 12);
         assert_eq!(c.layout.skills_dir, None);
         assert_eq!(c.stage[2].env["ENALLAGI_DRIVER"], "1");
-        assert_eq!(c.pipeline[2].end_after_dry_rounds, 1);
-        assert_eq!(c.pipeline[3].end_after_dry_rounds, 2);
+        assert_eq!(c.pipeline[3].end_after_dry_rounds, 1);
+        assert_eq!(c.pipeline[4].end_after_dry_rounds, 2);
     }
 
-    // tables merge key by key; an array of tables replaces the list whole, so a user's one [[stage]] is the only stage
+    // tables merge per key; an array of tables replaces whole, so a user's one [[stage]] is the only one
     #[test]
-    fn tables_merge_and_arrays_replace() {
+    fn tables_merge_arrays_replace() {
         let d = tempfile::tempdir().unwrap();
         write_config(
             d.path(),
             "[layout]\nspec = 'DESIGN.md'\n\n[[stage]]\nname = 'only'\ncommand = 'true'\n",
         );
         let c = load(d.path()).unwrap();
-        assert_eq!(c.layout.spec, "DESIGN.md");
+        assert_eq!(c.layout.spec, ".enallagi/DESIGN.md");
         assert_eq!(c.layout.harness_dir, ".enallagi", "untouched keys survive");
         assert_eq!(c.layout.context_file, ".enallagi/AGENTS.md");
 
@@ -1494,28 +1527,6 @@ mod tests {
         assert_eq!(c.stage.len(), 1);
         assert_eq!(c.stage[0].name, "only");
         assert_eq!(c.stage[0].turns, 40, "the per-stage default");
-    }
-
-    #[test]
-    fn a_lone_legacy_directory_is_kept() {
-        let d = tempfile::tempdir().unwrap();
-        std::fs::create_dir(d.path().join(".harness")).unwrap();
-        assert_eq!(load(d.path()).unwrap().layout.harness_dir, ".harness");
-
-        write_config(d.path(), "[layout]\nharness_dir = 'state'\n");
-        assert_eq!(
-            load(d.path()).unwrap().layout.harness_dir,
-            "state",
-            "a configured directory is never overridden"
-        );
-    }
-
-    #[test]
-    fn the_enallagi_directory_wins_when_both_exist() {
-        let d = tempfile::tempdir().unwrap();
-        std::fs::create_dir(d.path().join(".harness")).unwrap();
-        std::fs::create_dir(d.path().join(".enallagi")).unwrap();
-        assert_eq!(load(d.path()).unwrap().layout.harness_dir, ".enallagi");
     }
 
     #[test]
@@ -1723,7 +1734,7 @@ mod tests {
     }
 
     #[test]
-    fn subst_covers_every_token() {
+    fn subst_tokens() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
         let text = "__CHECK__|__CHECK_FORCE__|__SPEC__|__ENALLAGI_DIR__|__SKILLS_DIR__|\
                     __CONTEXT_FILE__|__CONTRACT_FILE__|__SKILL_INVOCATION__|__DRIVER_COMMAND__|\
@@ -1736,7 +1747,7 @@ mod tests {
             "only __SKILLS_DIR__ is left standing: {out}"
         );
         assert!(out.contains("__SKILLS_DIR__"));
-        assert!(out.contains("SPEC.md") && out.contains("## 12.") && out.contains("|12"));
+        assert!(out.contains("/spec.md") && out.contains("## Out of Scope") && out.contains("|12"));
 
         c.layout.skills_dir = Some(".codex/skills".into());
         out = subst(text, &c);
@@ -1762,7 +1773,7 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_json_migrates_into_a_valid_config() {
+    fn shipped_json_migrates() {
         let json = include_str!("../tests/fixtures/harness.default.json");
         let (text, renamed) = migrate_json(json).unwrap();
         assert!(renamed.iter().any(|r| r == "skills -> skill"));
@@ -1793,7 +1804,7 @@ mod tests {
         assert_eq!(c.skill[1].source, "github:DietrichGebert/ponytail");
         assert_eq!(c.skill[1].rev.as_deref(), Some("v4.8.4"));
         assert_eq!(c.skill[6].gate, "queue-uncovered");
-        assert_eq!(c.stage.len(), 4);
+        assert_eq!(c.stage.len(), 5);
         let roles = |_: &str| Some(String::new());
         let errs = validate(&c, &crate::agent::presets(), &roles).unwrap_err();
         assert!(
@@ -1866,7 +1877,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_stage_names_and_skill_ids_are_refused() {
+    fn duplicate_ids_refused() {
         let mut c = load(tempfile::tempdir().unwrap().path()).unwrap();
         c.stage.push(c.stage[0].clone());
         c.skill.push(c.skill[0].clone());
@@ -1877,7 +1888,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("both named implement"), "{text}");
-        assert!(text.contains("both have id tdd"), "{text}");
+        assert!(text.contains("both have id to-tickets"), "{text}");
     }
 
     #[test]

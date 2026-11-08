@@ -1,4 +1,4 @@
-//! `enallagi base <task>` -- prints the commit a task's work starts from, and nothing at all when there is none.
+//! `enallagi base <task>` -- the commit a task's work starts from, or nothing when there is none
 
 use crate::{config, git};
 
@@ -7,7 +7,7 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let root = std::env::current_dir()?;
+    let root = super::root()?;
     match git::task_base(&root, &config::harness_dir(&root), &args.task) {
         Ok(sha) => {
             if !sha.is_empty() {

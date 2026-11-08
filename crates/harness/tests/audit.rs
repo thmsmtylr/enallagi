@@ -1,4 +1,4 @@
-//! `enallagi audit` over a seeded fixture and a scripted auditor: the signal it hands over, the citations it checks, and the entries it writes or merges.
+//! `enallagi audit` over a seeded fixture and a scripted auditor
 
 use enallagi::audit;
 use enallagi::config::{self, Config};
@@ -40,7 +40,7 @@ notes: VERIFIER 2026-09-03
 const QUEUED: &str = "
 ## [T-012] the citation test
 scope: src/floor.rs
-status: proposed
+status: needs-triage
 notes: https://github.com/o/r/pull/4#discussion_r12
   > this test selects 0 tests, so it passes with the logic deleted
 ";
@@ -57,7 +57,9 @@ fn seeded() -> (Repo, Config) {
     let repo = Repo::new();
     let argv = answering(&repo, "");
     repo.init_harness(&format!(
-        "[agent]\npreset = \"custom\"\ncommand = {argv:?}\n\n[check]\ncommand = \"true\"\n"
+        "[agent]\npreset = \"custom\"\ncommand = {argv:?}\n\n[check]\ncommand = \"true\"\n\n[sandbox]\nwrite = [{:?}]\n",
+        // the auditor writes nothing in the checkout; the stub's prompt log needs a declared path
+        repo.root.join("src")
     ));
     let cfg = config::load(&repo.root).expect("config");
     (repo, cfg)
@@ -98,7 +100,7 @@ fn append(repo: &Repo, rel: &str, text: &str) {
     fs::write(path, body).expect("append");
 }
 
-// the rejected entry sits under its heading, and the archived blocks after it, as `enallagi run` leaves them
+// the rejected entry under its heading, the archived blocks after it, as `enallagi run` leaves them
 fn with_signal(repo: &Repo) {
     append(repo, ".enallagi/PROGRESS.md", PROGRESS);
     let rel = ".enallagi/DECISIONS.md";
@@ -109,7 +111,16 @@ fn with_signal(repo: &Repo) {
         1,
     );
     fs::write(repo.root.join(rel), format!("{decisions}{ARCHIVED}")).expect("write");
-    append(repo, ".enallagi/TASKS.md", QUEUED);
+    repo.queue(".enallagi", QUEUED);
+}
+
+// the queued block's heading, in TASKS.md or its own ticket file
+fn queued_at(repo: &Repo) -> String {
+    let t = enallagi::tracker::Tracker::open(&repo.root, ".enallagi");
+    let path = t.path_of("T-012").expect("the queue");
+    let rel = path.strip_prefix(&repo.root).expect("under the root");
+    let line = t.get("T-012").expect("the queue").expect("T-012").line;
+    format!("{}:{line}", rel.display())
 }
 
 fn at(repo: &Repo, rel: &str, needle: &str) -> String {
@@ -168,7 +179,7 @@ fn two_classes(repo: &Repo) -> (Vec<String>, Vec<String>) {
     let vacuous = vec![
         at(repo, progress, "passed with the filter deleted"),
         at(repo, decisions_rel, "a mutant survived"),
-        at(repo, ".enallagi/TASKS.md", "## [T-012]"),
+        queued_at(repo),
     ];
     (lost, vacuous)
 }

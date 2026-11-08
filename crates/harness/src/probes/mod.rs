@@ -1,4 +1,4 @@
-//! What the tree says about itself. A probe REPORTS, never gates; one that could not run says ERROR, not a claim of zero.
+//! what the tree says about itself: a probe reports, never gates; one that could not run says ERROR
 
 pub mod common;
 pub mod contribution_policy;
@@ -56,7 +56,7 @@ pub struct CheckOutcome {
 pub struct ProbeCtx<'a> {
     pub root: &'a Path,
     pub cfg: &'a Config,
-    /// `None` makes `run_all` run the check itself.
+    /// `None` makes `run_all` run the check itself
     pub check: Option<&'a CheckOutcome>,
     pub driver: bool,
 }
@@ -230,7 +230,8 @@ fn force_check(ctx: &ProbeCtx) -> CheckOutcome {
             output: "nested under turbo, the check would recurse".to_string(),
         };
     }
-    let report = crate::gates::check_delta(ctx.root, ctx.cfg, true);
+    let sandbox = crate::sandbox::Sandbox::start(ctx.root, ctx.cfg);
+    let report = crate::gates::check_delta(&sandbox, ctx.root, ctx.cfg, true);
     if report.timed_out.is_none() && report.exit == 127 {
         return CheckOutcome {
             ran: false,

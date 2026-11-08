@@ -1,7 +1,6 @@
-//! The one probe that drives the built artifact instead of reading text. Off unless `layout.driver_command` is set and `ENALLAGI_DRIVER=1`.
+//! the one probe driving the built artifact; needs `layout.driver_command` and `ENALLAGI_DRIVER=1`
 
 use super::{common, ProbeCtx, ProbeResult};
-use std::process::Command;
 
 pub const OFF: &str = "no driver_command in enallagi.toml, or ENALLAGI_DRIVER is unset. Nothing here exercised the built artifact.";
 
@@ -15,9 +14,10 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
         Ok(dir) => dir,
         Err(e) => return ProbeResult::Error(format!("no working directory for the driver: {e}")),
     };
-    let mut child = Command::new("sh");
-    child.arg("-c").arg(command).current_dir(dir.path());
-    child.env_clear();
+    let sandbox = crate::sandbox::Sandbox::start(ctx.root, ctx.cfg);
+    let wrapped = sandbox.wrap(&["sh", "-c", command], dir.path(), &[]);
+    let mut child = wrapped.command();
+    child.env_clear().envs(wrapped.env.iter().cloned());
     for key in ["PATH", "HOME"] {
         if let Some(value) = std::env::var_os(key) {
             child.env(key, value);

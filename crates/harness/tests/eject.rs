@@ -1,6 +1,6 @@
-//! `enallagi eject`: a repository the harness was brought into, ran in and left looks as it did before.
+//! `enallagi eject`: a repository the harness was brought into, ran in and left looks as before
 
-use enallagi::fixture::Repo;
+use enallagi::fixture::{exec, git, Repo};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -9,21 +9,10 @@ const TASKS: &str = "\
 
 scope: src/thing.ts
 rows: none — harness
-status: ready
+status: ready-for-agent
 criteria:
   - it happens
 ";
-
-const SKILLS: [&str; 8] = [
-    "tdd",
-    "ponytail",
-    "debugging",
-    "review-received",
-    "verify-before-done",
-    "review-requested",
-    "brainstorming",
-    "caveman-commit",
-];
 
 // where an eject in these tests keeps its record: never the user's own data directory
 fn data_home() -> &'static Path {
@@ -50,10 +39,6 @@ fn harness(root: &Path, args: &[&str]) -> (i32, String) {
     (out.status.code().unwrap_or(-1), text)
 }
 
-fn git(root: &Path, args: &[&str]) -> String {
-    enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
-}
-
 fn exclude(root: &Path) -> String {
     let path = git(root, &["rev-parse", "--git-path", "info/exclude"]);
     std::fs::read_to_string(root.join(path)).unwrap_or_default()
@@ -65,16 +50,6 @@ fn snapshot(root: &Path) -> (String, String, String) {
         git(root, &["ls-files", "-s"]),
         exclude(root),
     )
-}
-
-fn exec(path: &Path, body: &str) -> String {
-    std::fs::write(path, format!("#!/usr/bin/env bash\nset -u\n{body}")).expect("write script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
-    path.display().to_string()
 }
 
 // the stubs and skills live outside the repository, so nothing but init and the run touches it
@@ -96,7 +71,10 @@ fn stub_config(tools: &Path) -> String {
     );
     let verify = exec(
         &tools.join("verify.sh"),
-        &format!("{bin} tasks set-status T-001 done 'stub verified'\n{quiet}"),
+        &format!(
+            "{bin} tasks set-status T-001 done 'stub verified'\n\
+             printf 'verdict: verified by verifier\\nspec: none\\nstandards: none\\n' >>.enallagi/specs/*/issues/T-001-*.md\n{quiet}"
+        ),
     );
     let mut toml = format!(
         r#"
@@ -115,6 +93,10 @@ command = ["{verify}", "{{prompt}}", "{{turns}}"]
 
 [check]
 command = "{check}"
+
+# the stubs sit in /tmp outside the lane, which bwrap masks
+[sandbox]
+mode = "off"
 
 [[pipeline]]
 name = "review"
@@ -156,7 +138,7 @@ turns = 5
 post = ["commit-round", "adjudicator-halt", "dry-round"]
 "#
     );
-    for id in SKILLS {
+    for id in enallagi::fixture::SKILL_IDS {
         let dir = tools.join("vendor").join(id);
         std::fs::create_dir_all(&dir).expect("skill dir");
         std::fs::write(dir.join("SKILL.md"), format!("# {id}\n")).expect("skill");
@@ -176,7 +158,7 @@ fn removed(out: &str, verb: &str) -> Vec<String> {
 }
 
 #[test]
-fn an_ejected_repository_looks_untouched() {
+fn ejected_repo_untouched() {
     let r = Repo::new();
     let tools = tempfile::tempdir().expect("tools");
     let (status, index, excluded) = snapshot(&r.root);
@@ -188,7 +170,7 @@ fn an_ejected_repository_looks_untouched() {
         stub_config(tools.path()),
     )
     .expect("config");
-    std::fs::write(r.root.join(".enallagi/TASKS.md"), TASKS).expect("queue");
+    r.queue(".enallagi", TASKS);
     // the run refuses an install that has not seen this config, so init runs once more over it
     let (code, out) = harness(&r.root, &["init", "--adapter", "claude"]);
     assert_eq!(code, 0, "{out}");
@@ -261,7 +243,7 @@ impl Drop for Reaper {
 }
 
 #[test]
-fn eject_refuses_a_live_lane_or_loop() {
+fn eject_refuses_live_lane() {
     let r = Repo::new();
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
@@ -287,7 +269,7 @@ fn eject_refuses_a_live_lane_or_loop() {
         assert_ne!(code, 0, "{out}");
         assert!(out.contains("lane-x"), "{out}");
         assert!(out.contains(&pid.to_string()), "{out}");
-        assert!(r.root.join(".enallagi/TASKS.md").is_file(), "{out}");
+        assert!(r.root.join(".enallagi/PROGRESS.md").is_file(), "{out}");
     }
     let _ = git(
         &r.root,
@@ -296,7 +278,7 @@ fn eject_refuses_a_live_lane_or_loop() {
 }
 
 #[test]
-fn eject_refuses_its_own_ancestor_loop() {
+fn eject_refuses_ancestor_loop() {
     let r = Repo::new();
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
@@ -317,12 +299,12 @@ fn eject_refuses_its_own_ancestor_loop() {
         );
         assert_ne!(out.status.code(), Some(0), "{text}");
         assert!(text.contains("a loop is live"), "{text}");
-        assert!(r.root.join(".enallagi/TASKS.md").is_file(), "{text}");
+        assert!(r.root.join(".enallagi/PROGRESS.md").is_file(), "{text}");
     }
 }
 
 #[test]
-fn eject_keep_record_moves_the_directory_out() {
+fn eject_keep_record() {
     let r = Repo::new();
     let (code, out) = harness(&r.root, &["init"]);
     assert_eq!(code, 0, "{out}");
@@ -338,22 +320,21 @@ fn eject_keep_record_moves_the_directory_out() {
         ],
     );
     assert_ne!(code, 0, "{out}");
-    assert!(r.root.join(".enallagi/TASKS.md").is_file(), "{out}");
+    assert!(r.root.join(".enallagi/PROGRESS.md").is_file(), "{out}");
 
     let (code, out) = harness(
         &r.root,
         &["eject", "--keep-record", &record.to_string_lossy()],
     );
     assert_eq!(code, 0, "{out}");
-    assert!(record.join("TASKS.md").is_file(), "{out}");
+    assert!(record.join("PROGRESS.md").is_file(), "{out}");
     assert!(record.join(".git").exists(), "{out}");
     assert!(!r.root.join(".enallagi").exists(), "{out}");
     assert_eq!(git(&r.root, &["status", "--porcelain", "--ignored"]), "");
     assert!(!exclude(&r.root).contains("# >>> harness"));
 }
 
-// the record outlives the install: the events, verdicts and progress are what says why a run
-// ended where it did, and only --delete removes them
+// the record outlives the install: it says why a run ended, and only --delete removes it
 #[test]
 fn eject_keeps_the_record_in_the_data_directory() {
     let r = Repo::new();

@@ -7,13 +7,12 @@ Read it with `sed -n '/^## Earned rules/,/^## Rejected findings/p' __ENALLAGI_DI
 start of every task. A line carries the `enallagi eval --gate <name>` run that admitted it or the
 command that showed what it cost, and names a file, a command or a hook.
 
-`## Rejected findings` is every proposal the adjudicator killed, one line each, with the command
-that refutes it. Read it with `sed -n '/^## Rejected findings/,/^## \[T-/p' __ENALLAGI_DIR__/DECISIONS.md` and
+`## Rejected findings` is the proposals the adjudicator killed before kills moved to
+`__ENALLAGI_DIR__/.out-of-scope/`, one line each, with the command that refutes it. Nothing is
+appended to it now; the probes still honour its lines. Read it with `sed -n '/^## Rejected findings/,/^## \[T-/p' __ENALLAGI_DIR__/DECISIONS.md` and
 never read past that range.
 
-Below it, completed task blocks, verbatim, moved out of __ENALLAGI_DIR__/TASKS.md once `done` by
-`enallagi run`. Each block is the implementer's and the verifier's own words, never summarised on
-the way in.
+Below it, task blocks an older install archived, verbatim. Nothing is added there now.
 
 ## Earned rules
 

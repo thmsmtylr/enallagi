@@ -1,6 +1,6 @@
 ---
 name: running-the-loop
-description: Use when working in a repository that has a __ENALLAGI_DIR__ directory - explains the task queue, the four roles and their authority, what "done" means here, and the rails a change has to survive. Invoke before taking a task from __ENALLAGI_DIR__/TASKS.md, before marking anything done, and before proposing new work.
+description: Use when working in a repository that has a __ENALLAGI_DIR__ directory - explains the ticket queue, where the roles and their authority are stated, what "done" means here, and the rails a change has to survive. Invoke before taking a ticket from __ENALLAGI_DIR__/specs/, before marking anything done, and before proposing new work.
 ---
 
 # Running the loop
@@ -10,39 +10,42 @@ a fresh session, and every claim is gated on a command someone else can run.
 
 ## Before you touch anything
 
-Read `__CONTEXT_FILE__`, `__ENALLAGI_DIR__/LEARNINGS.md`, and the task's own block in `__ENALLAGI_DIR__/TASKS.md`. Read the **tail** of
+Read `__CONTEXT_FILE__`, `__ENALLAGI_DIR__/LEARNINGS.md`, and the task's own ticket file under `__ENALLAGI_DIR__/specs/` (`enallagi tasks block <id>` prints it). Read the **tail** of
 `__ENALLAGI_DIR__/PROGRESS.md` — it is append-only and newest-last, so reading it from the top gives you the oldest
 entries and none of the handoff.
 
 Restate the task's acceptance criteria in one sentence before writing code. If you cannot, the task
-is `needs-spec` and the question goes in its `notes:`.
+is `needs-info` and the question goes under its `## Comments`.
 
-## The four roles
+## Roles
 
-Each role has one job and one thing it may never do:
-
-| Role | Does | May never |
-| --- | --- | --- |
-| scout | turns `FINDING` lines from `enallagi probe` into `status: proposed` blocks | have a finding of its own, promote, or fix |
-| adjudicator | promotes a proposal to `ready` with runnable criteria, or kills it with the command that refutes it | write a proposal, or edit a file a block names |
-| implementer | one task, inside its `scope:` globs, test first | mark anything `done` |
-| verifier | fresh session, adversarial, promotes to `done` or rejects with reproducible reasons | fix code |
-
-The full prompts are in `__ENALLAGI_DIR__/roles/`. Read the one for the role you are playing.
+Each role's prompt, with what it does and what it may never do, is in `__ENALLAGI_DIR__/roles/`.
+Read the one for the role you are playing. Ticket states and every field are in
+`references/ticket.md`.
 
 ## What done means
+
+Under `[pr] per_task`, `done` means merged: the launcher sets a verified ticket `open` when it opens its
+pull request, and `done` only when that pull request merges.
+
+Review findings on that pull request come back to the ticket as `finding:` entries, and the ticket
+returns to `ready-for-agent` with `rounds:` bumped. The round runs on the pull request's branch and
+answers each finding with one `answer:` line. After the push the launcher replies on each finding
+(`settled:`) and resolves its thread. The loop stops at `respond: clean at <sha>` (no new finding,
+green checks, every thread resolved), or hands the ticket to a person at `[respond] max_rounds`.
+A finding raised again after a reject gets a pointer to the rejection and no round.
 
 `__CHECK__` passes, verified on **delta** against `__ENALLAGI_DIR__/.check-baseline` — a failure listed there is
 inherited, a failure not listed there is a rejection, and the file only ever shrinks. Adding a line
 to it is weakening a test by another name.
 
 Paste the exact command and its output. A task may never be marked done without them. The launcher
-re-runs the gate behind the verifier and forces back to `ready` any `done` the tree cannot support,
+re-runs the gate behind the verifier and forces back to `ready-for-agent` any `done` the tree cannot support,
 so write the verdict you can defend against a command someone else runs.
 
 It re-runs the **scope** check too: the iteration's own commits, diffed against the task's `scope:`
-globs. A file the scope line does not name sends the task back to `ready`, and so does a diff
-touching the launcher, the hooks, the check script, `__ENALLAGI_DIR__/.check-baseline` or `test-hashes.json` under a
+globs. A file the scope line does not name sends the task back to `ready-for-agent`, and so does a diff
+touching `__ENALLAGI_DIR__/`, a `hooks/` path, `enallagi.toml`, `harness.lock`, `.check-baseline` or `test-hashes.json` under a
 task whose `rows:` is not `none — harness` — one round changes a product lever or the measure of
 that lever, never both.
 
@@ -53,15 +56,15 @@ Stopping with `BLOCKED` and a written reason is a success, not a failure.
 Every iteration's `__ENALLAGI_DIR__/PROGRESS.md` entry ends with `friction:` — one thing that cost time and a rule or
 a check could prevent, or `none`. The first occurrence is evidence and stays there. The **second**
 occurrence of the same thing is decided: a line in `__ENALLAGI_DIR__/LEARNINGS.md`, which `enallagi eval --gate` must
-admit, or a dated kill line in `__ENALLAGI_DIR__/DECISIONS.md` quoting the `--gate` run that refused the rule.
+admit, or a dated kill line in a `__ENALLAGI_DIR__/.out-of-scope/` file quoting the `--gate` run that refused the rule.
 `enallagi probe` → `friction-repeat` keeps emitting it until one of the two is written.
 
 ## The rails
 
 `__ENALLAGI_DIR__/RAILS.md` has all of them with their enforcement. The ones that decide most
-reviews: `green`, `citable` (every claim carries its source), `measure-first` (no number that was
+reviews: `green`, `citable` (every claim in a note carries its source), `measure-first` (no number that was
 not run and stamped), `one-scope` (only the files the task names), `blocked-is-allowed`.
 
 ## References
 
-- `references/task-block.md` — the block format and every field's meaning
+- `references/ticket.md` — the ticket file and every field's meaning

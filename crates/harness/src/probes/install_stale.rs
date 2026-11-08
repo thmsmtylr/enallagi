@@ -1,4 +1,4 @@
-//! An installed file drifted from what init would write now (not the raw template, whose substitution tokens would false-positive every file). Seeded documents are excluded: seed never overwrites one, so drift there is legitimate.
+//! an installed file drifted from what init writes now; seeded documents are the project's
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};

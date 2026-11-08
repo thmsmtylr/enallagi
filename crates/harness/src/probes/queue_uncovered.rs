@@ -1,12 +1,18 @@
-//! The queue against the spec, both directions: neither spec-untested nor queue-hygiene asks whether the two agree.
+//! the queue against the spec, in both directions
 
 use super::common::{self, Res};
 use super::spec_untested::untested_rows;
 use super::{Finding, ProbeCtx, ProbeResult};
+use crate::block::{self, Block};
 use crate::git;
 use std::collections::BTreeSet;
 
-const OPEN_STATUS: &[&str] = &["proposed", "ready", "blocked", "review"];
+const OPEN_STATUS: &[&str] = &[
+    "needs-triage",
+    "ready-for-agent",
+    "ready-for-human",
+    "review",
+];
 
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
     common::result(find(ctx))
@@ -24,15 +30,15 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     let mut claimed: BTreeSet<(String, String)> = BTreeSet::new();
     let mut found = Vec::new();
 
-    let tasks = common::instance(ctx, "TASKS.md");
     let mut tree: Option<Vec<String>> = None;
-    for block in common::task_blocks(ctx)? {
-        let status = common::field(&block, "status").map(|(_, v)| v);
+    for (tasks, block) in common::tickets(ctx)? {
+        // the whole value, so `ready-for-agent -- a reason` stays closed
+        let status = block::field_at(&block, "status").map(|(_, v)| v);
         if !status.is_some_and(|s| OPEN_STATUS.contains(&s.as_str())) {
             continue;
         }
         found.extend(stale_criteria(ctx, &block, &tasks, &mut tree)?);
-        let Some((rows_at, rows)) = common::field(&block, "rows") else {
+        let Some((rows_at, rows)) = block::field_at(&block, "rows") else {
             continue;
         };
         let refs: Vec<_> = row_ref.captures_iter(&rows).collect();
@@ -79,11 +85,10 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
         }
     }
 
-    let spec = &common::instance(ctx, &ctx.cfg.layout.spec);
     for row in untested_rows(ctx)? {
         if !claimed.contains(&(row.name.clone(), row.test.clone())) {
             found.push(common::finding(
-                spec,
+                &row.spec,
                 row.line,
                 format!(
                     "{}::{} is untested and no open task names it ({})",
@@ -95,10 +100,10 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     Ok(found)
 }
 
-// a name absent from the tree is quiet unless the history once held it, so a test its own task has yet to write is not reported
+// a name absent from the tree is quiet unless history held it, so an unwritten test is not reported
 fn stale_criteria(
     ctx: &ProbeCtx,
-    block: &common::TaskBlock,
+    block: &Block,
     tasks: &str,
     tree: &mut Option<Vec<String>>,
 ) -> Res<Vec<Finding>> {
@@ -180,7 +185,7 @@ fn code_spans(text: &str) -> String {
         .join("\n")
 }
 
-// the positional filter of a `cargo test ... --test <file> <filter>` invocation, when the line carries one
+// the positional filter of a `cargo test ... --test <file> <filter>` line, when it carries one
 fn test_filter(text: &str) -> Option<String> {
     let spans = code_spans(text);
     let words: Vec<&str> = spans

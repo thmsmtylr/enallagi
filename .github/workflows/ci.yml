@@ -3,8 +3,8 @@
 # `driver` runs the ignored test that drives the release binary through a real install. `package`
 # refuses a dogfood instance on main or in a pull request into it. `skills`
 # fetches every pinned skill from harness.lock and checks it against its pin. `rust` runs
-# fmt, clippy at -D warnings and the workspace test suite on both userlands. `cross-build` proves the
-# four release targets compile. Every `uses:` is pinned to a 40-character commit SHA with its tag in
+# fmt, clippy at -D warnings and the workspace test suite on both userlands, with bubblewrap on
+# Linux. `cross-build` proves the four release targets compile. Every `uses:` is pinned to a 40-character commit SHA with its tag in
 # a trailing comment (`every_github_action_is_pinned_to_a_commit_sha`, crates/harness/tests/floor.rs).
 # ENALLAGI_EVALS is deliberately never set: the evals spawn a real agent, and a CI job holding a model
 # credential is the blast radius this project argues against.
@@ -87,7 +87,7 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: the published package tracks no instance file
-        run: cargo test -p enallagi --no-fail-fast --test floor -- --include-ignored --exact main_tracks_no_instance_file
+        run: cargo test -p enallagi --no-fail-fast --test floor -- --include-ignored --exact main_tracks_no_instance
 
   # The vendored skills are not in the tree: `sync` fetches them from harness.lock and `check`
   # refuses a pin whose vendored content no longer hashes to what the lock records, so a tag moved
@@ -138,6 +138,14 @@ jobs:
           toolchain: stable
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # tests/sandbox.rs runs real commands under bwrap, and ubuntu 24.04's AppArmor refuses the
+      # unprivileged user namespace bwrap needs unless this sysctl is 0
+      - name: bubblewrap and unprivileged user namespaces for tests/sandbox.rs
+        run: |
+          [ "$RUNNER_OS" = Linux ] || exit 0
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: rustfmt --check on the rust sources
         run: cargo fmt --all --check
       - name: cargo clippy -D warnings

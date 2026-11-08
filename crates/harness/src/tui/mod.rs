@@ -1,15 +1,19 @@
-//! Renders a run from the event log, live or attached; `Model` folds events, `view` draws onto any `ratatui` backend.
+//! renders a run from the event log; `Model` folds events, `view` draws onto any `ratatui` backend
 
 mod stream;
 mod view;
 
+use std::cell::Cell;
 use std::panic::PanicHookInfo;
 use std::path::Path;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event as CEvent, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event as CEvent, KeyCode, KeyEvent,
+    KeyEventKind, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -17,8 +21,9 @@ use crossterm::terminal::{
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::Terminal;
 
+use crate::block::Block;
 use crate::events::{Event, Kind, Log};
-use crate::queue::{self, Block};
+use crate::tracker::Tracker;
 
 pub use view::view;
 
@@ -29,46 +34,68 @@ pub enum Pane {
     Output,
 }
 
+// one run's stage and output, so lanes appending to one log keep separate views
+#[derive(Debug, Clone, Default)]
+pub struct Lane {
+    pub run: String,
+    pub stage: Option<String>,
+    pub task: Option<String>,
+    pub command: Option<String>,
+    pub output: Vec<String>,
+}
+
 pub struct Model {
+    // every event but agent output, which is parsed once into `feed`
     pub events: Vec<Event>,
+    // (run, line): each stage and gate event, as `enallagi events` prints it, and each tool call
+    pub feed: Vec<(String, String)>,
     pub queue: Vec<Block>,
     pub loop_running: bool,
     pub budget_usd: Option<f64>,
     pub focus: Pane,
-    pub scroll: usize,
+    // lines back from each pane's tail, indexed by `Pane as usize`; 0 follows the tail
+    pub scroll: [usize; 3],
+    // the output pane shows the agent's stream in place of the event feed
+    pub raw: bool,
     pub stop_requested: bool,
-    pub current_stage: Option<String>,
-    pub output: Vec<String>,
+    pub lanes: Vec<Lane>,
+    // the run `l` focused; none follows the newest lane
+    pub lane: Option<String>,
+    // (ticket id, lane branch) from the claims file
+    pub claims: Vec<(String, String)>,
     pub help: bool,
     // set once the event channel disconnects; the view then stays up (nothing more will change) until `q`
     pub finished: bool,
-    // tracked for the queue's bold row and the output pane's title; not part of the shared interface, so private
-    current_task: Option<String>,
-    current_command: Option<String>,
+    // each pane's inner height and furthest offset, from the last draw, so keys page and stop at the top
+    heights: Cell<[usize; 3]>,
+    max_scroll: Cell<[usize; 3]>,
 }
 
 impl Model {
     pub fn new() -> Model {
         Model {
             events: Vec::new(),
+            feed: Vec::new(),
             queue: Vec::new(),
             loop_running: false,
             budget_usd: std::env::var("BUDGET_USD")
                 .ok()
                 .and_then(|s| s.parse().ok()),
             focus: Pane::Queue,
-            scroll: 0,
+            scroll: [0; 3],
+            raw: false,
             stop_requested: false,
-            current_stage: None,
-            output: Vec::new(),
+            lanes: Vec::new(),
+            lane: None,
+            claims: Vec::new(),
             help: false,
             finished: false,
-            current_task: None,
-            current_command: None,
+            heights: Cell::new([10; 3]),
+            max_scroll: Cell::new([usize::MAX; 3]),
         }
     }
 
-    // output is capped at the last 200 chunks
+    // output is capped at the last 200 chunks per lane
     pub fn apply(&mut self, e: &Event) {
         match &e.kind {
             Kind::StageStart {
@@ -77,22 +104,65 @@ impl Model {
                 command,
                 ..
             } => {
-                self.current_stage = Some(stage.clone());
-                self.current_task = task.clone();
-                self.current_command = command.clone();
-                self.output.clear();
+                let lane = match self.lanes.iter().position(|l| l.run == e.run) {
+                    Some(i) => &mut self.lanes[i],
+                    None => {
+                        self.lanes.push(Lane::default());
+                        self.lanes.last_mut().expect("just pushed")
+                    }
+                };
+                *lane = Lane {
+                    run: e.run.clone(),
+                    stage: Some(stage.clone()),
+                    task: task.clone(),
+                    command: command.clone(),
+                    output: Vec::new(),
+                };
             }
-            Kind::StageOutput { stage, chunk }
-                if self.current_stage.as_deref() == Some(stage.as_str()) =>
-            {
-                self.output.push(chunk.clone());
-                if self.output.len() > 200 {
-                    self.output.remove(0);
+            Kind::StageOutput { stage, chunk } => {
+                if let Some(lane) = self
+                    .lanes
+                    .iter_mut()
+                    .find(|l| l.run == e.run && l.stage.as_deref() == Some(stage.as_str()))
+                {
+                    lane.output.push(chunk.clone());
+                    if lane.output.len() > 200 {
+                        lane.output.remove(0);
+                    }
                 }
+                let calls = stream::tool_calls(chunk).into_iter();
+                self.feed.extend(calls.map(|l| (e.run.clone(), l)));
+                return;
             }
             _ => {}
         }
+        if matches!(
+            e.kind,
+            Kind::StageStart { .. } | Kind::StageEnd { .. } | Kind::Gate { .. }
+        ) {
+            self.feed
+                .push((e.run.clone(), crate::events::render_line(e)));
+        }
         self.events.push(e.clone());
+    }
+
+    pub fn focused(&self) -> Option<&Lane> {
+        self.lane
+            .as_ref()
+            .and_then(|run| self.lanes.iter().find(|l| &l.run == run))
+            .or(self.lanes.last())
+    }
+
+    // the focused lane's events, and those of runs with no lane, such as the launcher's
+    pub fn shown(&self, e: &Event) -> bool {
+        self.shows(&e.run)
+    }
+
+    pub fn shows(&self, run: &str) -> bool {
+        match self.focused() {
+            Some(lane) => run == lane.run || self.lanes.iter().all(|l| l.run != run),
+            None => true,
+        }
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
@@ -108,11 +178,63 @@ impl Model {
                     Pane::Output => Pane::Queue,
                 };
             }
-            KeyCode::Up => self.scroll = self.scroll.saturating_add(1),
-            KeyCode::Down => self.scroll = self.scroll.saturating_sub(1),
+            KeyCode::Up => self.scroll_by(1),
+            KeyCode::Down => self.scroll_by(-1),
+            KeyCode::PageUp => self.scroll_by(self.page(self.focus) as isize),
+            KeyCode::PageDown => self.scroll_by(-(self.page(self.focus) as isize)),
+            KeyCode::Home => {
+                self.scroll[self.focus as usize] = self.max_scroll.get()[self.focus as usize]
+            }
+            KeyCode::End => self.scroll[self.focus as usize] = 0,
+            KeyCode::Char('r') => self.raw = !self.raw,
+            KeyCode::Char('l') => {
+                let at = self
+                    .focused()
+                    .and_then(|f| self.lanes.iter().position(|l| l.run == f.run));
+                if let Some(i) = at {
+                    self.lane = Some(self.lanes[(i + 1) % self.lanes.len()].run.clone());
+                }
+            }
             KeyCode::Char('?') => self.help = !self.help,
             _ => {}
         }
+    }
+
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => self.scroll_by(3),
+            MouseEventKind::ScrollDown => self.scroll_by(-3),
+            _ => {}
+        }
+    }
+
+    pub fn offset(&self, pane: Pane) -> usize {
+        self.scroll[pane as usize]
+    }
+
+    pub fn page(&self, pane: Pane) -> usize {
+        self.heights.get()[pane as usize].max(1)
+    }
+
+    fn scroll_by(&mut self, lines: isize) {
+        let i = self.focus as usize;
+        let s = self.scroll[i];
+        self.scroll[i] = if lines >= 0 {
+            s.saturating_add(lines as usize)
+        } else {
+            s.saturating_sub(lines.unsigned_abs())
+        }
+        .min(self.max_scroll.get()[i]);
+    }
+
+    fn record(&self, pane: Pane, height: usize, total: usize) {
+        let i = pane as usize;
+        let mut heights = self.heights.get();
+        heights[i] = height;
+        self.heights.set(heights);
+        let mut max = self.max_scroll.get();
+        max[i] = total.saturating_sub(height);
+        self.max_scroll.set(max);
     }
 }
 
@@ -122,11 +244,16 @@ impl Default for Model {
     }
 }
 
-fn read_queue(tasks: &Path) -> Vec<Block> {
-    std::fs::read_to_string(tasks)
-        .ok()
-        .and_then(|text| queue::parse(&text).ok())
-        .unwrap_or_default()
+fn read_queue(tracker: &Tracker) -> Vec<Block> {
+    tracker.blocks().unwrap_or_default()
+}
+
+fn read_claims(harness: &Path) -> Vec<(String, String)> {
+    crate::worktree::peek(harness)
+        .into_iter()
+        .filter(|c| !c.id.is_empty())
+        .map(|c| (c.id, c.branch))
+        .collect()
 }
 
 fn loop_running(pid_path: &Path) -> bool {
@@ -143,8 +270,7 @@ fn loop_running(pid_path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-// restores on drop only the steps that succeeded, including on panic (Drop runs during unwinding);
-// run_live/run_attached also catch_unwind so the terminal is restored before the panic resumes
+// restores on drop only the steps that succeeded, so a panic restores them too
 struct TerminalGuard {
     raw_mode: bool,
     alt_screen: bool,
@@ -153,7 +279,7 @@ struct TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         if self.alt_screen {
-            let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+            let _ = execute!(std::io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
         }
         if self.raw_mode {
             let _ = disable_raw_mode();
@@ -161,9 +287,9 @@ impl Drop for TerminalGuard {
     }
 }
 
-// unlike TerminalGuard, tries both steps unconditionally and ignores errors -- idempotent, safe to call more than once
+// unlike TerminalGuard, tries both steps and ignores errors, so it is safe to call twice
 fn restore_terminal() {
-    let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+    let _ = execute!(std::io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
     let _ = disable_raw_mode();
 }
 
@@ -176,13 +302,14 @@ fn enter_terminal() -> anyhow::Result<(Terminal<CrosstermBackend<std::io::Stdout
     };
     execute!(std::io::stdout(), EnterAlternateScreen)?;
     guard.alt_screen = true;
+    execute!(std::io::stdout(), EnableMouseCapture)?;
     let terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     Ok((terminal, guard))
 }
 
 type PanicHook = dyn Fn(&PanicHookInfo<'_>) + Send + Sync + 'static;
 
-// pulled out of install_restore_hook so a test can supply a fake restore/prev without touching a real terminal
+// split out so a test can pass a fake restore and previous hook without a real terminal
 fn build_hook<R>(restore: R, prev: Arc<PanicHook>) -> Box<PanicHook>
 where
     R: Fn() + Send + Sync + 'static,
@@ -193,7 +320,7 @@ where
     })
 }
 
-// restores the terminal before forwarding to the previous hook, so a panic's message prints on the normal screen
+// restores the terminal before the previous hook, so a panic's message prints on the normal screen
 fn install_restore_hook() -> Arc<PanicHook> {
     let prev: Arc<PanicHook> = Arc::from(std::panic::take_hook());
     std::panic::set_hook(build_hook(restore_terminal, Arc::clone(&prev)));
@@ -204,12 +331,12 @@ fn restore_hook(prev: Arc<PanicHook>) {
     std::panic::set_hook(Box::new(move |info| (*prev)(info)));
 }
 
-// `q` writes the STOP file and keeps drawing until rx disconnects -- the loop decides when to end, the TUI just asks
-pub fn run_live(rx: Receiver<Event>, tasks: &Path, stop: &Path) -> anyhow::Result<()> {
+// `q` writes STOP and keeps drawing until rx disconnects: the loop decides when to end
+pub fn run_live(rx: Receiver<Event>, tracker: &Tracker, stop: &Path) -> anyhow::Result<()> {
     let (mut terminal, guard) = enter_terminal()?;
     let prev_hook = install_restore_hook();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_live_loop(&mut terminal, &rx, tasks, stop)
+        run_live_loop(&mut terminal, &rx, tracker, stop)
     }));
     restore_hook(prev_hook);
     drop(guard);
@@ -219,9 +346,7 @@ pub fn run_live(rx: Receiver<Event>, tasks: &Path, stop: &Path) -> anyhow::Resul
     }
 }
 
-// `q` means STOP while the run is live; once it's finished nothing is left to stop, so the same
-// key means leave instead -- distinguished here rather than in Model::handle_key, which has no
-// notion of "leave" and stays a plain state fold.
+// `q` stops a live run and leaves a finished one; Model::handle_key stays a plain fold
 fn is_leave_key(finished: bool, key: &KeyEvent) -> bool {
     finished && key.kind == KeyEventKind::Press && key.code == KeyCode::Char('q')
 }
@@ -229,11 +354,11 @@ fn is_leave_key(finished: bool, key: &KeyEvent) -> bool {
 fn run_live_loop<B: Backend>(
     terminal: &mut Terminal<B>,
     rx: &Receiver<Event>,
-    tasks: &Path,
+    tracker: &Tracker,
     stop: &Path,
 ) -> anyhow::Result<()> {
     let mut model = Model::new();
-    model.queue = read_queue(tasks);
+    let mut read_at = None;
     let mut stop_written = false;
     let mut leave = false;
     loop {
@@ -248,10 +373,13 @@ fn run_live_loop<B: Backend>(
                     }
                 }
             }
-            model.queue = read_queue(tasks);
+            refresh(&mut model, tracker, &mut read_at);
         }
-        if event::poll(Duration::from_millis(500))? {
-            if let CEvent::Key(key) = event::read()? {
+        if let Some(read) = next_event()? {
+            if let CEvent::Mouse(mouse) = read {
+                model.handle_mouse(mouse);
+            }
+            if let CEvent::Key(key) = read {
                 let leaving = is_leave_key(model.finished, &key);
                 model.handle_key(key);
                 if leaving {
@@ -272,14 +400,14 @@ fn run_live_loop<B: Backend>(
     Ok(())
 }
 
-// read-only: tails the log and TASKS.md rather than owning a channel; `q` never touches STOP since watch doesn't own the run
-pub fn run_attached(harness_dir: &Path, tasks: &Path) -> anyhow::Result<()> {
+// read-only: tails the log and queue; `q` never touches STOP, as watch does not own the run
+pub fn run_attached(harness_dir: &Path, tracker: &Tracker) -> anyhow::Result<()> {
     let (mut terminal, guard) = enter_terminal()?;
     let prev_hook = install_restore_hook();
     let log = Log::open(harness_dir);
     let pid_path = harness_dir.join("loop.pid");
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_attached_loop(&mut terminal, &log, tasks, &pid_path)
+        run_attached_loop(&mut terminal, &log, tracker, &pid_path)
     }));
     restore_hook(prev_hook);
     drop(guard);
@@ -292,11 +420,11 @@ pub fn run_attached(harness_dir: &Path, tasks: &Path) -> anyhow::Result<()> {
 fn run_attached_loop<B: Backend>(
     terminal: &mut Terminal<B>,
     log: &Log,
-    tasks: &Path,
+    tracker: &Tracker,
     pid_path: &Path,
 ) -> anyhow::Result<()> {
     let mut model = Model::new();
-    model.queue = read_queue(tasks);
+    let mut read_at = None;
     let mut last_seq = 0u64;
     loop {
         if let Ok(events) = log.read_since(last_seq) {
@@ -305,13 +433,16 @@ fn run_attached_loop<B: Backend>(
                 model.apply(e);
             }
         }
-        model.queue = read_queue(tasks);
+        refresh(&mut model, tracker, &mut read_at);
         model.loop_running = loop_running(pid_path);
         terminal
             .draw(|f| view(&model, f))
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        if event::poll(Duration::from_millis(500))? {
-            if let CEvent::Key(key) = event::read()? {
+        if let Some(read) = next_event()? {
+            if let CEvent::Mouse(mouse) = read {
+                model.handle_mouse(mouse);
+            }
+            if let CEvent::Key(key) = read {
                 model.handle_key(key);
                 if model.stop_requested {
                     break;
@@ -322,11 +453,35 @@ fn run_attached_loop<B: Backend>(
     Ok(())
 }
 
+const TICK: Duration = Duration::from_millis(500);
+
+// queue and claims cost git subprocesses, so a burst of keys or wheel events reads them once a tick
+fn refresh(model: &mut Model, tracker: &Tracker, read_at: &mut Option<Instant>) {
+    if read_at.is_some_and(|t| t.elapsed() < TICK) {
+        return;
+    }
+    model.queue = read_queue(tracker);
+    model.claims = tracker.0.parent().map(read_claims).unwrap_or_default();
+    *read_at = Some(Instant::now());
+}
+
+// mouse capture reports every move; a move neither wakes the loop nor redraws
+fn next_event() -> std::io::Result<Option<CEvent>> {
+    let end = Instant::now() + TICK;
+    while event::poll(end.saturating_duration_since(Instant::now()))? {
+        match event::read()? {
+            CEvent::Mouse(m) if m.kind == MouseEventKind::Moved => continue,
+            other => return Ok(Some(other)),
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::events::{Log as EventLog, Writer};
-    use crossterm::event::{KeyEventState, KeyModifiers};
+    use crossterm::event::{KeyEventState, KeyModifiers, MouseEvent, MouseEventKind};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -337,7 +492,7 @@ mod tests {
             w.emit(Kind::RunStart {
                 config_sha256: "deadbeef".into(),
                 pipeline: None,
-                permissions_skipped: false,
+                sandbox: "off".into(),
                 binary: None,
             }),
             w.emit(Kind::StageStart {
@@ -374,11 +529,12 @@ mod tests {
             }),
         ];
 
-        let tasks_md =
-            "## [T-001] Do the thing\nstatus: review\n\n## [T-002] Another thing\nstatus: ready\n";
+        let tasks_md = "## [T-001] Do the thing\nstatus: review\n\n## [T-002] Another thing\nstatus: ready-for-agent\n\n## [T-003] Then this\nstatus: ready-for-agent\nblockedBy: T-001, T-002\n";
+        let repo = crate::fixture::Repo::new();
+        repo.queue(".enallagi", tasks_md);
 
         let mut model = Model::new();
-        model.queue = queue::parse(tasks_md).expect("parse queue");
+        model.queue = read_queue(&Tracker::open(&repo.root, ".enallagi"));
         for e in &events {
             model.apply(e);
         }
@@ -404,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn the_view_renders_a_fixture_run_headless() {
+    fn view_headless() {
         let model = fixture_model();
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).expect("terminal");
@@ -415,7 +571,8 @@ mod tests {
             "T-001",
             "4m36s",
             "verdict \u{2713}",
-            "T-002  ready",
+            "T-002  ready-for-agent",
+            "T-003  ready-for-agent  T-001, T-0",
             "running",
         ] {
             assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
@@ -460,12 +617,12 @@ mod tests {
     }
 
     #[test]
-    fn q_writes_stop_and_no_key_touches_the_queue() {
+    fn q_writes_stop() {
         let mut model = fixture_model();
         let queue_before = format!("{:?}", model.queue);
         assert!(!model.stop_requested);
 
-        // handle_key never mutates queue or writes TASKS.md -- checked for every recognised key, not just `q`
+        // handle_key never mutates the queue -- checked for every recognised key, not just `q`
         for key in [
             press('q'),
             KeyEvent {
@@ -487,11 +644,249 @@ mod tests {
                 state: KeyEventState::NONE,
             },
             press('?'),
+            press('r'),
+            key(KeyCode::PageUp),
+            key(KeyCode::PageDown),
+            key(KeyCode::Home),
+            key(KeyCode::End),
         ] {
             model.handle_key(key);
             assert_eq!(format!("{:?}", model.queue), queue_before);
         }
         assert!(model.stop_requested);
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn wheel(kind: MouseEventKind) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    fn tool_chunk(name: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"{name}","input":{{"path":"a.rs"}}}}]}}}}"#
+        )
+    }
+
+    fn with_tool_calls(n: usize) -> Model {
+        let mut model = fixture_model();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut w = Writer::new(EventLog::open(dir.path()));
+        w.run = model.events[0].run.clone();
+        for i in 0..n {
+            model.apply(&w.emit(Kind::StageOutput {
+                stage: "verify".into(),
+                chunk: tool_chunk(&format!("Tool{i:02}")),
+            }));
+        }
+        model
+    }
+
+    fn draw(model: &Model) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
+        terminal.draw(|f| view(model, f)).expect("draw");
+        buffer_text(terminal.backend())
+    }
+
+    #[test]
+    fn keys_scroll_focused_pane() {
+        let mut model = with_tool_calls(100);
+        model.focus = Pane::Output;
+        draw(&model);
+        let page = model.page(Pane::Output);
+        assert!(page > 1, "{page}");
+        model.handle_key(key(KeyCode::PageUp));
+        assert_eq!(model.offset(Pane::Output), page);
+        assert_eq!(model.offset(Pane::Queue), 0);
+        model.handle_key(key(KeyCode::PageUp));
+        model.handle_key(key(KeyCode::PageDown));
+        assert_eq!(model.offset(Pane::Output), page);
+        model.handle_key(key(KeyCode::Home));
+        let top = model.offset(Pane::Output);
+        assert_eq!(top, 107 - page, "four events of 7 rows and 100 tool calls");
+        model.handle_key(key(KeyCode::PageUp));
+        assert_eq!(model.offset(Pane::Output), top, "the top stops the scroll");
+        model.handle_key(key(KeyCode::PageDown));
+        assert_eq!(model.offset(Pane::Output), top - page);
+        model.handle_key(key(KeyCode::End));
+        assert_eq!(model.offset(Pane::Output), 0);
+
+        model.handle_mouse(wheel(MouseEventKind::ScrollUp));
+        assert_eq!(model.offset(Pane::Output), 3);
+        assert_eq!(model.offset(Pane::Stages), 0);
+        model.handle_mouse(wheel(MouseEventKind::ScrollDown));
+        assert_eq!(model.offset(Pane::Output), 0);
+    }
+
+    #[test]
+    fn home_end_show_ends() {
+        let mut model = with_tool_calls(40);
+        model.focus = Pane::Output;
+        let tail = draw(&model);
+        assert!(tail.contains("Tool39"), "{tail}");
+        assert!(!tail.contains("Tool00"), "{tail}");
+        model.handle_key(key(KeyCode::Home));
+        let top = draw(&model);
+        assert!(top.contains("stage.start"), "{top}");
+        assert!(!top.contains("Tool39"), "{top}");
+        model.handle_key(key(KeyCode::End));
+        assert!(draw(&model).contains("Tool39"));
+    }
+
+    #[test]
+    fn wrapped_tail_shows() {
+        let mut model = fixture_model();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut w = Writer::new(EventLog::open(dir.path()));
+        w.run = model.events[0].run.clone();
+        for _ in 0..30 {
+            model.apply(&w.emit(Kind::Gate {
+                gate: "verdict".into(),
+                task: "T-001".into(),
+                pass: false,
+                reason: "x".repeat(300),
+                tally: None,
+            }));
+        }
+        model.apply(&w.emit(Kind::StageOutput {
+            stage: "verify".into(),
+            chunk: tool_chunk("Newest"),
+        }));
+        model.focus = Pane::Output;
+        assert!(draw(&model).contains("tool  Newest"));
+        model.handle_key(key(KeyCode::Home));
+        assert!(!draw(&model).contains("tool  Newest"));
+        model.handle_key(key(KeyCode::End));
+        assert!(draw(&model).contains("tool  Newest"));
+    }
+
+    #[test]
+    fn output_default_feed() {
+        let mut model = with_tool_calls(1);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut w = Writer::new(EventLog::open(dir.path()));
+        w.run = model.events[0].run.clone();
+        model.apply(&w.emit(Kind::StageOutput {
+            stage: "verify".into(),
+            chunk: r#"{"type":"other","n":1}"#.into(),
+        }));
+        let feed = draw(&model);
+        assert!(feed.contains("stage.start"), "{feed}");
+        assert!(feed.contains("gate"), "{feed}");
+        assert!(feed.contains("tool  Tool00"), "{feed}");
+        assert!(!feed.contains(r#"{"type""#), "{feed}");
+        model.handle_key(press('r'));
+        let raw = draw(&model);
+        assert!(raw.contains(r#"{"type":"other","n":1}"#), "{raw}");
+        assert!(!raw.contains("stage.start"), "{raw}");
+    }
+
+    // each wake re-read the queue and spawned git for claims
+    #[test]
+    fn refresh_once_tick() {
+        let r = crate::fixture::Repo::new();
+        let one = "## [T-001] a\nstatus: ready-for-agent\n";
+        crate::fixture::queue(&r.root, ".enallagi", one);
+        let tracker = Tracker::open(&r.root, ".enallagi");
+        let (mut model, mut read_at) = (Model::new(), None);
+        refresh(&mut model, &tracker, &mut read_at);
+        let two = format!("{one}\n## [T-002] b\nstatus: ready-for-agent\n");
+        crate::fixture::queue(&r.root, ".enallagi", &two);
+        refresh(&mut model, &tracker, &mut read_at);
+        assert_eq!(model.queue.len(), 1);
+    }
+
+    // a long run's chunks, re-parsed on every draw, stalled the feed
+    #[test]
+    fn output_parsed_once() {
+        let mut model = with_tool_calls(1);
+        let kept = model.events.len();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut w = Writer::new(EventLog::open(dir.path()));
+        w.run = model.events[0].run.clone();
+        model.apply(&w.emit(Kind::StageOutput {
+            stage: "verify".into(),
+            chunk: r#"{"type":"other","n":1}"#.into(),
+        }));
+        assert_eq!(model.events.len(), kept);
+        assert!(draw(&model).contains("tool  Tool00"));
+    }
+
+    #[test]
+    fn lanes_keep_separate_output() {
+        let mut model = Model::new();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut writers: Vec<Writer> = ["run-a", "run-b"]
+            .iter()
+            .map(|run| {
+                let mut w = Writer::new(EventLog::open(dir.path()));
+                w.run = run.to_string();
+                w
+            })
+            .collect();
+        for (w, task) in writers.iter_mut().zip(["T-001", "T-002"]) {
+            model.apply(&w.emit(Kind::StageStart {
+                stage: "implement".into(),
+                role: Some("implementer".into()),
+                command: None,
+                task: Some(task.into()),
+            }));
+        }
+        for i in 0..3 {
+            for (w, name) in writers.iter_mut().zip(["Alpha", "Beta"]) {
+                model.apply(&w.emit(Kind::StageOutput {
+                    stage: "implement".into(),
+                    chunk: tool_chunk(&format!("{name}{i}")),
+                }));
+            }
+        }
+        model.raw = true;
+        let outputs: Vec<usize> = model.lanes.iter().map(|l| l.output.len()).collect();
+        assert_eq!(outputs, [3, 3]);
+        let newest = draw(&model);
+        assert!(
+            newest.contains("Beta2") && !newest.contains("Alpha"),
+            "{newest}"
+        );
+        model.handle_key(press('l'));
+        let first = draw(&model);
+        assert!(
+            first.contains("Alpha2") && !first.contains("Beta"),
+            "{first}"
+        );
+        assert!(first.contains("implement T-001"), "{first}");
+        model.handle_key(press('l'));
+        assert!(draw(&model).contains("Beta2"));
+    }
+
+    #[test]
+    fn claimed_row_names_lane() {
+        let mut model = fixture_model();
+        model.claims = vec![("T-002".into(), "lane/b".into())];
+        let text = draw(&model);
+        assert!(text.contains("T-002  ready-for-agent  lane/b"), "{text}");
+    }
+
+    #[test]
+    fn help_lists_keys() {
+        let mut model = fixture_model();
+        model.handle_key(press('?'));
+        let text = draw(&model);
+        for needle in ["Tab", "PgUp PgDn", "Home", "End", "wheel", "r ", "l ", "q "] {
+            assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+        }
     }
 
     #[test]

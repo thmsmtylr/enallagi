@@ -8,3 +8,7 @@ test_file_suffix_re = '_test\.go$'
 test_decl_patterns = ["func {name}("]
 source_ext = [".go"]
 source_roots = ["cmd", "internal", "pkg"]
+test_only_glob = ["**/*_test.go"]
+skip_patterns = ['\bt\.Skip(Now)?\(\)']
+hosts = ["proxy.golang.org", "sum.golang.org"]
+caches = ["GOMODCACHE", "GOCACHE"]

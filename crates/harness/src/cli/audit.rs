@@ -1,16 +1,12 @@
-//! `enallagi audit` -- prints each learning it proposed, each it merged into a standing entry, and each it refused with the reason. With `--harness`, prints each rule two installs earned as a `[seed]` line.
+//! `enallagi audit` -- learnings proposed, merged, refused; `--harness` prints `[seed]` rules
 
-use crate::{audit, config, events, git};
+use crate::{audit, config, events};
 
 pub fn run(harness: &[std::path::PathBuf]) -> anyhow::Result<i32> {
     if !harness.is_empty() {
         return shared(harness);
     }
-    let cwd = std::env::current_dir()?;
-    let root = match git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
-        Ok(top) => std::path::PathBuf::from(top),
-        Err(_) => cwd,
-    };
+    let root = super::root()?;
     let cfg = config::load(&root)?;
     let log = events::Log::open(&root.join(&cfg.layout.harness_dir));
     let report = match audit::run(&root, &cfg, &mut events::Writer::new(log)) {

@@ -33,22 +33,28 @@ SH
 echo "export const greeting = 'hello'" >src/greeting.ts
 echo "grep -q \"'hello'\" src/greeting.ts" >tests/greeting.sh
 
-python3 - <<'PY'
-# assert the fixture was BUILT: an append that lands nowhere leaves no ready task (LEARNINGS.md, zero-as-pass)
-src = open('.enallagi/TASKS.md', encoding='utf-8').read()
-# init seeds no placeholder block, so the fixture's block is appended rather than written over one
-assert '## [T-001]' not in src, 'the seeded queue already holds a T-001 block'
-open('.enallagi/TASKS.md', 'w', encoding='utf-8').write(src.rstrip('\n') + '''
+issues="$(ls -d .enallagi/specs/*/)issues"
+mkdir -p "$issues"
+cat >"$issues/T-001-the-check-is-sh-check-sh.md" <<'TICKET'
+# T-001: the check is `sh check.sh`
 
-## [T-001] the check is `sh check.sh`
+**Status:** ready-for-agent
+**Blocked by:** None
+
+## Acceptance criteria
+
+- [ ] `.enallagi/enallagi.toml`'s `[check]` runs `sh check.sh` as both `command` and `force`, and AGENTS.md's Commands section names it
+- [ ] `sh check.sh` exits 0
+
+## Harness
+
 scope: .enallagi/enallagi.toml, AGENTS.md
-blockedBy: none
-status: ready
 rows: none — harness
-criteria:
-  - `.enallagi/enallagi.toml`'s `[check]` runs `sh check.sh` as both `command` and `force`, and AGENTS.md's Commands section names it
-  - `sh check.sh` exits 0
-notes:
-''')
-PY
+TICKET
+# assert the fixture was BUILT: a ticket the tracker cannot read leaves nothing ready (LEARNINGS.md, zero-as-pass)
+[ "$(enallagi tasks ready)" = "T-001" ] || {
+  echo "  setup.sh: the tracker does not take T-001" >&2
+  exit 1
+}
+git -C .enallagi add -A && git -C .enallagi commit -qm 'eval: a ready ticket that swaps the check' >/dev/null
 git add -A && git commit -qm 'eval: a ready task that swaps the check' >/dev/null

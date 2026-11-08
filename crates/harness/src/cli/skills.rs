@@ -1,12 +1,10 @@
-//! `enallagi skills check|sync|list|--cost` -- the CLI surface over `skills`.
+//! `enallagi skills check|sync|list|--cost` -- the CLI surface over `skills`
 
 use crate::agent;
 use crate::config;
-use crate::events::{Log, Writer};
-use crate::git;
+use crate::events::{Kind, Log, Writer};
 use crate::pipeline::role_source;
 use crate::skills::{self, ResolveOpts, SkillError};
-use std::path::PathBuf;
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum SkillsCmd {
@@ -19,14 +17,12 @@ pub struct Args {
     pub cmd: Option<SkillsCmd>,
     pub frozen: bool,
     pub cost: bool,
+    pub since: Option<String>,
+    pub until: Option<String>,
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let cwd = std::env::current_dir()?;
-    let root = match git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
-        Ok(top) => PathBuf::from(top),
-        Err(_) => cwd,
-    };
+    let root = super::root()?;
     let cfg = config::load(&root)?;
     let presets = agent::presets();
     // resolving skills runs no check, so a repository that has not set one still syncs and lists
@@ -55,7 +51,14 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 .map(|source| skills::required_ids(&config::subst(&source, &cfg)))
                 .unwrap_or_default()
         };
-        let events = Log::open(&root.join(&cfg.layout.harness_dir)).read()?;
+        let mut events = Log::open(&root.join(&cfg.layout.harness_dir)).read()?;
+        // a stage is in the window it started in; its output and end follow the start
+        let (since, until) = (args.since.as_deref(), args.until.as_deref());
+        events.retain(|e| {
+            !matches!(e.kind, Kind::StageStart { .. })
+                || (since.is_none_or(|s| e.ts.as_str() >= s)
+                    && until.is_none_or(|u| e.ts.as_str() < u))
+        });
         print!("{}", skills::cost_report(&sized, &loads, &events));
         return Ok(0);
     }

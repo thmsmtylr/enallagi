@@ -1,6 +1,7 @@
-//! `enallagi tasks <verb>` -- the queue read and written from a shell, one verb per question a role asks of it.
+//! `enallagi tasks <verb>` -- the queue from a shell, one verb per question a role asks of it
 
-use crate::queue::{self, Queue, QueueError};
+use crate::block::{self, QueueError};
+use crate::tracker::{self, Tracker};
 use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
@@ -9,7 +10,7 @@ pub struct Args {
     pub args: Vec<String>,
 }
 
-const USAGE: &str = "enallagi tasks: usage: enallagi tasks <list|ready|ready-unattended|ids-at|block|field|set-status|unblock|rejections|archive|landed [--built]> [args] [file]";
+const USAGE: &str = "enallagi tasks: usage: enallagi tasks <list|ready|ids-at|block|field|set-status|rejections|archive|landed [--built]|check <spec>> [args] [file]";
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
     let a = &args.args;
@@ -19,18 +20,18 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 Ok(b) => b,
                 Err(code) => return Ok(code),
             };
-            let out = queue::list(&blocks);
+            let out = block::list(&blocks);
             if !out.is_empty() {
                 println!("{out}");
             }
             Ok(0)
         }
-        "ready" | "ready-unattended" => {
+        "ready" => {
             let blocks = match parsed_blocks(a, 0) {
                 Ok(b) => b,
                 Err(code) => return Ok(code),
             };
-            if let Some(id) = queue::ready_unattended(&blocks) {
+            if let Some(id) = tracker::takeable(&blocks) {
                 println!("{id}");
             }
             Ok(0)
@@ -41,7 +42,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 Ok(b) => b,
                 Err(code) => return Ok(code),
             };
-            for id in queue::ids_at(&blocks, &status) {
+            for id in tracker::ids_in(&blocks, &[status.as_str()]) {
                 println!("{id}");
             }
             Ok(0)
@@ -54,7 +55,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             };
             match blocks.iter().find(|b| b.id == id) {
                 Some(b) => {
-                    println!("{}", queue::block_text(b));
+                    println!("{}", block::block_text(b));
                     Ok(0)
                 }
                 None => {
@@ -72,7 +73,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             };
             match blocks.iter().find(|b| b.id == id) {
                 Some(b) => {
-                    if let Some(value) = queue::field(b, &key) {
+                    if let Some(value) = block::field(b, &key) {
                         println!("{value}");
                     }
                     Ok(0)
@@ -87,64 +88,39 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             let id = a.first().cloned().unwrap_or_default();
             let status = a.get(1).cloned().unwrap_or_default();
             let reason = a.get(2).cloned().unwrap_or_default();
-            let path = file_arg(a, 3, "TASKS.md");
-            let text = match read_text(&path) {
-                Ok(t) => t,
-                Err(code) => return Ok(code),
-            };
-            let out = match queue::set_status(&text, &id, &status, &reason) {
-                Ok(o) => o,
+            let t = tracker_arg(a, 3);
+            match t.get(&id) {
+                Ok(Some(b)) if block::field(&b, "status").is_some() => {}
+                Ok(_) => {
+                    eprintln!("enallagi tasks: no block {id}, nothing written");
+                    return Ok(1);
+                }
                 Err(e) => return Ok(fail(&e)),
-            };
-            if out == text {
-                eprintln!("enallagi tasks: no block {id}, nothing written");
-                return Ok(1);
             }
-            match (Queue { path }).write(&out) {
+            match t.set_status(&id, &status, &reason) {
                 Ok(()) => Ok(0),
                 Err(e) => Ok(fail(&e)),
             }
         }
-        "unblock" => {
-            let path = file_arg(a, 0, "TASKS.md");
-            let text = match read_text(&path) {
-                Ok(t) => t,
-                Err(code) => return Ok(code),
-            };
-            let out = match queue::unblock(&text) {
-                Ok(o) => o,
-                Err(e) => return Ok(fail(&e)),
-            };
-            if out != text {
-                if let Err(e) = (Queue { path }).write(&out) {
-                    return Ok(fail(&e));
-                }
-            }
-            Ok(0)
-        }
         "archive" => {
-            let cwd = std::env::current_dir()?;
-            let root = match crate::git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
-                Ok(top) => PathBuf::from(top),
-                Err(_) => cwd,
-            };
+            let root = super::root()?;
             let cfg = crate::config::load(&root)?;
             let report = crate::archive::archive_done(&root, &cfg, false)?;
             if let Some(refused) = report.refused {
                 eprintln!("{refused}");
                 return Ok(1);
             }
-            if report.moved.is_empty() {
+            if report.expired.is_empty() {
                 println!("nothing to archive");
             }
-            for id in &report.moved {
+            for id in &report.expired {
                 println!("{id}");
             }
             Ok(0)
         }
         "landed" => {
             let built = a.iter().any(|x| x == "--built");
-            let rows = crate::pr::landed(&std::env::current_dir()?)?;
+            let rows = crate::pr::landed(&super::root()?)?;
             for row in rows {
                 if built && !row.state.starts_with("built ") {
                     continue;
@@ -157,16 +133,26 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             }
             Ok(0)
         }
+        "check" => {
+            let Some(slug) = a.first() else {
+                eprintln!("{USAGE}");
+                return Ok(2);
+            };
+            let root = super::root()?;
+            let cfg = crate::config::load(&root)?;
+            let problems = tracker::check(&root, &cfg, slug);
+            for line in &problems {
+                println!("{line}");
+            }
+            Ok(if problems.is_empty() { 0 } else { 2 })
+        }
         "rejections" => {
             let path = file_arg(a, 0, "DECISIONS.md");
-            if !path.exists() {
-                return Ok(0);
-            }
-            let text = match read_text(&path) {
-                Ok(t) => t,
-                Err(code) => return Ok(code),
+            let lines = match tracker::kill_lines(path.parent().unwrap_or(Path::new("."))) {
+                Ok(l) => l,
+                Err(e) => return Ok(fail(&e.into())),
             };
-            for line in queue::rejections(&text) {
+            for line in lines {
                 println!("{line}");
             }
             Ok(0)
@@ -185,20 +171,22 @@ fn fail(e: &QueueError) -> i32 {
 
 fn file_arg(a: &[String], pos: usize, default: &str) -> PathBuf {
     a.get(pos).map(PathBuf::from).unwrap_or_else(|| {
-        let root = Path::new(".");
-        crate::config::instance_path(root, &crate::config::harness_dir(root), default)
+        let root = super::root().unwrap_or_else(|_| PathBuf::from("."));
+        crate::config::instance_path(&root, &crate::config::harness_dir(&root), default)
     })
 }
 
-fn read_text(path: &Path) -> Result<String, i32> {
-    (Queue {
-        path: path.to_path_buf(),
-    })
-    .read()
-    .map_err(|e| fail(&e))
+// an argument is a specs tree
+fn tracker_arg(a: &[String], pos: usize) -> Tracker {
+    match a.get(pos).map(PathBuf::from) {
+        Some(p) => Tracker(p),
+        None => {
+            let root = super::root().unwrap_or_else(|_| PathBuf::from("."));
+            Tracker::open(&root, &crate::config::harness_dir(&root))
+        }
+    }
 }
 
-fn parsed_blocks(a: &[String], pos: usize) -> Result<Vec<queue::Block>, i32> {
-    let text = read_text(&file_arg(a, pos, "TASKS.md"))?;
-    queue::parse(&text).map_err(|e| fail(&e))
+fn parsed_blocks(a: &[String], pos: usize) -> Result<Vec<block::Block>, i32> {
+    tracker_arg(a, pos).blocks().map_err(|e| fail(&e))
 }

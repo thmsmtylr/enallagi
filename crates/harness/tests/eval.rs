@@ -1,5 +1,6 @@
-//! The eval runner and the write-path gate on a candidate rule, driven with a stub agent so no real agent is spawned.
+//! the eval runner and the write-path gate on a candidate rule, driven by a stub agent
 
+use enallagi::fixture::exec;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -7,18 +8,6 @@ fn package() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     fs::create_dir_all(dir.path().join("evals")).expect("mkdir evals");
     dir
-}
-
-fn write_exec(path: &Path, body: &str) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).unwrap();
-    }
-    fs::write(path, format!("#!/usr/bin/env bash\n{body}")).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-    }
 }
 
 fn write_eval(
@@ -32,10 +21,10 @@ fn write_eval(
     let dir = pkg.join("evals").join(name);
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("prompt.txt"), prompt).unwrap();
-    write_exec(&dir.join("setup.sh"), setup);
-    write_exec(&dir.join("assert.sh"), assert);
+    exec(&dir.join("setup.sh"), setup);
+    exec(&dir.join("assert.sh"), assert);
     if let Some(body) = ablate {
-        write_exec(&dir.join("ablate.sh"), body);
+        exec(&dir.join("ablate.sh"), body);
     }
 }
 
@@ -94,7 +83,7 @@ fn last_line(s: &str) -> &str {
 }
 
 #[test]
-fn the_eval_runner_passes_a_role_that_obeys_its_rule() {
+fn obeying_role_passes() {
     let pkg = package();
     write_eval(
         pkg.path(),
@@ -105,7 +94,7 @@ fn the_eval_runner_passes_a_role_that_obeys_its_rule() {
         None,
     );
     let stub = pkg.path().join("obeys.sh");
-    write_exec(&stub, "echo done >state.txt\n");
+    exec(&stub, "echo done >state.txt\n");
 
     let r = run_eval(
         pkg.path(),
@@ -137,7 +126,64 @@ fn an_eval_script_calls_the_installing_binary() {
 }
 
 #[test]
-fn the_eval_runner_fails_a_role_that_breaks_its_rule() {
+fn agent_path_first() {
+    let pkg = package();
+    let bin = env!("CARGO_BIN_EXE_enallagi");
+    write_eval(
+        pkg.path(),
+        "case",
+        "do the thing",
+        "true",
+        &format!(r#"[ "$(cat bin.txt)" -ef "{bin}" ]"#),
+        None,
+    );
+    let stub = pkg.path().join("which.sh");
+    exec(&stub, "command -v enallagi >bin.txt\n");
+    let r = run_eval(pkg.path(), &stub.display().to_string(), &["case"]);
+    assert_eq!(last_line(&r.stdout), "EVAL case PASS", "{}", r.stderr);
+}
+
+#[test]
+fn agent_task_env() {
+    let pkg = package();
+    write_eval(
+        pkg.path(),
+        "case",
+        "do the thing",
+        "issues=\"$(ls -d .enallagi/specs/*/)issues\"; mkdir -p \"$issues\"\n\
+         printf '# T-007: x\\n\\n**Status:** ready-for-agent\\n' >\"$issues/T-007-x.md\"\n",
+        r#"[ "$(cat task.txt)" = T-007 ]"#,
+        None,
+    );
+    let stub = pkg.path().join("task.sh");
+    exec(&stub, "echo \"$ENALLAGI_TASK\" >task.txt\n");
+    let r = run_eval(pkg.path(), &stub.display().to_string(), &["case"]);
+    assert_eq!(last_line(&r.stdout), "EVAL case PASS", "{}", r.stderr);
+}
+
+#[test]
+fn agent_argv_quoted() {
+    let pkg = package();
+    write_eval(
+        pkg.path(),
+        "case",
+        "do the thing",
+        "true",
+        r#"[ "$(cat args.txt)" = "$(printf '%s\n' --settings '{"x": 1}')" ]"#,
+        None,
+    );
+    let stub = pkg.path().join("args.sh");
+    exec(&stub, "printf '%s\\n' \"$@\" >args.txt\n");
+    let r = run_eval(
+        pkg.path(),
+        &format!(r#"{} --settings "{{\"x\": 1}}""#, stub.display()),
+        &["case"],
+    );
+    assert_eq!(last_line(&r.stdout), "EVAL case PASS", "{}", r.stderr);
+}
+
+#[test]
+fn breaking_role_fails() {
     let pkg = package();
     write_eval(
         pkg.path(),
@@ -148,7 +194,7 @@ fn the_eval_runner_fails_a_role_that_breaks_its_rule() {
         None,
     );
     let stub = pkg.path().join("breaks.sh");
-    write_exec(&stub, "echo wrong >state.txt\n");
+    exec(&stub, "echo wrong >state.txt\n");
 
     let r = run_eval(
         pkg.path(),
@@ -160,7 +206,7 @@ fn the_eval_runner_fails_a_role_that_breaks_its_rule() {
 }
 
 #[test]
-fn an_eval_argv_carries_dir_and_context() {
+fn argv_carries_context() {
     let pkg = package();
     write_eval(
         pkg.path(),
@@ -171,7 +217,7 @@ fn an_eval_argv_carries_dir_and_context() {
         None,
     );
     let stub = pkg.path().join("args.sh");
-    write_exec(&stub, "printf '%s %s\\n' \"$1\" \"$2\" >args.txt\n");
+    exec(&stub, "printf '%s %s\\n' \"$1\" \"$2\" >args.txt\n");
 
     let r = run_eval(
         pkg.path(),
@@ -186,12 +232,13 @@ fn an_eval_argv_carries_dir_and_context() {
 }
 
 #[test]
-fn no_agent_configured_refuses_the_evals() {
+fn evals_need_agent() {
     let pkg = package();
     write_eval(pkg.path(), "case", "do the thing", "true", "true", None);
     // a preset that resolves to nothing: agent resolution fails closed
+    fs::create_dir_all(pkg.path().join(".enallagi")).unwrap();
     fs::write(
-        pkg.path().join("enallagi.toml"),
+        pkg.path().join(".enallagi/enallagi.toml"),
         "[agent]\npreset = \"doesnotexist\"\n",
     )
     .unwrap();
@@ -244,7 +291,7 @@ fn a_fixture_that_cannot_be_built_is_error_never_fail() {
 }
 
 // RULE is a real line of the verifier prompt enallagi init writes; ablate.sh deletes it
-const RULE: &str = "git status --porcelain";
+const RULE: &str = "enallagi tasks ids-at review";
 
 fn write_gate_fixture(pkg: &Path, other_assert: &str) -> PathBuf {
     write_eval(
@@ -260,7 +307,7 @@ fn write_gate_fixture(pkg: &Path, other_assert: &str) -> PathBuf {
     write_eval(pkg, "other", "OTHER", "true", other_assert, None);
 
     let stub = pkg.join("stub.sh");
-    write_exec(
+    exec(
         &stub,
         &format!(
             "case \"$1\" in\n\
@@ -274,11 +321,11 @@ fn write_gate_fixture(pkg: &Path, other_assert: &str) -> PathBuf {
 }
 
 #[test]
-fn a_rule_that_misses_its_case_is_rejected() {
+fn rule_missing_case_rejected() {
     let pkg = package();
     write_eval(pkg.path(), "rule", "RULE", "true", "false", Some("true\n"));
     let stub = pkg.path().join("stub.sh");
-    write_exec(&stub, ": # never passes\n");
+    exec(&stub, ": # never passes\n");
 
     let r = run_gate(
         pkg.path(),
@@ -293,11 +340,11 @@ fn a_rule_that_misses_its_case_is_rejected() {
 }
 
 #[test]
-fn a_rule_that_changes_nothing_is_rejected() {
+fn inert_rule_rejected() {
     let pkg = package();
     write_eval(pkg.path(), "rule", "RULE", "true", "true", Some("true\n"));
     let stub = pkg.path().join("stub.sh");
-    write_exec(&stub, ": # always passes, ablated or not\n");
+    exec(&stub, ": # always passes, ablated or not\n");
 
     let r = run_gate(
         pkg.path(),
@@ -346,15 +393,16 @@ fn a_rule_that_only_fixes_its_case_is_accepted() {
 }
 
 #[test]
-fn an_eval_with_no_prompt_needs_no_agent() {
+fn promptless_eval_no_agent() {
     let pkg = package();
     let dir = pkg.path().join("evals").join("case");
     fs::create_dir_all(&dir).unwrap();
-    write_exec(&dir.join("setup.sh"), "echo done >state.txt\n");
-    write_exec(&dir.join("assert.sh"), r#"[ "$(cat state.txt)" = done ]"#);
+    exec(&dir.join("setup.sh"), "echo done >state.txt\n");
+    exec(&dir.join("assert.sh"), r#"[ "$(cat state.txt)" = done ]"#);
     // a preset that resolves to nothing: an eval carrying a prompt would be refused here
+    fs::create_dir_all(pkg.path().join(".enallagi")).unwrap();
     fs::write(
-        pkg.path().join("enallagi.toml"),
+        pkg.path().join(".enallagi/enallagi.toml"),
         "[agent]\npreset = \"doesnotexist\"\n",
     )
     .unwrap();
@@ -365,11 +413,11 @@ fn an_eval_with_no_prompt_needs_no_agent() {
 }
 
 #[test]
-fn a_prompt_that_is_not_a_file_is_a_fixture_error() {
+fn prompt_dir_fixture_error() {
     let pkg = package();
     let dir = pkg.path().join("evals").join("case");
-    write_exec(&dir.join("setup.sh"), "true");
-    write_exec(&dir.join("assert.sh"), "true");
+    exec(&dir.join("setup.sh"), "true");
+    exec(&dir.join("assert.sh"), "true");
     fs::create_dir_all(dir.join("prompt.txt")).unwrap();
 
     let r = run_eval(pkg.path(), "/bin/true {prompt}", &["case"]);
@@ -377,5 +425,140 @@ fn a_prompt_that_is_not_a_file_is_a_fixture_error() {
     assert_eq!(
         last_line(&r.stdout),
         "EVAL case ERROR (the fixture could not be built — nothing was measured)"
+    );
+}
+
+// the ablation holds the filing rule only, so the eval measures that rule
+#[test]
+fn filing_ablate_strips_rule() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let role = dir.path().join(".enallagi/roles/verifier.md");
+    fs::create_dir_all(role.parent().unwrap()).unwrap();
+    let shipped = fs::read_to_string(repo.join("roles/verifier.md")).expect("shipped role");
+    fs::write(&role, &shipped).unwrap();
+    let out = std::process::Command::new("bash")
+        .arg(repo.join("evals/verifier-filing/ablate.sh"))
+        .current_dir(dir.path())
+        .output()
+        .expect("run ablate.sh");
+    assert!(out.status.success(), "{out:?}");
+    let text = fs::read_to_string(&role).unwrap();
+    assert!(!text.contains("A defect outside the criteria"), "{text}");
+    assert!(!text.contains("deferred:"), "{text}");
+    assert_eq!(
+        text.matches("Reproduce every claim the diff makes").count(),
+        1
+    );
+    let (kept, cut) = (text.lines().count(), shipped.lines().count());
+    assert!(cut - kept <= 2, "{cut} -> {kept}");
+}
+
+// an ablate.sh whose anchor left its role cannot build the gate's ablated arm
+#[test]
+fn ablate_anchors_match() {
+    let pkg = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut broken = Vec::new();
+    for entry in fs::read_dir(pkg.join("evals")).unwrap() {
+        let ablate = entry.unwrap().path().join("ablate.sh");
+        if !ablate.is_file() {
+            continue;
+        }
+        let repo = enallagi::fixture::Repo::new();
+        repo.init_harness("");
+        let out = std::process::Command::new("bash")
+            .arg(&ablate)
+            .env("EVAL_PKG", &pkg)
+            .current_dir(&repo.root)
+            .output()
+            .expect("run ablate.sh");
+        if !out.status.success() {
+            broken.push(format!(
+                "{}: {}",
+                ablate.display(),
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+    }
+    assert!(broken.is_empty(), "{broken:#?}");
+}
+
+// a package holding the shipped decomposer eval and nothing else, so no other eval runs
+fn decomposer_package() -> tempfile::TempDir {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let pkg = package();
+    let dir = pkg.path().join("evals/decomposer");
+    fs::create_dir_all(&dir).unwrap();
+    for f in ["setup.sh", "prompt.txt", "assert.sh"] {
+        fs::copy(repo.join("evals/decomposer").join(f), dir.join(f)).expect(f);
+    }
+    pkg
+}
+
+#[test]
+fn decomposer_assert_holds() {
+    let pkg = decomposer_package();
+    let r = run_eval(pkg.path(), "true {prompt}", &["decomposer"]);
+    assert_eq!(
+        last_line(&r.stdout),
+        "EVAL decomposer FAIL",
+        "{} {}",
+        r.stdout,
+        r.stderr
+    );
+
+    let draft = |num: &str, blocked: &str, test: &str| {
+        format!("# {num}: Step {num}\n\n**What to build:** step {num}.\n\n**Blocked by:** {blocked}\n\n**Status:** ready-for-agent\n\n- [ ] `{test}` passes\n")
+    };
+    let issues = ".enallagi/specs/calc/issues";
+    let agent = pkg.path().join("decompose.sh");
+    exec(
+        &agent,
+        &format!(
+            "mkdir -p {issues}\nprintf '%s' '{}' >{issues}/01-add.md\nprintf '%s' '{}' >{issues}/02-sub.md\nprintf '%s' '{}' >{issues}/03-usage.md\n",
+            draft("01", "None", "adds"),
+            draft("02", "None", "subtracts"),
+            draft("03", "01, 02", "usage_lists_ops"),
+        ),
+    );
+    let r = run_eval(
+        pkg.path(),
+        &format!("{} {{prompt}}", agent.display()),
+        &["decomposer"],
+    );
+    assert_eq!(
+        last_line(&r.stdout),
+        "EVAL decomposer PASS",
+        "{} {}",
+        r.stdout,
+        r.stderr
+    );
+}
+
+// the claude adapter's agent file is a second copy of the role, read as readily as the role
+#[test]
+fn ablate_reaches_agent_copy() {
+    let pkg = package();
+    write_eval(
+        pkg.path(),
+        "rule",
+        "RULE",
+        "true",
+        "grep -q . .enallagi/adapters/claude/agents/verifier.md",
+        Some(": >.enallagi/roles/verifier.md\n"),
+    );
+    let stub = pkg.path().join("stub.sh");
+    exec(&stub, ":\n");
+    let r = run_gate(
+        pkg.path(),
+        Some(&format!("{} {{prompt}}", stub.display())),
+        "rule",
+    );
+    assert_eq!(
+        last_line(&r.stdout),
+        "GATE rule ACCEPT fixes its case, fails without itself, regresses nothing",
+        "{} {}",
+        r.stdout,
+        r.stderr
     );
 }

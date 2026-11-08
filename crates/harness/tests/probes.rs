@@ -1,11 +1,13 @@
-//! The probe assertions, one test per assertion and named after it.
+//! the probe assertions, one test per assertion and named after it
 
+use enallagi::block::{self, Block};
 use enallagi::config::{self, Config};
-use enallagi::fixture::Repo;
+use enallagi::fixture::{git, Repo};
 use enallagi::probes::{self, CheckOutcome, ProbeCtx, ProbeResult};
+use enallagi::tracker::Tracker;
 use std::fs;
 
-// install is the seed: docs, rails and roles all come from the binary, so a probe reads the tree an operator would get
+// install is the seed: docs, rails and roles come from the binary, as an operator gets them
 fn seeded_with(overrides: &str) -> (Repo, Config) {
     let repo = Repo::new();
     repo.init_harness(overrides);
@@ -80,7 +82,7 @@ fn errors(results: &[(String, ProbeResult)]) -> Vec<&str> {
         .collect()
 }
 
-/// Never the literal, or the fixture reports itself when this repo is probed.
+/// never the literal, or the fixture reports itself when this repo is probed
 fn marker() -> String {
     format!("{}{}", "ponytail", ":")
 }
@@ -89,6 +91,33 @@ fn append(repo: &Repo, name: &str, text: &str) {
     let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), name);
     let existing = fs::read_to_string(&path).unwrap_or_default();
     fs::write(&path, format!("{existing}{text}")).expect("append");
+}
+
+fn tracker(repo: &Repo) -> Tracker {
+    Tracker::open(&repo.root, &config::harness_dir(&repo.root))
+}
+
+// the queue as held, read back through the tracker, so it is rewritten from the same blocks
+fn held(repo: &Repo, keep: impl Fn(&Block) -> bool) -> String {
+    let blocks = tracker(repo).blocks().expect("the queue");
+    let kept: Vec<String> = blocks
+        .iter()
+        .filter(|b| keep(b))
+        .map(block::block_text)
+        .collect();
+    kept.join("\n\n")
+}
+
+fn queue(repo: &Repo, text: &str) {
+    let held = held(repo, |_| true);
+    repo.queue(&config::harness_dir(&repo.root), &format!("{held}\n{text}"));
+}
+
+// the file a finding about `id` cites: the ticket's own file
+fn cited(repo: &Repo, id: &str) -> String {
+    let path = tracker(repo).path_of(id).expect("the ticket's file");
+    let rel = path.strip_prefix(&repo.root).expect("under the repo");
+    rel.display().to_string()
 }
 
 #[test]
@@ -142,7 +171,7 @@ fn check_unnamed_reports_an_unset_check() {
 }
 
 #[test]
-fn the_row_parser_reads_the_seeded_criteria_table() {
+fn seeded_criteria_rows() {
     let (repo, cfg) = seeded();
     // the seeded table is empty and still a table: read, and nothing to report
     assert_eq!(count(&run(&repo, &cfg), "spec-untested"), Some(0));
@@ -152,12 +181,34 @@ fn the_row_parser_reads_the_seeded_criteria_table() {
 
 // one row under the seeded table's header, naming a test the tree lacks
 fn seeded_row(repo: &Repo, cfg: &Config) {
-    let path = config::instance_path(&repo.root, &cfg.layout.harness_dir, &cfg.layout.spec);
-    let text = fs::read_to_string(&path).expect("SPEC.md");
+    let path = repo.root.join(&cfg.layout.spec);
+    let text = fs::read_to_string(&path).expect("spec.md");
     let header = "| Behaviour | Test |\n| --- | --- |\n";
     let at = text.find(header).expect("the seeded table header") + header.len();
     let row = "| the thing happens | `src/thing.test.ts::a name copied from your suite` |\n";
-    fs::write(&path, format!("{}{}{}", &text[..at], row, &text[at..])).expect("SPEC.md");
+    fs::write(&path, format!("{}{}{}", &text[..at], row, &text[at..])).expect("spec.md");
+}
+
+#[test]
+fn untested_reads_specs() {
+    let (repo, cfg) = seeded();
+    seeded_row(&repo, &cfg);
+    let second = ".enallagi/specs/zz-second/spec.md";
+    repo.write(
+        second,
+        &format!(
+            "# Second\n\n{}\n\n| Behaviour | Test |\n| --- | --- |\n| b | `src/other.test.ts::another name` |\n\n{}\n",
+            cfg.layout.rows_heading, cfg.layout.rows_end_heading
+        ),
+    );
+    let results = run(&repo, &cfg);
+    for probe in ["spec-untested", "queue-uncovered"] {
+        let cites: Vec<&str> = findings(&results, probe)
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
+        assert_eq!(cites, [repo.spec().as_str(), second], "{probe}");
+    }
 }
 
 #[test]
@@ -180,14 +231,11 @@ fn an_unclaimed_row_is_uncovered() {
     assert_eq!(count(&run(&repo, &cfg), "queue-uncovered"), Some(1));
 }
 
-const COMMA_ROWS: &str = "# SPEC\n\n## 11. Exit criteria\n\n| Behaviour | Test |\n| --- | --- |\n| a | `tests/x.test.ts::the frames FRAMES held, in order` |\n| b | `tests/x.test.ts::the packs a core pack holds, named` |\n\n## 12. Notes\n";
+const COMMA_ROWS: &str = "# SPEC\n\n### Exit criteria\n\n| Behaviour | Test |\n| --- | --- |\n| a | `tests/x.test.ts::the frames FRAMES held, in order` |\n| b | `tests/x.test.ts::the packs a core pack holds, named` |\n\n## Out of Scope\n";
 
 fn claiming(repo: &Repo, rows: &str) {
-    repo.write(".enallagi/SPEC.md", COMMA_ROWS);
-    append(
-        repo,
-        "TASKS.md",
-        &format!("\n## [T-002] the block that claims them\nscope: src/tests/x.test.ts\nblockedBy: none\nstatus: ready\nrows: {rows}\n"),
+    repo.write(&repo.spec(), COMMA_ROWS);
+    queue(repo, &format!("\n## [T-002] the block that claims them\nscope: src/tests/x.test.ts\nblockedBy: none\nstatus: ready-for-agent\nrows: {rows}\n"),
     );
 }
 
@@ -226,11 +274,11 @@ fn a_claimed_row_no_criteria_row_defines_is_found() {
     );
 }
 
-const PIECE_ROWS: &str = "# SPEC\n\n## 11. Exit criteria\n\n| Behaviour | Test |\n| --- | --- |\n| a | `tests/x.test.ts::one` |\n| b | `tests/x.test.ts::two` |\n\n## 12. Notes\n";
+const PIECE_ROWS: &str = "# SPEC\n\n### Exit criteria\n\n| Behaviour | Test |\n| --- | --- |\n| a | `tests/x.test.ts::one` |\n| b | `tests/x.test.ts::two` |\n\n## Out of Scope\n";
 
 fn claiming_pieces(repo: &Repo, rows: &str) {
     claiming(repo, rows);
-    repo.write(".enallagi/SPEC.md", PIECE_ROWS);
+    repo.write(&repo.spec(), PIECE_ROWS);
 }
 
 #[test]
@@ -262,7 +310,7 @@ fn an_undefined_piece_reports_the_whole_claim() {
 }
 
 #[test]
-fn a_missing_hash_file_uncovers_the_config() {
+fn missing_hash_uncovers_config() {
     // the rail names the file that is the gate; with the launcher a binary, that file is enallagi.toml
     let (repo, cfg) = seeded();
     fs::remove_file(repo.root.join(".enallagi/test-hashes.json")).expect("remove the hash file");
@@ -272,7 +320,7 @@ fn a_missing_hash_file_uncovers_the_config() {
     assert!(
         found[0]
             .message
-            .contains("`harness-immutable` names enallagi.toml"),
+            .contains("`harness-immutable` names .enallagi/enallagi.toml"),
         "{}",
         found[0].message
     );
@@ -289,6 +337,23 @@ fn no_driver_command_is_not_a_zero() {
     let (repo, cfg) = seeded();
     let out = render(&run(&repo, &cfg));
     assert!(out.contains("PROBE driver OFF -- "), "{out}");
+}
+
+#[test]
+fn no_queue_errors() {
+    let (repo, cfg) = seeded();
+    fs::remove_dir_all(tracker(&repo).0).expect("remove specs/");
+    let results = run(&repo, &cfg);
+    let errored = errors(&results);
+    for name in [
+        "queue-hygiene",
+        "queue-uncovered",
+        "title-length",
+        "rejection-stale",
+        "plain-record",
+    ] {
+        assert!(errored.contains(&name), "{name}: {}", render(&results));
+    }
 }
 
 #[test]
@@ -310,22 +375,11 @@ fn the_tree_has_no_litter() {
     assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
 }
 
-// `skills sync` refuses a role whose skill token has no entry, so a fixture declares all eight
-const IDS: [&str; 8] = [
-    "tdd",
-    "ponytail",
-    "debugging",
-    "review-received",
-    "verify-before-done",
-    "review-requested",
-    "brainstorming",
-    "caveman-commit",
-];
-
 // a path: source under src/ keeps the fixture off the network and off the litter list
 fn vendored_skills(repo: &Repo) -> String {
     let mut toml = String::new();
-    for id in IDS {
+    // `skills sync` refuses a role whose skill token has no entry, so a fixture declares them all
+    for id in enallagi::fixture::SKILL_IDS {
         repo.write(&format!("src/vendor/{id}/SKILL.md"), "body\n");
         toml.push_str(&format!(
             "\n[[skill]]\nid = \"{id}\"\nsource = \"path:src/vendor/{id}\"\npath = \"\"\ngate = \"none\"\nwhy = \"fixture\"\n"
@@ -362,13 +416,13 @@ fn conventional_with(layout_extra: &str) -> (Repo, Config) {
         repo.write(name, "x\n");
     }
 
-    // docs/ and bench/ are this repository's own, so they are named per repository and not by the defaults
+    // docs/ and bench/ are this repo's own, so they are named per repository, not by the defaults
     let mut toml = String::from(
         "[check]\ncommand = \"true\"\n\n[layout]\nallowed_prefixes = [\"src/\", \"docs/\", \"bench/\", \".enallagi/\", \".claude/\", \".github/\"]\n",
     );
     toml.push_str(layout_extra);
     toml.push_str(&vendored_skills(&repo));
-    // a tracked harness directory keeps the install in the product's history, so what it writes is tracked
+    // a tracked harness directory keeps the install in the product's history, so its writes are tracked
     repo.write(".enallagi/enallagi.toml", &toml);
     repo.commit_all("conventions");
 
@@ -386,31 +440,8 @@ fn conventional_with(layout_extra: &str) -> (Repo, Config) {
 }
 
 #[test]
-fn a_repository_of_conventions_has_no_litter() {
+fn conventions_no_litter() {
     let (repo, cfg) = conventional();
-    let results = run(&repo, &cfg);
-    assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
-}
-
-#[test]
-fn a_root_layout_lock_is_not_litter() {
-    let repo = Repo::new();
-    // a tracked TASKS.md at the root and none under the harness directory is the root layout
-    repo.write("src/main.rs", "fn main() {}\n");
-    repo.write("TASKS.md", "# TASKS\n");
-    let toml = format!(
-        "[check]\ncommand = \"true\"\n\n[layout]\nallowed_prefixes = [\"src/\", \".enallagi/\", \".claude/\"]\n{}",
-        vendored_skills(&repo)
-    );
-    repo.write("enallagi.toml", &toml);
-    repo.commit_all("product");
-
-    skills_sync(&repo);
-    repo.commit_all("skills");
-    let tracked = enallagi::git::git(&repo.root, &["ls-files", "--", "harness.lock"]).expect("ls");
-    assert!(!tracked.is_empty(), "harness.lock is untracked");
-
-    let cfg = config::load(&repo.root).expect("config");
     let results = run(&repo, &cfg);
     assert_eq!(count(&results, "litter"), Some(0), "{}", render(&results));
 }
@@ -471,7 +502,7 @@ fn a_tracked_file_the_ignore_rules_cover_is_litter() {
     );
 }
 
-// the harness directory as its own repository: what its ignore rules cover and git tracks anyway is litter too
+// the harness dir as its own repo: what its ignore rules cover and git tracks anyway is litter too
 #[test]
 fn a_state_repo_ignored_path_is_litter() {
     let repo = Repo::new();
@@ -557,7 +588,7 @@ fn no_adapter_install_reports_its_own_files() {
 fn a_traceless_install_leaves_no_litter() {
     for name in enallagi::agent::presets().keys() {
         let repo = Repo::new();
-        // no harness directory in the product's history, so the install is excluded and read as untracked or ignored
+        // no harness dir in the product's history, so the install is excluded, read as untracked or ignored
         repo.write("src/main.rs", "fn main() {}\n");
         repo.commit_all("product");
         enallagi::init::install(
@@ -617,7 +648,7 @@ fn a_dated_learning_is_told_where_to_move() {
 }
 
 #[test]
-fn learning_unenforced_reads_earned_rules() {
+fn learning_unenforced_reads_rules() {
     let (repo, cfg) = seeded();
     let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "DECISIONS.md");
     let earned = "## Earned rules\n\n- [2026-09-20] a rule that names no file, no command and no hook and is enforced by nothing at all.\n- [2026-09-20] a rule whose `citation` sits on its second line\n  `crates/harness/src/probes/common.rs`\n";
@@ -637,8 +668,7 @@ fn learning_unenforced_reads_earned_rules() {
     assert_eq!(
         (found[0].path.as_str(), found[0].line),
         (
-            config::instance_rel(&repo.root, &config::harness_dir(&repo.root), "DECISIONS.md")
-                .as_str(),
+            config::instance_rel(&config::harness_dir(&repo.root), "DECISIONS.md").as_str(),
             at + 1
         ),
         "{}",
@@ -714,7 +744,7 @@ fn a_learnings_file_over_its_cap_is_reported() {
     );
 }
 
-// two rewordings of one friction, plus a near-miss pair that opens with the same words but isn't a repeat; both are asserted because either alone passes a broken probe
+// two rewordings of one friction plus a same-opening near miss; either alone passes a broken probe
 
 const FRICTION_FIXTURE: &str = "
 ## fixture — a friction
@@ -762,7 +792,7 @@ fn and_a_repeat_a_dated_kill_line_names_is_covered() {
     assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
 }
 
-// the adjudicator writes the rule a repeat owes under `## Earned rules`, and LEARNINGS.md only holds the seeds
+// the adjudicator writes a repeat's rule under `## Earned rules`; LEARNINGS.md holds only seeds
 #[test]
 fn and_a_repeat_an_earned_rule_names_is_covered() {
     let (repo, cfg) = seeded();
@@ -824,7 +854,7 @@ fn a_longer_rewrite_of_one_friction_is_reported() {
     );
 }
 
-// two unrelated frictions whose only shared long words are connective prose: `because`, `expected`, `nobody`, `which`
+// two unrelated frictions sharing only connective words: `because`, `expected`, `nobody`, `which`
 const PROSE_SHARE_FIXTURE: &str = "
 friction: the build failed because clippy flagged an unused import which nobody expected
 friction: the fixture date drifted because the clock changed, which nobody expected
@@ -838,8 +868,10 @@ fn frictions_sharing_only_prose_are_not_repeats() {
 }
 
 fn with_driver(body: &str) -> (Repo, Config) {
-    let (repo, cfg) =
-        seeded_with("[layout]\ndriver_command = \"$ENALLAGI_ROOT/src/fakedriver.sh\"\n");
+    // the driver runs from a scratch dir, and the product in /tmp is masked by bwrap
+    let (repo, cfg) = seeded_with(
+        "[layout]\ndriver_command = \"$ENALLAGI_ROOT/src/fakedriver.sh\"\n\n[sandbox]\nmode = \"off\"\n",
+    );
     repo.write("src/fakedriver.sh", &format!("#!/usr/bin/env bash\n{body}"));
     #[cfg(unix)]
     {
@@ -901,10 +933,10 @@ fn an_unreachable_artifact_is_an_error() {
 }
 
 #[test]
-fn every_declared_skill_names_its_enforcing_gate() {
-    // asserts the COUNT, not just emptiness: an entry deleted to make this pass is the thing that fails it
+fn skills_name_gates() {
+    // asserts the COUNT, not emptiness: an entry deleted to make this pass is what fails it
     let (repo, cfg) = seeded();
-    assert_eq!(cfg.skill.len(), 8);
+    assert_eq!(cfg.skill.len(), 13);
     let results = run(&repo, &cfg);
     let found = findings(&results, "skill-ungated");
     let undefined: Vec<&str> = found
@@ -936,7 +968,7 @@ fn a_skill_with_no_enforcement_is_reported() {
     assert_eq!(count(&run(&repo, &cfg), "skill-ungated"), Some(0));
 }
 
-// three markers: killed in place, killed at a moved line, and killed by neither of two near-miss shapes
+// three markers: killed in place, killed at a moved line, and killed by neither of two near misses
 fn ceilings() -> (Repo, Config) {
     let (repo, cfg) = seeded();
     let m = marker();
@@ -1029,7 +1061,7 @@ fn a_ceiling_with_no_kill_line_is_still_reported() {
 }
 
 #[test]
-fn the_queue_is_not_read_as_product_source() {
+fn queue_not_source() {
     let (repo, cfg) = seeded_with("[layout]\nsource_ext = [\".rs\", \".md\"]\n");
     let m = marker();
     repo.write(
@@ -1037,9 +1069,8 @@ fn the_queue_is_not_read_as_product_source() {
         &format!("fn a() {{\n    let x = f(); // {m} a trailing comment marker\n}}\n"),
     );
     repo.commit_all("trailing marker");
-    append(
+    queue(
         &repo,
-        "TASKS.md",
         &format!("\n# {m} a marker in the queue\nprintln!(\"fix: four failures, four causes\");\n"),
     );
     let results = run(&repo, &cfg);
@@ -1057,18 +1088,19 @@ fn the_queue_is_not_read_as_product_source() {
 }
 
 #[test]
-fn a_slashed_row_resolves_under_source_root() {
+fn slashed_row_source_root() {
     let (repo, cfg) = seeded_with(
         "[layout]\nsource_root = \"crate\"\ntest_file_suffix_re = '\\.rs'\ntest_decl_patterns = [\"fn {name}(\"]\n",
     );
     repo.write(
-        ".enallagi/SPEC.md",
-        "# SPEC\n\n## 11. Exit criteria\n\n| Criterion | Test |\n| --- | --- |\n| c | `tests/x.rs::t` |\n\n## 12. Notes\n",
+        &repo.spec(),
+        "# SPEC\n\n### Exit criteria\n\n| Criterion | Test |\n| --- | --- |\n| c | `tests/x.rs::t` |\n\n## Out of Scope\n",
     );
+    let finding = format!("FINDING spec-untested {}:7 ", repo.spec());
     let untested = |results: &[(String, ProbeResult)]| {
         render(results)
             .lines()
-            .filter(|l| l.starts_with("FINDING spec-untested .enallagi/SPEC.md:7 "))
+            .filter(|l| l.starts_with(&finding))
             .count()
     };
     assert_eq!(untested(&run(&repo, &cfg)), 1);
@@ -1078,12 +1110,9 @@ fn a_slashed_row_resolves_under_source_root() {
 }
 
 #[test]
-fn only_a_review_block_needs_a_scope_file() {
+fn review_needs_scope_file() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the finished one, whose files a later cleanup deleted\nscope: src/gone.rs\nblockedBy: none\nstatus: done\n\n## [T-003] the reviewed one whose file never landed\nscope: src/missing.rs\nblockedBy: none\nstatus: review\n",
+    queue(&repo, "\n## [T-002] the finished one, whose files a later cleanup deleted\nscope: src/gone.rs\nblockedBy: none\nstatus: done\n\n## [T-003] the reviewed one whose file never landed\nscope: src/missing.rs\nblockedBy: none\nstatus: review\n",
     );
     repo.write("src/other.rs", "");
     repo.commit_all("feat: T-003 touches another file");
@@ -1098,12 +1127,9 @@ fn only_a_review_block_needs_a_scope_file() {
 }
 
 #[test]
-fn a_ready_block_may_name_a_file_it_creates() {
+fn ready_block_new_file() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the one that adds two files\nscope: src/packs/core.ts, tests/cli.test.ts\nblockedBy: none\nstatus: ready\n",
+    queue(&repo, "\n## [T-002] the one that adds two files\nscope: src/packs/core.ts, tests/cli.test.ts\nblockedBy: none\nstatus: ready-for-agent\n",
     );
     let results = run(&repo, &cfg);
     assert_eq!(
@@ -1115,13 +1141,10 @@ fn a_ready_block_may_name_a_file_it_creates() {
 }
 
 #[test]
-fn a_scope_directory_is_reported_as_matching_none() {
+fn scope_dir_matches_none() {
     let (repo, cfg) = seeded();
     repo.write("evals/verifier/setup.sh", "");
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the eval that adds files under a directory\nscope: evals/verifier, evals/other/new.sh\nblockedBy: none\nstatus: ready\n",
+    queue(&repo, "\n## [T-002] the eval that adds files under a directory\nscope: evals/verifier, evals/other/new.sh\nblockedBy: none\nstatus: ready-for-agent\n",
     );
     let results = run(&repo, &cfg);
     let found = findings(&results, "queue-hygiene");
@@ -1136,18 +1159,30 @@ fn a_scope_directory_is_reported_as_matching_none() {
     );
 }
 
+// the tracker refuses a repeat, so it is written by hand: a copied ticket file
 #[test]
-fn a_killed_id_reused_is_reported() {
+fn repeated_id_one_finding() {
+    let (repo, cfg) = seeded();
+    let block =
+        "\n## [T-002] the block\nscope: src/a.rs\nblockedBy: none\nstatus: ready-for-agent\n";
+    queue(&repo, block);
+    let path = tracker(&repo).path_of("T-002").expect("the ticket");
+    fs::copy(&path, path.with_file_name("T-002-a-copy.md")).expect("copy");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "queue-hygiene");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert_eq!(found[0].message, "a second block is numbered T-002");
+}
+
+#[test]
+fn killed_id_reused() {
     let (repo, cfg) = seeded();
     append(
         &repo,
         "DECISIONS.md",
         "\n- [2026-09-01] T-002 claimed a thing — refuted by `x`: y, and T-004 already carries it\n",
     );
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] a later finding under the killed number\nscope: src/a.rs\nblockedBy: none\nstatus: ready\n\n## [T-003] done under a killed number before the rule\nscope: src/b.rs\nblockedBy: none\nstatus: done\n\n## [T-004] the block the kill line names as the duplicate\nscope: src/c.rs\nblockedBy: none\nstatus: ready\n",
+    queue(&repo, "\n## [T-002] a later finding under the killed number\nscope: src/a.rs\nblockedBy: none\nstatus: ready-for-agent\n\n## [T-003] done under a killed number before the rule\nscope: src/b.rs\nblockedBy: none\nstatus: done\n\n## [T-004] the block the kill line names as the duplicate\nscope: src/c.rs\nblockedBy: none\nstatus: ready-for-agent\n",
     );
     append(
         &repo,
@@ -1264,36 +1299,28 @@ fn the_state_repository_log_is_read_too() {
 }
 
 #[test]
-fn a_note_saying_what_the_work_meant_fails() {
+fn meaning_note_fails() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the fixture was moved, which is why the run went green.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready-for-agent\nnotes: the fixture was moved, which is why the run went green.\n",
     );
     let found = plain_record(&repo, &cfg);
     assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains(".enallagi/TASKS.md:"), "{}", found[0]);
+    let cite = format!("{}:", cited(&repo, "T-002"));
+    assert!(found[0].contains(&cite), "{}", found[0]);
 }
 
 #[test]
-fn a_fenced_note_is_never_reported() {
+fn fenced_note_quiet() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the run is below.\n\n```\nfour failures, four causes, none of them the same, which is why the check was red \u{2014} and it is green now.\n```\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready-for-agent\nnotes: the run is below.\n\n```\nfour failures, four causes, none of them the same, which is why the check was red \u{2014} and it is green now.\n```\n",
     );
     assert_eq!(plain_record(&repo, &cfg), Vec::<String>::new());
 }
 
 #[test]
-fn a_pasted_command_in_a_note_is_exempt() {
+fn pasted_command_exempt() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: `cargo test` prints `four failures, four causes, none of them the same`.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready-for-agent\nnotes: `cargo test` prints `four failures, four causes, none of them the same`.\n",
     );
     assert_eq!(plain_record(&repo, &cfg), Vec::<String>::new());
 }
@@ -1313,23 +1340,17 @@ fn a_printed_em_dash_aside_is_reported() {
 
 // a verifier writes its verdict into notes:, and an implementer cannot clear someone else's words
 #[test]
-fn a_rejection_verdict_in_a_note_is_exempt() {
+fn rejection_verdict_exempt() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  the heading list was rewritten, three numbers, and the fences are stripped.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready-for-agent\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  the heading list was rewritten, three numbers, and the fences are stripped.\n",
     );
     assert_eq!(plain_record(&repo, &cfg), Vec::<String>::new());
 }
 
 #[test]
-fn a_note_counting_outside_a_verdict_is_reported() {
+fn counting_note_reported() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  IMPLEMENTER 2026-09-17: the heading list was rewritten, three numbers, and the fences are stripped.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready-for-agent\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  IMPLEMENTER 2026-09-17: the heading list was rewritten, three numbers, and the fences are stripped.\n",
     );
     let found = plain_record(&repo, &cfg);
     assert_eq!(found.len(), 1, "{found:?}");
@@ -1337,12 +1358,9 @@ fn a_note_counting_outside_a_verdict_is_reported() {
 }
 
 #[test]
-fn a_verified_note_after_a_rejection_is_read() {
+fn verified_after_rejection() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  VERIFIED (verifier, 2026-09-17). the heading list was rewritten, three numbers, and the fences are stripped.\n",
+    queue(&repo, "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: ready-for-agent\nnotes: the review record.\n  REJECTED: nothing in the paste reproduced (verifier, 2026-09-17).\n  VERIFIED (verifier, 2026-09-17). the heading list was rewritten, three numbers, and the fences are stripped.\n",
     );
     let found = plain_record(&repo, &cfg);
     assert_eq!(found.len(), 1, "{found:?}");
@@ -1357,231 +1375,61 @@ fn rejection_stale(repo: &Repo, cfg: &Config) -> Vec<String> {
         .collect()
 }
 
-fn reviewed_block(id: &str, status: &str, verdicts: &str) -> String {
-    format!("\n## [{id}] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: {status}\nnotes: the review record.\n{verdicts}")
+fn reviewed_block(id: &str, status: &str, lines: &str) -> String {
+    format!(
+        "\n## [{id}] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: {status}\n{lines}"
+    )
 }
 
-const REJECTION: &str =
-    "  REJECTED: the quoted figure does not reproduce (verifier, 2026-09-17).\n";
-
-// the shape T-064 carried: a verdict quoted in a later paragraph is a reference, not a verdict
-const QUOTED: &str = "  Named and not a rejection point: two citations sit inside this block's `REJECTED:` records.\n";
+#[test]
+fn unanswered_rejection() {
+    let (repo, cfg) = seeded();
+    let rejected = "verdict: rejected by verifier: the figure does not reproduce\n";
+    let answered = "verdict: answered by implementer\n";
+    let blocks: String = [
+        ("T-002", "review", rejected),
+        ("T-003", "done", rejected),
+        ("T-004", "ready-for-agent", rejected),
+        ("T-005", "ready-for-human", rejected),
+        ("T-006", "review", answered),
+        ("T-007", "needs-info", answered),
+    ]
+    .iter()
+    .map(|(id, status, line)| reviewed_block(id, status, line))
+    .collect();
+    queue(&repo, &blocks);
+    let found = rejection_stale(&repo, &cfg);
+    assert_eq!(found.len(), 3, "{found:?}");
+    for (f, id) in found.iter().zip(["T-002", "T-003", "T-007"]) {
+        assert!(f.contains(id), "{f}");
+    }
+}
 
 #[test]
-fn an_unanswered_rejection_is_reported() {
+fn rejection_prose_ignored() {
     let (repo, cfg) = seeded();
-    append(
+    queue(
         &repo,
-        "TASKS.md",
         &reviewed_block(
             "T-002",
             "review",
-            &format!("  IMPLEMENTER 2026-09-17: the change is committed.\n{REJECTION}"),
+            "notes: the review record.\n  REJECTED: the figure does not reproduce (verifier, 2026-09-17).\n",
         ),
     );
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("T-002"), "{}", found[0]);
-}
-
-#[test]
-fn an_answered_rejection_is_quiet_at_review() {
-    let (repo, cfg) = seeded();
-    for (id, answer) in [
-        ("T-002", "VERIFIED"),
-        ("T-003", "Passed"),
-        ("T-004", "IMPLEMENTER"),
-    ] {
-        append(
-            &repo,
-            "TASKS.md",
-            &reviewed_block(
-                id,
-                "review",
-                &format!(
-                    "{REJECTION}  {answer} 2026-09-17: the rejection point is answered.\n{QUOTED}"
-                ),
-            ),
-        );
-    }
     assert_eq!(rejection_stale(&repo, &cfg), Vec::<String>::new());
-}
-
-#[test]
-fn an_answered_rejection_is_quiet_at_done() {
-    let (repo, cfg) = seeded();
-    for (id, answer) in [
-        ("T-002", "VERIFIED"),
-        ("T-003", "Passed"),
-        ("T-004", "IMPLEMENTER"),
-    ] {
-        append(
-            &repo,
-            "TASKS.md",
-            &reviewed_block(
-                id,
-                "done",
-                &format!(
-                    "{REJECTION}  {answer} 2026-09-17: the rejection point is answered.\n{QUOTED}"
-                ),
-            ),
-        );
-    }
-    assert_eq!(rejection_stale(&repo, &cfg), Vec::<String>::new());
-}
-
-#[test]
-fn a_verdict_word_inside_a_rejection_is_not_read() {
-    let (repo, cfg) = seeded();
-    for (id, rejection) in [
-        (
-            "T-002",
-            "  REJECTED: only three of the five criteria Passed (verifier, 2026-09-17).\n",
-        ),
-        (
-            "T-003",
-            "  REJECTED: the IMPLEMENTER left the tree dirty (verifier, 2026-09-17).\n",
-        ),
-    ] {
-        append(&repo, "TASKS.md", &reviewed_block(id, "review", rejection));
-    }
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 2, "{found:?}");
-    assert!(found[0].contains("T-002"), "{}", found[0]);
-    assert!(found[1].contains("T-003"), "{}", found[1]);
-}
-
-#[test]
-fn a_verdict_word_later_in_a_rejection_is_not_read() {
-    let (repo, cfg) = seeded();
-    let rejection =
-        "  REJECTED: the diff is out of scope. Only three criteria Passed (verifier, 2026-09-18).\n";
-    append(
-        &repo,
-        "TASKS.md",
-        &reviewed_block("T-002", "review", rejection),
-    );
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("T-002"), "{}", found[0]);
-}
-
-#[test]
-fn a_verdict_first_in_a_rejection_is_not_read() {
-    let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        &reviewed_block(
-            "T-002",
-            "review",
-            "  REJECTED: Passed counts do not reproduce.\n",
-        ),
-    );
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("T-002"), "{}", found[0]);
-}
-
-#[test]
-fn a_dated_verdict_first_rejection_is_reported() {
-    let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        &reviewed_block(
-            "T-002",
-            "review",
-            "  REJECTED 2026-09-21: Passed counts do not reproduce.\n",
-        ),
-    );
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("T-002"), "{}", found[0]);
-}
-
-#[test]
-fn a_mid_line_answer_silences_a_rejection() {
-    let (repo, cfg) = seeded();
-    let block = format!(
-        "\n## [T-002] the block\nscope: src/schema.ts\nblockedBy: none\nstatus: review\nnotes: {}\n",
-        "Adjudicated 2026-09-17. REJECTED: the quoted figure does not reproduce (verifier, 2026-09-17). IMPLEMENTER 2026-09-17: the figure is re-run and stamped. VERIFIER 2026-09-17: VERIFIED."
-    );
-    append(&repo, "TASKS.md", &block);
-    assert_eq!(rejection_stale(&repo, &cfg), Vec::<String>::new());
-}
-
-#[test]
-fn a_rejection_behind_a_role_label_is_reported() {
-    let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        &reviewed_block(
-            "T-002",
-            "review",
-            "  VERIFIER 2026-09-18: REJECTED: the gate is red.\n",
-        ),
-    );
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("T-002"), "{}", found[0]);
-}
-
-#[test]
-fn a_prose_colon_prefix_is_not_a_rejection_label() {
-    let (repo, cfg) = seeded();
-    for (id, prose) in [
-        ("T-004", "the rejection point stands"),
-        ("T-005", "Reproduced at 2026-09-20"),
-    ] {
-        append(
-            &repo,
-            "TASKS.md",
-            &reviewed_block(
-                id,
-                "review",
-                &format!("{REJECTION}  {prose}: VERIFIED was never printed.\n"),
-            ),
-        );
-    }
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 2, "{found:?}");
-    assert!(found[0].contains("T-004"), "{}", found[0]);
-    assert!(found[1].contains("T-005"), "{}", found[1]);
-}
-
-#[test]
-fn a_rejection_behind_a_dated_label_is_reported() {
-    let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        &reviewed_block(
-            "T-003",
-            "review",
-            "  2026-09-18 verifier: REJECTED: the gate is red.\n",
-        ),
-    );
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("T-003"), "{}", found[0]);
 }
 
 const LONG_TITLE: &str = "a task/ branch that outlives its merged pull request calls gh pr list once every iteration for good";
 
 #[test]
-fn a_title_past_the_cap_is_reported_with_its_count() {
+fn long_title_reported() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        &format!("\n## [T-002] merged task/ branch still polls gh pr list every iteration\nscope: src/a.rs\nstatus: ready\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n"),
+    queue(&repo, &format!("\n## [T-002] merged task/ branch still polls gh pr list every iteration\nscope: src/a.rs\nstatus: ready-for-agent\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready-for-agent\n"),
     );
     let results = run(&repo, &cfg);
     let found = findings(&results, "title-length");
     assert_eq!(found.len(), 1, "{}", render(&results));
-    assert_eq!(found[0].path, ".enallagi/TASKS.md");
+    assert_eq!(found[0].path, cited(&repo, "T-003"));
     assert_eq!(
         found[0].message,
         format!(
@@ -1593,12 +1441,9 @@ fn a_title_past_the_cap_is_reported_with_its_count() {
 }
 
 #[test]
-fn an_imported_issue_keeps_its_title_until_promotion() {
+fn imported_title_kept() {
     let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: proposed\nprobe: issue\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\nprobe: issue\n"),
+    queue(&repo, &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: needs-triage\nprobe: issue\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready-for-agent\nprobe: issue\n"),
     );
     let results = run(&repo, &cfg);
     let found = findings(&results, "title-length");
@@ -1611,12 +1456,9 @@ fn an_imported_issue_keeps_its_title_until_promotion() {
 }
 
 #[test]
-fn a_title_written_before_the_cap_is_left_alone() {
+fn old_title_left() {
     let (repo, mut cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready\n"),
+    queue(&repo, &format!("\n## [T-002] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready-for-agent\n\n## [T-003] {LONG_TITLE}\nscope: src/a.rs\nstatus: ready-for-agent\n"),
     );
     cfg.queue.title_cap_from = 3;
     let results = run(&repo, &cfg);
@@ -1629,30 +1471,13 @@ fn a_title_written_before_the_cap_is_left_alone() {
     );
 }
 
-// the label's own first word is the verdict, and the reasons after the colon are not an answer to it
 #[test]
-fn a_rejection_dated_in_its_own_label_is_reported() {
-    let (repo, cfg) = seeded();
-    append(
-        &repo,
-        "TASKS.md",
-        &reviewed_block(
-            "T-003",
-            "review",
-            "  REJECTED 2026-09-21: Passed counts do not reproduce.\n",
-        ),
-    );
-    let found = rejection_stale(&repo, &cfg);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("T-003"), "{}", found[0]);
-}
-
-#[test]
-fn check_red_says_nothing_for_a_timed_out_check() {
+fn check_red_skips_timeout() {
     let (repo, mut cfg) = seeded();
     cfg.check.force = "sleep 10".to_string();
     cfg.check.timeout = "2s".to_string();
-    let report = enallagi::gates::check_delta(&repo.root, &cfg, true);
+    let sandbox = enallagi::sandbox::Sandbox::start(&repo.root, &cfg);
+    let report = enallagi::gates::check_delta(&sandbox, &repo.root, &cfg, true);
     assert!(report.timed_out.is_some(), "{report:?}");
     let outcome = report.outcome();
     assert!(
@@ -1846,10 +1671,7 @@ fn a_check_not_on_path_could_not_be_run() {
 }
 
 fn criterion(repo: &Repo, status: &str, tokens: &str) {
-    append(
-        repo,
-        "TASKS.md",
-        &format!("\n## [T-002] the block whose criteria name tests\nscope: src/a.rs\nblockedBy: none\nstatus: {status}\nrows: none — harness\ncriteria:\n  - `{tokens}` passes\n  - the check exits 0\nnotes: none\n"),
+    queue(repo, &format!("\n## [T-002] the block whose criteria name tests\nscope: src/a.rs\nblockedBy: none\nstatus: {status}\nrows: none — harness\ncriteria:\n  - `{tokens}` passes\n  - the check exits 0\nnotes: none\n"),
     );
 }
 
@@ -1861,10 +1683,10 @@ fn renamed(repo: &Repo) {
 }
 
 #[test]
-fn a_criterion_naming_a_removed_test_is_found() {
+fn removed_test_criterion() {
     let (repo, cfg) = seeded_with("[layout]\nsource_root = \"src\"\n");
     renamed(&repo);
-    criterion(&repo, "ready", "the_old_test_name");
+    criterion(&repo, "ready-for-agent", "the_old_test_name");
     let results = run(&repo, &cfg);
     let found: Vec<_> = findings(&results, "queue-uncovered")
         .iter()
@@ -1876,19 +1698,16 @@ fn a_criterion_naming_a_removed_test_is_found() {
         "{}",
         found[0].message
     );
-    assert_eq!(found[0].path, ".enallagi/TASKS.md");
+    assert_eq!(found[0].path, cited(&repo, "T-002"));
 }
 
 // rewrites T-002 in place, so one fixture is read under each filter
 fn filtered_criterion(repo: &Repo, filter: &str, names: &str) {
-    let path = config::instance_path(&repo.root, &config::harness_dir(&repo.root), "TASKS.md");
-    let text = fs::read_to_string(&path).expect("TASKS.md");
-    let kept = text.split("\n## [T-002]").next().expect("the seeded queue");
-    fs::write(&path, kept).expect("rewrite");
-    append(
-        repo,
-        "TASKS.md",
-        &format!("\n## [T-002] the block whose criteria run a filter\nscope: src/a.rs\nblockedBy: none\nstatus: ready\nrows: none — harness\ncriteria:\n  - `cargo test -q -p enallagi --test probes {filter}` passes, with {names} in its run\n  - the check exits 0\nnotes: none\n"),
+    let kept = held(repo, |b| b.id != "T-002");
+    let block = format!("## [T-002] the block whose criteria run a filter\nscope: src/a.rs\nblockedBy: none\nstatus: ready-for-agent\nrows: none — harness\ncriteria:\n  - `cargo test -q -p enallagi --test probes {filter}` passes, with {names} in its run\n  - the check exits 0\nnotes: none\n");
+    repo.queue(
+        &config::harness_dir(&repo.root),
+        &format!("{kept}\n\n{block}"),
     );
 }
 
@@ -1941,10 +1760,14 @@ fn a_criterion_filter_that_selects_no_test_is_found() {
 }
 
 #[test]
-fn a_criterion_naming_a_live_or_new_test_is_quiet() {
+fn live_test_criterion() {
     let (repo, cfg) = seeded_with("[layout]\nsource_root = \"src\"\n");
     renamed(&repo);
-    criterion(&repo, "ready", "the_new_test_name` and `the_unwritten_test");
+    criterion(
+        &repo,
+        "ready-for-agent",
+        "the_new_test_name` and `the_unwritten_test",
+    );
     let results = run(&repo, &cfg);
     let found = findings(&results, "queue-uncovered");
     assert!(
@@ -1979,10 +1802,6 @@ fn drift(repo: &Repo, cfg: &Config) -> ProbeResult {
         .pop()
         .expect("one result")
         .1
-}
-
-fn git(root: &std::path::Path, args: &[&str]) -> String {
-    enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
 }
 
 // a bare clone on disk, so the probe reads real refs and makes no network call
@@ -2058,9 +1877,30 @@ fn a_diverged_upstream_is_one_finding() {
 }
 
 const TRUE_CHECK: &str = "[check]\ncommand = \"true\"\n";
-const ANSWERED: &str = "echo 'deletion, pull_request'\n";
-const UNAUTHENTICATED: &str = "echo 'gh: run: gh auth login' >&2\nexit 4\n";
-const ERRORED: &str = "echo 'gh: Not Found (HTTP 404)' >&2\nexit 1\n";
+use enallagi::fixture::twin::{Response, State};
+
+const ADMIN: [&str; 4] = ["api", "repos/{owner}/{repo}", "--jq", ".permissions.admin"];
+
+// the probe's rules read for `branch`, answered with `stdout`
+fn rules(branch: &str, stdout: &str) -> Response {
+    let path = format!("repos/{{owner}}/{{repo}}/rules/branches/{branch}");
+    Response::to(&["api", &path, "--jq", "[.[].type] | join(\", \")"], stdout)
+}
+
+fn failing(branch: &str, stderr: &str, exit: i32) -> Response {
+    Response {
+        stderr: stderr.to_string(),
+        exit,
+        ..rules(branch, "")
+    }
+}
+
+fn answering(responses: Vec<Response>) -> Option<State> {
+    Some(State {
+        responses,
+        ..State::default()
+    })
+}
 
 fn protection(repo: &Repo, cfg: &Config) -> ProbeResult {
     let ctx = ProbeCtx {
@@ -2075,7 +1915,7 @@ fn protection(repo: &Repo, cfg: &Config) -> ProbeResult {
         .1
 }
 
-// the same bare clone, re-pointed at a URL that names a host, so the probe reads real refs and calls nothing
+// the bare clone re-pointed at a host URL, so the probe reads real refs and calls nothing
 fn hosted_origin(repo: &Repo, url: &str) -> (tempfile::TempDir, String) {
     let (dir, branch) = tracked_clone(repo);
     git(&repo.root, &["remote", "set-head", "origin", &branch]);
@@ -2090,16 +1930,13 @@ fn on_path(tool: &str) -> Option<std::path::PathBuf> {
 }
 
 // git and sh only: a host tool the machine happens to carry must not reach a probe under test
-fn bin_dir(dir: &std::path::Path, gh: Option<&str>) -> std::ffi::OsString {
+fn bin_dir(dir: &std::path::Path, twin: Option<State>) -> std::ffi::OsString {
     for tool in ["git", "sh"] {
         let found = on_path(tool).unwrap_or_else(|| panic!("{tool} is not on PATH"));
         std::os::unix::fs::symlink(found, dir.join(tool)).expect("symlink");
     }
-    if let Some(body) = gh {
-        let path = dir.join("gh");
-        fs::write(&path, format!("#!/bin/sh\n{body}")).expect("write gh");
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod gh");
+    if let Some(state) = twin {
+        enallagi::fixture::twin::install(dir, env!("CARGO_BIN_EXE_enallagi"), &state);
     }
     dir.as_os_str().to_os_string()
 }
@@ -2160,11 +1997,12 @@ fn direct_commits_on_the_default_branch_count() {
 }
 
 #[test]
-fn the_host_leg_quotes_the_answer_and_command() {
+fn host_leg_quotes_answer() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
     let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
-    let out = probe_bin(&repo, &bin_dir(bins.path(), Some(ANSWERED)));
+    let twin = answering(vec![rules(&branch, "deletion, pull_request\n")]);
+    let out = probe_bin(&repo, &bin_dir(bins.path(), twin));
     assert!(out.starts_with("PROBE branch-protection 2"), "{out}");
     assert!(
         out.contains(&format!(
@@ -2175,21 +2013,25 @@ fn the_host_leg_quotes_the_answer_and_command() {
 }
 
 #[test]
-fn an_unadministered_repository_is_silence() {
+fn non_admin_silent() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
-    let (_origin, _branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
+    let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
-    let gh = "case \"$2\" in *rules*) echo 'deletion';; *) echo false;; esac\n";
-    let out = probe_bin(&repo, &bin_dir(bins.path(), Some(gh)));
+    let twin = answering(vec![
+        Response::to(&ADMIN, "false\n"),
+        rules(&branch, "deletion\n"),
+    ]);
+    let out = probe_bin(&repo, &bin_dir(bins.path(), twin));
     assert_eq!(out.trim(), "PROBE branch-protection 0", "{out}");
 }
 
 #[test]
-fn an_unauthenticated_host_tool_reads_unknown() {
+fn unauthenticated_host_unknown() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
-    let (_origin, _branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
+    let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
-    let out = probe_bin(&repo, &bin_dir(bins.path(), Some(UNAUTHENTICATED)));
+    let twin = answering(vec![failing(&branch, "gh: run: gh auth login\n", 4)]);
+    let out = probe_bin(&repo, &bin_dir(bins.path(), twin));
     assert!(
         out.contains("-> unknown, exit 4: gh: run: gh auth login"),
         "{out}"
@@ -2197,33 +2039,38 @@ fn an_unauthenticated_host_tool_reads_unknown() {
 }
 
 #[test]
-fn a_host_tool_error_reads_unknown() {
+fn host_error_unknown() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
-    let (_origin, _branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
+    let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
-    let out = probe_bin(&repo, &bin_dir(bins.path(), Some(ERRORED)));
+    let twin = answering(vec![failing(&branch, "gh: Not Found (HTTP 404)\n", 1)]);
+    let out = probe_bin(&repo, &bin_dir(bins.path(), twin));
     assert!(
         out.contains("-> unknown, exit 1: gh: Not Found (HTTP 404)"),
         "{out}"
     );
 }
 
-// a host tool that never answers is killed with what it spawned after the bound, and the leg
-// reports the bound rather than an elapsed reading; the test polls the binary against a ceiling of
-// its own so a lost bound fails instead of hanging
+// a silent host tool dies with its children at the bound; the test's own ceiling catches a lost bound
 #[test]
-fn a_hung_host_tool_reads_unknown_after_the_bound() {
+fn hung_host_unknown() {
     let (repo, _cfg) = seeded_with(TRUE_CHECK);
-    let (_origin, _branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
+    let (_origin, branch) = hosted_origin(&repo, "https://github.invalid/o/r.git");
     let bins = tempfile::TempDir::new().expect("tempdir");
-    let pidfile = bins.path().join("gh.pid");
-    // sleep is a grandchild, so killing gh alone leaves it running
-    let stub = format!(
-        "/bin/sleep 600 &\necho $! > '{}'\nwait\n",
-        pidfile.display()
-    );
-    let path = bin_dir(bins.path(), Some(&stub));
-    let pid = || -> Option<libc::pid_t> { fs::read_to_string(&pidfile).ok()?.trim().parse().ok() };
+    // the twin's sleep is a grandchild, so killing gh alone leaves it running
+    let hang = Response {
+        sleep: 600,
+        ..rules(&branch, "")
+    };
+    let path = bin_dir(bins.path(), answering(vec![hang]));
+    let state = bins.path().join("twin.json");
+    let pid = || -> Option<libc::pid_t> {
+        let sleepers = fs::read_to_string(&state)
+            .ok()
+            .and_then(|t| serde_json::from_str::<State>(&t).ok())?
+            .sleepers;
+        Some(*sleepers.first()? as libc::pid_t)
+    };
     let mut child = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["probe", "branch-protection"])
         .current_dir(&repo.root)
@@ -2252,8 +2099,7 @@ fn a_hung_host_tool_reads_unknown_after_the_bound() {
     assert!(status.success(), "{out}");
     assert!(out.contains("-> unknown, no answer in 10s"), "{out}");
     let pid = pid().expect("the stub wrote its pid");
-    // the sandbox refuses a process listing, so the stub's own pid is polled
-    // killed is not yet reaped: a zombie the container's init has not collected still answers kill 0
+    // no process listing in the sandbox, so the stub's pid is polled; a zombie still answers kill 0
     let alive = || {
         let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
         let zombie = stat
@@ -2286,7 +2132,7 @@ const REVIEW_AND_DONE: &str = "\n## [T-901] a block still at review\nscope: a.tx
 
 // the default branch gains commits naming T-901, T-902 and T-9030, and only T-901 is at review
 fn merged_origin(repo: &Repo) -> (tempfile::TempDir, String) {
-    append(repo, "TASKS.md", REVIEW_AND_DONE);
+    queue(repo, REVIEW_AND_DONE);
     let (dir, branch) = tracked_clone(repo);
     git(&repo.root, &["remote", "set-head", "origin", &branch]);
     let base = git(&repo.root, &["rev-parse", "HEAD"]);
@@ -2306,30 +2152,27 @@ fn merged_origin(repo: &Repo) -> (tempfile::TempDir, String) {
 }
 
 #[test]
-fn a_merged_review_block_is_reported() {
+fn merged_review_reported() {
     let (repo, cfg) = seeded();
     let (_origin, sha) = merged_origin(&repo);
     let ProbeResult::Count(found) = merged(&repo, &cfg) else {
         panic!("{:?}", merged(&repo, &cfg));
     };
     assert_eq!(found.len(), 1, "{found:?}");
-    let tasks = config::instance_rel(&repo.root, &config::harness_dir(&repo.root), "TASKS.md");
-    let text = fs::read_to_string(repo.root.join(&tasks)).expect("tasks");
-    let heading = text
-        .lines()
-        .position(|l| l.starts_with("## [T-901]"))
-        .expect("heading")
-        + 1;
+    let block = tracker(&repo)
+        .get("T-901")
+        .expect("the queue")
+        .expect("T-901");
     assert_eq!(
-        (found[0].path.as_str(), found[0].line),
-        (tasks.as_str(), heading)
+        (found[0].path.clone(), found[0].line),
+        (cited(&repo, "T-901"), block.line)
     );
     assert!(found[0].message.contains("T-901"), "{}", found[0].message);
     assert!(found[0].message.contains(&sha), "{}", found[0].message);
 }
 
 #[test]
-fn no_origin_head_is_off() {
+fn no_origin_head_off() {
     let (repo, cfg) = seeded();
     let result = merged(&repo, &cfg);
     assert!(
@@ -2339,36 +2182,9 @@ fn no_origin_head_is_off() {
 }
 
 #[test]
-fn an_in_tree_state_commit_is_not_a_merge() {
-    let repo = Repo::new();
-    // a tracked TASKS.md at the root is the root layout: the loop's state commits land on the product's branch
-    repo.write("TASKS.md", &format!("# TASKS\n{REVIEW_AND_DONE}"));
-    repo.write("enallagi.toml", "");
-    repo.commit_all("product");
-    let cfg = config::load(&repo.root).expect("config");
-    let (_origin, branch) = tracked_clone(&repo);
-    git(&repo.root, &["remote", "set-head", "origin", &branch]);
-    append(&repo, "TASKS.md", "notes: VERIFIED\n");
-    let committed = enallagi::git::commit_instance(
-        &repo.root,
-        &cfg.layout.harness_dir,
-        &["TASKS.md"],
-        "verify: T-901 verdict",
-    );
-    assert!(committed.expect("commit"), "nothing was committed");
-    git(&repo.root, &["push", "-q", "origin", &branch]);
-    git(&repo.root, &["fetch", "-q", "origin"]);
-    let result = merged(&repo, &cfg);
-    assert!(
-        matches!(&result, ProbeResult::Count(f) if f.is_empty()),
-        "{result:?}"
-    );
-}
-
-#[test]
-fn an_unmerged_or_done_block_reports_nothing() {
+fn unmerged_reports_nothing() {
     let (repo, cfg) = seeded();
-    append(&repo, "TASKS.md", REVIEW_AND_DONE);
+    queue(&repo, REVIEW_AND_DONE);
     let (_origin, branch) = tracked_clone(&repo);
     git(&repo.root, &["remote", "set-head", "origin", &branch]);
     let result = merged(&repo, &cfg);
@@ -2627,4 +2443,65 @@ fn a_rule_not_recurring_after_promotion_is_silent() {
         "{}",
         found[0].message
     );
+}
+
+// a kill is a `.out-of-scope/<concept>.md` file; its prior requests are the kill lines
+fn out_of_scope(repo: &Repo, concept: &str, kill: &str) {
+    let dir = config::instance_path(
+        &repo.root,
+        &config::harness_dir(&repo.root),
+        ".out-of-scope",
+    );
+    fs::create_dir_all(&dir).expect("mkdir");
+    fs::write(
+        dir.join(format!("{concept}.md")),
+        format!("# {concept}\n\nThis project does not do it.\n\n## Why this is out of scope\n\nA re-run refutes it.\n\n## Prior requests\n\n{kill}"),
+    )
+    .expect("write");
+}
+
+#[test]
+fn exclusion_settles_ceiling() {
+    let (repo, cfg) = ceilings();
+    out_of_scope(
+        &repo,
+        "first-marker",
+        "- [2026-11-07] T-009 claimed the marker at `src/a.sh:2` — refuted by a re-run: settled.\n",
+    );
+    let results = run(&repo, &cfg);
+    assert_eq!(
+        count(&results, "ponytail-ceiling"),
+        Some(2),
+        "{}",
+        render(&results)
+    );
+}
+
+#[test]
+fn exclusion_kill_reused() {
+    let (repo, cfg) = seeded();
+    out_of_scope(
+        &repo,
+        "a-thing",
+        "- [2026-09-01] T-002 claimed a thing — refuted by `x`: y\n",
+    );
+    queue(&repo, "\n## [T-002] a later finding under the killed number\nscope: src/a.rs\nblockedBy: none\nstatus: ready-for-agent\n");
+    let results = run(&repo, &cfg);
+    let found = findings(&results, "queue-hygiene");
+    assert_eq!(found.len(), 1, "{}", render(&results));
+    assert!(found[0]
+        .message
+        .contains("T-002 reuses the id of a killed finding"));
+}
+
+#[test]
+fn exclusion_covers_friction() {
+    let (repo, cfg) = seeded();
+    append(&repo, "PROGRESS.md", FRICTION_FIXTURE);
+    out_of_scope(
+        &repo,
+        "prose-check",
+        "- [2026-09-13] the same friction is recorded 2 times: FIFTH sighting of a check firing on the prose that documents it - and the first where the \u{2014} refuted by `enallagi eval --gate prose-check`: `GATE prose-check REJECT the case passes with the rule ablated, so the rule changed no outcome`; PROGRESS.md keeps the evidence\n",
+    );
+    assert_eq!(count(&run(&repo, &cfg), "friction-repeat"), Some(0));
 }

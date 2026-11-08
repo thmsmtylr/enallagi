@@ -55,7 +55,7 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-// truncated at #[cfg(test)] so a fixture string in a test module isn't mistaken for real launcher code
+// truncated at #[cfg(test)] so a fixture string in a test module isn't read as launcher code
 fn crate_sources() -> Vec<(PathBuf, String)> {
     let src = repo_root().join("crates/harness/src");
     let sources: Vec<(PathBuf, String)> = walk(&src)
@@ -152,21 +152,110 @@ fn no_script_hardcodes_a_vendor_path() {
     }
 }
 
+// a regex escapes the brackets and stars, so the scan reads each source with its backslashes dropped
+fn parses_tickets(text: &str) -> bool {
+    let bare = text.replace('\\', "");
+    ["## [", "**Status:**", "**Blocked by:**", "## Harness"]
+        .iter()
+        .any(|marker| bare.contains(marker))
+}
+
 #[test]
-fn the_launcher_parses_no_task_blocks_itself() {
-    // only queue::match_heading may parse `## [` headings; a second parser here would drift from it
-    let heading = re(r"## \[");
-    assert!(
-        heading.is_match("## [T-001] a task"),
-        "the scan cannot report"
-    );
+fn launcher_parses_no_blocks() {
+    // only the tracker and block.rs read the ticket format; a second parser here would drift from them
+    for sample in [
+        "## [T-001] a task",
+        r#"re(r"^## \[(T-\d+)\]")"#,
+        r#"strip_prefix("\*\*Status:\*\*")"#,
+        "**Blocked by:** T-001",
+        "## Harness",
+    ] {
+        assert!(parses_tickets(sample), "the scan cannot report {sample}");
+    }
 
     let holders: Vec<String> = crate_sources()
         .into_iter()
-        .filter(|(_, text)| heading.is_match(text))
+        .filter(|(_, text)| parses_tickets(text))
         .map(|(rel, _)| rel.display().to_string())
         .collect();
-    assert_eq!(holders, vec!["queue.rs".to_string()]);
+    assert_eq!(
+        holders,
+        vec!["block.rs".to_string(), "tracker.rs".to_string()]
+    );
+}
+
+// statuses are bare strings, so a misspelt one would never match
+#[test]
+fn status_literals_known() {
+    let known = [
+        "needs-triage",
+        "needs-info",
+        "ready-for-agent",
+        "ready-for-human",
+    ];
+    let re = regex::Regex::new(r"\b(needs|ready-for)-[a-z]+").expect("regex");
+    let odd: Vec<String> = crate_sources()
+        .into_iter()
+        .flat_map(|(rel, text)| {
+            re.find_iter(&text)
+                .map(|m| m.as_str().to_string())
+                .filter(|m| !known.contains(&m.as_str()))
+                .map(|m| format!("{}: {m}", rel.display()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(odd, Vec::<String>::new());
+}
+
+// a path to a file named gh, other than a read of whether one exists
+fn names_gh(line: &str) -> bool {
+    (line.contains("join(\"gh\")") || line.contains("/gh\""))
+        && !line.contains(".config/gh")
+        && !line.contains(".exists()")
+}
+
+#[test]
+fn no_gh_stub() {
+    for (sample, stub) in [
+        ("let gh = tools.path().join(\"gh\");", true),
+        ("script(r, \"tools/gh\", body);", true),
+        ("deny(\"~/.config/gh\")", false),
+        (
+            ".filter(|d| !Path::new(&format!(\"{d}/gh\")).exists())",
+            false,
+        ),
+    ] {
+        assert_eq!(names_gh(sample), stub, "{sample}");
+    }
+    // the twin's install is the one place a gh is written
+    let root = repo_root().join("crates/harness");
+    let mut files: Vec<PathBuf> = walk(&root.join("tests"))
+        .into_iter()
+        .map(|p| Path::new("tests").join(p))
+        .chain(
+            walk(&root.join("src"))
+                .into_iter()
+                .map(|p| Path::new("src").join(p)),
+        )
+        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+        .collect();
+    files.retain(|p| p != Path::new("src/fixture/twin.rs"));
+    assert!(files.len() > 10, "{files:?}");
+    let stubs: Vec<String> = files
+        .iter()
+        .flat_map(|rel| {
+            read(&root.join(rel))
+                .lines()
+                .enumerate()
+                .filter(|(_, l)| names_gh(l))
+                .map(|(n, _)| format!("{}:{}", rel.display(), n + 1))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(
+        stubs.is_empty(),
+        "write gh through fixture::twin: {stubs:?}"
+    );
 }
 
 #[test]
@@ -250,28 +339,43 @@ fn the_bootstrap_record_is_derived_from_git() {
 }
 
 #[test]
-fn docs_demo_drives_one_iteration_and_cleans_up() {
-    let (code, out) = script(&repo_root().join("docs/demo.sh"), &repo_root(), &[]);
+fn docs_demo_merges_dark() {
+    // a space in the demo's own dir splits an unquoted gh shim
+    let spaced = tempfile::TempDir::new().expect("tempdir");
+    let tmp = spaced.path().join("a b");
+    fs::create_dir(&tmp).expect("mkdir");
+    let out = enallagi::fixture::command(&repo_root().join("docs/demo.sh").display().to_string())
+        .current_dir(repo_root())
+        .env("ENALLAGI_BIN", env!("CARGO_BIN_EXE_enallagi"))
+        .env("TMPDIR", &tmp)
+        .output()
+        .expect("run the demo");
+    let code = out.status.code().unwrap_or(-1);
+    let out = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert_eq!(code, 0, "{out}");
 
-    // exit code alone would pass on a demo that printed nothing; check the stage sequence too
-    let seen: Vec<&str> = out
-        .lines()
-        .filter_map(|l| {
-            if l.contains("stage.start") && l.contains("stage=implement") {
-                Some("implement")
-            } else if l.contains("stage.start") && l.contains("stage=verify") {
-                Some("verify")
-            } else if l.starts_with("T-001  status: ") {
-                Some(l.trim_end())
-            } else {
-                None
-            }
-        })
-        .collect();
+    // exit code alone would pass on a demo that printed nothing; check the sequence too
+    let marks = [
+        "stage decompose",
+        "stage implement",
+        "stage verify",
+        "holdout gate: holdouts: 1 of 1 green",
+        "respond round: 2 finding(s) answered",
+        "T-001: merged ",
+    ];
+    let mut at = 0;
+    for mark in marks {
+        let found = out[at..].find(mark);
+        let found = found.unwrap_or_else(|| panic!("no {mark:?} after byte {at}:\n{out}"));
+        at += found + mark.len();
+    }
     assert_eq!(
-        seen,
-        vec!["implement", "verify", "T-001  status: done"],
+        out.trim_end().lines().last(),
+        Some("pull 1  MERGED"),
         "{out}"
     );
 
@@ -362,7 +466,7 @@ fn matrix_os(block: &str) -> Vec<String> {
     out
 }
 
-// `^[^#]*` excludes commented-out lines; skips `name:` so a step label isn't mistaken for an invocation
+// `^[^#]*` skips commented-out lines; skipping `name:` keeps a step label from reading as a call
 fn invokes_floor(block: &str) -> bool {
     block.lines().any(|l| {
         let before_comment = l.split('#').next().unwrap_or("");
@@ -402,8 +506,7 @@ fn ci_runs_the_floor_on_a_gnu_and_a_bsd_userland() {
     );
     assert!(!invokes_floor(&job_block(&ci(), "no-such-job")));
 
-    // ablation self-checks: a matrix with one OS must not read as both userlands, and an `if:`
-    // on the job must be caught by switched_off -- the same checks the neighbouring test makes.
+    // ablation: one OS must not read as both userlands, and a job `if:` must trip switched_off
     let one_os = "jobs:\n  rust:\n    strategy:\n      matrix:\n        os:\n          - ubuntu-latest\n    steps:\n      - run: cargo test --workspace\n";
     assert_ne!(
         matrix_os(&job_block(one_os, "rust")),
@@ -444,8 +547,7 @@ fn ci_runs_the_driver_against_the_artifact() {
     assert_eq!(reading(soft), (true, true, true, 1));
 }
 
-// A fixture that inherits the shipped `[[skill]]` table clones github from a test: it passed on a
-// warm cache and raced itself in CI. Only harness.default.toml may name a remote source.
+// only harness.default.toml may name a remote source; a fixture that does races github in CI
 #[test]
 fn no_fixture_declares_a_fetched_skill() {
     let root = repo_root();
@@ -500,7 +602,7 @@ fn every_github_action_is_pinned_to_a_commit_sha() {
 }
 
 #[test]
-fn the_skill_hook_fires_on_a_headless_lane() {
+fn hook_fires_headless() {
     // UserPromptSubmit, not SessionStart: SessionStart fires once and decays as context grows
     let repo = Repo::new();
     init::install(
@@ -523,8 +625,15 @@ fn the_skill_hook_fires_on_a_headless_lane() {
     let (code, stdout, stderr) = harness(&repo.root, &["hook", "skills"]);
     assert_eq!(code, 0, "{stderr}");
     let cfg = enallagi::config::load(&repo.root).expect("config");
-    assert_eq!(cfg.skill.len(), 8);
+    assert_eq!(cfg.skill.len(), 13);
     for skill in &cfg.skill {
+        assert!(skill.rev.is_some(), "{} is unpinned", skill.id);
+        assert!(!skill.gate.is_empty(), "{} has no gate", skill.id);
+        assert!(
+            skill.path.ends_with(&format!("/{}", skill.id)),
+            "{} is not its upstream name",
+            skill.id
+        );
         assert!(
             stdout.contains(&skill.id),
             "{} absent from {stdout}",
@@ -622,8 +731,7 @@ fn no_shipped_file_carries_rhetorical_filler() {
 
 #[test]
 fn no_shipped_document_calls_the_binary_harness() {
-    // `harness` survives as a common noun, a path the tree holds and a key the source reads; the
-    // binary, the config and the prompt token are `enallagi`
+    // `harness` survives as a noun, a tree path and a source key; binary, config, token are `enallagi`
     let old = re(
         r"harness (init|eject|run|watch|probe|pr|base|gate|hook|skills|tasks|eval|events|worktree)\b|harness\.toml|__HARNESS_DIR__|HARNESS_[A-Z]",
     );
@@ -682,6 +790,47 @@ fn no_identifier_runs_past_fifty_characters() {
     assert!(long.is_empty(), "{} over {CAP}: {long:#?}", long.len());
 }
 
+// shrink-only: an untouched legacy name leaves the list when it is renamed
+#[test]
+fn fn_names_terse() {
+    let prose = |name: &str| {
+        let words: Vec<&str> = name.split('_').filter(|w| !w.is_empty()).collect();
+        words.len() > 4 || words.iter().any(|w| matches!(*w, "a" | "an" | "the"))
+    };
+    assert!(
+        prose("one_two_three_four_five") && prose("an_x"),
+        "the scan cannot report"
+    );
+    assert!(
+        !prose("timeout_kills_group"),
+        "the scan reports a terse name"
+    );
+
+    let decl = re(r"\bfn\s+([a-z_][a-z0-9_]*)");
+    let list = read(&repo_root().join("crates/harness/tests/fixtures/prose-names.txt"));
+    let allowed: std::collections::BTreeSet<&str> = list.lines().collect();
+    let crates = repo_root().join("crates");
+    let (mut seen, mut bad) = (std::collections::BTreeSet::new(), Vec::new());
+    for rel in walk(&crates) {
+        if rel.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        for c in decl.captures_iter(&read(&crates.join(&rel))) {
+            let name = c[1].to_string();
+            if prose(&name) && !allowed.contains(name.as_str()) {
+                bad.push(format!("{}: {name}", rel.display()));
+            }
+            seen.insert(name);
+        }
+    }
+    let gone: Vec<&&str> = allowed.iter().filter(|n| !seen.contains(**n)).collect();
+    assert!(bad.is_empty(), "{} prose names: {bad:#?}", bad.len());
+    assert!(
+        gone.is_empty(),
+        "allowlisted names that no longer exist: {gone:?}"
+    );
+}
+
 #[test]
 fn no_identifier_names_a_task_or_a_step() {
     let task = re(r"(?i)(?:^|_)t_?[0-9]{3}(?:_|$)");
@@ -729,9 +878,7 @@ fn no_identifier_names_a_task_or_a_step() {
     assert!(scanned > 50, "{scanned} sources scanned");
 }
 
-// `//!` is the only comment `cargo doc` renders onto the module's own page, so a summary written as
-// `//` or `///` does not count. No module is exempt, dispatchers included, and a header that only
-// repeats the path it sits at says nothing the reader did not already have.
+// `//!` alone renders on the module page; every module needs one saying more than its path
 fn module_summary(rel: &Path, text: &str) -> Result<(), String> {
     let Some(header) = text.lines().next().and_then(|l| l.strip_prefix("//!")) else {
         return Err("no `//!` summary line".to_string());
@@ -824,7 +971,7 @@ fn one_matcher_answers_both_commit_callers() {
 // main ships the package; what `enallagi init` writes lives only on dogfood/* branches
 #[test]
 #[ignore = "main only: ci.yml runs it on main and on pull requests into main"]
-fn main_tracks_no_instance_file() {
+fn main_tracks_no_instance() {
     let mut instance = std::collections::BTreeSet::from(["test-hashes.json".to_string()]);
     for name in enallagi::agent::presets().keys() {
         let repo = Repo::new();
@@ -838,21 +985,10 @@ fn main_tracks_no_instance_file() {
     }
     // seeded by init, but its source is in the tree
     instance.remove(".enallagi/evals/README.md");
-    // a root-layout install writes these names at the root, and main tracks none of them either
-    instance.extend(
-        [
-            "TASKS.md",
-            "PROGRESS.md",
-            "PROGRESS.archive.md",
-            "DECISIONS.md",
-            "LEARNINGS.md",
-            "SPEC.md",
-            ".check-baseline",
-            "enallagi.toml",
-        ]
-        .map(String::from),
+    assert!(
+        instance.iter().any(|p| p.starts_with(".enallagi/specs/")),
+        "{instance:?}"
     );
-    assert!(instance.contains(".enallagi/TASKS.md"), "{instance:?}");
 
     let out = Command::new("git")
         .args(["ls-files"])
@@ -862,7 +998,7 @@ fn main_tracks_no_instance_file() {
     assert!(out.status.success(), "{:?}", out);
     let tracked: Vec<String> = String::from_utf8_lossy(&out.stdout)
         .lines()
-        .filter(|l| instance.contains(*l))
+        .filter(|l| instance.contains(*l) || l.starts_with(".enallagi/specs/"))
         .map(String::from)
         .collect();
     assert_eq!(tracked, Vec::<String>::new());
@@ -921,7 +1057,7 @@ fn the_driver_reports_shortfalls_as_findings() {
         .collect();
     assert_eq!(stray, Vec::<&str>::new());
 
-    // every sha printed must resolve in this repo -- drive() works in a mktemp dir removed before it prints
+    // every printed sha must resolve here; drive() works in a mktemp dir removed before it prints
     let sha = re(r"^FINDING [^:]*: ([0-9a-f]+) ");
     for line in out.lines() {
         let Some(caps) = sha.captures(line) else {
@@ -944,7 +1080,7 @@ fn the_trimmed_role_prompts_still_pass_their_evals() {
 }
 
 #[test]
-fn the_licence_is_mit() {
+fn licence_mit() {
     let root = repo_root();
     let licence = read(&root.join("LICENSE"));
     assert!(
@@ -955,12 +1091,13 @@ fn the_licence_is_mit() {
     let manifest = read(&root.join("crates/harness/Cargo.toml"));
     assert!(manifest.contains("license = \"MIT\""), "{manifest}");
 
-    // the declared skills are other people's MIT work; NOTICE carries their notices, which is what
-    // MIT asks of anyone who ships or builds on a copy
+    // the declared skills are others' MIT work, so NOTICE must carry their notices
     let notice = read(&root.join("NOTICE"));
     for (source, holder) in [
         ("obra/superpowers", "Jesse Vincent"),
         ("DietrichGebert/ponytail", "DietrichGebert"),
+        ("mattpocock/skills", "Matt Pocock"),
+        ("JuliusBrussee/caveman", "Julius Brussee"),
     ] {
         assert!(notice.contains(source), "NOTICE omits {source}");
         assert!(
@@ -981,8 +1118,7 @@ fn crate_version_in(manifest: &str) -> String {
         .expect("a version line in the manifest")
 }
 
-// a tag is the release; one that does not name the crate version ships a binary printing a version
-// its own release page does not carry
+// a tag not naming the crate version ships a binary whose version its release page lacks
 fn tag_mismatch(tag: &str, version: &str) -> Option<String> {
     match tag.strip_prefix('v') {
         Some(rest) if rest == version => None,
@@ -1208,8 +1344,7 @@ fn the_release_job_checks_the_tag_version() {
     assert_eq!(switched_off(steps), 0, "{block}");
 }
 
-// RELEASE_TAG is set only in the release job, and a check that cannot read what it compares fails
-// rather than passes
+// RELEASE_TAG is set only in the release job; a check that cannot read it fails, not passes
 #[test]
 #[ignore = "release only: release.yml runs it on the tag it releases"]
 fn the_tag_equals_the_crate_version() {
@@ -1248,7 +1383,7 @@ fn the_release_publishes_only_a_complete_draft() {
 
 const FAKE_BINARY: &str = "#!/bin/sh\necho enallagi 9.9.9\n";
 
-// every asset name carries the same fake binary, so the test needs no copy of install.sh's target table
+// every asset carries the same fake binary, so no copy of install.sh's target table is needed
 fn fake_release(sum: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut sums = String::new();
@@ -1354,9 +1489,10 @@ fn every_workflow_exact_names_a_declared_test() {
     assert!(reported[0].contains("the_tag_equals_the_crate_versionX"));
     let helper = "      - run: cargo test -p enallagi --test floor -- --include-ignored --exact tag_mismatch\n";
     assert_eq!(undeclared_exact(helper, &root).len(), 1);
-    let no_suite = "      - run: cargo test -p enallagi --test nosuch -- --exact main_tracks_no_instance_file\n";
+    let no_suite =
+        "      - run: cargo test -p enallagi --test nosuch -- --exact main_tracks_no_instance\n";
     assert_eq!(undeclared_exact(no_suite, &root).len(), 1);
-    let unparsed = "      - run: cargo test -- --exact main_tracks_no_instance_file\n";
+    let unparsed = "      - run: cargo test -- --exact main_tracks_no_instance\n";
     assert_eq!(undeclared_exact(unparsed, &root).len(), 1);
 }
 
@@ -1516,7 +1652,7 @@ fn no_default_names_a_runner() {
 
 #[test]
 fn every_harness_dir_path_has_a_store() {
-    // a path the product writes under the harness directory that the records table does not name has no store, so the first tidy-up takes it
+    // a harness-dir path the records table does not name has no store; the first tidy-up takes it
     let joined = re(
         r#"(?:\.join\(\s*&?(?:self\.)?(?:ctx\.)?(?:cfg\.layout\.)?(?:harness_dir|dir)\s*\)|\bharness_dir)\s*\.join\(\s*"([^"]+)"\s*\)"#,
     );
@@ -1545,8 +1681,7 @@ fn every_harness_dir_path_has_a_store() {
     assert_eq!(missing, Vec::<String>::new());
 }
 
-// string literals blanked to spaces, newlines kept, so a `//` line inside a raw-string fixture is
-// source and not a comment; a comment's own quotes are left alone
+// strings blanked, newlines kept, so a `//` in a raw string is source; a comment's quotes stay
 fn without_strings(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let at = |k: usize| chars.get(k).copied();
@@ -1621,8 +1756,7 @@ fn without_strings(text: &str) -> String {
 
 #[test]
 fn no_comment_cites_an_issue_number() {
-    // ponytail: whole-line comments only, which is the shape the rule has been broken in; a
-    // trailing comment after code is still unread
+    // ponytail: whole-line comments only, the shape the rule broke in; a trailing comment is unread
     let cited = re(r"(?m)^[ \t]*//[^\n]*#[0-9]+");
     assert!(
         cited.is_match(&without_strings(
@@ -1642,8 +1776,7 @@ fn no_comment_cites_an_issue_number() {
     );
 
     let root = repo_root();
-    // the rule is the citation's form and names no repository: an upstream citation in a fixture
-    // and a slug passed to a function are both accepted
+    // the rule is the citation's form, no repository: a fixture's upstream cite and a slug both pass
     for (rel, marker) in [
         (
             "crates/harness/tests/fixtures/harness.default.json",
@@ -1706,13 +1839,10 @@ fn rustdoc_reports_no_warning() {
     );
 }
 
-// the citation floor above catches a comment, not a fixture, and a fixture is where the foreign name
-// was. A manifest a fixture writes names one of a few neutral words, so putting a real repository's
-// name back in one fails here.
+// a fixture manifest names a neutral word, so a real repository's name in one fails here
 #[test]
 fn no_fixture_manifest_names_another_repository() {
-    // ponytail: the two manifests a fixture writes, package.json and Cargo.toml, inside a Rust string
-    // literal, which is the shape the rule has been broken in
+    // ponytail: only package.json and Cargo.toml in a Rust string literal, the shape it broke in
     let json = re(r#"\\"name\\":\s*\\"([a-z0-9][a-z0-9._-]*)\\""#);
     let cargo = re(r#"\[package\]\\n\s*name = \\"([a-z0-9][a-z0-9._-]*)\\""#);
     let sample = String::from("let t = \"{\\\"name\\\": \\\"") + "ad" + "hd\\\"}\";";
@@ -1753,8 +1883,62 @@ fn no_fixture_manifest_names_another_repository() {
     assert!(scanned > 50, "{scanned} sources scanned");
 }
 
-// the fixture T-281 named: a `//` line inside a raw string is source, and the citation scan leaves it
+// a `//` line inside a raw string is source, and the citation scan leaves it
 #[allow(dead_code)]
 const PROBE_FIXTURE: &str = r#"
 // a seeded note the fixture carries #12
 "#;
+
+// a role table or a role count in the skill goes stale the day a role is added
+fn role_restated(text: &str) -> Vec<String> {
+    let count = re(r"(?i)\b(\d+|two|three|four|five|six|seven|eight|nine|ten) roles\b");
+    let mut found: Vec<String> = count.find_iter(text).map(|m| m.as_str().into()).collect();
+    found.extend(
+        text.lines()
+            .filter(|l| l.starts_with("| Role |"))
+            .map(String::from),
+    );
+    // three tracker states on one line is a status list the ticket reference owns
+    let states = [
+        "needs-triage",
+        "ready-for-agent",
+        "ready-for-human",
+        "needs-info",
+        "wontfix",
+        "review",
+        "done",
+    ];
+    found.extend(
+        text.lines()
+            .filter(|l| states.iter().filter(|s| l.contains(*s)).count() >= 3)
+            .map(String::from),
+    );
+    found
+}
+
+#[test]
+fn skill_points_roles() {
+    let skill = read(&repo_root().join("skills/running-the-loop/SKILL.md"));
+    assert_eq!(role_restated(&skill), Vec::<String>::new());
+    assert!(skill.contains("roles/"), "{skill}");
+    assert!(skill.contains("references/ticket.md"), "{skill}");
+    assert_eq!(role_restated("the four roles"), ["four roles"]);
+    assert_eq!(role_restated("| Role | Does |\n"), ["| Role | Does |"]);
+    let list = "`needs-triage`, `ready-for-agent`, `done`";
+    assert_eq!(role_restated(list), [list]);
+}
+
+fn keys_missing(text: &str) -> Vec<&'static str> {
+    enallagi::tracker::HARNESS_KEYS
+        .iter()
+        .copied()
+        .filter(|k| !text.contains(&format!("`{k}:`")))
+        .collect()
+}
+
+#[test]
+fn ticket_names_keys() {
+    let reference = read(&repo_root().join("skills/running-the-loop/references/ticket.md"));
+    assert_eq!(keys_missing(&reference), Vec::<&str>::new());
+    assert_eq!(keys_missing(&reference.replace("`gate:`", "")), ["gate"]);
+}

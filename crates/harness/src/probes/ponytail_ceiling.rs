@@ -1,29 +1,12 @@
-//! A ponytail marker is not re-reported once a kill line names its TEXT (quoted, or via `path:line`) — text not line number, since a moved marker is still the same marker.
+//! a ponytail marker whose text a kill line names, quoted or by `path:line`, stays settled when moved
 
 use super::common::{self, Res};
-use super::learning_ungated::DATED;
 use super::{Finding, ProbeCtx, ProbeResult};
 use std::collections::{BTreeMap, BTreeSet};
 
-const REJECTED: &str = "## Rejected findings";
-
 // lines, not their task ids: an id is spent once but the same finding recurs under a new one
 pub fn kill_lines(ctx: &ProbeCtx) -> Res<Vec<String>> {
-    let decisions = common::instance(ctx, "DECISIONS.md");
-    if !common::exists(ctx.root, &decisions) {
-        return Ok(vec![]);
-    }
-    let dated = common::re(DATED)?;
-    let mut inside = false;
-    let mut found = Vec::new();
-    for line in common::lines_of(ctx.root, &decisions)? {
-        if line.starts_with("## ") {
-            inside = line.trim() == REJECTED;
-        } else if inside && dated.is_match(&line) {
-            found.push(line);
-        }
-    }
-    Ok(found)
+    crate::tracker::kill_lines(&ctx.root.join(common::instance(ctx, ""))).map_err(|e| e.to_string())
 }
 
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {

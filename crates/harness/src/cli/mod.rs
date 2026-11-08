@@ -1,4 +1,4 @@
-//! The parser and the dispatcher: one clap `Command` variant per subcommand, and `run` hands each to the sibling module of the same name.
+//! the parser and dispatcher: one clap variant per subcommand, each run by its sibling module
 
 mod audit;
 mod base;
@@ -48,9 +48,6 @@ pub enum Command {
         /// Print what would be written and write nothing
         #[arg(long)]
         dry_run: bool,
-        /// Move instance files at the repository root, or in a legacy .harness/, into the harness directory, and install nothing
-        #[arg(long = "move")]
-        move_files: bool,
         /// Rewrite enallagi.toml without the keys that equal their default
         #[arg(long)]
         prune_defaults: bool,
@@ -75,7 +72,7 @@ pub enum Command {
         /// Vendor nothing, as CI does
         #[arg(long)]
         frozen: bool,
-        /// Append this GitHub issue as a proposed block once installed
+        /// Queue this GitHub issue as a needs-triage ticket once installed
         #[arg(long, value_name = "URL")]
         issue: Option<String>,
         /// Ask the agent for an unset check even when stdin is not a terminal or --yes is given
@@ -126,12 +123,12 @@ pub enum Command {
         /// Refuse a stage whose skills are not already vendored and locked; never fetch
         #[arg(long)]
         frozen: bool,
-        /// Add the agent preset's bypass flag to every lane, as `[agent] dangerously_skip_permissions` does
-        #[arg(long)]
-        dangerously_skip_permissions: bool,
         /// Push each landed task to its own branch and open its pull request, as `[pr] per_task` does
         #[arg(long)]
         pr_per_task: bool,
+        /// Take only this ticket, and skip the stages that write the queue (scout, adjudicator, decomposer)
+        #[arg(long, value_name = "T-NNN")]
+        task: Option<String>,
     },
     /// Attach read-only to a running loop's event log and queue
     Watch,
@@ -157,7 +154,7 @@ pub enum Command {
         #[arg(long)]
         policy_read: bool,
     },
-    /// Append a proposed block to TASKS.md from a GitHub issue
+    /// Queue a needs-triage ticket from a GitHub issue
     ///
     /// Reads the issue with gh. Scope and criteria stay placeholders until you write them.
     Issue {
@@ -167,10 +164,10 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Append a proposed block for each open comment on a pull request review
+    /// Queue a needs-triage ticket for each open comment on a pull request review
     ///
     /// Reads the comments with gh. A comment with no file anchor is skipped, and so is a resolved
-    /// or outdated one. Each block takes its scope from the comment's path.
+    /// or outdated one. Each ticket takes its scope from the comment's path.
     Review {
         /// Pull request URL, or owner/repo#n
         reference: String,
@@ -180,7 +177,7 @@ pub enum Command {
     },
     /// Propose a learning for each class of finding that recurs
     ///
-    /// Reads review blocks, frictions and rejections, and writes proposed entries to DECISIONS.md.
+    /// Reads review tickets, frictions and rejections, and writes proposed entries to DECISIONS.md.
     /// The `auditor` role names each class, and it sits in no pipeline.
     Audit {
         /// Print each rule two or more of these installs earned as a `[seed]` line, and write nothing
@@ -198,7 +195,7 @@ pub enum Command {
     Gate {
         /// Which gate to run
         which: GateWhich,
-        /// Task id the gate judges
+        /// Task id the gate judges; a spec slug for tickets
         task: String,
         /// Commit-ish the task's diff is measured against (default HEAD~1)
         #[arg(long)]
@@ -219,18 +216,23 @@ pub enum Command {
         /// Which operation to perform
         #[arg(required_unless_present = "cost")]
         cmd: Option<SkillsCmd>,
-        // `check` is this flag: `sync --frozen` and `check` take the same arm. Hidden here, and
-        // accepted for one release so a caller written against the old spelling still runs.
+        // `check` is this flag: `sync --frozen` and `check` share an arm; hidden, kept for old callers
         #[arg(long, hide = true)]
         frozen: bool,
         /// Print each skill's bytes and the stages that loaded it against the stages that used it
         #[arg(long, conflicts_with_all = ["cmd", "frozen"])]
         cost: bool,
+        /// With --cost, count only role stages that started at or after this timestamp
+        #[arg(long, requires = "cost")]
+        since: Option<String>,
+        /// With --cost, count only role stages that started before this timestamp
+        #[arg(long, requires = "cost")]
+        until: Option<String>,
     },
-    /// Query or edit TASKS.md
+    /// Query or edit the queue
     ///
-    /// Subcommands: list, ready, ready-unattended, ids-at, block, field, set-status, unblock,
-    /// rejections, archive, landed [--built].
+    /// Subcommands: list, ready, ids-at, block, field, set-status, rejections, archive,
+    /// landed [--built], check `<spec>`.
     Tasks {
         /// Subcommand to run
         cmd: String,
@@ -274,6 +276,36 @@ pub enum Command {
         /// Iterations the lane's run performs
         n: Option<u32>,
     },
+    /// Sandbox internals the launcher spawns itself
+    #[command(hide = true)]
+    Sandbox {
+        #[command(subcommand)]
+        cmd: SandboxCmd,
+    },
+    /// Serve a gh call from the twin's state file, for tests and the demo
+    #[command(hide = true)]
+    Twin {
+        /// The service the call is for; only gh
+        service: String,
+        /// The call's arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SandboxCmd {
+    /// Forward the namespace's loopback ports to the launcher's sockets, then run argv
+    Bridge {
+        /// Directory holding one `<port>` socket per forwarded port
+        #[arg(long)]
+        dir: std::path::PathBuf,
+        /// Loopback port to forward, the proxy's first
+        #[arg(long)]
+        port: Vec<u16>,
+        #[arg(last = true, required = true)]
+        argv: Vec<String>,
+    },
 }
 
 pub fn run(cli: Cli) -> anyhow::Result<i32> {
@@ -281,7 +313,6 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         Command::Init {
             adapter,
             dry_run,
-            move_files,
             prune_defaults,
             yes,
             preset,
@@ -295,7 +326,6 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         } => init::run(&init::Args {
             adapter,
             dry_run,
-            move_files,
             prune_defaults,
             yes,
             answers: crate::init::Answers {
@@ -327,8 +357,8 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             no_tui,
             dry_run,
             frozen,
-            dangerously_skip_permissions,
             pr_per_task,
+            task,
         } => run::run(&run::Args {
             iterations,
             pipelines: pipeline,
@@ -338,8 +368,8 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             no_tui,
             dry_run,
             frozen,
-            dangerously_skip_permissions,
             pr_per_task,
+            task,
         }),
         Command::Watch => watch::run(),
         Command::Probe { names } => probe::run(&probe::Args { names }),
@@ -358,7 +388,19 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
         Command::Base { task } => base::run(&base::Args { task }),
         Command::Gate { which, task, base } => gate::run(&gate::Args { which, task, base }),
         Command::Hook { name } => hook::run(&hook::Args { name }),
-        Command::Skills { cmd, frozen, cost } => skills::run(&skills::Args { cmd, frozen, cost }),
+        Command::Skills {
+            cmd,
+            frozen,
+            cost,
+            since,
+            until,
+        } => skills::run(&skills::Args {
+            cmd,
+            frozen,
+            cost,
+            since,
+            until,
+        }),
         Command::Tasks { cmd, args } => tasks::run(&tasks::Args { cmd, args }),
         Command::Eval { gate, names } => eval::run(&eval::Args { gate, names }),
         Command::Events {
@@ -377,7 +419,32 @@ pub fn run(cli: Cli) -> anyhow::Result<i32> {
             prefix,
         }),
         Command::Worktree { n } => worktree::run(&worktree::Args { n }),
+        Command::Sandbox {
+            cmd: SandboxCmd::Bridge { dir, port, argv },
+        } => std::process::exit(crate::sandbox::bwrap::bridge(&dir, &port, &argv)),
+        Command::Twin { service, args } => match service.as_str() {
+            "gh" => Ok(crate::fixture::twin::gh(&args)),
+            _ => anyhow::bail!("twin: no twin for {service}"),
+        },
     }
+}
+
+// inside a nested instance repo the toplevel is the instance; the product is the repo around it
+pub(super) fn root() -> anyhow::Result<std::path::PathBuf> {
+    let top = |d: &std::path::Path| {
+        crate::git::git(d, &["rev-parse", "--show-toplevel"]).map(std::path::PathBuf::from)
+    };
+    let cwd = std::env::current_dir()?;
+    let Ok(own) = top(&cwd) else {
+        return Ok(cwd);
+    };
+    if let Some(outer) = own.parent().and_then(|p| top(p).ok()) {
+        let dir = crate::config::harness_dir(&outer);
+        if outer.join(&dir) == own {
+            return Ok(outer);
+        }
+    }
+    Ok(own)
 }
 
 #[cfg(test)]
@@ -395,10 +462,9 @@ mod tests {
         "hook", "skills", "tasks", "eval", "events", "worktree",
     ];
 
-    const FLAGS: [&str; 40] = [
+    const FLAGS: [&str; 41] = [
         "init --adapter",
         "init --dry-run",
-        "init --move",
         "init --prune-defaults",
         "init --yes",
         "init --preset",
@@ -420,8 +486,8 @@ mod tests {
         "run --no-tui",
         "run --dry-run",
         "run --frozen",
-        "run --dangerously-skip-permissions",
         "run --pr-per-task",
+        "run --task",
         "pr --push",
         "pr --policy-read",
         "issue --dry-run",
@@ -429,6 +495,8 @@ mod tests {
         "audit --harness",
         "gate --base",
         "skills --cost",
+        "skills --since",
+        "skills --until",
         "eval --gate",
         "events --role",
         "events --task",
@@ -441,7 +509,7 @@ mod tests {
     fn visible_flags() -> Vec<String> {
         let cmd = Cli::command();
         let mut found = Vec::new();
-        for sub in cmd.get_subcommands() {
+        for sub in cmd.get_subcommands().filter(|s| !s.is_hide_set()) {
             for arg in sub.get_arguments() {
                 let Some(long) = arg.get_long() else { continue };
                 if arg.is_hide_set() || long == "help" || long == "version" {
@@ -453,10 +521,7 @@ mod tests {
         found
     }
 
-    // the job id, then only the step-level `name:` and `run:` lines under its `steps:`. The job's
-    // own `name:`, a `uses:` path, a `with:` value and a comment are all left out, so nothing but
-    // what the job runs can stand in for the id. Step keys are the two indents a step writes them
-    // at: `      - ` for the first key of a step and `        ` for the rest.
+    // job id plus step `name:`/`run:` lines (step keys at 6 or 8 spaces), so only what runs stands in
     fn job_steps(workflow: &str) -> Vec<(String, String)> {
         let mut jobs = Vec::new();
         let mut in_jobs = false;
@@ -492,7 +557,7 @@ mod tests {
         jobs
     }
 
-    // `grep -w`'s boundary: `rust` inside `rustfmt` is not the word, `build` in `cross-build` is.
+    // `grep -w`'s boundary: `rust` inside `rustfmt` is not the word, `build` in `cross-build` is
     fn says_word(steps: &str, word: &str) -> bool {
         steps
             .split(|c: char| !c.is_alphanumeric() && c != '_')
@@ -523,6 +588,7 @@ jobs:
     fn subcommand_names() -> Vec<String> {
         Cli::command()
             .get_subcommands()
+            .filter(|s| !s.is_hide_set())
             .map(|s| s.get_name().to_string())
             .collect()
     }

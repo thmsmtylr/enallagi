@@ -21,10 +21,10 @@ names a test by `file::test name`, copied character for character from __SPEC__'
 | Rail | What it means | Enforced by |
 | --- | --- | --- |
 | `green` | Done means `__CHECK__` passes. Never weaken, skip or delete a test or a lint rule to get there. **Done is verified on delta against `__ENALLAGI_DIR__/.check-baseline`**: a failure listed there is inherited, a failure not listed there is a rejection, and the file only ever shrinks. Adding a line to it is weakening a test by another name. | `enallagi run` → `gate_verdict` → `enallagi gate` · `__ENALLAGI_DIR__/.check-baseline` · `gate_scope`, for a line added to the baseline (plus `enallagi hook verify-done`, where your tool has hooks) |
-| `citable` | Every claim in code, a comment, a task note, a verdict or a document carries its source: a URL with the date checked, a `file:line`, or the command and its output. No source, no claim. | judgment — the verifier |
+| `citable` | Every claim in a task note, a verdict or a document carries its source: a URL with the date checked, a `file:line`, or the command and its output. No source, no claim. A code comment cites nothing: no ADR, task id, pull request or date. | judgment — the verifier |
 | `measure-first` | Nothing that moves a number lands before a measurement, taken on the current tree, of the thing it claims to fix. A failing threshold is not evidence the threshold is wrong. Stamp the revision a number came from. | judgment — the verifier |
 | `contracts` | Every shape crossing a boundary is declared once in `__CONTRACT_FILE__`, parsed at the write path, frozen for the milestone. Never invent an interface, import it. | `typecheck` |
-| `one-scope` | Touch only files inside the task's `scope:` globs. The implementer may widen the line with a one-line `widened:` reason in the block. The widening is graded by the verifier, never by the implementer. A silent widening, or an edit outside the line, is a rejection. | `enallagi run` → `gate_scope`, diffing the iteration's own commits against `scope:`, and the line as queued against the line at verdict · judgment — the verifier |
+| `one-scope` | Touch only files inside the task's `scope:` globs. The implementer may widen the line with a one-line `widened:` reason under the ticket's `## Harness`. The widening is graded by the verifier, never by the implementer. A silent widening, or an edit outside the line, is a rejection. | `enallagi run` → `gate_scope`, diffing the iteration's own commits against `scope:`, and the line as queued against the line at verdict · judgment — the verifier |
 | `minimal` | Walk the ladder: does it need to exist → already here → stdlib → the platform → an installed dependency → one line → only then a minimal build. Product rails are never on the chopping block. | judgment — the verifier |
 | `no-invented-strategy` | Never state a business model, sequence, price or market position that was not given to you. An open question is written as an open question. | judgment — the verifier |
 | `tidy` | The tree holds the product and the documents that govern it. A throwaway experiment is deleted the moment its number exists. Gitignored is not absent. Deleted work stays citable by sha: `git show <sha>:<path>`. | `enallagi probe` → `litter` |
@@ -47,7 +47,7 @@ names a test by `file::test name`, copied character for character from __SPEC__'
 | `minutes-not-hours` | No task is more than about 30 minutes of human-equivalent work. Split it if it is. | judgment — the adjudicator, at promotion |
 | `blocked-is-allowed` | A task may stop with `BLOCKED` and a written reason, which is a success. A task may **never** be marked done without the exact command and its pasted output. | `enallagi run` → `gate_verdict` |
 | `no-clarification-left` | If any `[NEEDS CLARIFICATION]` marker exists in __SPEC__, the loop does not start. | `enallagi run` |
-| `harness-lane` | One round changes a product lever or the measure of that lever, never both. A diff touching the launcher, the hooks, the check script or `__ENALLAGI_DIR__/.check-baseline` belongs to a task that declared `rows: none — harness`. A `test-hashes.json` re-cut is **exempt** when every key it changed names a file the task's own `scope:` line covers (SPEC.md §0.2 `tests-immutable`). | `enallagi run` → `gate_scope` |
+| `harness-lane` | One round changes a product lever or the measure of that lever, never both. A diff touching the launcher, the hooks, the check script or `__ENALLAGI_DIR__/.check-baseline` belongs to a task that declared `rows: none — harness`. A `test-hashes.json` re-cut is **exempt** when every key it changed names a file the task's own `scope:` line covers (__SPEC__ §0.2 `tests-immutable`). | `enallagi run` → `gate_scope` |
 | `friction` | Every iteration's __ENALLAGI_DIR__/PROGRESS.md entry ends with the round's question — what cost time that a rule or a check could prevent. The first occurrence is evidence and stays in __ENALLAGI_DIR__/PROGRESS.md; the **second** occurrence of the same thing is decided: a dated rule under `## Earned rules` in __ENALLAGI_DIR__/DECISIONS.md, or a dated kill line under `## Rejected findings` in the same file quoting the `--gate` run that refused the rule. | judgment — the verifier, for the line's presence · `enallagi probe` → `friction-repeat`, for the second occurrence |
 | `gated-rules` | __ENALLAGI_DIR__/LEARNINGS.md holds the `[seed]` rules the install shipped and nothing else: `enallagi init` seeds it from the binary and keeps it once it has content (`crates/harness/src/init.rs:400`), so a line appended there reaches no other install and no role is answerable for it. A rule the loop earned is a dated line under `## Earned rules` in __ENALLAGI_DIR__/DECISIONS.md, **written by the adjudicator**, carrying either the `enallagi eval --gate <name>` run that admitted it — its eval fails without the rule, passes with it, and regresses no eval that was passing — or the command that showed what it cost. The two files are capped together: at the cap, adding a rule means removing one. | `enallagi probe` → `learning-ungated`, for a dated line left in __ENALLAGI_DIR__/LEARNINGS.md and for the pair over its cap · judgment — the verifier, that a new rule cites its `--gate` run or its command |
 | `verifier-not-implementer` | Final acceptance runs in a fresh session that sees only the diff and the exit criteria. It never sees the implementation conversation. | `enallagi run` · `__ENALLAGI_DIR__/roles/verifier.md` |
@@ -62,35 +62,39 @@ path this table does not name.
 
 | Path | Store |
 | --- | --- |
+| `__ENALLAGI_DIR__/.out-of-scope` | tracked — one file per killed concept, written by the adjudicator and committed by `enallagi run` at the end of every stage |
 | `__ENALLAGI_DIR__/.git` | the state repository, created by `enallagi init` when the harness directory is its own repository |
-| `__ENALLAGI_DIR__/TASKS.md` | tracked — committed by `enallagi run` at the end of every stage |
+| `__ENALLAGI_DIR__/specs` | tracked — committed by `enallagi run` at the end of every stage |
 | `__ENALLAGI_DIR__/events.jsonl` | ignored — one run's log, read with `enallagi events` while the run is live |
 | `__ENALLAGI_DIR__/hooks` | tracked — the operator's own scripts, read by `enallagi hook` and written by nothing here |
 | `__ENALLAGI_DIR__/loop.pid` | ignored — one live process, removed when it exits |
 | `__ENALLAGI_DIR__/pr` | tracked — committed into the state repository by `enallagi pr`, which writes it |
 | `__ENALLAGI_DIR__/roles` | tracked — written by `enallagi init` |
-| `__ENALLAGI_DIR__/run` | ignored — the role prompts a stage renders, rebuilt at every stage |
+| `__ENALLAGI_DIR__/security` | tracked — `security/gitleaks-baseline.json`, the full-history secrets baseline `enallagi init` records once and the `security` gate passes as `--baseline-path` |
+| `__ENALLAGI_DIR__/run` | ignored — the role prompts a stage renders, rebuilt at every stage; `run/claims.json`, the writer lanes' claims, live while each lane's worktree exists; `run/land.lock`, held while one lane lands |
 | `__ENALLAGI_DIR__/worktrees` | ignored — a lane's checkout, removed when the lane ends |
 
 ## Task protocol
 
-- Tasks live in __ENALLAGI_DIR__/TASKS.md: id, `scope:` globs, `blockedBy:`, `rows:`, objective acceptance criteria,
-  status of proposed, ready, blocked, review, done or needs-spec.
-- **The scout proposes and the adjudicator promotes or kills.** `proposed` is the scout's output and
-  nobody else's — one block per `FINDING` line from `enallagi probe`, carrying `probe:`, the
-  command and its output — and the adjudicator either writes runnable criteria and sets `ready`, or
-  kills it to `## Rejected findings` in __ENALLAGI_DIR__/DECISIONS.md. A `proposed` block is inert to the loop.
+- Tickets live under __ENALLAGI_DIR__/specs/<spec>/issues/, one file each: id, `**Status:**`, `**Blocked by:**`,
+  objective acceptance criteria, and `scope:` and `rows:` under `## Harness`. A status is one of
+  needs-triage, ready-for-agent, ready-for-human, review, done, needs-info or wontfix.
+- **The scout proposes and the adjudicator promotes or kills.** `needs-triage` is the scout's output and
+  the verifier's filing — one ticket per `FINDING` line from `enallagi probe`, carrying `probe:`, the
+  command and its output — and the adjudicator either writes runnable criteria and sets
+  `ready-for-agent`, or sets `wontfix` with a kill line recorded in __ENALLAGI_DIR__/.out-of-scope/<concept>.md.
+  A `needs-triage` ticket is inert to the loop, and no ticket file is deleted.
 - `rows:` names the exit-criteria rows the task turns green, copied character for character. A task
   with no rows writes `rows: none` and says whether it is harness or measurement.
-- Take the first ready task whose blockers are done. Restate its acceptance criteria in one
-  sentence before coding; if you cannot, mark it `needs-spec` with the question.
-- Implementer sets `review`, never `done`. Verifier promotes to `done` or rejects to `ready` with
+- Take the lowest-id `ready-for-agent` ticket whose blockers are done (`enallagi tasks ready`). Restate
+  its acceptance criteria in one sentence before coding; if you cannot, mark it `needs-info` with the question.
+- Implementer sets `review`, never `done`. Verifier promotes to `done` or rejects to `ready-for-agent` with
   reproducible reasons, and the launcher then re-runs the gate itself. A lint failure alone is a
   rejection.
 - A task must be completable by an agent that has read only `__CONTEXT_FILE__`, __SPEC__, __ENALLAGI_DIR__/LEARNINGS.md,
-  `## Earned rules` in __ENALLAGI_DIR__/DECISIONS.md and its own task block. Criteria assuming conversational context are unrunnable.
-- `attended: true` marks a task needing a human credential. No launcher picks one up on auto-select.
-- **One checkout is one writer.** Never let two sessions edit __ENALLAGI_DIR__/TASKS.md in one working directory.
+  `## Earned rules` in __ENALLAGI_DIR__/DECISIONS.md and its own ticket file. Criteria assuming conversational context are unrunnable.
+- `ready-for-human` marks a ticket needing a person or a human credential. No launcher takes one.
+- **One checkout is one writer.** Never let two sessions file tickets in one working directory.
 
 ## Commands
 

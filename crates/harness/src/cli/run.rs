@@ -1,4 +1,4 @@
-//! `enallagi run [n]` -- the launcher, in the TUI when there is one to draw in.
+//! `enallagi run [n]` -- the launcher, in the TUI when there is one to draw in
 
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,18 +17,14 @@ pub struct Args {
     pub no_tui: bool,
     pub dry_run: bool,
     pub frozen: bool,
-    pub dangerously_skip_permissions: bool,
     pub pr_per_task: bool,
+    pub task: Option<String>,
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
     // a stop is the operator's, so it ends the run through the digest rather than orphaning a lane
     agent::catch_stop_signals();
-    let cwd = std::env::current_dir()?;
-    let root = match git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
-        Ok(top) => std::path::PathBuf::from(top),
-        Err(_) => cwd,
-    };
+    let root = super::root()?;
     if !args.dry_run {
         if let Err(err) = pipeline::preflight(&root) {
             eprintln!("enallagi run: {err}");
@@ -51,8 +47,8 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         budget_usd: args.budget_usd,
         budget_seconds: args.budget_seconds,
         budget_tokens: args.budget_tokens,
-        dangerously_skip_permissions: args.dangerously_skip_permissions,
         pr_per_task: args.pr_per_task,
+        task: args.task.clone(),
     }
     .with_env_budgets();
 
@@ -76,11 +72,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 }),
             )
         });
-        let drawn = tui::run_live(
-            rx,
-            &crate::config::instance_path(&root, &dir, "TASKS.md"),
-            &stop,
-        );
+        let drawn = tui::run_live(rx, &crate::tracker::Tracker::open(&root, &dir), &stop);
         if drawn.is_err() {
             let _ = std::fs::write(&stop, b"");
         }
@@ -89,7 +81,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
             Err(payload) => std::panic::resume_unwind(payload),
         };
         drawn?;
-        // the TUI path never printed one; the no-TUI path gets its from pipeline::run itself
+        // the TUI path never printed one; the no-TUI path gets one from pipeline::run itself
         if let Ok(digest) = &ran {
             print!("{}", pipeline::digest_text(digest));
         }
@@ -120,7 +112,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     }
 }
 
-// dry-round's rejection is a routing decision, not a verdict: a round with nothing takeable is how a run ends well
+// dry-round's rejection routes, not judges: a round with nothing takeable is how a run ends well
 fn counts_as_failure(e: &Event) -> bool {
     match &e.kind {
         Kind::Halt { .. } => true,

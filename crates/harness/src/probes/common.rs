@@ -1,8 +1,10 @@
-//! Helpers the text probes share: table parsers, the queue/learnings readers, and tree lookups.
+//! helpers the text probes share: table parsers, the queue/learnings readers, and tree lookups
 
 use super::{Finding, ProbeCtx, ProbeResult};
+use crate::block::Block;
 use crate::config::Config;
 use crate::git;
+use crate::tracker::Tracker;
 use globset::GlobBuilder;
 use regex::Regex;
 use std::path::Path;
@@ -33,7 +35,7 @@ pub fn re(pattern: &str) -> Res<Regex> {
 }
 
 pub fn instance(ctx: &ProbeCtx, name: &str) -> String {
-    crate::config::instance_rel(ctx.root, &ctx.cfg.layout.harness_dir, name)
+    crate::config::instance_rel(&ctx.cfg.layout.harness_dir, name)
 }
 
 pub fn read(root: &Path, rel: &str) -> Res<String> {
@@ -62,7 +64,7 @@ pub fn tracked(root: &Path) -> Res<Vec<String>> {
     listed(root, &["ls-files"], "")
 }
 
-// a harness directory that is its own repository is outside the product's index; list what the launcher's `git add -A` there commits
+// a harness that is its own repo sits outside the product's index: list what `git add -A` commits
 pub fn tracked_with_state(root: &Path) -> Res<Vec<String>> {
     let mut paths = tracked(root)?;
     let dir = crate::config::harness_dir(root);
@@ -154,6 +156,7 @@ pub fn backticked(text: &str) -> Vec<String> {
 }
 
 pub struct SpecRow {
+    pub spec: String,
     pub name: String,
     pub test: String,
     pub line: usize,
@@ -161,15 +164,35 @@ pub struct SpecRow {
 
 const SEPARATOR: &str = r"^\|[\s:|-]+\|\s*$";
 
-// must slice and read cells the same way the floor's own row parser does, or the two disagree
+// every spec's table; a spec with no rows heading holds none; all lacking one is an error
 pub fn spec_rows(ctx: &ProbeCtx) -> Res<Vec<SpecRow>> {
     let cfg: &Config = ctx.cfg;
-    let spec = &instance(ctx, &cfg.layout.spec);
-    let text = read(ctx.root, spec)?;
     let heading = &cfg.layout.rows_heading;
-    let start = text
-        .find(&format!("\n{heading}"))
-        .ok_or_else(|| format!("{spec}: no \"{heading}\" heading"))?;
+    let mut rows = Vec::new();
+    let mut tables = 0;
+    for spec in crate::tracker::spec_files(ctx.root, cfg) {
+        let text = read(ctx.root, &spec)?;
+        if let Some(found) = spec_table(cfg, &spec, &text)? {
+            tables += 1;
+            rows.extend(found);
+        }
+    }
+    if tables == 0 {
+        return Err(format!("{}: no \"{heading}\" heading", cfg.layout.spec));
+    }
+    Ok(rows)
+}
+
+/// one spec's exit-criteria rows; None when it has no rows heading
+pub fn spec_table(cfg: &Config, spec: &str, text: &str) -> Res<Option<Vec<SpecRow>>> {
+    match text.find(&format!("\n{}", cfg.layout.rows_heading)) {
+        Some(start) => table_rows(cfg, spec, text, start).map(Some),
+        None => Ok(None),
+    }
+}
+
+// must slice and read cells the same way the floor's own row parser does, or the two disagree
+fn table_rows(cfg: &Config, spec: &str, text: &str, start: usize) -> Res<Vec<SpecRow>> {
     let after = text[start..]
         .find(&format!("\n{}", cfg.layout.rows_end_heading))
         .map(|at| start + at);
@@ -185,6 +208,7 @@ pub fn spec_rows(ctx: &ProbeCtx) -> Res<Vec<SpecRow>> {
         .filter_map(|m| {
             let at = m.get(0)?.start();
             Some(SpecRow {
+                spec: spec.to_string(),
                 name: m.get(1)?.as_str().to_string(),
                 test: m.get(2)?.as_str().to_string(),
                 line: base + section[..at].matches('\n').count(),
@@ -205,7 +229,7 @@ pub fn spec_rows(ctx: &ProbeCtx) -> Res<Vec<SpecRow>> {
     }
     if shaped != rows.len() {
         return Err(format!(
-            "the exit-criteria section has {shaped} row-shaped lines but {} parsed as file::test — a table went unread",
+            "{spec}: the exit-criteria section has {shaped} row-shaped lines but {} parsed as file::test — a table went unread",
             rows.len()
         ));
     }
@@ -272,7 +296,7 @@ pub fn learning_entries(ctx: &ProbeCtx) -> Res<Vec<(usize, String)>> {
     Ok(entries_of(numbered(&lines)))
 }
 
-// a rule the loop earned sits under `## Earned rules` in DECISIONS.md, and `## Rejected findings` below it is not one
+// earned rules sit under `## Earned rules`; `## Rejected findings` below are not
 pub fn earned_rules(ctx: &ProbeCtx) -> Res<Vec<(usize, String)>> {
     let decisions = instance(ctx, "DECISIONS.md");
     if !is_file(ctx.root, &decisions) {
@@ -315,49 +339,38 @@ fn entries_of<'a>(lines: impl Iterator<Item = (usize, &'a String)>) -> Vec<(usiz
     entries
 }
 
-pub struct TaskBlock {
-    pub id: String,
-    pub line: usize,
-    pub body: Vec<(usize, String)>,
-}
-
-pub fn task_blocks(ctx: &ProbeCtx) -> Res<Vec<TaskBlock>> {
-    let heading = re(r"^## \[(T-\d+)\]")?;
-    let mut blocks: Vec<TaskBlock> = Vec::new();
-    let mut open = false;
-    for (index, line) in lines_of(ctx.root, &instance(ctx, "TASKS.md"))?
-        .iter()
-        .enumerate()
-    {
-        if let Some(m) = heading.captures(line) {
-            let id = m.get(1).map(|g| g.as_str()).unwrap_or_default().to_string();
-            blocks.push(TaskBlock {
-                id,
-                line: index + 1,
-                body: Vec::new(),
-            });
-            open = true;
-            continue;
-        }
-        if line.starts_with("## ") {
-            open = false;
-            continue;
-        }
-        if open {
-            if let Some(block) = blocks.last_mut() {
-                block.body.push((index + 1, line.clone()));
-            }
-        }
+// a missing queue reads as empty to the tracker, which a probe would report as a count of zero
+pub fn tracker(ctx: &ProbeCtx) -> Res<Tracker> {
+    let t = Tracker::open(ctx.root, &ctx.cfg.layout.harness_dir);
+    match t.0.is_dir() {
+        true => Ok(t),
+        false => Err("no queue: no specs/".to_string()),
     }
-    Ok(blocks)
 }
 
-pub fn field(block: &TaskBlock, key: &str) -> Option<(usize, String)> {
-    let prefix = format!("{key}:");
-    block.body.iter().find_map(|(line, text)| {
-        text.strip_prefix(&prefix)
-            .map(|value| (*line, value.trim().to_string()))
-    })
+pub fn rel(ctx: &ProbeCtx, path: &Path) -> String {
+    path.strip_prefix(ctx.root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+/// the file a finding about ticket `id` cites: the ticket's own file
+pub fn cite(ctx: &ProbeCtx, tracker: &Tracker, id: &str) -> String {
+    tracker
+        .path_of(id)
+        .map(|p| rel(ctx, &p))
+        .unwrap_or_default()
+}
+
+/// every ticket, with the file a finding about it cites
+pub fn tickets(ctx: &ProbeCtx) -> Res<Vec<(String, Block)>> {
+    let tracker = tracker(ctx)?;
+    let blocks = tracker.blocks().map_err(|e| e.to_string())?;
+    Ok(blocks
+        .into_iter()
+        .map(|b| (cite(ctx, &tracker, &b.id), b))
+        .collect())
 }
 
 pub fn normal(text: &str) -> String {

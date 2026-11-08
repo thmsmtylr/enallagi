@@ -1,9 +1,27 @@
-//! Turns one `stage.output` chunk into the lines the output pane shows: a recognised JSON shape renders as `tool`/`text`, anything else shows raw.
+//! one `stage.output` chunk as output-pane lines: a known JSON shape renders `tool`/`text`, else raw
 
 use serde_json::Value;
 
 pub fn parse_chunk(chunk: &str) -> Vec<String> {
     chunk.lines().filter_map(render_line).collect()
+}
+
+// the feed's summary of a chunk: one line per tool call, and nothing for any other line
+pub fn tool_calls(chunk: &str) -> Vec<String> {
+    chunk
+        .lines()
+        .filter_map(parse_object)
+        .flat_map(|v| match v.get("type").and_then(Value::as_str) {
+            Some("assistant" | "message") => v
+                .pointer("/message/content")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+            _ => vec![v],
+        })
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("tool_use"))
+        .filter_map(|item| render_item(&item))
+        .collect()
 }
 
 pub fn is_assistant_chunk(chunk: &str) -> bool {
@@ -18,7 +36,7 @@ fn parse_object(line: &str) -> Option<Value> {
     serde_json::from_str::<Value>(line).ok()
 }
 
-// A recognised message with nothing to show renders as nothing, never as raw JSON.
+// a recognised message with nothing to show renders as nothing, never as raw JSON
 fn render_line(line: &str) -> Option<String> {
     let Some(v) = parse_object(line) else {
         return Some(line.to_string());
@@ -130,6 +148,12 @@ mod tests {
     fn multi_line_chunk_renders_one_line_per_input_line() {
         let chunk = "not json\n{\"type\":\"other\"}";
         assert_eq!(parse_chunk(chunk).len(), 2);
+    }
+
+    #[test]
+    fn tool_calls_filter() {
+        let chunk = "not json\n{\"type\":\"other\"}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"},{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{}}]}}\n{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{}}";
+        assert_eq!(tool_calls(chunk), vec!["tool  Read  {}", "tool  Bash  {}"]);
     }
 
     #[test]

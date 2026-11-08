@@ -1,5 +1,4 @@
-//! A sentence in the target's contribution guide that refuses or conditions generated contributions, read before `enallagi pr --push`.
-//!
+//! a contribution-guide sentence refusing or conditioning generated work, read before `pr --push`
 //! ponytail: two word lists over prose catch the explicit refusal only; `--policy-read` is the override for anything subtler.
 
 use super::common::{self, Res};

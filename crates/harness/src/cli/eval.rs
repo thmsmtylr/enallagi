@@ -1,7 +1,6 @@
-//! `enallagi eval [names]` -- runs the suite, or one gate's cases, exiting 1 on a failure and 2 when it could not run.
+//! `enallagi eval [names]` -- the suite or one gate's cases; exit 1 on a failure, 2 when it cannot run
 
-use crate::{eval, git};
-use std::path::PathBuf;
+use crate::eval;
 
 pub struct Args {
     pub gate: Option<String>,
@@ -9,11 +8,7 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let cwd = std::env::current_dir()?;
-    let root = match git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
-        Ok(top) => PathBuf::from(top),
-        Err(_) => cwd,
-    };
+    let root = super::root()?;
 
     let outcome = match &args.gate {
         Some(name) => eval::gate(&root, name, None),

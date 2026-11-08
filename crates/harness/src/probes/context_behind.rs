@@ -1,4 +1,4 @@
-//! A Commands line the context template renders that the installed context file lacks: init keeps a file the project owns, so a line the template gained reaches new installs only.
+//! a Commands line the context template renders that the installed file lacks; init keeps the file
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};

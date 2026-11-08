@@ -1,5 +1,6 @@
-//! `enallagi pr`: a landed task becomes a branch off the upstream default branch holding only its own product change.
+//! `enallagi pr`: a landed task becomes a branch off upstream's default holding only its change
 
+use enallagi::fixture::{exec, git};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,24 +13,10 @@ struct Fixture {
     tools: PathBuf,
 }
 
-fn git(root: &Path, args: &[&str]) -> String {
-    enallagi::git::git(root, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
-}
-
 fn write(root: &Path, rel: &str, text: &str) {
     let path = root.join(rel);
     fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
     fs::write(path, text).expect("write");
-}
-
-fn exec(path: &Path, body: &str) -> String {
-    fs::write(path, format!("#!/usr/bin/env bash\n{body}")).expect("write script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
-    path.display().to_string()
 }
 
 fn commit(root: &Path, rel: &str, text: &str, msg: &str) -> String {
@@ -39,12 +26,16 @@ fn commit(root: &Path, rel: &str, text: &str, msg: &str) -> String {
     git(root, &["rev-parse", "--short", "HEAD"])
 }
 
+fn calls(state: &Path) -> Vec<Vec<String>> {
+    enallagi::fixture::twin::load(state).calls
+}
+
 fn replace(text: &str, from: &str, to: &str) -> String {
     text.replacen(from, to, 1)
 }
 
 impl Fixture {
-    // a bare origin at main, a round branch, and a harness directory with its own repository excluded from the product's
+    // a bare origin at main, a round branch, and a harness dir with its own repo the product excludes
     fn new(tasks: &str, check: &str) -> Fixture {
         let dir = tempfile::TempDir::new().expect("tempdir");
         let root = dir.path().join("product");
@@ -76,9 +67,10 @@ impl Fixture {
         write(
             &state,
             "enallagi.toml",
-            &format!("[check]\ncommand = \"{check}\"\n"),
+            // the stubs sit in /tmp outside the task worktree, which bwrap masks
+            &format!("[sandbox]\nmode = \"off\"\n\n[check]\ncommand = \"{check}\"\n"),
         );
-        write(&state, "TASKS.md", tasks);
+        enallagi::fixture::queue(&root, ".enallagi", tasks);
         git(&state, &["add", "-A"]);
         git(
             &state,
@@ -123,6 +115,17 @@ impl Fixture {
         (out.status.code().unwrap_or(-1), text)
     }
 
+    // the twin's state path; its gh shim goes in the tools directory
+    fn twin(&self) -> PathBuf {
+        let state = enallagi::fixture::twin::State {
+            repo: "owner/repo".to_string(),
+            origin: self.origin.clone(),
+            default_branch: "main".to_string(),
+            ..Default::default()
+        };
+        enallagi::fixture::twin::install(&self.tools, env!("CARGO_BIN_EXE_enallagi"), &state).1
+    }
+
     fn thing(&self) -> String {
         fs::read_to_string(self.root.join("src/thing.txt")).expect("read thing")
     }
@@ -133,8 +136,6 @@ impl Fixture {
 }
 
 const DONE_AND_REJECTED: &str = "\
-# TASKS
-
 ## [T-001] the thing says two twice
 scope: src/thing.txt
 blockedBy: none
@@ -144,7 +145,7 @@ archived: DECISIONS.md
 ## [T-002] the thing says five loudly
 scope: src/thing.txt
 blockedBy: none
-status: ready
+status: ready-for-agent
 notes: verifier: rejected, it shouts
 ";
 
@@ -157,13 +158,16 @@ blockedBy: none
 status: done
 criteria:
   - src/thing.txt says two twice
+verdict: verified by verifier
+ran: `grep -c two src/thing.txt`
+exit: 0
 notes: implementer: doubled two
   verifier, first pass: REJECTED, three does not mention two
   implementer: three mentions two
   verifier, second pass: VERIFIED. `grep -c two src/thing.txt` → 2
 ";
 
-// the done task lands in two commits around a rejected task's commit inside the second one's context, so only a three-way apply takes it
+// the done task lands in two commits around a rejected one's, so only a three-way apply takes it
 fn landed(check: &str) -> (Fixture, Vec<String>) {
     let f = Fixture::new(DONE_AND_REJECTED, check);
     write(&f.root, ".enallagi/DECISIONS.md", DECISIONS);
@@ -188,8 +192,7 @@ fn landed(check: &str) -> (Fixture, Vec<String>) {
     (f, vec![first, rejected, second])
 }
 
-// a checkout behind its upstream is refused before any replay, so a fixture that pushes upstream
-// takes that commit into the round branch first, keeping the round's own content on every conflict
+// a behind checkout is refused before replay, so the fixture merges upstream in, keeping its side
 fn absorb_upstream(f: &Fixture) {
     git(
         &f.root,
@@ -268,21 +271,30 @@ fn the_task_branch_holds_only_the_done_change() {
     assert!(text.contains("src/thing.txt says two twice"), "{text}");
     assert!(text.contains(&shas[0]) && text.contains(&shas[2]), "{text}");
     assert!(!text.contains(&shas[1]), "{text}");
-    let verification = text.split("### Verification").nth(1).expect("verification");
-    assert!(
-        verification.contains("`grep -c two src/thing.txt` → 2"),
-        "{text}"
-    );
-    assert!(!verification.contains("first pass"), "{text}");
 }
 
 #[test]
-fn pr_refuses_a_blocker_not_yet_upstream() {
+fn pr_body_verdict() {
+    let (f, _) = landed("exit 0\n");
+    let (code, out) = f.harness(&["pr", "T-001"]);
+    assert_eq!(code, 0, "{out}");
+    let text = fs::read_to_string(f.root.join(".enallagi/pr/T-001.md")).expect("description");
+    let verification = text.split("### Verification").nth(1).expect("verification");
+    assert!(
+        verification.trim_start().starts_with(
+            "```\nverdict: verified by verifier\nran: grep -c two src/thing.txt\nexit: 0\n```\n"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn pr_refuses_unpushed_blocker() {
     let (f, _) = landed("exit 0\n");
     let tasks = format!(
         "{DONE_AND_REJECTED}\n## [T-003] the thing says twelve at the end\nscope: src/other.txt\nblockedBy: T-001\nstatus: done\n"
     );
-    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    enallagi::fixture::queue(&f.root, ".enallagi", &tasks);
     commit(
         &f.root,
         "src/other.txt",
@@ -329,7 +341,7 @@ fn pr_refuses_a_blocker_not_yet_upstream() {
 }
 
 #[test]
-fn pr_refuses_a_checkout_behind_its_upstream() {
+fn pr_refuses_stale_checkout() {
     let (f, _) = landed("exit 0\n");
     git(&f.root, &["checkout", "-q", "main"]);
     commit(&f.root, "src/other.txt", "eleven\n", "upstream eleven");
@@ -341,15 +353,11 @@ fn pr_refuses_a_checkout_behind_its_upstream() {
     );
     git(&f.root, &["push", "-q", "origin", "main"]);
     git(&f.root, &["checkout", "-q", "dogfood/round-1"]);
-    let log = f.tools.join("gh.log");
-    exec(
-        &f.tools.join("gh"),
-        &format!("printf '%s\\n' \"$@\" >{}\n", log.display()),
-    );
+    let log = f.twin();
 
     let (code, out) = f.harness(&["pr", "T-001", "--push"]);
     assert_ne!(code, 0, "{out}");
-    assert!(!log.exists(), "gh ran");
+    assert!(calls(&log).is_empty(), "gh ran");
     assert!(out.contains("HEAD..origin/main` -> 2"), "{out}");
     assert!(out.contains("git merge origin/main"), "{out}");
     assert!(!out.contains("T-001"), "{out}");
@@ -408,9 +416,9 @@ fn a_red_check_pushes_nothing() {
 }
 
 #[test]
-fn a_hung_check_is_bound_by_timeout() {
+fn hung_check_bound() {
     let (f, _) = landed("sleep 10\n");
-    exec(&f.tools.join("gh"), "exit 0\n");
+    f.twin();
     let toml = f.root.join(".enallagi/enallagi.toml");
     let text = fs::read_to_string(&toml).expect("config");
     fs::write(&toml, format!("{text}timeout = \"2s\"\n")).expect("config");
@@ -427,13 +435,9 @@ fn a_hung_check_is_bound_by_timeout() {
 }
 
 #[test]
-fn push_pushes_the_branch_and_opens_the_pr() {
+fn push_opens_pr() {
     let (f, _) = landed("exit 0\n");
-    let log = f.tools.join("gh.log");
-    exec(
-        &f.tools.join("gh"),
-        &format!("printf '%s\\n' \"$@\" >{}\n", log.display()),
-    );
+    let log = f.twin();
 
     let (code, out) = f.harness(&["pr", "T-001", "--push"]);
     assert_eq!(code, 0, "{out}");
@@ -442,8 +446,7 @@ fn push_pushes_the_branch_and_opens_the_pr() {
         "{}",
         f.remote_branches()
     );
-    let args = fs::read_to_string(&log).expect("gh ran");
-    let args: Vec<&str> = args.lines().collect();
+    let args = calls(&log).remove(0);
     assert_eq!(&args[..2], ["pr", "create"], "{args:?}");
     for pair in [["--base", "main"], ["--head", "task/T-001"]] {
         assert!(args.windows(2).any(|w| w == pair), "{args:?}");
@@ -451,17 +454,37 @@ fn push_pushes_the_branch_and_opens_the_pr() {
     let body = args
         .windows(2)
         .find(|w| w[0] == "--body-file")
-        .expect("--body-file")[1];
+        .expect("--body-file")[1]
+        .clone();
     assert!(fs::read_to_string(body)
         .expect("body")
         .contains("the thing says two twice"));
 }
 
 #[test]
-fn pr_refuses_a_done_task_no_round_commit_names() {
+fn push_opens_pull() {
+    let (f, _) = landed("exit 0\n");
+    let path = f.twin();
+    let (code, out) = f.harness(&["pr", "T-001", "--push"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("pushed: https://github.com/owner/repo/pull/1"),
+        "{out}"
+    );
+    let state = enallagi::fixture::twin::load(&path);
+    assert_eq!(state.pulls.len(), 1, "{state:?}");
+    assert_eq!(state.pulls[0].state, "OPEN");
+    assert_eq!(
+        state.pulls[0].head_sha,
+        git(&f.origin, &["rev-parse", "task/T-001"])
+    );
+}
+
+#[test]
+fn pr_refuses_unnamed_task() {
     let (f, _) = landed("exit 0\n");
     let tasks = format!("{DONE_AND_REJECTED}\n## [T-004] only the queue moved\nscope: TASKS.md\nblockedBy: none\nstatus: done\n");
-    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    enallagi::fixture::queue(&f.root, ".enallagi", &tasks);
     let (code, out) = f.harness(&["pr", "T-004"]);
     assert_ne!(code, 0, "{out}");
     assert!(out.contains("T-004") && out.contains("no commit"), "{out}");
@@ -478,16 +501,12 @@ fn guarded() -> (Fixture, PathBuf) {
         &format!("# Contributing\n\nRun the tests.\n{REFUSAL}\n"),
         "docs: contribution guide",
     );
-    let log = f.tools.join("gh.log");
-    exec(
-        &f.tools.join("gh"),
-        &format!("printf '%s\\n' \"$@\" >{}\n", log.display()),
-    );
+    let log = f.twin();
     (f, log)
 }
 
 #[test]
-fn push_refuses_a_guide_refusing_generated_work() {
+fn push_refuses_guarded() {
     let (f, log) = guarded();
     let (code, out) = f.harness(&["pr", "T-001", "--push"]);
     assert_ne!(code, 0, "{out}");
@@ -497,7 +516,7 @@ fn push_refuses_a_guide_refusing_generated_work() {
     );
     assert!(out.contains("--policy-read"), "{out}");
     assert!(f.remote_branches().lines().all(|b| !b.contains("task/")));
-    assert!(!log.exists(), "gh ran");
+    assert!(calls(&log).is_empty(), "gh ran");
     let text = fs::read_to_string(f.root.join(".enallagi/pr/T-001.md")).expect("description");
     let policy = text.split("## Contribution policy").nth(1).expect("policy");
     assert!(
@@ -508,7 +527,7 @@ fn push_refuses_a_guide_refusing_generated_work() {
     let (code, out) = f.harness(&["pr", "T-001", "--push", "--policy-read"]);
     assert_eq!(code, 0, "{out}");
     assert!(f.remote_branches().contains("task/T-001"));
-    assert!(log.exists(), "gh did not run");
+    assert!(!calls(&log).is_empty(), "gh did not run");
     let text = fs::read_to_string(f.root.join(".enallagi/pr/T-001.md")).expect("description");
     let policy = text.split("## Contribution policy").nth(1).expect("policy");
     assert!(
@@ -518,7 +537,7 @@ fn push_refuses_a_guide_refusing_generated_work() {
 }
 
 #[test]
-fn pr_without_push_prints_the_policy_finding() {
+fn pr_prints_policy_finding() {
     let (f, log) = guarded();
     let (code, out) = f.harness(&["pr", "T-001"]);
     assert_eq!(code, 0, "{out}");
@@ -527,17 +546,17 @@ fn pr_without_push_prints_the_policy_finding() {
         "{out}"
     );
     assert!(git(&f.root, &["branch", "--list", "task/T-001"]).contains("task/T-001"));
-    assert!(!log.exists(), "gh ran");
+    assert!(calls(&log).is_empty(), "gh ran");
 }
 
 #[test]
-fn a_blocker_built_this_run_is_the_base() {
+fn built_blocker_is_base() {
     let (f, _) = landed("exit 0\n");
     let tasks = DONE_AND_REJECTED.replace(
-        "blockedBy: none\nstatus: ready\nnotes: verifier: rejected, it shouts\n",
+        "blockedBy: none\nstatus: ready-for-agent\nnotes: verifier: rejected, it shouts\n",
         "blockedBy: T-001\nstatus: done\n",
     );
-    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    enallagi::fixture::queue(&f.root, ".enallagi", &tasks);
     let first = enallagi::pr::build(
         &f.root,
         &["T-001".to_string()],
@@ -571,14 +590,14 @@ fn a_blocker_built_this_run_is_the_base() {
 }
 
 #[test]
-fn two_sibling_blockers_are_refused() {
+fn sibling_blockers_refused() {
     let (f, _) = landed("exit 0\n");
     let mut tasks = DONE_AND_REJECTED.replace(
-        "blockedBy: none\nstatus: ready\nnotes: verifier: rejected, it shouts\n",
+        "blockedBy: none\nstatus: ready-for-agent\nnotes: verifier: rejected, it shouts\n",
         "blockedBy: none\nstatus: done\n",
     );
     tasks.push_str("\n## [T-003] the thing carries both\nscope: src/thing.txt\nblockedBy: T-001, T-002\nstatus: done\n");
-    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    enallagi::fixture::queue(&f.root, ".enallagi", &tasks);
     commit(
         &f.root,
         "src/thing.txt",
@@ -606,8 +625,6 @@ fn two_sibling_blockers_are_refused() {
 }
 
 const SAME_LINE: &str = "\
-# TASKS
-
 ## [T-010] two gains an a
 scope: src/thing.txt
 blockedBy: none
@@ -720,7 +737,7 @@ fn a_blocker_pushed_earlier_is_the_base() {
 #[test]
 fn a_conflict_skips_a_branch_off_its_files() {
     let f = same_line(SAME_LINE);
-    // T-020 forks from a main whose two read `two a`, so T-011 applies there though T-020 never touched the file
+    // T-020 forks from a main whose two reads `two a`, so T-011 applies there anyway
     git(&f.root, &["checkout", "-q", "main"]);
     commit(
         &f.root,
@@ -815,8 +832,7 @@ fn pr_commits_its_description_to_the_state_repo() {
     );
 }
 
-// `enallagi pr` runs outside a stage, where the operator may hold uncommitted queue edits; the
-// record is committed alone and those stay where they were
+// `enallagi pr` commits its record alone; the operator's uncommitted queue edits stay put
 #[test]
 fn pr_commits_the_record_and_leaves_operator_edits() {
     let (f, _) = landed("exit 0");
@@ -848,12 +864,12 @@ fn an_empty_names_list_still_sweeps_the_state_repo() {
 }
 
 #[test]
-fn landed_names_each_state_and_filters_built() {
+fn landed_filters_built() {
     let (f, shas) = landed("exit 0");
     let tasks = format!(
         "{DONE_AND_REJECTED}\n## [T-003] pushed already\nscope: src/thing.txt\nblockedBy: none\nstatus: done\n\n## [T-004] never built\nscope: src/thing.txt\nblockedBy: none\nstatus: done\n"
     );
-    write(&f.root, ".enallagi/TASKS.md", &tasks);
+    enallagi::fixture::queue(&f.root, ".enallagi", &tasks);
     let pushed = commit(
         &f.root,
         "src/thing.txt",
@@ -888,7 +904,7 @@ fn landed_names_each_state_and_filters_built() {
 }
 
 #[test]
-fn push_on_a_built_branch_updates_the_pushed_line() {
+fn push_updates_pushed_line() {
     let (f, _) = landed("exit 0");
     let (code, out) = f.harness(&["pr", "T-001"]);
     assert_eq!(code, 0, "{out}");
@@ -897,7 +913,7 @@ fn push_on_a_built_branch_updates_the_pushed_line() {
     assert!(text.contains("\npushed: no "), "{text}");
     let tip = git(&f.root, &["rev-parse", "task/T-001"]);
 
-    exec(&f.tools.join("gh"), "echo https://example.test/pull/1\n");
+    f.twin();
     let (code, out) = f.harness(&["pr", "T-001", "--push"]);
     assert_eq!(code, 0, "{out}");
     assert_eq!(git(&f.root, &["rev-parse", "task/T-001"]), tip);
@@ -906,9 +922,64 @@ fn push_on_a_built_branch_updates_the_pushed_line() {
     let pushed: Vec<&str> = text.lines().filter(|l| l.starts_with("pushed:")).collect();
     assert_eq!(pushed.len(), 1, "{text}");
     assert!(
-        pushed[0].starts_with("pushed: https://example.test/pull/1 "),
+        pushed[0].starts_with("pushed: https://github.com/owner/repo/pull/1 "),
         "{text}"
     );
     let state = f.root.join(".enallagi");
     assert_eq!(git(&state, &["status", "--porcelain", "--", "pr"]), "");
+}
+
+// in-tree: a state commit naming the ticket sits beside its product commit
+#[test]
+fn pr_skips_state_commits() {
+    let f = Fixture::new(
+        "## [T-001] the thing says two twice\nscope: src/thing.txt\nblockedBy: none\nstatus: done\n",
+        "exit 0\n",
+    );
+    fs::remove_dir_all(f.root.join(".enallagi/.git")).expect("rm state repo");
+    let exclude = f
+        .root
+        .join(git(&f.root, &["rev-parse", "--git-path", "info/exclude"]));
+    fs::write(exclude, "").expect("exclude");
+    git(&f.root, &["add", ".enallagi"]);
+    git(
+        &f.root,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "chore: install",
+        ],
+    );
+    let product = commit(
+        &f.root,
+        "src/thing.txt",
+        &replace(THING, "two\n", "two two\n"),
+        "feat(thing): T-001 two says itself twice",
+    );
+    write(&f.root, ".enallagi/PROGRESS.md", "# progress\n\nverified\n");
+    assert!(enallagi::git::commit_instance(
+        &f.root,
+        ".enallagi",
+        &["PROGRESS.md"],
+        "verify: T-001"
+    )
+    .expect("state commit"));
+
+    let (code, out) = f.harness(&["pr", "T-001"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        git(
+            &f.root,
+            &["diff", "--name-only", "origin/main", "task/T-001"]
+        ),
+        "src/thing.txt"
+    );
+    let (code, out) = f.harness(&["tasks", "landed"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        format!("T-001\tthe thing says two twice\t{product}\tbuilt task/T-001\n")
+    );
 }

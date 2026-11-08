@@ -1,4 +1,4 @@
-//! Seeds a repo with the harness's files: its own files are rewritten every run, the project's documents are seeded once.
+//! seeds a repo: the harness's own files rewritten every run, the project's documents seeded once
 
 use crate::agent::{self, Preset};
 use crate::config::{self, Config};
@@ -11,6 +11,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const ROLES: &[(&str, &str)] = &[
+    (
+        "decomposer.md",
+        include_str!("../../../roles/decomposer.md"),
+    ),
     (
         "adjudicator.md",
         include_str!("../../../roles/adjudicator.md"),
@@ -29,7 +33,6 @@ const ROLES: &[(&str, &str)] = &[
 
 // ships as dot.check-baseline so the package's own tooling doesn't read it as a baseline
 const DOCS: &[(&str, &str)] = &[
-    ("TASKS.md", include_str!("../../../templates/TASKS.md")),
     (
         "PROGRESS.md",
         include_str!("../../../templates/PROGRESS.md"),
@@ -46,6 +49,8 @@ const DOCS: &[(&str, &str)] = &[
         ".check-baseline",
         include_str!("../../../templates/dot.check-baseline"),
     ),
+    // passed as --config, so a client's own root config is never read
+    ("gitleaks.toml", "[extend]\nuseDefault = true\n"),
 ];
 
 const SKILL: &[(&str, &str)] = &[
@@ -54,8 +59,8 @@ const SKILL: &[(&str, &str)] = &[
         include_str!("../../../skills/running-the-loop/SKILL.md"),
     ),
     (
-        "references/task-block.md",
-        include_str!("../../../skills/running-the-loop/references/task-block.md"),
+        "references/ticket.md",
+        include_str!("../../../skills/running-the-loop/references/ticket.md"),
     ),
 ];
 
@@ -67,21 +72,23 @@ const EVALS_README: &str = include_str!("../../../templates/evals.README.md");
 const CLAUDE_PLUGIN: &str = "adapters/claude";
 const CLAUDE_HOOKS: &str = include_str!("../../../adapters/claude/hooks/hooks.json");
 
-// scoped to the harness dir, never touches the repo's own .gitignore
-// vendored skills are committed (controller ruling), so skills/ is not ignored here
-const GITIGNORE: &str = "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\n";
+// harness-dir scoped; skills/ is not ignored since vendored skills are committed
+const GITIGNORE: &str =
+    "events.jsonl\n*.log\nlogs/\nworktrees/\nloop.pid\nrun/\n__pycache__/\nholdouts/\nSTOP\n";
+// two lanes each append a PROGRESS.md entry; union is a built-in driver, so no git config is written
+const GITATTRIBUTES: &str = "PROGRESS.md merge=union\n";
 
 #[derive(Debug, Default, Clone)]
 pub struct InitOpts {
     pub adapter: Option<String>,
     pub dry_run: bool,
-    /// Answers given on the command line; each skips its question.
+    /// answers given on the command line; each skips its question
     pub answers: Answers,
-    /// Take every default without asking; a stdin that is not a terminal is the same.
+    /// take every default without asking; a stdin that is not a terminal is the same
     pub yes: bool,
 }
 
-/// The four keys detection cannot always decide, answered by a flag, a prompt, or the default.
+/// the four keys detection cannot always decide, answered by a flag, a prompt, or the default
 #[derive(Debug, Default, Clone)]
 pub struct Answers {
     pub preset: Option<String>,
@@ -90,7 +97,7 @@ pub struct Answers {
     pub source_root: Option<String>,
 }
 
-/// The questions init asks on a fresh install, in the order it asks them.
+/// the questions init asks on a fresh install, in the order it asks them
 pub const QUESTIONS: [(&str, &str); 4] = [
     ("agent.preset", "the agent CLI the lanes run"),
     ("check.command", "the one command that means done"),
@@ -103,20 +110,17 @@ pub const QUESTIONS: [(&str, &str); 4] = [
 
 #[derive(Debug, Default)]
 pub struct InitReport {
-    /// Relative paths this run wrote, or would write under `--dry-run`.
+    /// relative paths this run wrote, or would write under `--dry-run`
     pub wrote: Vec<String>,
-    /// Relative paths that already had content and were left alone.
+    /// relative paths that already had content and were left alone
     pub kept: Vec<String>,
-    /// `"<old> -> <new>"` for every key lifted out of a `harness.json`.
+    /// `"<old> -> <new>"` for every key lifted out of a `harness.json`
     pub migrated_keys: Vec<String>,
-    /// The top-level paths of everything above, for the `git add` line.
+    /// the top-level paths of everything above, for the `git add` line
     pub track: Vec<String>,
-    /// Everything else the operator has to read: advice on a kept file, and the
-    /// adapters that write nothing.
+    /// everything else the operator has to read: advice on a kept file, adapters that write nothing
     pub notes: Vec<String>,
-    /// `(old, new)` for every instance file outside the harness directory.
-    pub moves: Vec<(String, String)>,
-    /// Paths outside the harness directory that the product does not track, hidden in its info/exclude.
+    /// untracked paths outside the harness directory, hidden in the product's info/exclude
     pub excluded: Vec<String>,
 }
 
@@ -139,8 +143,6 @@ pub enum InitError {
     InvalidJson { path: String, message: String },
     #[error("a token survived substitution, so enallagi.toml is missing a key: {}: {}", .0, .1.join(" "))]
     TokenSurvived(String, Vec<String>),
-    #[error("{0} already exists; move it aside, nothing is overwritten")]
-    MoveTarget(String),
     #[error("the leftover-token pattern does not compile ({0}); this is a defect in the binary")]
     BadPattern(String),
 }
@@ -158,7 +160,6 @@ pub fn planned_files(root: &Path, opts: &InitOpts) -> Result<Vec<(String, String
 
 pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
     let (plan, mut report) = prepare(root, opts)?;
-    report.moves = moves(root)?;
 
     // assert before the first write, so a missing token leaves no half-install
     let pattern = regex::Regex::new(TOKEN).map_err(|e| InitError::BadPattern(e.to_string()))?;
@@ -184,6 +185,9 @@ pub fn install(root: &Path, opts: &InitOpts) -> Result<InitReport, InitError> {
     let dir = config::load(root)?.layout.harness_dir;
     if !opts.dry_run && own_repository(root, &dir) {
         state_repository(root, &dir, &report.excluded)?;
+        if let Some(note) = untrack_stop(root, &dir)? {
+            report.notes.push(note);
+        }
         if let Some(note) = ignore_in_product(root, &dir)? {
             report.notes.push(note);
         }
@@ -218,17 +222,22 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         None => config::load(root)?,
     };
     let dir = cfg.layout.harness_dir.clone();
-    // config_from resolves an unset context file in a scratch directory, which never has a root-layout queue
-    let unset = |text: &str| {
-        toml::from_str::<Value>(text)
-            .ok()
-            .and_then(|v| v.get("layout")?.get("context_file").cloned())
-            .is_none()
+    // config_from resolves unset paths in a scratch dir, whose name is not the repository's
+    let unset = |key: &str| {
+        pending.as_deref().is_some_and(|text| {
+            toml::from_str::<Value>(text)
+                .ok()
+                .and_then(|v| v.get("layout")?.get(key).cloned())
+                .is_none()
+        })
     };
-    if pending.as_deref().is_some_and(unset) {
-        cfg.layout.context_file = config::instance_rel(root, &dir, "AGENTS.md");
+    if unset("context_file") {
+        cfg.layout.context_file = config::instance_rel(&dir, "AGENTS.md");
     }
-    config::root_layout_skills(root, &mut cfg);
+    if unset("spec") {
+        cfg.layout.spec = String::new();
+        cfg.layout.spec = crate::tracker::spec_rel(root, &cfg);
+    }
     let missing = config::unset_keys(&cfg);
     if !missing.is_empty() {
         report.notes.push(format!(
@@ -237,16 +246,11 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
             config_rel(root)
         ));
     }
-    let at = |name: &str| config::instance_rel(root, &dir, name);
+    let at = |name: &str| config::instance_rel(&dir, name);
     let toml = config_rel(root);
-    // before subst, which would put a root-layout queue under the harness directory
     let sub = |text: &str| {
-        let text = text.replace(config::LEGACY_DIR_TOKEN, config::DIR_TOKEN);
-        let text = ROOT_INSTANCE_FILES
-            .iter()
-            .fold(text, |acc, name| {
-                acc.replace(&format!("{}/{name}", config::DIR_TOKEN), &at(name))
-            })
+        let text = text
+            .replace(config::LEGACY_DIR_TOKEN, config::DIR_TOKEN)
             .replace(&format!("{}/{}", config::DIR_TOKEN, config::CONFIG), &toml)
             .replace(
                 &format!("{}/{}", config::DIR_TOKEN, config::LEGACY_CONFIG),
@@ -262,6 +266,10 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     }
     plan.push(write(format!("{dir}/RAILS.md"), sub(RAILS)));
     plan.push(write(format!("{dir}/.gitignore"), GITIGNORE.to_string()));
+    plan.push(write(
+        format!("{dir}/.gitattributes"),
+        GITATTRIBUTES.to_string(),
+    ));
     // per tool, not per repo: this ships the project's own skill in the shared format
     for (name, text) in SKILL {
         let path = skills_dir.join("running-the-loop").join(name);
@@ -301,7 +309,7 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     }
     seed_context(root, &mut plan, &mut report, &cfg, &sub);
 
-    let spec = at(&cfg.layout.spec);
+    let spec = cfg.layout.spec.clone();
     if has_content(&root.join(&spec)) {
         report.notes.push(format!(
             "{spec} was kept — merge the SPEC.section.md template into it by hand"
@@ -311,8 +319,7 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         seed(root, &mut plan, &mut report, &spec, sub(SPEC_SECTION));
     }
 
-    // --adapter overrides; otherwise the configured preset names the tool, so one init writes
-    // its hook and instruction files without a second flag
+    // --adapter overrides; else the configured preset names the tool, so one init needs no second flag
     let tool = match &opts.adapter {
         Some(name) => Some(
             presets
@@ -335,7 +342,7 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
         }
     }
 
-    // without a manifest claude names the plugin after its directory, and every skill invocation says harness:<id>
+    // without a manifest claude names the plugin after its dir, and each skill call says harness:<id>
     let plugin = format!("{dir}/{CLAUDE_PLUGIN}");
     if skills_dir.starts_with(&plugin) || tool.is_some_and(|t| t.name == "claude") {
         let manifest = json!({
@@ -363,14 +370,12 @@ fn prepare(root: &Path, opts: &InitOpts) -> Result<(Vec<Planned>, InitReport), I
     Ok((plan, report))
 }
 
-// a harness directory the product already tracks, or a root-layout queue, stays in the product's history
+// a harness directory the product already tracks stays in the product's history
 fn own_repository(root: &Path, dir: &str) -> bool {
-    !dir.is_empty()
-        && config::instance_rel(root, dir, "TASKS.md") != "TASKS.md"
-        && git::git(root, &["ls-files", "--", dir]).is_ok_and(|out| out.is_empty())
+    !dir.is_empty() && git::git(root, &["ls-files", "--", dir]).is_ok_and(|out| out.is_empty())
 }
 
-// a tracked file is never excluded: exclude does not hide it, and `git add` on an excluded path exits 1
+// a tracked file is never excluded: exclude can't hide it, and `git add` on an excluded path exits 1
 fn untracked_entry_points(
     root: &Path,
     dir: &str,
@@ -420,7 +425,7 @@ fn state_repository(root: &Path, dir: &str, entries: &[String]) -> Result<(), In
             _ => kept.push(line),
         }
     }
-    // ponytail: entry paths are written unescaped, so a configured name holding `*`, `?`, `[` or `!` matches as a pattern
+    // ponytail: paths written unescaped; a name holding `*`, `?`, `[` or `!` matches as a pattern
     let block = std::iter::once(bare)
         .chain(entries.iter().map(|e| format!("/{e}")))
         .fold(String::new(), |acc, line| acc + &line + "\n");
@@ -436,8 +441,22 @@ fn state_repository(root: &Path, dir: &str, entries: &[String]) -> Result<(), In
     Ok(())
 }
 
-// linters and formatters read .gitignore and never info/exclude, and a lane checks out HEAD, so the
-// line is committed: uncommitted, the lane's tools still scan the harness directory's vendored code
+// the file stays on disk: it is the operator's halt, and only its place in the history goes
+fn untrack_stop(root: &Path, dir: &str) -> Result<Option<String>, InitError> {
+    let state = root.join(dir);
+    if git::git(&state, &["ls-files", "--", "STOP"]).map_or(true, |out| out.is_empty()) {
+        return Ok(None);
+    }
+    git::git(&state, &["rm", "--cached", "-q", "--", "STOP"]).map_err(|e| InitError::Io {
+        path: format!("{dir}/STOP"),
+        source: std::io::Error::other(e.to_string()),
+    })?;
+    Ok(Some(format!(
+        "untracked: {dir}/STOP, which the state repository tracked"
+    )))
+}
+
+// linters read .gitignore, not info/exclude, and lanes check out HEAD, so the line is committed
 fn ignore_in_product(root: &Path, dir: &str) -> Result<Option<String>, InitError> {
     let path = root.join(".gitignore");
     let text = fs::read_to_string(&path).unwrap_or_default();
@@ -571,9 +590,7 @@ fn seed_config(
     Ok(Some(text))
 }
 
-// the four keys a fresh install may still have to be told: a flag answers without asking, a
-// question defaults to what detection found or the shipped default, and `--yes` or a stdin that is
-// not a terminal takes every default so an unattended init never blocks
+// a flag answers, a prompt defaults to detection; `--yes` or a non-tty stdin takes every default
 fn answer(
     detected_toml: &str,
     detected: &[runners::Detected],
@@ -665,7 +682,7 @@ fn audit_config(root: &Path, path: &Path, report: &mut InitReport) -> Result<(),
     Ok(())
 }
 
-/// Drops every key in enallagi.toml that equals its embedded default, and names each one.
+/// drops every key in enallagi.toml that equals its embedded default, and names each one
 pub fn prune(root: &Path, dry_run: bool) -> Result<Vec<String>, InitError> {
     let path = config::config_path(root);
     if !has_content(&path) {
@@ -684,94 +701,6 @@ fn config_rel(root: &Path) -> String {
     rel(path.strip_prefix(root).unwrap_or(&path))
 }
 
-const ROOT_INSTANCE_FILES: &[&str] = &[
-    "TASKS.md",
-    "PROGRESS.md",
-    "PROGRESS.archive.md",
-    "LEARNINGS.md",
-    "DECISIONS.md",
-    ".check-baseline",
-    "test-hashes.json",
-    "harness.lock",
-    "evals/README.md",
-];
-
-// a legacy directory is the one config::load substitutes when harness_dir is unset, so it differs from the default only then
-pub fn moves(root: &Path) -> Result<Vec<(String, String)>, InitError> {
-    let cfg = config::load(root)?;
-    let configured = fs::read_to_string(config::config_path(root))
-        .ok()
-        .and_then(|text| toml::from_str::<Value>(&text).ok())
-        .and_then(|v| Some(v.get("layout")?.get("harness_dir")?.as_str()?.to_string()));
-    let default = config_from("")?.layout.harness_dir;
-    let legacy = configured.is_none() && cfg.layout.harness_dir != default;
-    let dir = configured.unwrap_or(default);
-
-    let mut out = Vec::new();
-    if legacy {
-        let mut files = Vec::new();
-        files_under(root, &cfg.layout.harness_dir, &mut files);
-        files.sort();
-        for old in files {
-            let name = &old[cfg.layout.harness_dir.len() + 1..];
-            out.push((old.clone(), format!("{dir}/{name}")));
-        }
-    }
-    let root_toml = config::config_path(root) == root.join("enallagi.toml");
-    let names = ROOT_INSTANCE_FILES
-        .iter()
-        .copied()
-        .chain(["enallagi.toml", cfg.layout.spec.as_str()]);
-    for name in names {
-        let at_root = if name == "enallagi.toml" {
-            root_toml
-        } else {
-            config::instance_rel(root, &dir, name) == name
-        };
-        if at_root && root.join(name).is_file() {
-            out.push((name.to_string(), format!("{dir}/{name}")));
-        }
-    }
-    Ok(out)
-}
-
-fn files_under(root: &Path, dir: &str, out: &mut Vec<String>) {
-    let Ok(entries) = fs::read_dir(root.join(dir)) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = format!("{dir}/{}", entry.file_name().to_string_lossy());
-        if entry.file_type().is_ok_and(|t| t.is_dir()) {
-            files_under(root, &path, out);
-        } else {
-            out.push(path);
-        }
-    }
-}
-
-// every destination is checked before the first rename, so a collision leaves the tree as it was
-pub fn relocate(root: &Path, moves: &[(String, String)]) -> Result<(), InitError> {
-    let mut seen = BTreeSet::new();
-    for (_, new) in moves {
-        if !seen.insert(new) || root.join(new).symlink_metadata().is_ok() {
-            return Err(InitError::MoveTarget(new.clone()));
-        }
-    }
-    for (old, new) in moves {
-        let (from, to) = (root.join(old), root.join(new));
-        if let Some(parent) = to.parent() {
-            fs::create_dir_all(parent).map_err(io(parent.display()))?;
-        }
-        fs::rename(&from, &to).map_err(io(from.display()))?;
-        let mut dir = from.parent();
-        while let Some(emptied) = dir.filter(|d| *d != root && fs::remove_dir(d).is_ok()) {
-            dir = emptied.parent();
-        }
-    }
-    Ok(())
-}
-
-// config::load reads a directory, so give the pending text a temporary one
 fn config_from(text: &str) -> Result<Config, InitError> {
     let dir = tempfile::TempDir::new().map_err(io("a temporary directory"))?;
     let path = config::config_path(dir.path());
@@ -798,7 +727,7 @@ fn seed_context(
     resync_kept(root, plan, report, cfg, path);
 }
 
-// a document the project owns keeps every word it wrote; only the check command it names follows the config
+// a project-owned document keeps every word; only the check command it names follows the config
 fn resync_kept(
     root: &Path,
     plan: &mut Vec<Planned>,
@@ -1147,6 +1076,14 @@ mod tests {
             resync(&text, Some(&defaults), &cfg.check).as_deref(),
             Some("- Verify, and this is what done means: `make check`\n")
         );
+    }
+
+    #[test]
+    fn init_seeds_gitleaks_config() {
+        let repo = crate::fixture::Repo::new();
+        repo.init_harness("");
+        let text = fs::read_to_string(repo.root.join(".enallagi/gitleaks.toml")).expect("seeded");
+        assert_eq!(text, "[extend]\nuseDefault = true\n");
     }
 
     #[test]

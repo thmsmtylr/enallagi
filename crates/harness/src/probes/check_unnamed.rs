@@ -1,5 +1,4 @@
-//! The context file's Commands section must name the configured check, or every lane verifies with the wrong command silently.
-//!
+//! the context file's Commands must name the configured check, or lanes run the wrong one
 //! ponytail: the context file only; widen to the spec or LEARNINGS.md once a second document is measured to have drifted.
 
 use super::common::{self, Res};

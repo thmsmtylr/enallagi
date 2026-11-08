@@ -1,4 +1,4 @@
-//! A tracked path the repository itself treats as disposable, and an untracked path on no allowlist.
+//! a tracked path the repository itself treats as disposable, and an untracked path on no allowlist
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
@@ -23,8 +23,7 @@ fn machinery(ctx: &ProbeCtx, path: &str) -> bool {
     })
 }
 
-// the repository's own ignore rules cover it and git tracks it anyway, so the repository already calls it
-// disposable; a state repository is asked the same and its paths are prefixed as `common::tracked` names them
+// ignored by the repository's own rules yet tracked, so disposable; a state repository is asked too
 fn tracked_and_ignored(root: &Path) -> Res<Vec<String>> {
     let list = |repo: &Path, prefix: &str| -> Res<Vec<String>> {
         let out = git::git(

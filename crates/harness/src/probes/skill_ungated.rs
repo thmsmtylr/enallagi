@@ -1,9 +1,8 @@
-//! A `[[skill]]` entry with `gate = "none"` reads identically to real enforcement unless something says so out loud.
-//!
-//! gate names are checked against fixed constants, not the rails file's own text: a literal gate name in that file must not define itself.
+//! a `[[skill]]` with `gate = "none"` reads like real enforcement unless something says otherwise
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult, NAMES};
+// fixed constants, never the rails file's text: a gate name written there must not define itself
 use crate::config::GATE_NAMES;
 
 pub fn probe(ctx: &ProbeCtx) -> ProbeResult {

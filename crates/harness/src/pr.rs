@@ -1,7 +1,8 @@
-//! Builds a pull-request branch off the upstream default branch from the product commits whose subject names a landed task.
+//! builds a pull-request branch off upstream's default branch from the commits naming a landed task
 
 use crate::probes::{contribution_policy, Finding};
-use crate::{config, gates, git, queue};
+use crate::tracker::{self, Tracker};
+use crate::{block, config, gates, git};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,17 +11,17 @@ use std::process::Command;
 pub struct PrOpts {
     pub push: bool,
     pub policy_read: bool,
-    /// Tasks whose branch this run already built, in build order; an unmerged blocker among them is the base, not a refusal.
+    /// tasks this run already built, in order; an unmerged blocker among them is the base, not a refusal
     pub stack_on: Vec<String>,
 }
 
 #[derive(Debug)]
 pub struct PrReport {
     pub branch: String,
-    /// The branch the pull request merges into: the default branch, or a blocker's `task/` branch.
+    /// the default branch, or a blocker's `task/` branch
     pub base: String,
     pub description: PathBuf,
-    /// The pull request's URL, or why none was opened, when `--push` ran.
+    /// the pull request's URL, or why none was opened, when `--push` ran
     pub opened: Option<String>,
     pub policy: Vec<Finding>,
 }
@@ -52,28 +53,26 @@ pub enum PrError {
 struct Task {
     id: String,
     title: String,
-    block: queue::Block,
+    block: block::Block,
 }
 
 pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrError> {
     let cfg = config::load(root).map_err(|e| PrError::Refused(vec![e.to_string()]))?;
     let dir = cfg.layout.harness_dir.clone();
     let read = |name: &str| fs::read_to_string(config::instance_path(root, &dir, name));
-    let tasks_md = read("TASKS.md").unwrap_or_default();
-    let decisions = read("DECISIONS.md").unwrap_or_default();
-    let queued = parse(&tasks_md)?;
-    let archived = parse(&decisions)?;
+    let queued = tickets(root, &dir)?;
+    let archived = parse(&read("DECISIONS.md").unwrap_or_default())?;
 
     let mut refusals = Vec::new();
     let mut tasks = Vec::new();
     for id in ids {
-        // the stub in TASKS.md carries the live status, the archive the full block
+        // a ticket archived before the migration is a stub with the live status; the full block is elsewhere
         let found = queued.iter().find(|b| b.id == *id);
         let Some(full) = archived.iter().find(|b| b.id == *id).or(found) else {
-            refusals.push(format!("{id} is in neither TASKS.md nor DECISIONS.md"));
+            refusals.push(format!("{id} is in neither the queue nor DECISIONS.md"));
             continue;
         };
-        let status = queue::field(found.unwrap_or(full), "status").unwrap_or_default();
+        let status = block::field(found.unwrap_or(full), "status").unwrap_or_default();
         if status != "done" {
             refusals.push(format!("{id} is {status:?}, not done"));
             continue;
@@ -123,7 +122,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     let mut stacked: Option<usize> = None;
     let mut on: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     for task in &tasks {
-        for blocker in queue::blockers(&task.block) {
+        for blocker in block::blockers(&task.block) {
             if ids.contains(&blocker)
                 || commits(root, &range, std::slice::from_ref(&blocker))?.is_empty()
             {
@@ -180,7 +179,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
     let attempt = |rev: &str| try_build(root, &dir, &branch, rev, &cfg, &tasks, &picked);
     let mut on = stacked.map(|at| &stacks[at]);
     let mut built = attempt(on.map_or(base.as_str(), |s| s.rev.as_str()));
-    // a change on an earlier unmerged task's lines builds on that task's branch; none taking it keeps the first conflict
+    // an edit to an unmerged task's lines builds on its branch; else the first conflict stands
     if let (None, Err(PrError::Conflict { files, .. })) = (on, &built) {
         let files = files.clone();
         let touching = |s: &&Stack| {
@@ -248,7 +247,7 @@ pub fn build(root: &Path, ids: &[String], opts: &PrOpts) -> Result<PrReport, PrE
 
 struct Stack {
     id: String,
-    /// The ref the branch is built from: `task/<id>`, or `origin/task/<id>` for one an earlier run pushed.
+    /// the ref the branch is built from: `task/<id>`, or `origin/task/<id>` for one an earlier run pushed
     rev: String,
 }
 
@@ -258,7 +257,7 @@ impl Stack {
     }
 }
 
-// the branches a task may build on, newest first: this run's in reverse build order, then the remote's
+// branches a task may build on, newest first: this run's in reverse, then the remote's
 fn stacks(root: &Path, opts: &PrOpts, stem: &str, landed: &str) -> Result<Vec<Stack>, PrError> {
     let mut out: Vec<Stack> = opts
         .stack_on
@@ -302,8 +301,7 @@ fn try_build(
     tasks: &[Task],
     picked: &[(String, String)],
 ) -> Result<(), PrError> {
-    // under the repository, as a lane's is: a runner that resolves its tools from a parent directory,
-    // as node does node_modules, finds the checkout's own; a system temp directory has none
+    // under the repository, as a lane's is: a runner resolving tools upward finds the checkout's own
     let worktrees = root.join(dir).join("worktrees");
     fs::create_dir_all(&worktrees).map_err(io(worktrees.display()))?;
     let scratch = tempfile::Builder::new()
@@ -333,7 +331,7 @@ fn try_build(
     built
 }
 
-// a branch built without --push is pushed as it stands; its base is the task branch its parent tips, else the default
+// pushed as built; its base is the task branch its parent tips, else the default
 fn push_built(
     root: &Path,
     dir: &str,
@@ -405,7 +403,7 @@ fn push(root: &Path, dir: &str, stem: &str, report: &mut PrReport) -> Result<(),
     Ok(())
 }
 
-// the description is the only record of the contribution-policy decision and the push, so it is committed rather than left for the next tidy-up
+// the description alone records the policy decision and the push, so it is committed now
 fn record(root: &Path, dir: &str, stem: &str) -> Result<(), PrError> {
     let record = format!("pr/{stem}.md");
     // the record alone: an operator's uncommitted queue edits are not this command's to commit
@@ -422,23 +420,23 @@ pub struct Landed {
     pub id: String,
     pub title: String,
     pub commits: Vec<String>,
-    /// `no branch`, `built <branch>`, or `pushed <url>`.
+    /// `no branch`, `built <branch>`, or `pushed <url>`
     pub state: String,
 }
 
-/// Every done task, archived ones first, with the product commits naming it and its pull-request state.
+/// every done or open task, archived first, with the product commits naming it and its PR state
 pub fn landed(root: &Path) -> Result<Vec<Landed>, PrError> {
     let cfg = config::load(root).map_err(|e| PrError::Refused(vec![e.to_string()]))?;
     let dir = cfg.layout.harness_dir.clone();
     let read = |name: &str| fs::read_to_string(config::instance_path(root, &dir, name));
-    let queued = parse(&read("TASKS.md").unwrap_or_default())?;
+    let queued = tickets(root, &dir)?;
     let archived = parse(&read("DECISIONS.md").unwrap_or_default())?;
     let unstubbed = archived
         .iter()
         .filter(|a| !queued.iter().any(|q| q.id == a.id));
-    let done: Vec<&queue::Block> = unstubbed
+    let done: Vec<&block::Block> = unstubbed
         .chain(&queued)
-        .filter(|b| queue::field(b, "status").as_deref() == Some("done"))
+        .filter(|b| matches!(block::field(b, "status").as_deref(), Some("done" | "open")))
         .collect();
     let ids: Vec<String> = done.iter().map(|b| b.id.clone()).collect();
     let picked = commits(root, "HEAD", &ids)?;
@@ -522,8 +520,14 @@ fn policy_section(policy: &[Finding], opts: &PrOpts, refused: bool) -> String {
     out
 }
 
-fn parse(text: &str) -> Result<Vec<queue::Block>, PrError> {
-    queue::parse(text).map_err(|e| PrError::Refused(vec![e.to_string()]))
+fn tickets(root: &Path, dir: &str) -> Result<Vec<block::Block>, PrError> {
+    Tracker::open(root, dir)
+        .blocks()
+        .map_err(|e| PrError::Refused(vec![e.to_string()]))
+}
+
+fn parse(text: &str) -> Result<Vec<block::Block>, PrError> {
+    block::parse(text).map_err(|e| PrError::Refused(vec![e.to_string()]))
 }
 
 fn io(path: impl std::fmt::Display) -> impl FnOnce(std::io::Error) -> PrError {
@@ -532,7 +536,7 @@ fn io(path: impl std::fmt::Display) -> impl FnOnce(std::io::Error) -> PrError {
 }
 
 // origin/HEAD is only set by a clone, so ask the remote
-fn default_branch(root: &Path) -> Result<String, PrError> {
+pub fn default_branch(root: &Path) -> Result<String, PrError> {
     let out = git::git(root, &["ls-remote", "--symref", "origin", "HEAD"])?;
     out.lines()
         .find_map(|l| l.strip_prefix("ref: refs/heads/"))
@@ -551,8 +555,10 @@ fn commits(root: &Path, range: &str, ids: &[String]) -> Result<Vec<(String, Stri
         .filter_map(|l| l.split_once(' '))
         // contains first: the matcher compiles a regex per call, and a whole history meets every id
         .filter(|(_, subject)| {
-            ids.iter()
-                .any(|id| subject.contains(id.as_str()) && gates::names_task(subject, id))
+            git::recorded_sha(subject).is_none()
+                && ids
+                    .iter()
+                    .any(|id| subject.contains(id.as_str()) && gates::names_task(subject, id))
         })
         .map(|(sha, subject)| (sha.to_string(), subject.to_string()))
         .collect())
@@ -598,7 +604,7 @@ fn apply_and_commit(
         }
     }
 
-    let report = gates::check_delta(wt, cfg, false);
+    let report = gates::check_delta(&crate::sandbox::Sandbox::start(wt, cfg), wt, cfg, false);
     if report.exit != 0 {
         return Err(PrError::Check(report.output));
     }
@@ -619,9 +625,7 @@ fn apply_and_commit(
     Ok(())
 }
 
-// the task's last commit subject with its id dropped: `feat(scope): T-### x` -> `feat(scope): x`.
-// A block title is the finding in the finding's own words and runs long; a pull request wants the
-// one line the commit already wrote. The block's title is the body's heading, not the subject.
+// the last commit subject minus its id: a PR wants the commit's one line, not the long block title
 const SUBJECT_MAX: usize = 72;
 
 fn subject(tasks: &[Task], picked: &[(String, String)]) -> String {
@@ -656,24 +660,23 @@ fn describe(
         git::git(&state, &["log", "--reverse", "--format=%h %s"]).unwrap_or_default()
     };
     for task in tasks {
-        let body = queue::block_text(&task.block);
+        let body = block::block_text(&task.block);
         let criteria: Vec<&str> = body
             .lines()
             .skip_while(|l| !l.starts_with("criteria:"))
             .skip(1)
             .take_while(|l| l.starts_with(' '))
             .collect();
-        let notes: Vec<&str> = body
-            .lines()
-            .skip_while(|l| !l.starts_with("notes:"))
-            .collect();
-        let verdict = notes
-            .iter()
-            .rposition(|l| {
-                let l = l.trim_start().trim_start_matches("notes:").trim_start();
-                l.to_lowercase().starts_with("verifier")
+        let verdict = tracker::verdict(&task.block)
+            .map(|r| {
+                let v = r.verdict;
+                let pairs: String = r
+                    .runs
+                    .iter()
+                    .map(|(cmd, exit)| format!("\nran: {cmd}\nexit: {exit}"))
+                    .collect();
+                format!("```\nverdict: {v}{pairs}\n```")
             })
-            .map(|at| notes[at..].join("\n"))
             .unwrap_or_default();
         out.push_str(&format!(
             "\n## {} {}\n\n{}\n",
@@ -732,5 +735,128 @@ fn open(root: &Path, report: &PrReport) -> Result<String, PrError> {
         Ok(out) => Err(PrError::Gh(
             String::from_utf8_lossy(&out.stderr).trim().to_string(),
         )),
+    }
+}
+
+/// a pull request as the merge step reads it
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Head {
+    pub state: String,
+    pub base_ref_name: String,
+    pub head_ref_name: String,
+    pub head_ref_oid: String,
+    pub status_check_rollup: Vec<serde_json::Value>,
+}
+
+/// `gh args` with `token` as `GH_TOKEN`: its stdout, or why it failed
+pub(crate) fn gh(
+    root: Option<&Path>,
+    token: Option<&str>,
+    args: &[&str],
+) -> Result<String, String> {
+    let mut cmd = Command::new("gh");
+    if let Some(root) = root {
+        cmd.current_dir(root);
+    }
+    if let Some(t) = token {
+        cmd.env("GH_TOKEN", t);
+    }
+    let out = cmd
+        .args(args)
+        .output()
+        .map_err(|e| format!("gh {}: {e}", args.join(" ")))?;
+    match out.status.success() {
+        true => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+        false => Err(String::from_utf8_lossy(&out.stderr).trim().to_string()),
+    }
+}
+
+pub fn view(root: &Path, url: &str) -> Result<Head, String> {
+    let fields = "state,baseRefName,headRefName,headRefOid,statusCheckRollup";
+    let out = gh(Some(root), None, &["pr", "view", url, "--json", fields])?;
+    serde_json::from_str(&out).map_err(|e| format!("gh pr view {url}: {e}"))
+}
+
+/// why a pull request is not merged yet, or None when it is green
+pub fn blocked(
+    head: &Head,
+    id: &str,
+    default: &str,
+    tip: &str,
+    unresolved: usize,
+) -> Option<String> {
+    if head.head_ref_name != format!("task/{id}") {
+        return Some(format!("{} is not task/{id}", head.head_ref_name));
+    }
+    if head.base_ref_name != default {
+        return Some(format!("stacked on {}", head.base_ref_name));
+    }
+    if head.head_ref_oid != tip {
+        return Some("head moved".to_string());
+    }
+    if head.status_check_rollup.is_empty() {
+        return Some("no checks reported".to_string());
+    }
+    // a check run carries name/status/conclusion, a commit status context/state
+    for c in &head.status_check_rollup {
+        let word = |k: &str| c[k].as_str().unwrap_or_default().to_uppercase();
+        let name = c["name"].as_str().or(c["context"].as_str()).unwrap_or("?");
+        let (status, end) = match c.get("context") {
+            Some(_) => ("COMPLETED".to_string(), word("state")),
+            None => (word("status"), word("conclusion")),
+        };
+        if status != "COMPLETED" {
+            return Some(format!("checks: {name} {status}"));
+        }
+        if !matches!(end.as_str(), "SUCCESS" | "NEUTRAL" | "SKIPPED") {
+            return Some(format!("checks: {name} {end}"));
+        }
+    }
+    (unresolved > 0).then(|| format!("{unresolved} unresolved thread(s)"))
+}
+
+pub fn merge(root: &Path, url: &str, sha: &str) -> Result<(), String> {
+    let args = ["pr", "merge", url, "--merge", "--match-head-commit", sha];
+    gh(
+        Some(root),
+        None,
+        &[&args[..], &["--delete-branch"]].concat(),
+    )
+    .map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blocked_reasons() {
+        let green = Head {
+            state: "OPEN".to_string(),
+            base_ref_name: "main".to_string(),
+            head_ref_name: "task/T-001".to_string(),
+            head_ref_oid: "abc".to_string(),
+            status_check_rollup: vec![serde_json::json!({"context": "ci", "state": "SUCCESS"})],
+        };
+        assert_eq!(blocked(&green, "T-001", "main", "abc", 0), None);
+        let why = |h: &Head| blocked(h, "T-001", "main", "abc", 0).unwrap_or_default();
+        let pending = Head {
+            status_check_rollup: vec![serde_json::json!({"context": "ci", "state": "PENDING"})],
+            ..green.clone()
+        };
+        assert_eq!(why(&pending), "checks: ci PENDING");
+        let stacked = Head {
+            base_ref_name: "task/T-000".to_string(),
+            ..green.clone()
+        };
+        assert_eq!(why(&stacked), "stacked on task/T-000");
+        for name in ["feature/x", "task/T-002"] {
+            let other = Head {
+                head_ref_name: name.to_string(),
+                ..green.clone()
+            };
+            assert_eq!(why(&other), format!("{name} is not task/T-001"));
+        }
     }
 }

@@ -3,10 +3,23 @@
 This harness declares skills it does not write. Each is fetched from its own repository at the
 revision `harness.lock` pins, and none is redistributed here.
 
+## openai/codex
+
+`crates/harness/src/sandbox/seatbelt_base.sbpl` and `seatbelt_network.sbpl` are Codex's
+`seatbelt_base_policy.sbpl` and `seatbelt_network_policy.sbpl` from https://github.com/openai/codex
+at `1c414e0d6525ea385aeabad32fac252467a6b836`, redistributed unmodified below a two-line provenance
+header under the Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0). They
+derive from Chromium's sandbox policies.
+
+```
+OpenAI Codex
+Copyright 2025 OpenAI
+```
+
 ## obra/superpowers
 
-`tdd`, `debugging`, `review-received`, `review-requested`, `verify-before-done` and `brainstorming`
-come from https://github.com/obra/superpowers, pinned at `v6.3.0`.
+`receiving-code-review` and `verification-before-completion` come from
+https://github.com/obra/superpowers, pinned at `v6.3.0`.
 
 ```
 MIT License
@@ -34,12 +47,71 @@ SOFTWARE.
 
 ## DietrichGebert/ponytail
 
-`ponytail` comes from https://github.com/DietrichGebert/ponytail, pinned at `v4.8.4`.
+`ponytail` and `ponytail-review` come from https://github.com/DietrichGebert/ponytail, pinned at
+`v5.3.3`.
 
 ```
 MIT License
 
 Copyright (c) 2026 DietrichGebert
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## mattpocock/skills
+
+`to-tickets`, `triage`, `tdd`, `diagnosing-bugs`, `codebase-design`, `writing-for-agents`,
+`domain-modeling` and `code-review` come from https://github.com/mattpocock/skills, pinned at
+`v1.3.2`.
+
+```
+MIT License
+
+Copyright (c) 2026 Matt Pocock
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## JuliusBrussee/caveman
+
+`caveman-commit` comes from https://github.com/JuliusBrussee/caveman, pinned at `v2.7.0`.
+
+```
+MIT License
+
+Copyright (c) 2026 Julius Brussee
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

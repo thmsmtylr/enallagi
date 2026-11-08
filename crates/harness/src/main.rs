@@ -1,13 +1,9 @@
-//! The binary. Refuses a retired environment variable and the retired `run <n>` form before clap sees either, then exits with the code `cli::run` returns.
+//! refuses the retired `run <n>` form before clap sees it
 
 use clap::Parser;
 use enallagi::cli::Cli;
 
 fn main() -> anyhow::Result<()> {
-    if let Some(message) = enallagi::config::legacy_env() {
-        eprintln!("{message}");
-        std::process::exit(2);
-    }
     // clap has no positional here any more; catch the old `run <n>` form to name its replacement
     let raw: Vec<String> = std::env::args().collect();
     if raw.get(1).map(String::as_str) == Some("run") {

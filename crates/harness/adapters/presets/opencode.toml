@@ -1,4 +1,5 @@
 name = "opencode"
+hosts = ["models.dev", "opencode.ai"]
 argv = ["opencode", "run", "{prompt}", "--format", "json", "--auto"]
 turn_cap = "config"
 model_flag = "--model"

@@ -7,20 +7,23 @@
 
 - Verify, and this is what done means: `__CHECK__`
 - Uncached, for any number you quote to a human: `__CHECK_FORCE__`
-- Run either one alone in its shell call, exactly as written: nothing piped, redirected or chained. A sandboxed lane runs only that exact form outside its sandbox, and a suite that needs a terminal fails inside it. The tool's result carries the exit status: never append `echo $?` to read it.
 - One loop iteration: `enallagi run --iterations 1`; `touch STOP` halts it
 - What the tree says about itself: `enallagi probe`
 
 ## How work moves
 
-`__SPEC__` is what we build. **__ENALLAGI_DIR__/TASKS.md** is the queue, **__ENALLAGI_DIR__/PROGRESS.md** the loop's record one
+`__SPEC__` is what we build. **__ENALLAGI_DIR__/specs/** is the queue, one file per ticket, **__ENALLAGI_DIR__/PROGRESS.md** the loop's record one
 iteration at a time, **__ENALLAGI_DIR__/LEARNINGS.md** the mistakes already paid for, **__ENALLAGI_DIR__/DECISIONS.md** the archive.
 Read __ENALLAGI_DIR__/LEARNINGS.md at the start of every task.
 
-A task is `proposed` → `ready` → `review` → `done`. The scout proposes only from a `FINDING` line,
-the adjudicator promotes or kills, the implementer sets `review` and never `done`, the verifier
+A ticket is `needs-triage` → `ready-for-agent` → `review` → `done`. The scout proposes only from a `FINDING` line,
+the adjudicator promotes or sets `wontfix`, the implementer sets `review` and never `done`, the verifier
 promotes and never fixes, and the launcher re-runs the gate behind the verdict. Touch only the files
 on the task's `scope:` line; an out-of-scope need is a note and a stop.
+
+A lane has no user to answer. Where a skill says to ask or confirm with the user, the ticket's
+criteria are the agreed seams and the answer; anything they leave open is a note under `## Comments`
+and a stop.
 
 ## The rails
 
@@ -29,8 +32,8 @@ The full table is `__ENALLAGI_DIR__/RAILS.md`. The five that decide most reviews
 
 - `green` — done means `__CHECK__` passes, verified on **delta** against `__ENALLAGI_DIR__/.check-baseline`, which
   only ever shrinks. Never weaken a test or a lint rule to get there.
-- `citable` — every claim carries its source: a URL with the date, a `file:line`, or the command and
-  its output.
+- `citable` — every claim in a note, verdict or document carries its source: a URL with the date,
+  a `file:line`, or the command and its output. A code comment cites nothing.
 - `measure-first` — no number lands that was not run and stamped. Never tune a constant to pass.
 - `one-scope` — only the files the task's `scope:` names.
 - `blocked-is-allowed` — stopping with a written reason is a success. Marking done without the

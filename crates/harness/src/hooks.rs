@@ -1,28 +1,29 @@
-//! The agent lifecycle hooks (PreToolUse, Stop, UserPromptSubmit), all fail-open.
+//! the agent lifecycle hooks (PreToolUse, Stop, UserPromptSubmit), all fail-open
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::config;
 use crate::gates::{self, CheckReport};
-use crate::queue;
 use crate::skills;
 
-// this can be bypassed via Bash sed -i or a heredoc: the real authority is the verifier reading the diff
-pub fn immutable(root: &Path, input: &str) -> (i32, String) {
+// bypassable through Bash; the verifier reading the diff is the real check
+pub fn immutable(root: &Path, input: &str, task: Option<&str>) -> (i32, String) {
     let Some(target) = tool_input_path(root, input) else {
         return (0, String::new());
     };
 
     let cfg = config::load(root).ok();
     let dir = config::harness_dir(root);
-    if let Some(hit) = hashed_hit(root, &dir, &target) {
+    if let Some(hit) =
+        hashed_hit(root, &dir, &target).filter(|_| !own_scope(root, &dir, &target, task))
+    {
         return (
             2,
             format!(
-                "immutable: {hit} is covered by test-hashes.json (SPEC.md §0.2, tests-immutable \
+                "immutable: {hit} is covered by test-hashes.json (the spec §0.2, tests-immutable \
                  and harness-immutable). This edit is refused. If the change is genuinely \
-                 needed, stop the task and write it into the task notes."
+                 needed, stop the task and write it under the ticket's ## Comments."
             ),
         );
     }
@@ -36,6 +37,22 @@ pub fn immutable(root: &Path, input: &str) -> (i32, String) {
         );
     }
     (0, String::new())
+}
+
+// a hashed file on the ticket's own scope: line is the lane's to edit and re-cut
+fn own_scope(root: &Path, dir: &str, target: &Path, task: Option<&str>) -> bool {
+    if normalize(root, &config::instance_rel(dir, "test-hashes.json")) == *target {
+        return false;
+    }
+    let Some(scope) = task
+        .filter(|id| !id.is_empty())
+        .and_then(|id| crate::tracker::Tracker::open(root, dir).get(id).ok()?)
+        .and_then(|b| crate::block::field(&b, "scope"))
+    else {
+        return false;
+    };
+    let rel = target.strip_prefix(realpath_like(root)).unwrap_or(target);
+    gates::in_scope(&rel.to_string_lossy(), &gates::scope_globs(&scope))
 }
 
 fn tool_input_path(root: &Path, input: &str) -> Option<PathBuf> {
@@ -56,8 +73,7 @@ fn normalize(root: &Path, rel: &str) -> PathBuf {
     realpath_like(&joined)
 }
 
-// resolves symlinks on the longest existing ancestor only: a nonexistent tail (a file about to be
-// created) has nothing on disk to canonicalize, so it is appended to the resolved ancestor as-is
+// symlinks resolve on the longest existing ancestor; a not-yet-created tail is appended as-is
 fn realpath_like(p: &Path) -> PathBuf {
     let normalized = lexical_normalize(p);
     let mut existing = normalized.clone();
@@ -91,7 +107,7 @@ fn lexical_normalize(p: &Path) -> PathBuf {
 }
 
 fn hashed_hit(root: &Path, harness_dir: &str, target: &Path) -> Option<String> {
-    let hashes = config::instance_rel(root, harness_dir, "test-hashes.json");
+    let hashes = config::instance_rel(harness_dir, "test-hashes.json");
     let hashes_path = root.join(&hashes);
     if normalize(root, &hashes) == *target {
         if hashes_path.is_file() {
@@ -172,7 +188,7 @@ fn glob_package_jsons(root: &Path, pattern: &str) -> Vec<PathBuf> {
 
 fn locked_hit(root: &Path, cfg: &config::Config, target: &Path) -> Option<String> {
     let dir = &cfg.layout.harness_dir;
-    let lock = config::instance_rel(root, dir, "harness.lock");
+    let lock = config::instance_rel(dir, "harness.lock");
     let lock_path = root.join(&lock);
     if normalize(root, &lock) == *target {
         if lock_path.is_file() {
@@ -212,16 +228,26 @@ pub fn one_writer(root: &Path, _input: &str) -> (i32, String) {
         return (0, String::new());
     }
 
-    let text = queue::Queue {
-        path: config::instance_path(root, &cfg.layout.harness_dir, "TASKS.md"),
-    }
-    .read()
-    .unwrap_or_default();
-    let task = queue::parse(&text).ok().and_then(|blocks| {
-        queue::ids_at(&blocks, "review")
-            .into_iter()
-            .next()
-            .or_else(|| queue::ready_unattended(&blocks))
+    let here = root.canonicalize().ok();
+    // under one writer nothing claims, so the hook neither writes nor reads claims
+    let claims = match cfg.parallel.writers.get() > 1 {
+        true => crate::worktree::peek(&root.join(&cfg.layout.harness_dir)),
+        false => Vec::new(),
+    };
+    let claimed = claims
+        .into_iter()
+        .find(|c| c.worktree.canonicalize().ok() == here)
+        .map(|c| c.id);
+    let task = claimed.or_else(|| {
+        crate::tracker::Tracker::open(root, &cfg.layout.harness_dir)
+            .blocks()
+            .ok()
+            .and_then(|blocks| {
+                crate::tracker::ids_in(&blocks, &["review"])
+                    .into_iter()
+                    .next()
+                    .or_else(|| crate::tracker::takeable(&blocks))
+            })
     });
     let named = task.map(|t| format!(" It is on {t}.")).unwrap_or_default();
     (
@@ -249,7 +275,8 @@ pub fn verify_done(root: &Path, input: &str) -> (i32, String) {
     if is_executable(&check_covered) {
         return run_check_covered(&check_covered, input);
     }
-    render_check_report(&gates::check_delta(root, &cfg, false))
+    let sandbox = crate::sandbox::Sandbox::start(root, &cfg);
+    render_check_report(&gates::check_delta(&sandbox, root, &cfg, false))
 }
 
 fn stop_hook_active(input: &str) -> bool {
@@ -385,39 +412,54 @@ mod tests {
     }
 
     #[test]
-    fn immutable_refuses_an_edit_to_a_hashed_file() {
+    fn immutable_refuses_hashed() {
         let r = Repo::new();
         r.write("src/a.ts", "export const a = 1\n");
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
-        let (code, msg) = immutable(&r.root, &input("src/a.ts"));
+        let (code, msg) = immutable(&r.root, &input("src/a.ts"), None);
         assert_eq!(code, 2);
         assert!(msg.contains("covered by test-hashes.json"), "{msg}");
     }
 
     #[test]
-    fn immutable_refuses_an_edit_config_refused() {
+    fn immutable_scope_exempt() {
         let r = Repo::new();
-        r.write(".enallagi/TASKS.md", "# TASKS\n");
+        let hashes = r#"{".enallagi/enallagi.toml":"deadbeef"}"#;
+        r.write(".enallagi/test-hashes.json", hashes);
+        r.queue(
+            ".enallagi",
+            "## [T-001] x\nstatus: ready-for-agent\nscope: .enallagi/enallagi.toml, .enallagi/test-hashes.json\n",
+        );
+        let edit = |file: &str, task: Option<&str>| immutable(&r.root, &input(file), task).0;
+        assert_eq!(edit(".enallagi/enallagi.toml", Some("T-001")), 0);
+        assert_eq!(edit(".enallagi/test-hashes.json", Some("T-001")), 2);
+        assert_eq!(edit(".enallagi/enallagi.toml", None), 2);
+        assert_eq!(edit(".enallagi/test-hashes.json", None), 2);
+    }
+
+    #[test]
+    fn immutable_bad_config() {
+        let r = Repo::new();
         r.write("src/a.ts", "export const a = 1\n");
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         r.write(".enallagi/enallagi.toml", "[check]\ncomand = \"x\"\n");
         assert!(config::load(&r.root).is_err());
-        let (code, msg) = immutable(&r.root, &input("src/a.ts"));
+        let (code, msg) = immutable(&r.root, &input("src/a.ts"), None);
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("covered by test-hashes.json"), "{msg}");
     }
 
     #[test]
-    fn immutable_refuses_the_reference_itself() {
+    fn immutable_refuses_reference() {
         let r = Repo::new();
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
-        let (code, msg) = immutable(&r.root, &input(".enallagi/test-hashes.json"));
+        let (code, msg) = immutable(&r.root, &input(".enallagi/test-hashes.json"), None);
         assert_eq!(code, 2);
         assert!(msg.contains("the reference itself"), "{msg}");
     }
 
     #[test]
-    fn immutable_refuses_a_locked_skill_file() {
+    fn immutable_refuses_locked_skill() {
         let r = Repo::new();
         r.write(
             ".enallagi/harness.lock",
@@ -426,35 +468,36 @@ mod tests {
         let (code, msg) = immutable(
             &r.root,
             &input(".enallagi/adapters/claude/skills/tdd/SKILL.md"),
+            None,
         );
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("harness.lock"), "{msg}");
     }
 
     #[test]
-    fn immutable_allows_an_uncovered_file() {
+    fn immutable_allows_uncovered() {
         let r = Repo::new();
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
-        let (code, msg) = immutable(&r.root, &input("src/b.ts"));
+        let (code, msg) = immutable(&r.root, &input("src/b.ts"), None);
         assert_eq!(code, 0, "{msg}");
     }
 
     #[test]
     #[cfg(unix)]
-    fn immutable_refuses_a_symlinked_alias() {
+    fn immutable_refuses_alias() {
         let r = Repo::new();
         r.write("src/a.ts", "export const a = 1\n");
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
         std::os::unix::fs::symlink(r.root.join("src/a.ts"), r.root.join("src/b.ts"))
             .expect("symlink");
-        let (code, msg) = immutable(&r.root, &input("src/b.ts"));
+        let (code, msg) = immutable(&r.root, &input("src/b.ts"), None);
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("covered by test-hashes.json"), "{msg}");
     }
 
     #[test]
     #[cfg(unix)]
-    fn immutable_refuses_a_symlinked_skill_dir() {
+    fn immutable_refuses_skill_symlink() {
         let r = Repo::new();
         r.write(".enallagi/adapters/claude/skills/tdd/SKILL.md", "# tdd\n");
         r.write(
@@ -466,21 +509,21 @@ mod tests {
             r.root.join("alias"),
         )
         .expect("symlink");
-        let (code, msg) = immutable(&r.root, &input("alias/SKILL.md"));
+        let (code, msg) = immutable(&r.root, &input("alias/SKILL.md"), None);
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("harness.lock"), "{msg}");
     }
 
     #[test]
-    fn immutable_normalizes_a_missing_target() {
+    fn immutable_normalizes_missing() {
         let r = Repo::new();
         r.write(".enallagi/test-hashes.json", r#"{"src/a.ts":"deadbeef"}"#);
-        let (code, msg) = immutable(&r.root, &input("src/does-not-exist-yet.ts"));
+        let (code, msg) = immutable(&r.root, &input("src/does-not-exist-yet.ts"), None);
         assert_eq!(code, 0, "{msg}");
     }
 
     #[test]
-    fn immutable_refuses_a_workspace_manifest() {
+    fn immutable_refuses_manifest() {
         let r = Repo::new();
         r.write(
             "package.json",
@@ -491,23 +534,23 @@ mod tests {
             ".enallagi/test-hashes.json",
             r#"{"package.json#scripts":"deadbeef"}"#,
         );
-        let (code, msg) = immutable(&r.root, &input("packages/foo/package.json"));
+        let (code, msg) = immutable(&r.root, &input("packages/foo/package.json"), None);
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("package.json#scripts"), "{msg}");
 
-        let (code, _) = immutable(&r.root, &input("package.json"));
+        let (code, _) = immutable(&r.root, &input("package.json"), None);
         assert_eq!(code, 2);
 
         r.write("packages/bar/package.json", r#"{"name":"bar"}"#);
-        let (code, _) = immutable(&r.root, &input("packages/bar/other.ts"));
+        let (code, _) = immutable(&r.root, &input("packages/bar/other.ts"), None);
         assert_eq!(code, 0);
     }
 
     #[test]
-    fn a_write_from_another_session_is_refused() {
+    fn other_session_write_refused() {
         let r = Repo::new();
-        r.write(
-            "TASKS.md",
+        r.queue(
+            ".enallagi",
             "## [T-001] x\nstatus: review\nblockedBy: none\n",
         );
         r.commit_all("seed");
@@ -518,22 +561,53 @@ mod tests {
         r.write(".enallagi/loop.pid", &child.id().to_string());
         let _reaper = Reaper(child);
 
-        let (code, msg) = one_writer(&r.root, &input("TASKS.md"));
+        let (code, msg) = one_writer(&r.root, &input(".enallagi/specs/x/issues/T-001-x.md"));
         assert_eq!(code, 2, "{msg}");
         assert!(msg.contains("one-writer:"), "{msg}");
         assert!(msg.contains("T-001"), "{msg}");
+        assert!(!r.root.join(".enallagi/run/claims.json").exists());
     }
 
     #[test]
-    fn a_write_from_under_the_loop_itself_is_allowed() {
+    fn claimed_id_named() {
+        let r = Repo::new();
+        r.queue(
+            ".enallagi",
+            "## [T-001] x\nstatus: review\nblockedBy: none\n\n## [T-002] y\nscope: y.rs\nstatus: ready-for-agent\n",
+        );
+        r.write(".enallagi/enallagi.toml", "[parallel]\nwriters = 2\n");
+        r.commit_all("seed");
+        let cfg = config::load(&r.root).expect("config");
+        // a second lane's claim is not this checkout's
+        let other = tempfile::TempDir::new().expect("tempdir");
+        crate::worktree::claim(&r.root, &cfg, other.path(), &[]).expect("claim");
+        r.queue(
+            ".enallagi",
+            "## [T-001] x\nstatus: review\nblockedBy: none\n\n## [T-002] y\nscope: y.rs\nstatus: ready-for-agent\n\n## [T-003] z\nscope: z.rs\nstatus: ready-for-agent\n",
+        );
+        crate::worktree::claim(&r.root, &cfg, &r.root, &[]).expect("claim");
+        let child = StdCommand::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        r.write(".enallagi/loop.pid", &child.id().to_string());
+        let _reaper = Reaper(child);
+
+        let (code, msg) = one_writer(&r.root, &input(".enallagi/specs/x/issues/T-001-x.md"));
+        assert_eq!(code, 2, "{msg}");
+        assert!(msg.contains("It is on T-003."), "{msg}");
+    }
+
+    #[test]
+    fn own_loop_write_allowed() {
         let r = Repo::new();
         r.write(".enallagi/loop.pid", &std::process::id().to_string());
-        let (code, msg) = one_writer(&r.root, &input("TASKS.md"));
+        let (code, msg) = one_writer(&r.root, &input(".enallagi/specs/x/issues/T-001-x.md"));
         assert_eq!(code, 0, "{msg}");
     }
 
     #[test]
-    fn a_stale_pid_file_is_not_a_live_loop() {
+    fn stale_pid_not_live() {
         let r = Repo::new();
         let child = StdCommand::new("sleep")
             .arg("30")
@@ -543,7 +617,7 @@ mod tests {
         drop(Reaper(child)); // kills and waits immediately: the pid file must name a dead loop
         r.write(".enallagi/loop.pid", &pid.to_string());
 
-        let (code, msg) = one_writer(&r.root, &input("TASKS.md"));
+        let (code, msg) = one_writer(&r.root, &input(".enallagi/specs/x/issues/T-001-x.md"));
         assert_eq!(code, 0, "{msg}");
     }
 
@@ -556,11 +630,11 @@ mod tests {
     }
 
     #[test]
-    fn verify_done_runs_check_delta_otherwise() {
+    fn verify_done_check_delta() {
         let r = Repo::new();
         let cmd = r.stub_check("echo '(fail) alpha'\nexit 1\n");
         r.write(
-            "enallagi.toml",
+            ".enallagi/enallagi.toml",
             &format!("[check]\ncommand = \"{cmd}\"\nfail_name = '\\(fail\\) (.+)$'\n"),
         );
         let (code, msg) = verify_done(&r.root, "{}");
@@ -570,7 +644,7 @@ mod tests {
 
         let cmd = r.stub_check("exit 0\n");
         r.write(
-            "enallagi.toml",
+            ".enallagi/enallagi.toml",
             &format!("[check]\ncommand = \"{cmd}\"\nfail_name = '\\(fail\\) (.+)$'\n"),
         );
         let (code, msg) = verify_done(&r.root, "{}");
@@ -579,10 +653,10 @@ mod tests {
     }
 
     #[test]
-    fn the_skills_contract_lists_every_declared_skill() {
+    fn skills_contract_lists_skills() {
         let r = Repo::new();
         r.write(
-            "enallagi.toml",
+            ".enallagi/enallagi.toml",
             "[[skill]]\nid = \"tdd\"\nsource = \"path:skills/tdd\"\npath = \"skills/tdd\"\ngate = \"verdict\"\nwhy = \"forces a failing test first\"\n",
         );
         let (code, _) = skills_contract(&r.root);

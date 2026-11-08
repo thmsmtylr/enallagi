@@ -1,4 +1,5 @@
 name = "goose"
+hosts = ["router.tetrate.ai", "openrouter.ai"]
 argv = ["goose", "run", "-t", "{prompt}", "--output-format", "stream-json", "--max-turns", "{turns}"]
 turn_cap = "flag"
 model_flag = "--model"

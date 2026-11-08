@@ -1,4 +1,4 @@
-//! The install assertions, one test per assertion and named after it.
+//! install assertions, one test per assertion and named after it
 
 use enallagi::fixture::Repo;
 use enallagi::init::{self, InitOpts, InitReport};
@@ -73,6 +73,22 @@ fn walk(root: &Path) -> Vec<PathBuf> {
     }
     out.sort();
     out
+}
+
+#[test]
+fn fresh_install_skills_gated() {
+    let repo = Repo::new();
+    install(&repo);
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .args(["probe", "skill-ungated"])
+        .current_dir(&repo.root)
+        .output()
+        .expect("run enallagi probe");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.lines().any(|l| l == "PROBE skill-ungated 0"),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -154,7 +170,7 @@ fn init_leaves_a_clean_fixture_clean() {
 }
 
 #[test]
-fn init_excludes_the_dir_in_one_block() {
+fn init_excludes_dir() {
     let repo = Repo::new();
     let report = with(&repo, &adapter("gemini"));
     with(&repo, &adapter("gemini"));
@@ -185,30 +201,6 @@ fn init_excludes_the_dir_in_one_block() {
         "{:?}",
         report.track
     );
-}
-
-#[test]
-fn a_root_layout_seeds_the_context_file() {
-    let repo = Repo::new();
-    repo.write("TASKS.md", "# TASKS\n");
-    let report = install(&repo);
-    let cfg = enallagi::config::load(&repo.root).expect("config");
-    assert_eq!(cfg.layout.context_file, "AGENTS.md");
-    assert!(
-        report.wrote.contains(&"AGENTS.md".to_string()),
-        "{:?}",
-        report.wrote
-    );
-    assert!(!repo.root.join(".enallagi/AGENTS.md").exists());
-}
-
-#[test]
-fn init_leaves_a_root_queue_in_the_product() {
-    let repo = Repo::new();
-    repo.write("TASKS.md", "# TASKS\n");
-    repo.commit_all("queue");
-    install(&repo);
-    assert!(!repo.root.join(".enallagi/.git").exists());
 }
 
 #[test]
@@ -289,7 +281,20 @@ fn the_context_file_stays_short() {
 }
 
 #[test]
-fn the_project_skill_is_valid_agentskills_frontmatter() {
+fn context_says_no_user() {
+    let repo = Repo::new();
+    install(&repo);
+    let text = read(&repo, ".enallagi/AGENTS.md");
+    let para = text
+        .split("\n\n")
+        .find(|p| p.starts_with("A lane has no user to answer"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(para.contains("criteria"), "{para}");
+    assert!(para.contains("stop"), "{para}");
+}
+
+#[test]
+fn skill_frontmatter_valid() {
     let repo = Repo::new();
     install(&repo);
     let skill = read(
@@ -303,12 +308,12 @@ fn the_project_skill_is_valid_agentskills_frontmatter() {
     );
     assert!(repo
         .root
-        .join(".enallagi/adapters/claude/skills/running-the-loop/references/task-block.md")
+        .join(".enallagi/adapters/claude/skills/running-the-loop/references/ticket.md")
         .is_file());
 }
 
 #[test]
-fn init_writes_the_harness_gitignore() {
+fn writes_gitignore() {
     let repo = Repo::new();
     install(&repo);
     let ignore = read(&repo, ".enallagi/.gitignore");
@@ -323,22 +328,58 @@ fn init_writes_the_harness_gitignore() {
             "loop.pid",
             "run/",
             "__pycache__/",
+            "holdouts/",
+            "STOP",
         ]
     );
 }
 
 #[test]
-fn documents_with_content_are_kept() {
+fn init_writes_state_gitattributes() {
     let repo = Repo::new();
-    repo.write("TASKS.md", "# my own queue\n");
-    repo.write("SPEC.md", "# my own spec\n");
+    install(&repo);
+    assert_eq!(
+        read(&repo, ".enallagi/.gitattributes"),
+        "PROGRESS.md merge=union\n"
+    );
+}
+
+#[test]
+fn init_ignores_holdouts() {
+    let repo = Repo::new();
+    install(&repo);
+    repo.write(".enallagi/holdouts/s/t", "scenario\n");
+    let status = enallagi::git::git(
+        &repo.root.join(".enallagi"),
+        &["status", "--porcelain", "--untracked-files=all"],
+    )
+    .expect("status");
+    assert!(!status.contains("holdouts"), "{status}");
+}
+
+#[test]
+fn content_is_kept() {
+    let repo = Repo::new();
+    repo.write(".enallagi/PROGRESS.md", "# my own progress\n");
+    repo.write(&repo.spec(), "# my own spec\n");
     let report = install(&repo);
-    assert_eq!(read(&repo, "TASKS.md"), "# my own queue\n");
-    assert_eq!(read(&repo, "SPEC.md"), "# my own spec\n");
-    assert!(report.kept.contains(&"TASKS.md".to_string()), "{report:?}");
-    assert!(report.kept.contains(&"SPEC.md".to_string()), "{report:?}");
-    // a kept document is still tracked, or the first verdict fails on it
-    assert!(report.track.contains(&"TASKS.md".to_string()));
+    assert_eq!(read(&repo, ".enallagi/PROGRESS.md"), "# my own progress\n");
+    assert_eq!(read(&repo, &repo.spec()), "# my own spec\n");
+    assert!(
+        report.kept.contains(&".enallagi/PROGRESS.md".to_string()),
+        "{report:?}"
+    );
+    assert!(report.kept.contains(&repo.spec()), "{report:?}");
+}
+
+#[test]
+fn init_seeds_spec() {
+    let repo = Repo::new();
+    install(&repo);
+    assert!(read(&repo, &repo.spec()).contains("\n### Exit criteria"));
+    assert!(!repo.root.join(".enallagi/TASKS.md").exists());
+    let t = enallagi::tracker::Tracker::open(&repo.root, ".enallagi");
+    assert!(t.blocks().expect("the queue").is_empty());
 }
 
 #[test]
@@ -424,14 +465,14 @@ fn a_reinstall_rehashes_an_edited_config() {
 }
 
 #[test]
-fn a_fresh_install_leaves_the_hash_rails_true() {
+fn fresh_hash_rails_true() {
     let repo = Repo::new();
     install(&repo);
     assert_eq!(findings(&repo, "rail-unenforced"), Vec::new());
     assert_eq!(findings(&repo, "hash-uncovered"), Vec::new());
     // a name the row carries in prose is one hash-uncovered cannot see and init does not hash
-    for doc in [".enallagi/RAILS.md", ".enallagi/SPEC.md"] {
-        let text = read(&repo, doc);
+    for doc in [".enallagi/RAILS.md".to_string(), repo.spec()] {
+        let text = read(&repo, &doc);
         let row = text
             .lines()
             .find(|l| l.starts_with("| `harness-immutable`"))
@@ -495,17 +536,17 @@ fn init_names_the_keys_left_unset() {
 }
 
 #[test]
-fn the_spec_resyncs_the_check() {
+fn spec_resyncs_check() {
     let repo = Repo::new();
     install(&repo);
     let unset = format!("`{}`", enallagi::config::UNSET_CHECK);
-    assert!(read(&repo, ".enallagi/SPEC.md").contains(&unset));
+    assert!(read(&repo, &repo.spec()).contains(&unset));
     repo.write(
         ".enallagi/enallagi.toml",
         "[check]\ncommand = \"make check\"\n",
     );
     install(&repo);
-    let spec = read(&repo, ".enallagi/SPEC.md");
+    let spec = read(&repo, &repo.spec());
     let at = spec.find("### 0.4").expect("no 0.4 heading");
     let section = &spec[at..];
     assert!(section.contains("`make check`"), "{section:.400}");
@@ -514,17 +555,17 @@ fn the_spec_resyncs_the_check() {
 
 // the seeded spec must not name a check stage the configured check never runs
 #[test]
-fn the_seeded_spec_names_no_stage_the_check_lacks() {
+fn seeded_spec_stages() {
     let repo = Repo::new();
     install(&repo);
-    let spec = read(&repo, ".enallagi/SPEC.md");
+    let spec = read(&repo, &repo.spec());
     for claim in ["precheck", "hash-verify", "trace", "The check greps"] {
         assert!(!spec.contains(claim), "{claim} in {spec}");
     }
 }
 
 #[test]
-fn a_drifted_install_is_reported() {
+fn drifted_install_reported() {
     let repo = Repo::new();
     install(&repo);
     // zero on a freshly installed tree, or this is a permanent finding nobody reads
@@ -548,7 +589,7 @@ fn a_drifted_install_is_reported() {
     );
 
     // a document the project has edited is not drift: seed never overwrites one
-    repo.write(".enallagi/TASKS.md", "# my own queue\n");
+    repo.write(".enallagi/PROGRESS.md", "# my own progress\n");
     assert_eq!(stale(&repo).len(), 2);
 
     install(&repo);
@@ -923,7 +964,7 @@ fn the_claude_preset_loads_the_plugin() {
 }
 
 #[test]
-fn the_default_skills_plugin_is_harness() {
+fn default_skills_plugin() {
     let repo = Repo::new();
     install(&repo);
     let manifest: serde_json::Value = serde_json::from_str(&read(
@@ -932,29 +973,6 @@ fn the_default_skills_plugin_is_harness() {
     ))
     .expect("plugin json");
     assert_eq!(manifest["name"], "harness");
-}
-
-#[test]
-fn a_root_layout_keeps_dot_claude_skills() {
-    let repo = root_layout();
-    let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
-    let paths: Vec<&str> = planned.iter().map(|(path, _)| path.as_str()).collect();
-    assert!(
-        paths.contains(&".claude/skills/running-the-loop/SKILL.md"),
-        "{paths:?}"
-    );
-    let cfg = enallagi::config::load(&repo.root).expect("config");
-    assert_eq!(cfg.layout.skills_dir.as_deref(), Some(".claude/skills"));
-
-    let unconfigured = Repo::new();
-    unconfigured.write("TASKS.md", "# TASKS\n");
-    let planned = init::planned_files(&unconfigured.root, &adapter("claude")).expect("plan");
-    assert!(
-        planned
-            .iter()
-            .any(|(path, _)| path == ".claude/skills/running-the-loop/SKILL.md"),
-        "{planned:?}"
-    );
 }
 
 #[test]
@@ -1056,7 +1074,7 @@ fn a_tracked_instruction_file_is_never_written() {
 }
 
 #[test]
-fn a_settings_file_that_is_not_json_is_refused() {
+fn non_json_settings_refused() {
     let repo = Repo::new();
     let hooks = ".enallagi/adapters/claude/hooks/hooks.json";
     repo.write(hooks, "{ not json at all\n");
@@ -1066,7 +1084,7 @@ fn a_settings_file_that_is_not_json_is_refused() {
         "{err}"
     );
     assert!(!repo.root.join(".enallagi/adapters/claude/agents").exists());
-    assert!(!repo.root.join(".enallagi/TASKS.md").exists());
+    assert!(!repo.root.join(".enallagi/PROGRESS.md").exists());
 }
 
 #[test]
@@ -1165,7 +1183,7 @@ fn the_seeded_documents_state_rules_and_do_not_argue() {
 }
 
 #[test]
-fn init_plans_every_instance_file() {
+fn init_plans_instance_files() {
     let repo = Repo::new();
     let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
     let entry_points = [
@@ -1182,31 +1200,14 @@ fn init_plans_every_instance_file() {
             "{path} is planned outside the harness directory"
         );
     }
+    let spec = repo.spec();
     for path in [
         ".enallagi/enallagi.toml",
-        ".enallagi/TASKS.md",
-        ".enallagi/SPEC.md",
+        spec.as_str(),
         ".enallagi/evals/README.md",
     ] {
         assert!(paths.contains(&path), "{path} not planned: {paths:?}");
     }
-}
-
-const ROOT_LAYOUT: &[(&str, &str)] = &[
-    ("TASKS.md", "# TASKS\n"),
-    ("PROGRESS.md", "# PROGRESS\n"),
-    ("SPEC.md", "# spec\n"),
-    ("enallagi.toml", "[check]\ncommand = \"true\"\n"),
-    (".harness/RAILS.md", "rails\n"),
-    (".harness/roles/scout.md", "scout\n"),
-];
-
-fn root_layout() -> Repo {
-    let repo = Repo::new();
-    for (rel, text) in ROOT_LAYOUT {
-        repo.write(rel, text);
-    }
-    repo
 }
 
 fn instance_mentions(planned: &[(String, String)]) -> Vec<(String, String)> {
@@ -1216,7 +1217,8 @@ fn instance_mentions(planned: &[(String, String)]) -> Vec<(String, String)> {
     .expect("regex");
     let mut out = Vec::new();
     for (path, text) in planned {
-        if path.ends_with(".toml") || path.ends_with(".json") {
+        // a .gitattributes pattern is relative to its own directory
+        if path.ends_with(".toml") || path.ends_with(".json") || path.ends_with(".gitattributes") {
             continue;
         }
         for found in mention.captures_iter(text) {
@@ -1228,7 +1230,7 @@ fn instance_mentions(planned: &[(String, String)]) -> Vec<(String, String)> {
 }
 
 #[test]
-fn rendered_files_name_the_harness_dir() {
+fn rendered_files_name_dir() {
     let repo = Repo::new();
     let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
     let off: Vec<_> = instance_mentions(&planned)
@@ -1239,21 +1241,6 @@ fn rendered_files_name_the_harness_dir() {
         })
         .collect();
     assert!(off.is_empty(), "{off:#?}");
-}
-
-#[test]
-fn a_root_layout_renders_instance_files_at_the_root() {
-    let repo = root_layout();
-    let planned = init::planned_files(&repo.root, &adapter("claude")).expect("plan");
-    let off: Vec<_> = instance_mentions(&planned)
-        .into_iter()
-        .filter(|(_, m)| m.contains('/'))
-        .collect();
-    assert!(off.is_empty(), "{off:#?}");
-}
-
-fn moved_to(rel: &str) -> String {
-    format!(".enallagi/{}", rel.trim_start_matches(".harness/"))
 }
 
 fn harness_init(repo: &Repo, args: &[&str]) -> String {
@@ -1267,11 +1254,9 @@ fn harness_init(repo: &Repo, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).to_string()
 }
 
-// the verdict gate wants the instance committed, and init does it: the nested state repository
-// holds one commit naming the version, its tree is clean, the product's porcelain is empty, and
-// a re-run with nothing changed commits nothing more
+// init commits the instance: one commit naming the version, clean trees, a no-op re-run
 #[test]
-fn init_commits_the_state_it_wrote() {
+fn init_commits_state() {
     let repo = Repo::new();
     let stdout = harness_init(&repo, &[]);
     assert!(stdout.contains("  committed: .enallagi"), "{stdout}");
@@ -1294,34 +1279,6 @@ fn init_commits_the_state_it_wrote() {
     let again = harness_init(&repo, &[]);
     assert!(!again.contains("  committed: .enallagi"), "{again}");
     assert_eq!(git(&["log", "--format=%s"]).lines().count(), 1);
-}
-
-#[test]
-fn init_lists_new_paths_and_moves_nothing() {
-    let repo = root_layout();
-    let stdout = harness_init(&repo, &[]);
-    for (rel, _) in ROOT_LAYOUT {
-        let line = format!("{rel} -> {}", moved_to(rel));
-        assert!(stdout.contains(&line), "no `{line}` in:\n{stdout}");
-        assert!(repo.root.join(rel).is_file(), "{rel} was moved");
-    }
-    assert!(!repo.root.join(".enallagi").exists());
-}
-
-#[test]
-fn init_move_puts_files_at_their_new_paths() {
-    let repo = root_layout();
-    let stdout = harness_init(&repo, &["--move"]);
-    for (rel, text) in ROOT_LAYOUT {
-        let new = moved_to(rel);
-        assert!(
-            stdout.contains(&format!("{rel} -> {new}")),
-            "{rel} not listed:\n{stdout}"
-        );
-        assert_eq!(read(&repo, &new), *text, "{new}");
-        assert!(!repo.root.join(rel).exists(), "{rel} remains");
-    }
-    assert!(!repo.root.join(".harness").exists());
 }
 
 // the failing-test line each preset's fail_name is written against, captured from the runner itself
@@ -1375,6 +1332,53 @@ fn every_runner_preset_names_its_failing_test() {
     }
 }
 
+#[test]
+fn presets_match_bare_skips() {
+    let cases: &[(&str, &[&str], &[&str])] = &[
+        (
+            "cargo",
+            &["#[ignore]", "    #[ignore]"],
+            &[r#"#[ignore = "slow"]"#],
+        ),
+        (
+            "pytest",
+            &["@pytest.mark.skip", "@pytest.mark.xfail(strict=True)"],
+            &[
+                r#"@pytest.mark.skip(reason="slow")"#,
+                "@pytest.mark.skipif(x, reason='y')",
+            ],
+        ),
+        ("go", &["t.Skip()", "\tt.SkipNow()"], &[r#"t.Skip("slow")"#]),
+        (
+            "jest",
+            &[
+                "it.skip(",
+                "test.skip(",
+                "describe.skip(",
+                "xit(",
+                "xdescribe(",
+            ],
+            &["it(", "exit("],
+        ),
+    ];
+    let presets = runners::presets();
+    for (runner, hit, miss) in cases {
+        let preset = presets.iter().find(|r| r.name == *runner).expect(runner);
+        let res: Vec<regex::Regex> = preset
+            .skip_patterns
+            .iter()
+            .map(|p| regex::Regex::new(p).expect(p))
+            .collect();
+        let skips = |l: &str| res.iter().any(|re| re.is_match(l));
+        for l in *hit {
+            assert!(skips(l), "{runner}: {l}");
+        }
+        for l in *miss {
+            assert!(!skips(l), "{runner}: {l}");
+        }
+    }
+}
+
 // package.json's test script, a CI workflow that runs it, and tests under tests/
 fn node_repo() -> Repo {
     let repo = Repo::new();
@@ -1422,7 +1426,7 @@ fn init_writes_the_keys_the_runner_decides() {
         Some(node.test_file_suffix_re.as_str())
     );
     assert!(layout.get("test_decl_patterns").is_some(), "{layout:?}");
-    // src/ equals the default, so T-021's pruning leaves the key out and the load resolves it
+    // src/ equals the default, so pruning leaves the key out and the load resolves it
     let loaded = enallagi::config::load(&repo.root).expect("load");
     assert_eq!(loaded.layout.source_root, "src");
     let prefixes = layout["allowed_prefixes"].as_array().expect("array");
@@ -1483,7 +1487,41 @@ fn init_names_the_file_a_detected_value_came_from() {
 }
 
 #[test]
-fn two_runners_in_one_tree_write_no_keys() {
+fn init_seeds_runner_hosts() {
+    let repo = Repo::new();
+    repo.write("Cargo.toml", "[package]\nname = \"fixture\"\n");
+    repo.write("src/lib.rs", "");
+    repo.commit_all("a cargo tree");
+    let report = install(&repo);
+    let written: toml::Value =
+        toml::from_str(&read(&repo, ".enallagi/enallagi.toml")).expect("parse");
+    let sandbox = &written["sandbox"];
+    let list = |key: &str| -> Vec<String> {
+        sandbox[key]
+            .as_array()
+            .unwrap_or_else(|| panic!("{key}: {sandbox:?}"))
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    };
+    assert_eq!(list("hosts"), ["index.crates.io", "static.crates.io"]);
+    assert!(sandbox.get("write").is_none(), "{sandbox:?}");
+    let cache = enallagi::config::cache_root()
+        .join("caches")
+        .join(enallagi::tracker::repo_slug(&repo.root));
+    assert_eq!(
+        sandbox["caches"]["CARGO_HOME"].as_str(),
+        Some(cache.join("cargo_home").to_str().expect("utf8"))
+    );
+    assert!(
+        detected(&report, "sandbox.hosts").contains("(Cargo.toml:1)"),
+        "{:?}",
+        report.notes
+    );
+}
+
+#[test]
+fn two_runners_no_keys() {
     let repo = node_repo();
     repo.write("Cargo.toml", "[package]\nname = \"fixture\"\n");
     repo.commit_all("two runners");
@@ -1491,6 +1529,8 @@ fn two_runners_in_one_tree_write_no_keys() {
     let written = read(&repo, ".enallagi/enallagi.toml");
     assert!(!written.contains("fail_name"), "{written}");
     assert!(!written.contains("source_root"), "{written}");
+    assert!(!written.contains("crates.io"), "{written}");
+    assert!(!written.contains("registry.npmjs.org"), "{written}");
     assert!(
         !report.notes.iter().any(|n| n.starts_with("detected: ")),
         "{:?}",
@@ -1624,6 +1664,18 @@ fn init_writes_the_test_glob_it_detected() {
 }
 
 #[test]
+fn init_writes_skip_patterns() {
+    let repo = Repo::new();
+    repo.write("Cargo.toml", "[package]\nname = \"fixture\"\n");
+    repo.write("src/lib.rs", "");
+    repo.commit_all("a cargo tree");
+    install(&repo);
+    let cfg = enallagi::config::load(&repo.root).expect("config");
+    assert_eq!(cfg.layout.test_only_glob, vec!["**/tests/**"]);
+    assert_eq!(cfg.layout.skip_patterns, vec![r"^\s*#\[ignore\]"]);
+}
+
+#[test]
 fn a_fresh_install_leaves_no_unmatched_glob() {
     let repo = node_repo();
     install(&repo);
@@ -1631,8 +1683,7 @@ fn a_fresh_install_leaves_no_unmatched_glob() {
     assert_eq!(found, Vec::new(), "{found:?}");
 }
 
-// one pass over a tree no runner preset matches: the check comes from a flag, the layout from the
-// tree, every rendered copy names them, and the probes that fired on every cold start are silent
+// no runner preset matches: check from a flag, layout from the tree, cold-start probes silent
 #[test]
 fn one_init_leaves_no_stale_copy_and_names_the_check() {
     let repo = Repo::new();
@@ -1675,8 +1726,7 @@ fn one_init_leaves_no_stale_copy_and_names_the_check() {
     assert!(read(&repo, ".enallagi/AGENTS.md").contains("`sh check.sh`"));
 }
 
-// a stdin that is not a terminal asks nothing and takes the defaults, printing each one; a flag
-// answers one question, and an existing enallagi.toml keeps its answers over a flag
+// a non-tty stdin takes printed defaults; a flag answers one; an existing enallagi.toml beats a flag
 #[test]
 fn a_non_terminal_init_takes_the_defaults() {
     let repo = Repo::new();
@@ -1703,11 +1753,20 @@ fn a_non_terminal_init_takes_the_defaults() {
 
 // the configured preset names the tool, so a bare init writes what --adapter claude writes
 #[test]
-fn the_adapter_defaults_to_the_configured_preset() {
+fn adapter_defaults_to_preset() {
     let bare = Repo::new();
     let named = Repo::new();
-    let wrote_bare = install(&bare).wrote;
-    let wrote_named = with(&named, &adapter("claude")).wrote;
+    // the spec's directory is each repository's own name
+    let wrote = |repo: &Repo, report: init::InitReport| -> Vec<String> {
+        let slug = enallagi::tracker::repo_slug(&repo.root);
+        report
+            .wrote
+            .iter()
+            .map(|p| p.replace(&slug, "repo"))
+            .collect()
+    };
+    let wrote_bare = wrote(&bare, install(&bare));
+    let wrote_named = wrote(&named, with(&named, &adapter("claude")));
     assert_eq!(wrote_bare, wrote_named);
     assert!(
         wrote_bare
@@ -1732,7 +1791,7 @@ fn the_adapter_defaults_to_the_configured_preset() {
 
 // --sync vendors every declared skill from a stdin that is not a terminal; --frozen vendors none
 #[test]
-fn init_sync_vendors_the_declared_skills() {
+fn sync_vendors_skills() {
     let repo = Repo::new();
     let toml = "[agent]\npreset = \"claude\"\n";
     repo.write(
@@ -1744,7 +1803,7 @@ fn init_sync_vendors_the_declared_skills() {
         .lines()
         .filter(|l| l.starts_with("  vendored: "))
         .count();
-    assert_eq!(vendored, 8, "{stdout}");
+    assert_eq!(vendored, 13, "{stdout}");
     let lock = read(&repo, ".enallagi/harness.lock");
     assert!(lock.contains("id = \"tdd\""), "{lock}");
     assert!(
@@ -1769,28 +1828,19 @@ fn init_sync_vendors_the_declared_skills() {
 
 // --issue appends the block `enallagi issue` writes and commits it, so the first run finds it
 #[test]
-fn init_issue_queues_the_block_and_commits_it() {
+fn issue_queues_and_commits() {
     let repo = Repo::new();
     let tools = tempfile::tempdir().expect("tools");
-    let gh = tools.path().join("gh");
-    std::fs::write(
-        &gh,
-        format!(
-            "#!/bin/sh\nprintf '%s' '{}'\n",
-            include_str!("fixtures/issues/help-wanted.json")
-        ),
-    )
-    .expect("gh");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
-    let path = format!(
-        "{}:{}",
-        tools.path().display(),
-        std::env::var("PATH").unwrap_or_default()
+    let issue = enallagi::fixture::twin::Response::to(
+        &enallagi::issue::gh_args("owner/repo#12").expect("args"),
+        include_str!("fixtures/issues/help-wanted.json"),
     );
+    let state = enallagi::fixture::twin::State {
+        responses: vec![issue],
+        ..Default::default()
+    };
+    let (path, _) =
+        enallagi::fixture::twin::install(tools.path(), env!("CARGO_BIN_EXE_enallagi"), &state);
     let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
         .args(["init", "--issue", "owner/repo#12"])
         .current_dir(&repo.root)
@@ -1800,9 +1850,12 @@ fn init_issue_queues_the_block_and_commits_it() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{stdout}");
     assert!(stdout.contains("  proposed: ## [T-001] "), "{stdout}");
-    let tasks = read(&repo, ".enallagi/TASKS.md");
-    assert!(tasks.contains("## [T-001] "), "{tasks}");
-    assert!(tasks.contains("status: proposed"), "{tasks}");
+    let t = enallagi::tracker::Tracker::open(&repo.root, ".enallagi");
+    let b = t.get("T-001").expect("the queue").expect("T-001");
+    assert_eq!(
+        enallagi::tracker::state(&b).as_deref(),
+        Some("needs-triage")
+    );
     let state = repo.root.join(".enallagi");
     assert_eq!(
         enallagi::git::git(&state, &["status", "--porcelain"]).expect("git"),
@@ -1995,8 +2048,7 @@ fn a_fail_name_matching_a_pass_is_refused() {
     }
 }
 
-// a suite a runner preset detects, its check already named, and a scripted agent that logs each
-// prompt it is given and answers with one `tally`
+// a detected suite with its check named, and an agent that logs each prompt and says `tally`
 fn detected_suite(manifest: &str, tally: &str) -> Repo {
     let repo = Repo::new();
     repo.write(manifest, "module fixture\n");
@@ -2068,4 +2120,65 @@ fn a_cargo_runner_is_never_asked_for_a_tally() {
     assert!(prompts(&repo).is_empty(), "{stdout}");
     let cfg = enallagi::config::load(&repo.root).expect("config");
     assert_eq!(cfg.check.tally, "");
+}
+
+fn init_with_cache(repo: &Repo, xdg: &Path) -> String {
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .arg("init")
+        .env("XDG_CACHE_HOME", xdg)
+        .current_dir(&repo.root)
+        .output()
+        .expect("run enallagi init");
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+#[test]
+fn init_secrets_baseline() {
+    let repo = Repo::new();
+    let xdg = tempfile::tempdir().expect("xdg");
+    let cache = xdg.path().join("enallagi");
+    enallagi::fixture::stub_gitleaks(&cache, r#"[{"RuleID":"old-leak"}]"#, 1);
+    let stdout = init_with_cache(&repo, xdg.path());
+    let baseline = read(&repo, ".enallagi/security/gitleaks-baseline.json");
+    assert!(baseline.contains("old-leak"), "{stdout}");
+    let argv = fs::read_to_string(cache.join("gitleaks.argv")).expect("argv");
+    assert!(
+        argv.starts_with("git\n") && argv.contains("\n--redact\n"),
+        "{argv}"
+    );
+    assert!(!argv.contains("--log-opts"), "{argv}");
+    let tracked = enallagi::git::git(
+        &repo.root.join(".enallagi"),
+        &["ls-files", "security/gitleaks-baseline.json"],
+    )
+    .expect("ls-files");
+    assert_eq!(tracked, "security/gitleaks-baseline.json");
+}
+
+#[test]
+fn baseline_fetch_warns() {
+    let repo = Repo::new();
+    let xdg = tempfile::tempdir().expect("xdg");
+    // a refused proxy fails the fetch offline
+    let out = enallagi::fixture::command(env!("CARGO_BIN_EXE_enallagi"))
+        .arg("init")
+        .env("XDG_CACHE_HOME", xdg.path())
+        .env("https_proxy", "http://127.0.0.1:9")
+        .env("HTTPS_PROXY", "http://127.0.0.1:9")
+        .current_dir(&repo.root)
+        .output()
+        .expect("run enallagi init");
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("security:") && l.contains("enallagi init")),
+        "{stdout}"
+    );
+    assert!(!repo
+        .root
+        .join(".enallagi/security/gitleaks-baseline.json")
+        .exists());
 }

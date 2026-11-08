@@ -4,8 +4,6 @@
 [agent]
 preset = "claude"
 rate_limit_pattern = "hit your session limit"
-# adds the preset's bypass_flag to every lane; a preset that declares none refuses the run.
-dangerously_skip_permissions = false
 
 # command decides whether the tree is green, force is the same check uncached, fail_name's group 1 is the failing test's name; all empty until init detects a runner.
 [check]
@@ -29,6 +27,31 @@ title_cap_from = 1
 # per_task has enallagi run push each landed task to its own branch and open its pull request, as --pr-per-task does.
 [pr]
 per_task = false
+# "auto" merges a ticket's pull request on green; it needs a holdout set, a USD or token budget and the sandbox.
+merge = "human"
+
+# mode "native" confines every lane (Seatbelt or bwrap); hosts, ports, write, env and caches widen it.
+[sandbox]
+mode = "native"
+hosts = []
+ports = []
+write = []
+env = []
+caches = {}
+
+# writers is how many writer lanes `enallagi worktree` runs at once, each on a ticket whose scope overlaps no other's.
+[parallel]
+writers = 1
+
+[respond]
+# a ticket whose pull request draws new in-scope findings after max_rounds goes to ready-for-human.
+max_rounds = 3
+# how long after a push the poll waits before judging the pull request.
+quiet = "10m"
+# reviewers asked again on each push, e.g. "@copilot" or "@greptileai", for bots that do not re-review on push.
+rereview = []
+# names the variable whose value replies and resolves pass to gh as GH_TOKEN; unset uses gh's own auth.
+token_env = "ENALLAGI_GH_TOKEN"
 
 [layout]
 # context_file is the file every role reads first, unset meaning AGENTS.md beside the queue; pointer_files are one-line pointers to it for tools that cannot take it on their command line.
@@ -41,14 +64,19 @@ skill_invocation = "invoke it via the Skill tool"
 # driver_command runs the built artifact in a throwaway directory and prints one `FINDING ` line per shortfall; empty is off, and ENALLAGI_DRIVER=1 is also required.
 driver_command = ""
 
-spec = "SPEC.md"
-rows_heading = "## 11. Exit criteria"
-rows_end_heading = "## 12."
+# spec is relative to harness_dir; empty is the first specs/<slug>/spec.md holding rows_heading, else the one init seeds. Exit-criteria rows are read from it and from every other specs/<slug>/spec.md.
+spec = ""
+rows_heading = "### Exit criteria"
+rows_end_heading = "## Out of Scope"
 source_root = ""
 contract_file = "src/schema.ts"
 test_file_suffix_re = ""
 test_decl_patterns = []
 test_glob = []
+# test_only_glob names the files red-first keeps when it reverts the rest of a task to its base; empty skips the gate.
+test_only_glob = []
+# skip_patterns are regexes over the lines a task adds to test_glob files; a match is a skip with no stated reason, and skip-added forces the task back.
+skip_patterns = []
 source_ext = [".ts", ".tsx", ".js", ".mjs", ".cjs", ".sh", ".py"]
 
 harness_files = [
@@ -133,6 +161,12 @@ name = "review"
 when = "queue.reviewing"
 stages = ["verify"]
 
+# decompose runs before task: an accepted spec with no tickets is broken down, numbered and triaged first.
+[[pipeline]]
+name = "decompose"
+when = "spec.undecomposed"
+stages = ["decompose", "adjudicate"]
+
 # adjudicate runs last: the round drains whatever the verdict filed before the next task is picked.
 [[pipeline]]
 name = "task"
@@ -162,7 +196,7 @@ post = ["queue-intact", "commit-identity", "commit-task", "implementer-not-done"
 name = "verify"
 role = "verifier"
 turns = 100
-post = ["commit-verdict", "queue-intact", "commit-identity", "verdict", "claims", "scope", "install-stale"]
+post = ["commit-verdict", "queue-intact", "commit-identity", "verdict", "claims", "findings", "skip-added", "security", "red-first", "scope", "install-stale", "holdout"]
 
 [[stage]]
 name = "scout"
@@ -171,68 +205,98 @@ turns = 30
 env = { ENALLAGI_DRIVER = "1" }
 
 [[stage]]
+name = "decompose"
+role = "decomposer"
+turns = 60
+post = ["tickets", "commit-round", "queue-intact"]
+
+[[stage]]
 name = "adjudicate"
 role = "adjudicator"
 turns = 40
 post = ["commit-round", "queue-intact", "adjudicator-halt", "dry-round"]
 
-# gate names the probe, rail or hook that fails without the skill, or the literal `none`; an id renamed here is renamed in roles/ too.
+# gate names the probe, rail or hook that fails without the skill, or the literal `none`; an id is the last segment of its upstream path, so a bare name inside a skill body resolves, and an id renamed here is renamed in roles/ too.
+
+[[skill]]
+id = "to-tickets"
+source = "github:mattpocock/skills"
+path = "skills/engineering/to-tickets"
+rev = "v1.3.2"
+gate = "tickets"
+why = "a spec is broken into thin vertical slices with blocking edges before any writer takes one"
+
+[[skill]]
+id = "triage"
+source = "github:mattpocock/skills"
+path = "skills/engineering/triage"
+rev = "v1.3.2"
+gate = "anchored"
+why = "every new ticket is judged and moved to a triage state before a writer sees it"
 
 [[skill]]
 id = "tdd"
-source = "github:obra/superpowers"
-path = "skills/test-driven-development"
-rev = "v6.3.0"
+source = "github:mattpocock/skills"
+path = "skills/engineering/tdd"
+rev = "v1.3.2"
 gate = "spec-untested"
 why = "the failing test that encodes the acceptance criteria is written before the code"
+
+[[skill]]
+id = "diagnosing-bugs"
+source = "github:mattpocock/skills"
+path = "skills/engineering/diagnosing-bugs"
+rev = "v1.3.2"
+gate = "anchored"
+why = "a failure is reproduced by a command before any theory about it is acted on"
+
+[[skill]]
+id = "codebase-design"
+source = "github:mattpocock/skills"
+path = "skills/engineering/codebase-design"
+rev = "v1.3.2"
+gate = "contracts"
+why = "an interface is shaped as a deep module before code is written against it"
+
+[[skill]]
+id = "writing-for-agents"
+source = "github:mattpocock/skills"
+path = "skills/productivity/writing-for-agents"
+rev = "v1.3.2"
+gate = "context-behind"
+why = "a doc, skill or role an agent reads is written in one register"
+
+[[skill]]
+id = "domain-modeling"
+source = "github:mattpocock/skills"
+path = "skills/engineering/domain-modeling"
+rev = "v1.3.2"
+gate = "citable"
+why = "the glossary and ADRs keep one word for one thing"
+
+[[skill]]
+id = "code-review"
+source = "github:mattpocock/skills"
+path = "skills/engineering/code-review"
+rev = "v1.3.2"
+gate = "verdict"
+why = "a diff is reviewed against its spec and its standards as two separate axes"
 
 [[skill]]
 id = "ponytail"
 source = "github:DietrichGebert/ponytail"
 path = "skills/ponytail"
-rev = "v4.8.4"
+rev = "v5.3.3"
 gate = "ponytail-ceiling"
 why = "the ladder is walked before any new code, and a shortcut taken anyway is marked"
 
 [[skill]]
-id = "debugging"
-source = "github:obra/superpowers"
-path = "skills/systematic-debugging"
-rev = "v6.3.0"
-gate = "anchored"
-why = "a finding carries the command that reproduces it rather than a theory about it"
-
-[[skill]]
-id = "review-received"
-source = "github:obra/superpowers"
-path = "skills/receiving-code-review"
-rev = "v6.3.0"
-gate = "rejection-repeat"
-why = "a rejected task answers every rejection point before it is re-implemented"
-
-[[skill]]
-id = "verify-before-done"
-source = "github:obra/superpowers"
-path = "skills/verification-before-completion"
-rev = "v6.3.0"
-gate = "blocked-is-allowed"
-why = "no completion claim without the exact command and its pasted output"
-
-[[skill]]
-id = "review-requested"
-source = "github:obra/superpowers"
-path = "skills/requesting-code-review"
-rev = "v6.3.0"
-gate = "verdict-flip"
-why = "the verifier works a checklist rather than reading the diff for whatever stands out"
-
-[[skill]]
-id = "brainstorming"
-source = "github:obra/superpowers"
-path = "skills/brainstorming"
-rev = "v6.3.0"
-gate = "queue-uncovered"
-why = "criteria are written before code, which here happens in the queue and not in a chat"
+id = "ponytail-review"
+source = "github:DietrichGebert/ponytail"
+path = "skills/ponytail-review"
+rev = "v5.3.3"
+gate = "minimal"
+why = "a diff is read for what to delete before it is accepted"
 
 [[skill]]
 id = "caveman-commit"
@@ -241,5 +305,21 @@ path = "skills/caveman-commit"
 rev = "v2.7.0"
 gate = "plain-record"
 why = "a commit subject names what changed and stops there"
+
+[[skill]]
+id = "receiving-code-review"
+source = "github:obra/superpowers"
+path = "skills/receiving-code-review"
+rev = "v6.3.0"
+gate = "rejection-repeat"
+why = "a rejected task answers every rejection point before it is re-implemented"
+
+[[skill]]
+id = "verification-before-completion"
+source = "github:obra/superpowers"
+path = "skills/verification-before-completion"
+rev = "v6.3.0"
+gate = "blocked-is-allowed"
+why = "no completion claim without the exact command and its pasted output"
 
 # [[role]] takes name, source, path and rev as [[skill]] does; <path>/<name>.md vendors to <harness_dir>/roles/<name>.md and pins in harness.lock.

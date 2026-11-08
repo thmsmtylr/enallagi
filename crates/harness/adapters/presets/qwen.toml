@@ -1,4 +1,5 @@
 name = "qwen"
+hosts = ["chat.qwen.ai", "dashscope.aliyuncs.com", "*.dashscope.aliyuncs.com"]
 argv = ["qwen", "-p", "{prompt}", "--output-format", "stream-json", "--max-session-turns", "{turns}"]
 bypass_flag = "--yolo"
 turn_cap = "flag"

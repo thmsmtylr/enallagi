@@ -1,23 +1,25 @@
-//! The named checks the loop runs after a stage exits.
+//! the named checks the loop runs after a stage exits
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::block::{self, Block};
 use crate::config::Config;
 use crate::events::{Kind, Tally, Writer};
 use crate::git::{self, git, head, porcelain};
-use crate::queue::{self, Queue};
 use crate::skills::LockEntry;
+use crate::tracker::{self, Tracker, SPECS};
 
 pub(crate) const BOOKKEEPING: &[&str] = &[
-    "TASKS.md",
+    SPECS,
     "PROGRESS.md",
     "PROGRESS.archive.md",
     "DECISIONS.md",
     "LEARNINGS.md",
+    ".out-of-scope",
 ];
 
 pub struct GateCtx<'a> {
@@ -25,7 +27,7 @@ pub struct GateCtx<'a> {
     pub cfg: &'a Config,
     pub task: Option<String>,
     pub iter_base: Option<String>,
-    // the harness directory repository's base; the same as iter_base while instance files share the product's
+    // the harness directory repo's base; equals iter_base while instance files share the product's
     pub state_base: Option<String>,
     pub stage_output: String,
     pub events: &'a mut Writer,
@@ -33,6 +35,9 @@ pub struct GateCtx<'a> {
     pub warnings: &'a mut Vec<String>,
     pub halts: &'a mut Vec<String>,
     pub dry_rounds: &'a mut u32,
+    // the scanners and their reports; config::cache_root() outside a test
+    pub cache: PathBuf,
+    pub sandbox: &'a crate::sandbox::Sandbox,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -66,7 +71,11 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "commit-verdict" => commit_verdict(ctx),
         "verdict" => verdict(ctx),
         "claims" => claims(ctx),
+        "findings" => findings(ctx),
         "scope" => scope(ctx),
+        "red-first" => red_first(ctx),
+        "skip-added" => skip_added(ctx),
+        "security" => security(ctx),
         "queue-intact" => queue_intact(ctx),
         "commit-identity" => commit_identity(ctx),
         "commit-task" => commit_task(ctx),
@@ -75,6 +84,8 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
         "adjudicator-halt" => adjudicator_halt(ctx),
         "dry-round" => dry_round(ctx),
         "install-stale" => install_stale(ctx),
+        "tickets" => tickets(ctx),
+        "holdout" => holdout(ctx),
         other => fail(format!("no such gate: {other}")),
     };
     let task = ctx.task.clone().unwrap_or_default();
@@ -89,7 +100,7 @@ pub fn run(name: &str, ctx: &mut GateCtx) -> GateOutcome {
 }
 
 fn rel(ctx: &GateCtx, name: &str) -> String {
-    crate::config::instance_rel(ctx.root, &ctx.cfg.layout.harness_dir, name)
+    crate::config::instance_rel(&ctx.cfg.layout.harness_dir, name)
 }
 
 // the repository an instance file's history is in, the path inside it, and that repository's base
@@ -118,48 +129,52 @@ fn commit_instance(ctx: &GateCtx, names: &[&str], msg: &str) -> Result<bool, git
     git::commit_instance(ctx.root, &ctx.cfg.layout.harness_dir, names, msg)
 }
 
-fn tasks_file(root: &Path, cfg: &Config) -> Queue {
-    Queue {
-        path: crate::config::instance_path(root, &cfg.layout.harness_dir, "TASKS.md"),
-    }
+fn queue_of(ctx: &GateCtx) -> Tracker {
+    Tracker::open(ctx.root, &ctx.cfg.layout.harness_dir)
 }
 
-fn status_of(ctx: &GateCtx, task: &str) -> Result<Option<String>, queue::QueueError> {
-    let text = tasks_file(ctx.root, ctx.cfg).read()?;
-    let blocks = queue::parse(&text)?;
-    Ok(blocks
-        .iter()
-        .find(|b| b.id == task)
-        .and_then(|b| queue::field(b, "status")))
+fn status_of(ctx: &GateCtx, task: &str) -> Result<Option<String>, block::QueueError> {
+    Ok(queue_of(ctx)
+        .get(task)?
+        .and_then(|b| block::field(&b, "status"))
+        .filter(|s| !s.is_empty()))
 }
 
 fn field_of(ctx: &GateCtx, task: &str, key: &str) -> String {
-    let Ok(text) = tasks_file(ctx.root, ctx.cfg).read() else {
-        return String::new();
-    };
-    let Ok(blocks) = queue::parse(&text) else {
-        return String::new();
-    };
-    blocks
-        .iter()
-        .find(|b| b.id == task)
-        .and_then(|b| queue::field(b, key))
+    queue_of(ctx)
+        .get(task)
+        .ok()
+        .flatten()
+        .and_then(|b| block::field(&b, key))
         .unwrap_or_default()
 }
 
-// the field as TASKS.md held it at a revision, the base when rev is None, the way lock_at reads
+fn blocks_at_base(ctx: &GateCtx) -> Option<Vec<Block>> {
+    let (_, _, base) = at_base(ctx, &rel(ctx, SPECS))?;
+    tracker::blocks_at(ctx.root, &ctx.cfg.layout.harness_dir, &base)
+}
+
+// the field at a revision, the base when rev is None, the way lock_at reads
+
 fn field_at(ctx: &GateCtx, task: &str, key: &str, rev: Option<&str>) -> Option<String> {
-    let text = show_at(ctx, &rel(ctx, "TASKS.md"), rev)?;
-    queue::parse(&text)
-        .ok()?
-        .iter()
-        .find(|b| b.id == task)
-        .and_then(|b| queue::field(b, key))
+    let (_, _, base) = at_base(ctx, &rel(ctx, SPECS))?;
+    let b = tracker::get_at(
+        ctx.root,
+        &ctx.cfg.layout.harness_dir,
+        task,
+        rev.unwrap_or(&base),
+    )?;
+    block::field(&b, key)
+}
+
+fn verdict_of(ctx: &GateCtx, task: &str) -> Option<tracker::Ruling> {
+    let b = queue_of(ctx).get(task).ok()??;
+    tracker::verdict(&b)
 }
 
 fn unreadable(ctx: &mut GateCtx, task: &str) -> GateOutcome {
     ctx.warnings.push(format!(
-        "{task}: TASKS.md could not be read; the gate did not run."
+        "{task}: the queue could not be read; the gate did not run."
     ));
     fail("unreadable")
 }
@@ -179,14 +194,9 @@ fn force_back(
         .flatten()
         .unwrap_or_else(|| "done".to_string());
     if !ctx.dry_run {
-        let q = tasks_file(ctx.root, ctx.cfg);
-        let written = q
-            .read()
-            .and_then(|text| queue::set_status(&text, task, to, reason))
-            .and_then(|text| q.write(&text));
-        match written {
+        match queue_of(ctx).set_status(task, to, reason) {
             Ok(()) => {
-                if let Err(err) = commit_instance(ctx, &["TASKS.md"], commit_msg) {
+                if let Err(err) = commit_instance(ctx, &[SPECS], commit_msg) {
                     ctx.warnings
                         .push(format!("{task}: the queue was not committed: {err}"));
                 }
@@ -194,7 +204,7 @@ fn force_back(
             // the queue still says done, so a task.status event here isn't a change the file carries
             Err(err) => {
                 ctx.warnings
-                    .push(format!("{task}: TASKS.md could not be rewritten: {err}"));
+                    .push(format!("{task}: the queue could not be rewritten: {err}"));
                 return fail(reason);
             }
         }
@@ -209,8 +219,7 @@ fn force_back(
     fail(reason)
 }
 
-// a done written by the implementer itself (not the verifier) is forced back to ready; anything short
-// of review has nothing to verify either, so the rest of the iteration is skipped in both cases
+// a done the implementer wrote goes back to ready; below review the rest of the iteration is skipped
 fn implementer_not_done(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -218,7 +227,22 @@ fn implementer_not_done(ctx: &mut GateCtx) -> GateOutcome {
     match status_of(ctx, &task) {
         Err(_) => unreadable(ctx, &task),
         Ok(status) if status.as_deref() == Some("review") => {
-            pass("the implementer left it at review")
+            if !verdict_of(ctx, &task)
+                .is_some_and(|r| matches!(r.verdict, tracker::Verdict::Rejected(_)))
+            {
+                return pass("the implementer left it at review");
+            }
+            let mut out = force_back(
+                ctx,
+                "implementer-not-done",
+                &task,
+                "ready-for-agent",
+                "the implementer set review over a rejection; answer it and write `verdict: answered by implementer`",
+                &format!("chore({task}): the implementer left a rejection standing"),
+                &format!("{task} was forced back to ready: review with the rejection unanswered."),
+            );
+            out.skip_rest = true;
+            out
         }
         Ok(status) if status.as_deref() != Some("done") => GateOutcome {
             skip_rest: true,
@@ -232,7 +256,7 @@ fn implementer_not_done(ctx: &mut GateCtx) -> GateOutcome {
                 ctx,
                 "implementer-not-done",
                 &task,
-                "ready",
+                "ready-for-agent",
                 "the implementer set done; only the verifier may, and the launcher gates that",
                 &format!("chore({task}): the implementer marked its own task done"),
                 &format!("{task} was forced back to ready: the implementer marked it done itself."),
@@ -252,10 +276,10 @@ fn commit_verdict(ctx: &mut GateCtx) -> GateOutcome {
         let phrase = &deferred.phrase;
         let reason = match deferred.source {
             DeferredIn::Field => format!(
-                "the verdict's `deferred:` line says \"{phrase}\" and it added no status: proposed block; write that finding as a proposed block with the command that shows it"
+                "the verdict's `deferred:` line says \"{phrase}\" and it added no needs-triage ticket; file that finding as a needs-triage ticket with the command that shows it"
             ),
             DeferredIn::Notes => format!(
-                "the verdict's notes say \"{phrase}\" and it added no status: proposed block; write that finding as a proposed block with the command that shows it, and name it on a `deferred:` line"
+                "the verdict's notes say \"{phrase}\" and it added no needs-triage ticket; file that finding as a needs-triage ticket with the command that shows it, and name it on a `deferred:` line"
             ),
         };
         let mut out = force_back(
@@ -270,7 +294,7 @@ fn commit_verdict(ctx: &mut GateCtx) -> GateOutcome {
         out.skip_rest = true;
         return out;
     }
-    commit(ctx, &["TASKS.md"], &format!("verify: {task} verdict"))
+    commit(ctx, &[SPECS], &format!("verify: {task} verdict"))
 }
 
 enum DeferredIn {
@@ -285,12 +309,11 @@ struct Deferred {
 
 // a finding left only in notes is archived with its block and never reaches the queue
 fn deferred_finding(ctx: &GateCtx, task: &str) -> Option<Deferred> {
-    at_base(ctx, &rel(ctx, "TASKS.md"))?;
-    let before = show_at(ctx, &rel(ctx, "TASKS.md"), None).unwrap_or_default();
-    let before = queue::parse(&before).unwrap_or_default();
-    let now = queue::parse(&tasks_file(ctx.root, ctx.cfg).read().ok()?).ok()?;
-    let proposed_before = queue::ids_at(&before, "proposed");
-    if queue::ids_at(&now, "proposed")
+    at_base(ctx, &rel(ctx, SPECS))?;
+    let before = blocks_at_base(ctx).unwrap_or_default();
+    let now = queue_of(ctx).blocks().ok()?;
+    let proposed_before = tracker::ids_in(&before, &["needs-triage"]);
+    if tracker::ids_in(&now, &["needs-triage"])
         .iter()
         .any(|id| !proposed_before.contains(id))
     {
@@ -369,7 +392,7 @@ fn commit_round(ctx: &mut GateCtx) -> GateOutcome {
     let iter = ctx.events.iter;
     commit(
         ctx,
-        &["TASKS.md", "DECISIONS.md"],
+        &[SPECS, "DECISIONS.md"],
         &format!("queue: scout and adjudicator round (iteration {iter})"),
     )
 }
@@ -390,10 +413,61 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
     };
+    let ruling = verdict_of(ctx, &task);
+    let line = ruling.as_ref().map(|r| &r.verdict);
     match status_of(ctx, &task) {
         Err(_) => return unreadable(ctx, &task),
+        Ok(status) if status.as_deref() == Some("ready-for-agent") => {
+            if field_at(ctx, &task, "status", None).as_deref() != Some("review")
+                || matches!(&line, Some(tracker::Verdict::Rejected(r)) if !r.is_empty())
+            {
+                return pass("a reasoned rejection");
+            }
+            return force_back(
+                ctx,
+                "verdict",
+                &task,
+                "review",
+                "the verifier rejected it without `verdict: rejected by verifier: <reason>`",
+                &format!("chore({task}): enallagi gate refused a rejection with no reason"),
+                &format!("{task} went back to review: a rejection with no verdict reason."),
+            );
+        }
         Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
-        Ok(_) => {}
+        Ok(_) if line != Some(&tracker::Verdict::Verified) => {
+            return force_back(
+                ctx,
+                "verdict",
+                &task,
+                "review",
+                "done without `verdict: verified by verifier`",
+                &format!("chore({task}): enallagi gate refused a done with no verified verdict"),
+                &format!("{task} went back to review: done with no verified verdict."),
+            );
+        }
+        Ok(_) => {
+            let r = ruling.as_ref().expect("verified");
+            let missing: Vec<&str> = [("`spec:`", &r.spec), ("`standards:`", &r.standards)]
+                .iter()
+                .filter(|(_, v)| v.is_none())
+                .map(|(k, _)| *k)
+                .collect();
+            if !missing.is_empty() {
+                let reason = format!(
+                    "done without a {} line under the verdict: each review axis names its findings or `none`",
+                    missing.join(" or ")
+                );
+                return force_back(
+                    ctx,
+                    "verdict",
+                    &task,
+                    "ready-for-agent",
+                    &reason,
+                    &format!("chore({task}): enallagi gate refused a done missing a review axis"),
+                    &format!("{task} was forced back to ready: done missing a review axis."),
+                );
+            }
+        }
     }
 
     // STOP is the harness's own marker, never a lane's work, so it's excluded from the uncommitted count
@@ -410,7 +484,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
             ctx,
             "verdict",
             &task,
-            "ready",
+            "ready-for-agent",
             &reason,
             &format!(
                 "chore({task}): enallagi gate rejected a done verdict with work off the branch"
@@ -419,7 +493,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         );
     }
 
-    let report = check_delta(ctx.root, ctx.cfg, false);
+    let report = check_delta(ctx.sandbox, ctx.root, ctx.cfg, false);
     if let Some(halt) = hung(ctx, &report) {
         return halt;
     }
@@ -446,7 +520,7 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
         ctx,
         "verdict",
         &task,
-        "ready",
+        "ready-for-agent",
         &reason,
         &format!("chore({task}): enallagi gate rejected a false VERIFIED"),
         &format!(
@@ -456,32 +530,17 @@ fn verdict(ctx: &mut GateCtx) -> GateOutcome {
     GateOutcome { tally, ..outcome }
 }
 
-// the `ran:`/`exit:` pairs after the block's last verdict header; a recorded command may itself name VERIFIER
 fn claimed_runs(ctx: &GateCtx, task: &str) -> Vec<(String, i32)> {
-    let text = tasks_file(ctx.root, ctx.cfg).read().unwrap_or_default();
-    let blocks = queue::parse(&text).unwrap_or_default();
-    let Some(block) = blocks.iter().find(|b| b.id == task) else {
-        return Vec::new();
-    };
-    let lines: Vec<&str> = block.body.iter().map(|(_, l)| l.trim()).collect();
-    let marker = regex::Regex::new(r"^(notes:\s*)?VERIFIER\b").expect("pattern");
-    let Some(start) = lines.iter().rposition(|l| marker.is_match(l)) else {
-        return Vec::new();
-    };
-    let mut runs = Vec::new();
-    for pair in lines[start..].windows(2) {
-        let (Some(cmd), Some(exit)) = (pair[0].strip_prefix("ran:"), pair[1].strip_prefix("exit:"))
-        else {
-            continue;
-        };
-        if let Ok(exit) = exit.trim().trim_matches('`').parse() {
-            runs.push((cmd.trim().trim_matches('`').to_string(), exit));
-        }
-    }
-    runs
+    queue_of(ctx)
+        .get(task)
+        .ok()
+        .flatten()
+        .and_then(|b| tracker::verdict(&b))
+        .map(|r| r.runs)
+        .unwrap_or_default()
 }
 
-// a verdict's pasted exit is otherwise its word alone; the allowlist bounds what a lane's text may run here
+// a verdict's pasted exit is otherwise its word alone; the allowlist bounds what lane text may run
 fn claims(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -497,7 +556,7 @@ fn claims(ctx: &mut GateCtx) -> GateOutcome {
     }
     let runs = claimed_runs(ctx, &task);
     if runs.is_empty() {
-        return pass("the latest VERIFIER entry claims no ran:/exit: pair");
+        return pass("no ran:/exit: pair under the verdict line");
     }
     let timeout = ctx
         .cfg
@@ -508,24 +567,29 @@ fn claims(ctx: &mut GateCtx) -> GateOutcome {
     for (cmd, claimed) in runs {
         // the command goes to `sh -c`, so a prefix match alone would let `<prefix>; <anything>` run
         if cmd.contains([';', '&', '|', '`', '$', '<', '>', '\n'])
-            || !allow.iter().any(|p| cmd.starts_with(p.as_str()))
+            || !allow.iter().any(|p| allowed(&cmd, p))
         {
             skipped.push(format!("`{cmd}`"));
             continue;
         }
         let mut exits = [-1; 2];
         for exit in &mut exits {
-            let Ok(run) = run_bounded(ctx.root, &cmd, timeout) else {
-                continue;
-            };
-            let report = CheckReport {
-                timed_out: hang_reason("the claim", &cmd, timeout, &run),
-                ..CheckReport::default()
+            let report = match run_bounded(ctx.sandbox, ctx.root, &cmd, timeout) {
+                Ok(run) => {
+                    *exit = run.exit;
+                    CheckReport {
+                        timed_out: hang_reason("the claim", &cmd, timeout, &run),
+                        ..CheckReport::default()
+                    }
+                }
+                Err(e) => CheckReport {
+                    timed_out: Some(format!("{NEVER_RAN} `{cmd}`: {e}")),
+                    ..CheckReport::default()
+                },
             };
             if let Some(halt) = hung(ctx, &report) {
                 return halt;
             }
-            *exit = run.exit;
         }
         let [a, b] = exits;
         let line = format!("`{cmd}` claimed exit {claimed}, re-ran exit {a} and {b}");
@@ -546,7 +610,7 @@ fn claims(ctx: &mut GateCtx) -> GateOutcome {
             ctx,
             "claims",
             &task,
-            "ready",
+            "ready-for-agent",
             &reason,
             &format!("chore({task}): enallagi gate rejected a claimed exit"),
             &format!("{task} was forced back to ready: {}", refuted.join("; ")),
@@ -568,19 +632,124 @@ fn claims(ctx: &mut GateCtx) -> GateOutcome {
     pass(parts.join(". "))
 }
 
+// each finding answered once: an accept's test in a changed test file, a reject's command ran
+fn findings(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(task) = ctx.task.clone() else {
+        return pass("no task");
+    };
+    match status_of(ctx, &task) {
+        Err(_) => return unreadable(ctx, &task),
+        Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
+        Ok(_) => {}
+    }
+    let Some(b) = queue_of(ctx).get(&task).ok().flatten() else {
+        return unreadable(ctx, &task);
+    };
+    let lines = |key: &str| -> Vec<String> {
+        b.body
+            .iter()
+            .filter_map(|(_, l)| l.strip_prefix(key))
+            .map(|l| l.trim().to_string())
+            .collect()
+    };
+    // a finding settled on an earlier push was judged against that round's base
+    let settled = lines("settled:");
+    let ids: Vec<String> = lines("finding:")
+        .iter()
+        .filter_map(|l| l.split_whitespace().next().map(String::from))
+        .filter(|id| {
+            !settled
+                .iter()
+                .any(|s| s.split_whitespace().next() == Some(id))
+        })
+        .collect();
+    if ids.is_empty() {
+        return pass("no finding");
+    }
+    let answers = lines("answer:");
+    let ran: Vec<String> = tracker::verdict(&b)
+        .map(|r| r.runs.into_iter().map(|(cmd, _)| cmd).collect())
+        .unwrap_or_default();
+    let base = ctx.iter_base.clone().unwrap_or_default();
+    let globs = &ctx.cfg.layout.test_glob;
+    let files = match task_files(ctx, &base, &task, "") {
+        Ok(files) => files,
+        Err(e) => return fail(e.to_string()),
+    };
+    let tests: String = files
+        .iter()
+        .filter(|f| globs.is_empty() || in_scope(f, globs))
+        .filter_map(|f| git(ctx.root, &["show", &format!("HEAD:{f}")]).ok())
+        .collect();
+    let mut wrong = Vec::new();
+    for id in &ids {
+        let mine: Vec<&str> = answers
+            .iter()
+            .filter_map(|a| a.strip_prefix(id.as_str()))
+            .filter(|a| a.starts_with(' '))
+            .map(str::trim)
+            .collect();
+        let [answer] = mine[..] else {
+            wrong.push(format!("{id} has {} answers, not one", mine.len()));
+            continue;
+        };
+        if let Some(test) = answer.strip_prefix("accept ").map(str::trim) {
+            if test.is_empty() || !names_task(&tests, test) {
+                wrong.push(format!(
+                    "{id}'s test `{test}` is in no test file the round changed"
+                ));
+            }
+        } else if let Some(reject) = answer.strip_prefix("reject ") {
+            match reject.split_once(':').map(|(_, c)| c.trim()) {
+                None | Some("") => wrong.push(format!("{id}'s reject names no command")),
+                Some(cmd) if !ran.iter().any(|r| r == cmd) => {
+                    wrong.push(format!("{id}'s reject command `{cmd}` has no `ran:` line"))
+                }
+                Some(_) => {}
+            }
+        } else {
+            wrong.push(format!("{id}'s answer is neither accept nor reject"));
+        }
+    }
+    if wrong.is_empty() {
+        return pass(format!("{} finding(s) answered", ids.len()));
+    }
+    let why = wrong.join("; ");
+    force_back(
+        ctx,
+        "findings",
+        &task,
+        "ready-for-agent",
+        &format!("the verifier returned done and the findings gate rejected it: {why}"),
+        &format!("chore({task}): enallagi findings gate rejected a done verdict"),
+        &format!("{task} was forced back to ready by the findings gate: {why}."),
+    )
+}
+
+// a whole command word, so `cargo test` never admits `cargo testx`
+fn allowed(cmd: &str, entry: &str) -> bool {
+    let entry = entry.trim_end();
+    cmd.strip_prefix(entry)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+}
+
 // word boundaries, so one id never matches a longer id it prefixes
 pub fn names_task(subject: &str, task: &str) -> bool {
     regex::Regex::new(&format!(r"\b{}\b", regex::escape(task))).is_ok_and(|re| re.is_match(subject))
 }
 
-// the files the task's own commits changed: a commit whose subject names no task, or another task,
-// is an operator's or another round's and is not charged here. filter is a git --diff-filter value,
-// empty for every change
-fn commit_files(root: &Path, base: &str, task: &str, filter: &str) -> Vec<String> {
+// files changed by commits naming this task; filter is a --diff-filter value, empty for all
+fn commit_files(
+    root: &Path,
+    base: &str,
+    task: &str,
+    filter: &str,
+) -> Result<Vec<String>, git::GitError> {
     let flag = format!("--diff-filter={filter}");
     let mut files: Vec<String> = Vec::new();
-    for sha in task_commits(root, base, task) {
-        let mut args = vec!["show", "--format=", "--name-only"];
+    for sha in task_commits(root, base, task)? {
+        // both paths of a rename, so a restore at base brings the old one back
+        let mut args = vec!["show", "--format=", "--name-only", "--no-renames"];
         if !filter.is_empty() {
             args.push(&flag);
         }
@@ -591,17 +760,20 @@ fn commit_files(root: &Path, base: &str, task: &str, filter: &str) -> Vec<String
             }
         }
     }
-    files
+    Ok(files)
 }
 
-// the baseline lines the task's own commits add and do not take back: each commit's removals are
-// netted against what the earlier ones added, so an add a later commit reverses is not growth
-fn baseline_lines_added(root: &Path, inner: &str, base: &str, task: &str) -> Vec<String> {
+// baseline lines the task's commits net add: a line a later commit takes back is not growth
+fn baseline_lines_added(
+    root: &Path,
+    inner: &str,
+    base: &str,
+    task: &str,
+) -> Result<Vec<String>, git::GitError> {
     let mut added: Vec<String> = Vec::new();
-    for sha in task_commits(root, base, task) {
+    for sha in task_commits(root, base, task)? {
         let diff = git(root, &["show", "--format=", &sha, "--", inner]).unwrap_or_default();
-        // a failure name may itself start with + or -, so the file headers are told apart by
-        // position, not by a doubled prefix: everything before the first hunk is a header
+        // a failure name may start with + or -, so headers are told by position: all before the first hunk
         let body: Vec<&str> = diff
             .lines()
             .skip_while(|l| !l.starts_with("@@"))
@@ -619,58 +791,70 @@ fn baseline_lines_added(root: &Path, inner: &str, base: &str, task: &str) -> Vec
             added.push(new[1..].to_string());
         }
     }
-    added
+    Ok(added)
 }
 
-fn task_commits(root: &Path, base: &str, task: &str) -> Vec<String> {
+fn task_commits(root: &Path, base: &str, task: &str) -> Result<Vec<String>, git::GitError> {
     let range = format!("{base}..HEAD");
-    git(
+    Ok(git(
         root,
         &["log", "--reverse", "--no-merges", "--format=%h %s", &range],
-    )
-    .unwrap_or_default()
+    )?
     .lines()
     .filter_map(|l| l.split_once(' '))
     .filter(|(_, subject)| names_task(subject, task))
     .map(|(sha, _)| sha.to_string())
-    .collect()
+    .collect())
 }
 
-// the task's files: the product repository's, and in a nested install the harness
-// directory's under its own prefix
-fn task_files(ctx: &GateCtx, base: &str, task: &str, filter: &str) -> Vec<String> {
+// the task's files: the product repo's, and in a nested install the harness dir's under its prefix
+fn task_files(
+    ctx: &GateCtx,
+    base: &str,
+    task: &str,
+    filter: &str,
+) -> Result<Vec<String>, git::GitError> {
     let dir = &ctx.cfg.layout.harness_dir;
     let state = git::state_root(ctx.root, dir);
-    let mut files = commit_files(ctx.root, base, task, filter);
+    let mut files = commit_files(ctx.root, base, task, filter)?;
     if let Some(state_base) = ctx.state_base.as_deref().filter(|_| state != ctx.root) {
         files.extend(
-            commit_files(&state, state_base, task, filter)
+            commit_files(&state, state_base, task, filter)?
                 .into_iter()
                 .map(|f| format!("{dir}/{f}")),
         );
     }
-    files
+    Ok(files)
 }
 
 // a proposed block's scope: line is the adjudicator's to write, so widening counts from its promotion
 fn promoted_at(ctx: &GateCtx, task: &str, queued: &str) -> Option<String> {
-    if field_at(ctx, task, "status", Some(queued)).as_deref() != Some("proposed") {
+    if field_at(ctx, task, "status", Some(queued)).as_deref() != Some("needs-triage") {
         return None;
     }
-    let tasks = crate::config::instance_rel(ctx.root, &ctx.cfg.layout.harness_dir, "TASKS.md");
-    let (repo, inner, _) = git::locate(ctx.root, &ctx.cfg.layout.harness_dir, &tasks);
     let range = format!("{queued}..HEAD");
-    let revs = git::git(
-        &repo,
-        &["log", "--reverse", "--format=%H", &range, "--", &inner],
-    )
-    .ok()?;
-    revs.lines()
-        .find(|rev| field_at(ctx, task, "status", Some(rev)).is_some_and(|s| s != "proposed"))
-        .map(String::from)
+    tracker::ticket_revs(ctx.root, &ctx.cfg.layout.harness_dir, task, &range)?
+        .into_iter()
+        .find(|rev| field_at(ctx, task, "status", Some(rev)).is_some_and(|s| s != "needs-triage"))
 }
 
-// diffs the iteration's own commits against the task's scope: globs; also routes the three loops via rows: none — harness
+fn filed_untriaged(ctx: &GateCtx, path: &str) -> bool {
+    let name = Path::new(path).file_name().and_then(|n| n.to_str());
+    let Some(number) = name.and_then(|n| n.strip_prefix("T-")?.split('-').next()) else {
+        return false;
+    };
+    tracker::get_at(
+        ctx.root,
+        &ctx.cfg.layout.harness_dir,
+        &format!("T-{number}"),
+        "HEAD",
+    )
+    .and_then(|b| tracker::state(&b))
+    .as_deref()
+        == Some("needs-triage")
+}
+
+// diffs the iteration's own commits against the task's scope: globs
 fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let Some(task) = ctx.task.clone() else {
         return pass("no task");
@@ -685,15 +869,13 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         return pass("no base");
     }
 
-    // the lane edits the block it is graded against, so a path the line gained since the queue
-    // passes only with a `widened:` reason, and the verdict names it
+    // the lane edits its own block, so a path the line gained since queueing needs a `widened:` reason
     let head_block = |key: &str| {
         field_at(ctx, &task, key, Some("HEAD")).unwrap_or_else(|| field_of(ctx, &task, key))
     };
     let pats = scope_globs(&head_block("scope"));
-    // the commit that queued the block, not the round's base: in a review-only round the base is the
-    // implement round's own state commit, which already carries the widening
-    let queued_rev = git::task_queued_commit(ctx.root, &ctx.cfg.layout.harness_dir, &task)
+    // the queueing commit, not the round's base: a review-only round's base already has the widening
+    let queued_rev = tracker::queued_commit(ctx.root, &ctx.cfg.layout.harness_dir, &task)
         .ok()
         .flatten()
         .map(|rev| promoted_at(ctx, &task, &rev).unwrap_or(rev));
@@ -709,9 +891,16 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     let lock = rel(ctx, "harness.lock");
     let hashes = rel(ctx, "test-hashes.json");
     let bookkeeping: Vec<String> = BOOKKEEPING.iter().map(|name| rel(ctx, name)).collect();
-    // not in BOOKKEEPING, which the launcher commits by name, but its state commit carries a STOP
-    // written mid-run into whatever task the lane held
-    let stop = rel(ctx, "STOP");
+    // the lane's own ticket is the one queue path it may edit; another ticket's file is out of scope
+    let tickets = format!("{}/", rel(ctx, SPECS));
+    let own = queue_of(ctx).path_of(&task).and_then(|p| {
+        Some(
+            p.strip_prefix(ctx.root)
+                .ok()?
+                .to_string_lossy()
+                .into_owned(),
+        )
+    });
     let base_lock = lock_at(ctx, &lock, None);
     let head_lock = lock_at(ctx, &lock, Some("HEAD"));
     // ids the pipeline vendored fresh this iteration -- the task's scope: line never has to name them
@@ -727,15 +916,28 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
 
     let mut out_of: Vec<String> = Vec::new();
     let mut harness_hit: Vec<String> = Vec::new();
-    let changed = task_files(ctx, &base, &task, "");
-    let added = task_files(ctx, &base, &task, "A");
-    // cargo rewrites Cargo.lock from a manifest the range changed, and a commit without it leaves
-    // the tree dirty after the next build; the manifest still has to be on the scope: line
+    let (changed, added) = match (
+        task_files(ctx, &base, &task, ""),
+        task_files(ctx, &base, &task, "A"),
+    ) {
+        (Ok(changed), Ok(added)) => (changed, added),
+        (Err(e), _) | (_, Err(e)) => return fail(e.to_string()),
+    };
+    // Cargo.lock follows a changed manifest or the next build dirties the tree; the manifest needs scope:
     let manifest_in_scope = changed
         .iter()
         .any(|f| f.ends_with("Cargo.toml") && in_scope(f, &pats));
+    let rejections = format!("{}/", rel(ctx, tracker::OUT_OF_SCOPE));
     for f in changed {
-        if bookkeeping.contains(&f) || f == lock || f == stop {
+        if bookkeeping.contains(&f)
+            || f.starts_with(&rejections)
+            || f == lock
+            || own.as_ref() == Some(&f)
+        {
+            continue;
+        }
+        // a ticket the range adds is a filed finding, as appending a block was, so only untriaged
+        if added.contains(&f) && f.starts_with(&tickets) && filed_untriaged(ctx, &f) {
             continue;
         }
         if added_skills
@@ -745,16 +947,14 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         {
             continue;
         }
-        // a file the range ADDS under a locked id is that id's re-vendoring; one it rewrites is a
-        // hand edit, which the scope: line still has to name
+        // a file ADDED under a locked id is its re-vendoring; a rewrite is a hand edit scope: must name
         if added.contains(&f) && locked_skills.iter().any(|d| f.starts_with(d)) {
             continue;
         }
         if manifest_in_scope && (f == "Cargo.lock" || f.ends_with("/Cargo.lock")) {
             continue;
         }
-        // test-hashes.json is exempt when every re-cut key (present at base too, with a new value)
-        // is in scope; a key ADDED fresh (absent at base) needs no scope: line to cover it
+        // test-hashes.json is exempt when every re-cut key is in scope; a freshly added key needs no scope:
         if let Some(key_re) = (f == hashes).then_some(HASHES_KEY) {
             let touched = recut_keys(ctx, &f, key_re);
             if !touched.is_empty() {
@@ -788,8 +988,7 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
         }
     }
 
-    // present at base and (gone, or a field differs) at HEAD: a re-cut or a removal, neither of
-    // which is the pipeline's own fresh vendoring, so the id's vendored file still needs the scope: line
+    // present at base and gone or changed at HEAD: not fresh vendoring, so it still needs the scope: line
     let recut: Vec<(String, String)> = recut_ids(&base_lock.skill, &head_lock.skill)
         .into_iter()
         .map(|id| (format!("{skills_dir}/{id}/SKILL.md"), id))
@@ -811,11 +1010,14 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     if rows.contains("none") && rows.contains("harness") {
         harness_hit.clear();
     }
-    // the baseline only ever shrinks; a line the task's own commits ADD is a red check made green by
-    // hand, whatever rows: says
-    let grew = at_base(ctx, &rel(ctx, ".check-baseline")).is_some_and(|(repo, inner, base)| {
-        !baseline_lines_added(&repo, &inner, &base, &task).is_empty()
-    });
+    // the baseline only shrinks; a line the task ADDS is a red made green by hand, whatever rows: says
+    let grew = match at_base(ctx, &rel(ctx, ".check-baseline"))
+        .map(|(repo, inner, base)| baseline_lines_added(&repo, &inner, &base, &task))
+    {
+        Some(Err(e)) => return fail(e.to_string()),
+        Some(Ok(lines)) => !lines.is_empty(),
+        None => false,
+    };
 
     let unexplained = widening.is_some() && widened.is_empty();
     if out_of.is_empty() && harness_hit.is_empty() && !grew && !unexplained {
@@ -855,14 +1057,12 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     }
     let why = parts.join("; ");
     let reason = format!("the verifier returned done and the scope gate rejected it: {why}");
-    // to ready, not review: every scope refusal is answered by a code or block edit, and the
-    // implementer is the one role that may make it; its confirm-only arm finds the iteration's
-    // commits already on the branch and adds the `widened:` line or reverts the stray file
+    // to ready, not review: only the implementer may answer a scope refusal with a code or block edit
     force_back(
         ctx,
         "scope",
         &task,
-        "ready",
+        "ready-for-agent",
         &reason,
         &format!("chore({task}): harness scope gate rejected a done verdict"),
         &format!(
@@ -871,8 +1071,346 @@ fn scope(ctx: &mut GateCtx) -> GateOutcome {
     )
 }
 
-// a heading an agent deletes mid-edit leaves a block nothing counts: its body merges into its
-// neighbour and archive moves both out, so the id is gone with the tree still consistent (T-020, 9c0b4af)
+// a test switched off passes every other gate: the hashes guard only files already hashed
+fn skip_added(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(task) = ctx.task.clone() else {
+        return pass("no task");
+    };
+    match status_of(ctx, &task) {
+        Err(_) => return unreadable(ctx, &task),
+        Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
+        Ok(_) => {}
+    }
+    let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
+        return pass("no base");
+    };
+    if ctx.cfg.layout.skip_patterns.is_empty() {
+        return pass("skip_patterns is empty");
+    }
+    let res = match ctx
+        .cfg
+        .layout
+        .skip_patterns
+        .iter()
+        .map(|p| regex::Regex::new(p))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(res) => res,
+        Err(e) => return fail(format!("skip_patterns: {e}")),
+    };
+    let globs = &ctx.cfg.layout.test_glob;
+    let files = match task_files(ctx, &base, &task, "") {
+        Ok(files) => files,
+        Err(e) => return fail(e.to_string()),
+    };
+    let mut hits: Vec<String> = Vec::new();
+    // an empty test_glob reads every changed file, so an unset key never switches the gate off
+    for f in files
+        .iter()
+        .filter(|f| globs.is_empty() || in_scope(f, globs))
+    {
+        // the net diff: a skip taken back is gone, and a new one is numbered from its own hunk
+        let diff = match git(ctx.root, &["diff", "-U0", &base, "HEAD", "--", f]) {
+            Ok(diff) => diff,
+            Err(e) => return fail(e.to_string()),
+        };
+        let mut at = 0;
+        for l in diff.lines().skip_while(|l| !l.starts_with("@@")) {
+            if l.starts_with("@@") {
+                let plus = l.split_whitespace().find_map(|w| w.strip_prefix('+'));
+                at = plus
+                    .and_then(|p| p.split(',').next()?.parse().ok())
+                    .unwrap_or(0);
+            } else if let Some(added) = l.strip_prefix('+') {
+                if res.iter().any(|re| re.is_match(added)) {
+                    hits.push(format!("{f}:{at} {}", added.trim()));
+                }
+                at += 1;
+            }
+        }
+    }
+    if hits.is_empty() {
+        return pass(format!("{task} added no skip"));
+    }
+    let why = format!(
+        "added a skip with no stated reason: {}; state the reason or drop the skip",
+        hits.join(", ")
+    );
+    force_back(
+        ctx,
+        "skip-added",
+        &task,
+        "ready-for-agent",
+        &format!("the verifier returned done and the skip-added gate rejected it: {why}"),
+        &format!("chore({task}): harness skip-added gate rejected a done verdict"),
+        &format!("{task} was forced back to ready by the skip-added gate: {why}."),
+    )
+}
+
+// a detached worktree at rev, removed on drop so a hang or a panic leaves the lane clean
+struct Scratch {
+    root: PathBuf,
+    dir: tempfile::TempDir,
+}
+
+impl Scratch {
+    fn add(root: &Path, under: &Path, rev: &str) -> Result<Scratch, String> {
+        std::fs::create_dir_all(under).map_err(|e| e.to_string())?;
+        let dir = tempfile::Builder::new()
+            .prefix("enallagi-scratch-")
+            .tempdir_in(under)
+            .map_err(|e| e.to_string())?;
+        let path = dir.path().to_string_lossy().into_owned();
+        git(root, &["worktree", "add", "--detach", &path, rev]).map_err(|e| e.to_string())?;
+        Ok(Scratch {
+            root: root.to_path_buf(),
+            dir,
+        })
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let path = self.dir.path().to_string_lossy().into_owned();
+        let _ = git(&self.root, &["worktree", "remove", "--force", &path]);
+        let _ = git(&self.root, &["worktree", "prune"]);
+    }
+}
+
+// a test that passes with the task's other files back at base proves nothing
+fn red_first(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(task) = ctx.task.clone() else {
+        return pass("no task");
+    };
+    match status_of(ctx, &task) {
+        Err(_) => return unreadable(ctx, &task),
+        Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
+        Ok(_) => {}
+    }
+    let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
+        return pass("no base");
+    };
+    let globs = &ctx.cfg.layout.test_only_glob;
+    if globs.is_empty() {
+        return pass("test_only_glob is empty");
+    }
+    let (tests, source): (Vec<String>, Vec<String>) = match task_files(ctx, &base, &task, "") {
+        Ok(files) => files.into_iter().partition(|f| in_scope(f, globs)),
+        Err(e) => return fail(e.to_string()),
+    };
+    if tests.is_empty() {
+        return pass("no test-only file changed");
+    }
+    let tree = match Scratch::add(ctx.root, &std::env::temp_dir(), "HEAD") {
+        Ok(tree) => tree,
+        Err(e) => return fail(format!("red-first could not add a worktree: {e}")),
+    };
+    let at = tree.dir.path();
+    for f in &source {
+        // a file the task added is absent at base, so restoring it is deleting it
+        let restored = if git(at, &["cat-file", "-e", &format!("{base}:{f}")]).is_ok() {
+            git(at, &["checkout", &base, "--", f])
+                .map(drop)
+                .map_err(|e| e.to_string())
+        } else {
+            match std::fs::remove_file(at.join(f)) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+                _ => Ok(()),
+            }
+        };
+        if let Err(e) = restored {
+            return fail(format!("red-first could not restore {f} at base: {e}"));
+        }
+    }
+    let mut report = check_delta(ctx.sandbox, at, ctx.cfg, false);
+    drop(tree);
+    if let Some(halt) = hung(ctx, &report) {
+        return halt;
+    }
+    // red only on what the baseline forgives is the base's own red, not the new tests'
+    let dir = &ctx.cfg.layout.harness_dir;
+    let forgiven = baseline(&crate::config::instance_path(
+        ctx.root,
+        dir,
+        ".check-baseline",
+    ));
+    report.unforgiven.retain(|n| !forgiven.contains(n));
+    let named = tests.join(" ");
+    match report {
+        r if r.red && (r.unnamed || !r.unforgiven.is_empty()) => {
+            pass(format!("{named} red on base {base} (exit {})", r.exit))
+        }
+        _ => {
+            let why = format!(
+                "the check passes with {named} and every other changed file at base {base}, so the tests prove nothing"
+            );
+            force_back(
+                ctx,
+                "red-first",
+                &task,
+                "ready-for-agent",
+                &format!("the verifier returned done and the red-first gate rejected it: {why}"),
+                &format!("chore({task}): harness red-first gate rejected a done verdict"),
+                &format!("{task} was forced back to ready by the red-first gate: {why}."),
+            )
+        }
+    }
+}
+
+// a respond lane's state worktree lacks the ignored set; the main worktree holds it
+fn holdout_root(root: &Path, cfg: &Config) -> PathBuf {
+    let dir = &cfg.layout.harness_dir;
+    git::main_worktree_path(&root.join(dir))
+        .map(|main| main.join("holdouts"))
+        .unwrap_or_else(|| crate::config::instance_path(root, dir, "holdouts"))
+}
+
+/// a spec's holdouts: the executable regular files in `holdouts/<slug>/`, sorted
+pub fn holdout_set(root: &Path, cfg: &Config, slug: &str) -> Vec<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = holdout_root(root, cfg).join(slug);
+    let mut set: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            e.metadata()
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+        .map(|e| e.path())
+        .collect();
+    set.sort();
+    set
+}
+
+pub fn holdout_specs(root: &Path, cfg: &Config) -> Vec<String> {
+    let dir = holdout_root(root, cfg);
+    let mut specs: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|slug| !holdout_set(root, cfg, slug).is_empty())
+        .collect();
+    specs.sort();
+    specs
+}
+
+/// whether a lane's transcript or diff names a concrete set path; prose about holdouts never trips it
+pub fn names_holdout(
+    root: &Path,
+    cfg: &Config,
+    bases: &(Option<String>, Option<String>),
+    output: &str,
+) -> bool {
+    let paths: Vec<String> = holdout_specs(root, cfg)
+        .iter()
+        .map(|s| format!("holdouts/{s}"))
+        .collect();
+    if paths.is_empty() {
+        return false;
+    }
+    let state = git::state_root(root, &cfg.layout.harness_dir);
+    let mut texts = vec![output.to_string()];
+    for (repo, base) in [(root, &bases.0), (state.as_path(), &bases.1)] {
+        if let Some(base) = base.as_deref().filter(|b| !b.is_empty()) {
+            texts.extend(git(repo, &["diff", base]).ok());
+        }
+    }
+    texts.iter().any(|t| paths.iter().any(|p| t.contains(p)))
+}
+
+/// runs a spec's holdouts at `rev`; returns only (run, red), as anything more would reach a writer
+pub fn holdouts(
+    sandbox: &crate::sandbox::Sandbox,
+    root: &Path,
+    cfg: &Config,
+    cache: &Path,
+    slug: &str,
+    task: &str,
+    rev: &str,
+) -> Result<(usize, usize), String> {
+    let set = holdout_set(root, cfg, slug);
+    let tree = Scratch::add(
+        root,
+        &root.join(&cfg.layout.harness_dir).join("worktrees"),
+        rev,
+    )?;
+    let logs = cache
+        .join("holdouts")
+        .join(tracker::repo_slug(root))
+        .join(task);
+    std::fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
+    let timeout = cfg
+        .check
+        .timeout_duration()
+        .unwrap_or(crate::config::DEFAULT_CHECK_TIMEOUT);
+    let lifted = crate::sandbox::RolePolicy {
+        holdouts: true,
+        ..Default::default()
+    };
+    let mut red = 0;
+    for h in &set {
+        let mut w = sandbox.wrap_as(&[h.display().to_string()], tree.dir.path(), &[], &lifted);
+        let dir = h.parent().unwrap_or(h).display().to_string();
+        w.env.push(("ENALLAGI_HOLDOUTS".to_string(), dir));
+        let name = h.file_name().unwrap_or_default().to_string_lossy();
+        let output = match run_wrapped(&w, timeout) {
+            Ok(run) if run.refused.is_some() => return Err(run.refused.unwrap_or_default()),
+            Ok(run) if run.exit == 0 && !run.timed_out && run.stopped.is_none() => run.output,
+            Ok(run) => {
+                red += 1;
+                run.output
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        let _ = std::fs::write(logs.join(format!("{name}.log")), output);
+    }
+    Ok((set.len(), red))
+}
+
+// a red holdout says only how many, so the writer has nothing to fit the code to
+fn holdout(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(task) = ctx.task.clone() else {
+        return pass("no task");
+    };
+    match status_of(ctx, &task) {
+        Err(_) => return unreadable(ctx, &task),
+        Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
+        Ok(_) => {}
+    }
+    let Some(slug) = queue_of(ctx).spec_of(&task) else {
+        return pass("no holdout set");
+    };
+    if holdout_set(ctx.root, ctx.cfg, &slug).is_empty() {
+        return pass("no holdout set");
+    }
+    match holdouts(
+        ctx.sandbox,
+        ctx.root,
+        ctx.cfg,
+        &ctx.cache,
+        &slug,
+        &task,
+        "HEAD",
+    ) {
+        Err(e) => halted(ctx, format!("{task}: the holdouts could not be run: {e}")),
+        Ok((n, 0)) => pass(format!("holdouts: {n} of {n} green")),
+        Ok((n, k)) => {
+            let reason = format!("holdouts: {k} of {n} red");
+            force_back(
+                ctx,
+                "holdout",
+                &task,
+                "ready-for-agent",
+                &reason,
+                &format!("chore({task}): harness holdout gate rejected a done verdict"),
+                &format!("{task} was forced back to ready by the holdout gate: {reason}."),
+            )
+        }
+    }
+}
+
 // a lane that sets its own author puts an identity the operator never chose into their history
 fn commit_identity(ctx: &mut GateCtx) -> GateOutcome {
     let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
@@ -886,7 +1424,10 @@ fn commit_identity(ctx: &mut GateCtx) -> GateOutcome {
     }
     let range = format!("{base}..HEAD");
     // a merge commit carries an author too, so it is read like any other
-    let log = git(ctx.root, &["log", "--format=%h %ae", &range]).unwrap_or_default();
+    let log = match git(ctx.root, &["log", "--format=%h %ae", &range]) {
+        Ok(log) => log,
+        Err(e) => return fail(e.to_string()),
+    };
     let strangers: Vec<String> = log
         .lines()
         .filter_map(|l| l.split_once(' '))
@@ -908,20 +1449,24 @@ fn commit_task(ctx: &mut GateCtx) -> GateOutcome {
         return pass("no base");
     };
     let id = regex::Regex::new(r"\bT-[0-9]+\b").expect("task id pattern");
-    let mut state: Vec<String> = BOOKKEEPING.iter().map(|name| rel(ctx, name)).collect();
-    state.push(rel(ctx, "STOP"));
+    let state: Vec<String> = BOOKKEEPING.iter().map(|name| rel(ctx, name)).collect();
     let skills_dir = format!("{}/", skills_dir_for(ctx.cfg));
     // the launcher's own state and vendoring commits name no task, and touch nothing a lane writes
     let launcher = |files: &[&str]| {
         !files.is_empty()
             && files.iter().all(|f| {
-                state.iter().any(|s| s == f)
+                state
+                    .iter()
+                    .any(|s| f == s || f.starts_with(&format!("{s}/")))
                     || is_harness_path(ctx.cfg, f)
                     || f.starts_with(&skills_dir)
             })
     };
     let range = format!("{base}..HEAD");
-    let log = git(ctx.root, &["log", "--no-merges", "--format=%h %s", &range]).unwrap_or_default();
+    let log = match git(ctx.root, &["log", "--no-merges", "--format=%h %s", &range]) {
+        Ok(log) => log,
+        Err(e) => return fail(e.to_string()),
+    };
     let unnamed: Vec<String> = log
         .lines()
         .filter_map(|l| l.split_once(' '))
@@ -946,25 +1491,33 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
     let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
         return pass("no base");
     };
-    let tasks = rel(ctx, "TASKS.md");
-    let before = ids_in_rev(ctx, &tasks);
+    let Some((_, _, rev)) = at_base(ctx, &rel(ctx, SPECS)) else {
+        return pass("no base");
+    };
+    let Some(at) = tracker::blocks_at(ctx.root, &ctx.cfg.layout.harness_dir, &rev) else {
+        return fail(format!("the queue could not be read at base {rev}"));
+    };
+    let before: Vec<String> = at.into_iter().map(|b| b.id).collect();
     if before.is_empty() {
         return pass("no ids at base");
     }
-    let Ok(text) = tasks_file(ctx.root, ctx.cfg).read() else {
-        return pass("TASKS.md unreadable; queue-hygiene owns that");
+    let q = queue_of(ctx);
+    let Ok(now) = q.blocks() else {
+        return pass("the queue is unreadable; queue-hygiene owns that");
     };
-    let Ok(now) = queue::parse(&text) else {
-        return pass("TASKS.md unparseable; queue-hygiene owns that");
-    };
-    let archived =
-        std::fs::read_to_string(ctx.root.join(rel(ctx, "DECISIONS.md"))).unwrap_or_default();
+    let Tracker(path) = q;
+    let tasks = path
+        .strip_prefix(ctx.root)
+        .unwrap_or(&path)
+        .to_string_lossy()
+        .into_owned();
+    // a kill is wontfix, never a deletion, so DECISIONS.md accounts for nothing
     let lost: Vec<String> = before
         .into_iter()
-        .filter(|id| !now.iter().any(|b| &b.id == id) && !archived.contains(&format!("[{id}]")))
+        .filter(|id| !now.iter().any(|b| &b.id == id))
         .collect();
     if lost.is_empty() {
-        return pass("every id at the base is still in the queue or in DECISIONS.md");
+        return pass("every ticket at the base still has its file");
     }
     let (_, inner, nested) = git::locate(ctx.root, &ctx.cfg.layout.harness_dir, &tasks);
     let show = if nested {
@@ -974,9 +1527,49 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
     };
     let base = at_base(ctx, &tasks).map(|(_, _, b)| b).unwrap_or(base);
     let reason = format!(
-        "{} left TASKS.md without reaching DECISIONS.md; recover with `{show} {base}:{inner}`",
+        "{} lost its ticket file; a kill is wontfix, never a deletion; recover with `{show} {base}:{inner}`",
         lost.join(", "),
     );
+    halted(ctx, reason)
+}
+
+// the decompose stage names a spec, not a ticket, so its slug rides in ctx.task
+fn tickets(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(slug) = ctx.task.clone() else {
+        return pass("no spec");
+    };
+    let problems = tracker::check(ctx.root, ctx.cfg, &slug);
+    if !problems.is_empty() {
+        return halted(
+            ctx,
+            format!(
+                "tickets: the drafts of {slug} fail `enallagi tasks check {slug}`: {}",
+                problems.join("; ")
+            ),
+        );
+    }
+    let q = queue_of(ctx);
+    let decisions =
+        std::fs::read_to_string(ctx.root.join(rel(ctx, "DECISIONS.md"))).unwrap_or_default();
+    let archived = block::parse(&decisions).unwrap_or_default();
+    let numbered = q
+        .next_id(&archived)
+        .map_err(|e| e.to_string())
+        .and_then(|next| {
+            q.number_drafts(&slug, next[2..].parse().unwrap_or(1))
+                .map_err(|e| e.to_string())
+        });
+    match numbered {
+        Ok(ids) => commit(
+            ctx,
+            &[SPECS],
+            &format!("decompose {slug}: {} at needs-triage", ids.join(", ")),
+        ),
+        Err(e) => halted(ctx, format!("tickets: {slug}: {e}")),
+    }
+}
+
+fn halted(ctx: &mut GateCtx, reason: String) -> GateOutcome {
     ctx.warnings.push(reason.clone());
     ctx.halts.push(reason.clone());
     GateOutcome {
@@ -987,12 +1580,148 @@ fn queue_intact(ctx: &mut GateCtx) -> GateOutcome {
     }
 }
 
-// queue::ids_at is ids at a status; this is ids at a revision
-fn ids_in_rev(ctx: &GateCtx, tasks: &str) -> Vec<String> {
-    show_at(ctx, tasks, None)
-        .and_then(|text| queue::parse(&text).ok())
-        .map(|blocks| blocks.into_iter().map(|b| b.id).collect())
-        .unwrap_or_default()
+// a leak is never handed back to a lane: the history rewrite it needs is a person's
+fn security(ctx: &mut GateCtx) -> GateOutcome {
+    let Some(task) = ctx.task.clone() else {
+        return pass("no task");
+    };
+    match status_of(ctx, &task) {
+        Err(_) => return unreadable(ctx, &task),
+        Ok(status) if status.as_deref() != Some("done") => return pass("the verdict is not done"),
+        Ok(_) => {}
+    }
+    let Some(base) = ctx.iter_base.clone().filter(|b| !b.is_empty()) else {
+        return pass("no base");
+    };
+    let leaks = match gitleaks(ctx, &base) {
+        Ok(leaks) => leaks,
+        Err(e) => return halted(ctx, format!("security: {e}")),
+    };
+    if leaks.is_empty() {
+        return match advisories(ctx, &base, &task) {
+            Err(e) => halted(ctx, format!("security: {e}")),
+            Ok(new) if new.is_empty() => pass(format!("{task} added no secret and no advisory")),
+            Ok(new) => {
+                let why = format!(
+                    "a dependency change adds an advisory the base did not carry: {}; bump past it",
+                    new.join(", ")
+                );
+                force_back(
+                    ctx,
+                    "security",
+                    &task,
+                    "ready-for-agent",
+                    &format!("the verifier returned done and the security gate rejected it: {why}"),
+                    &format!("chore({task}): harness security gate rejected a done verdict"),
+                    &format!("{task} was forced back to ready by the security gate: {why}."),
+                )
+            }
+        };
+    }
+    let why = format!(
+        "a secret in the task's commits: {}; the history needs rewriting by hand",
+        leaks.join(", ")
+    );
+    let out = force_back(
+        ctx,
+        "security",
+        &task,
+        "ready-for-human",
+        &format!("the verifier returned done and the security gate held it: {why}"),
+        &format!("chore({task}): harness security gate held a leaked secret"),
+        &format!("{task} was set to ready-for-human by the security gate: {why}."),
+    );
+    halted(ctx, out.reason)
+}
+
+// only rule, file, line and commit leave the report: events.jsonl and the ticket are committed
+fn gitleaks(ctx: &GateCtx, base: &str) -> Result<Vec<String>, String> {
+    let dir = &ctx.cfg.layout.harness_dir;
+    let baseline = crate::config::instance_path(ctx.root, dir, crate::security::BASELINE);
+    if !baseline.is_file() {
+        return Err(format!(
+            "no secrets baseline at {}; run `enallagi init` to record one",
+            baseline.display()
+        ));
+    }
+    let reports = ctx.cache.join("security");
+    let io = |e: std::io::Error| format!("{}: {e}", reports.display());
+    std::fs::create_dir_all(&reports).map_err(io)?;
+    let scratch = tempfile::Builder::new()
+        .prefix("run-")
+        .tempdir_in(&reports)
+        .map_err(io)?;
+    let args = [
+        format!("--log-opts={base}..HEAD"),
+        "--baseline-path".to_string(),
+        baseline.display().to_string(),
+    ];
+    let report = scratch.path().join("gitleaks.json");
+    let findings = crate::security::gitleaks(ctx.root, dir, &ctx.cache, &args, &report)?;
+    Ok(findings
+        .iter()
+        .map(|f| {
+            let s = |k: &str| f[k].as_str().unwrap_or("?").to_string();
+            format!(
+                "{} {}:{} {}",
+                s("RuleID"),
+                s("File"),
+                f["StartLine"],
+                s("Commit")
+            )
+        })
+        .collect())
+}
+
+// an advisory charged to the lane is one its lockfile change brought: present at HEAD, not at base
+fn advisories(ctx: &GateCtx, base: &str, task: &str) -> Result<Vec<String>, String> {
+    let locks: Vec<String> = task_files(ctx, base, task, "")
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|f| {
+            let name = Path::new(f).file_name().and_then(|n| n.to_str());
+            name.is_some_and(|n| crate::security::LOCKFILES.contains(&n))
+                && ctx.root.join(f).is_file()
+        })
+        .collect();
+    if locks.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dir = &ctx.cfg.layout.harness_dir;
+    let reports = ctx.cache.join("security");
+    let io = |e: std::io::Error| format!("{}: {e}", reports.display());
+    std::fs::create_dir_all(&reports).map_err(io)?;
+    let scratch = tempfile::Builder::new()
+        .prefix("run-")
+        .tempdir_in(&reports)
+        .map_err(io)?;
+    let mut new = Vec::new();
+    for (i, f) in locks.iter().enumerate() {
+        let out = |side: &str| scratch.path().join(format!("{side}-{i}.json"));
+        let osv = |lock: &Path, report: PathBuf| {
+            crate::security::osv(ctx.root, dir, &ctx.cache, lock, &report)
+        };
+        let head = osv(&ctx.root.join(f), out("head"))?;
+        // the same file name, since osv-scanner picks its parser by name
+        let at_base = match git(ctx.root, &["show", &format!("{base}:{f}")]) {
+            Ok(text) => {
+                let copy = scratch
+                    .path()
+                    .join(format!("base-{i}"))
+                    .join(Path::new(f).file_name().unwrap_or_default());
+                std::fs::create_dir_all(copy.parent().unwrap_or(scratch.path())).map_err(io)?;
+                std::fs::write(&copy, text).map_err(io)?;
+                osv(&copy, out("base"))?
+            }
+            Err(_) => Vec::new(),
+        };
+        for (name, version, id) in head {
+            if !at_base.iter().any(|(n, _, a)| *n == name && *a == id) {
+                new.push(format!("{f}: {name} {version} {id}"));
+            }
+        }
+    }
+    Ok(new)
 }
 
 fn added_ids(base: &[LockEntry], head: &[LockEntry]) -> Vec<String> {
@@ -1020,7 +1749,7 @@ pub(crate) fn role_file(cfg: &Config, id: &str) -> String {
     format!("{}/roles/{id}.md", cfg.layout.harness_dir)
 }
 
-fn scope_globs(line: &str) -> Vec<String> {
+pub(crate) fn scope_globs(line: &str) -> Vec<String> {
     line.replace(['`', ' '], "")
         .replace(',', " ")
         .split_whitespace()
@@ -1054,16 +1783,14 @@ pub(crate) fn skills_dir_for(cfg: &Config) -> String {
 // harness.lock has its own struct and is compared with skills::parse_lock, not this text pattern
 const HASHES_KEY: &str = r#"^[+-]\s*"([^"]+)"\s*:"#;
 
-// the lock as toml::from_str reads it at a given commit; a missing file (nothing vendored yet at
-// that commit) is an empty lock, not an error
+// the lock at a commit as toml::from_str reads it; a missing file is an empty lock, not an error
 fn lock_at(ctx: &GateCtx, lock: &str, rev: Option<&str>) -> crate::skills::Lock {
     show_at(ctx, lock, rev)
         .and_then(|text| crate::skills::parse_lock(&text).ok())
         .unwrap_or_default()
 }
 
-// same key regex as HASHES_KEY, applied to a revision's whole file rather than a diff, to
-// tell an added key (present in HEAD, absent at base) from a re-cut of one already at base
+// HASHES_KEY over a revision's whole file, to tell a key added at HEAD from a re-cut of a base key
 fn keys_at(ctx: &GateCtx, file: &str, diff_key_re: &str) -> Vec<String> {
     let plain = format!("^{}", &diff_key_re[5..]);
     let (Ok(re), Some(text)) = (regex::Regex::new(&plain), show_at(ctx, file, None)) else {
@@ -1104,6 +1831,19 @@ pub fn in_scope(path: &str, globs: &[String]) -> bool {
     })
 }
 
+// globs overlap unless literal prefixes diverge, by bytes, since in_scope lets `*` cross `/`
+pub fn overlaps(a: &[String], b: &[String]) -> bool {
+    let prefix = |g: &String| g[..g.find(['*', '?', '[', '{']).unwrap_or(g.len())].to_string();
+    a.is_empty()
+        || b.is_empty()
+        || a.iter().any(|x| {
+            b.iter().any(|y| {
+                let (p, q) = (prefix(x), prefix(y));
+                p.starts_with(&q) || q.starts_with(&p)
+            })
+        })
+}
+
 // the one sentinel `probes` also writes, so a caller can tell "never started" from "started and red"
 pub const NEVER_RAN: &str = "the check could not be run:";
 
@@ -1115,7 +1855,7 @@ pub struct CheckReport {
     pub unnamed: bool,
     pub output: String,
     pub exit: i32,
-    /// The halt reason when the check ran past `[check] timeout` or a signal stopped it. Neither red nor green.
+    /// why the check halted: past `[check] timeout`, a signal, or no start; neither red nor green
     pub timed_out: Option<String>,
     pub tally: Tally,
 }
@@ -1134,8 +1874,7 @@ impl CheckReport {
         }
     }
 
-    // a failure the exit hid, or a check that ran and printed no count, is a number nobody can quote.
-    // `counts` is whether this repository's check prints a count the tally reads at all
+    // a failure the exit hid, or no printed count, is a number nobody can quote; `counts`: one is printed
     pub fn tally_warning(&self, command: &str, counts: bool) -> Option<String> {
         if self.timed_out.is_some() || self.output.starts_with(NEVER_RAN) {
             return None;
@@ -1170,6 +1909,8 @@ struct Run {
     output: String,
     timed_out: bool,
     stopped: Option<&'static str>,
+    // the wrapper's own setup error: nothing of the product ran
+    refused: Option<String>,
 }
 
 const POLL: Duration = Duration::from_millis(100);
@@ -1178,13 +1919,20 @@ const GRACE: Duration = Duration::from_secs(10);
 // how long a killed group's pipes get to close before an unfinished reader is left detached
 const DRAIN: Duration = Duration::from_secs(1);
 
-// the check gets its own process group so a build tool's children die with it, not with the shell alone
-fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result<Run> {
+// the check gets its own process group so a build tool's children die with it, not the shell alone
+fn run_bounded(
+    sandbox: &crate::sandbox::Sandbox,
+    root: &Path,
+    command: &str,
+    timeout: Duration,
+) -> std::io::Result<Run> {
+    run_wrapped(&sandbox.wrap(&["sh", "-c", command], root, &[]), timeout)
+}
+
+fn run_wrapped(wrapped: &crate::sandbox::Wrapped, timeout: Duration) -> std::io::Result<Run> {
     use std::os::unix::process::CommandExt;
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(root)
+    let mut child = wrapped
+        .command()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1192,7 +1940,7 @@ fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result
         .spawn()?;
     let pgid = child.id();
 
-    // stdout and stderr interleave into one buffer, and draining them keeps a chatty check off a full pipe
+    // stdout and stderr interleave into one buffer; draining keeps a chatty check off a full pipe
     let buffer = Arc::new(Mutex::new(String::new()));
     let mut readers = Vec::new();
     if let Some(out) = child.stdout.take() {
@@ -1249,11 +1997,22 @@ fn run_bounded(root: &Path, command: &str, timeout: Duration) -> std::io::Result
             .code()
             .unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
     };
+    let wrapper = Path::new(&wrapped.argv[0]).file_name();
+    let refused = (exit != 0
+        && (wrapper == Some("sandbox-exec".as_ref()) && output.starts_with("sandbox-exec:")
+            || wrapper == Some("bwrap".as_ref()) && output.starts_with("bwrap:")))
+    .then(|| {
+        format!(
+            "{} (exit {exit})",
+            output.lines().next().unwrap_or_default()
+        )
+    });
     Ok(Run {
         exit,
         output,
         timed_out,
         stopped,
+        refused,
     })
 }
 
@@ -1283,7 +2042,7 @@ fn signal(sig: i32, pgid: u32) -> bool {
     unsafe { libc::kill(group, sig) == 0 }
 }
 
-fn drain<R: Read + Send + 'static>(
+pub(crate) fn drain<R: Read + Send + 'static>(
     pipe: R,
     buffer: Arc<Mutex<String>>,
 ) -> std::thread::JoinHandle<()> {
@@ -1345,7 +2104,6 @@ fn tally_by(output: &str, pattern: &str) -> Tally {
     t
 }
 
-// the gate's copy of the tally, and the digest's warning when the tally contradicts the exit
 // the runner whose summary `tally` parses, named by the fail_name the preset pins
 fn counts_test_results(cfg: &Config) -> bool {
     !cfg.check.tally.is_empty()
@@ -1363,7 +2121,12 @@ fn counted(ctx: &mut GateCtx, report: &CheckReport) -> Option<Tally> {
     counts.then_some(report.tally)
 }
 
-pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
+pub fn check_delta(
+    sandbox: &crate::sandbox::Sandbox,
+    root: &Path,
+    cfg: &Config,
+    force: bool,
+) -> CheckReport {
     let command = if force {
         &cfg.check.force
     } else {
@@ -1373,14 +2136,15 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
         .check
         .timeout_duration()
         .unwrap_or(crate::config::DEFAULT_CHECK_TIMEOUT);
-    let run = match run_bounded(root, command, timeout) {
+    let mark = sandbox.denials_since(0).len();
+    let run = match run_bounded(sandbox, root, command, timeout) {
         Ok(run) => run,
         Err(err) => {
+            let reason = format!("{NEVER_RAN} {err}");
             return CheckReport {
-                red: true,
-                unnamed: true,
-                output: format!("{NEVER_RAN} {err}"),
+                output: reason.clone(),
                 exit: -1,
+                timed_out: Some(reason),
                 ..CheckReport::default()
             };
         }
@@ -1388,7 +2152,7 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
     let hang = hang_reason("the check", command, timeout, &run);
     let Run { exit, output, .. } = run;
     // a runner forced into colour would otherwise need every fail_name to spell out its escape codes
-    let output = strip_ansi(&output);
+    let mut output = strip_ansi(&output);
     let tally = tally(&output, &cfg.check.tally);
     if let Some(reason) = hang {
         return CheckReport {
@@ -1419,6 +2183,13 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
     };
     names.sort();
     names.dedup();
+    // after the names, so a refusal line never reads as a failing test
+    for d in sandbox.denials_since(mark) {
+        output.push_str(&format!(
+            "\nsandbox refused {}:{} ({})",
+            d.host, d.port, d.reason
+        ));
+    }
 
     let baseline = baseline(&crate::config::instance_path(
         root,
@@ -1439,7 +2210,6 @@ pub fn check_delta(root: &Path, cfg: &Config, force: bool) -> CheckReport {
     }
 }
 
-/// The text with its ANSI colour and cursor sequences removed.
 pub fn strip_ansi(text: &str) -> String {
     static ANSI: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     ANSI.get_or_init(|| {
@@ -1452,7 +2222,7 @@ pub fn strip_ansi(text: &str) -> String {
     .into_owned()
 }
 
-// strips a trailing " [<digits>(.<digits>)?(s|m)]" — a test-runner-printed duration, not part of the test's name
+// strips a trailing " [<n>(.<n>)?(s|m)]": a runner-printed duration, not part of the test name
 fn strip_duration(name: &str) -> String {
     let trimmed = name.trim_end();
     let Some(open) = trimmed.rfind(" [") else {
@@ -1480,6 +2250,11 @@ fn baseline(path: &Path) -> Vec<String> {
 }
 
 fn hang_reason(what: &str, command: &str, timeout: Duration, run: &Run) -> Option<String> {
+    if let Some(line) = &run.refused {
+        return Some(format!(
+            "the sandbox could not start {what}, so it is neither red nor green: {line}; run outside any other sandbox, or set `[sandbox] mode = \"off\"`"
+        ));
+    }
     match run.stopped {
         Some(signal) => Some(format!(
             "{what} was stopped by {signal} and its process group was killed: `{command}`"
@@ -1515,7 +2290,7 @@ fn hung(ctx: &mut GateCtx, report: &CheckReport) -> Option<GateOutcome> {
 }
 
 fn check_gate(ctx: &mut GateCtx) -> GateOutcome {
-    let report = check_delta(ctx.root, ctx.cfg, false);
+    let report = check_delta(ctx.sandbox, ctx.root, ctx.cfg, false);
     if let Some(halt) = hung(ctx, &report) {
         return halt;
     }
@@ -1549,15 +2324,18 @@ fn judged(report: &CheckReport) -> GateOutcome {
     ))
 }
 
-// the probe answers from the templates its own binary compiled in, so the gate spawns the binary
-// the check just rebuilt instead of reading them in this process
+// the probe answers from its binary's compiled templates, so the gate spawns the freshly built one
 fn install_stale(ctx: &mut GateCtx) -> GateOutcome {
     let spawned = std::env::current_exe()
         .map_err(|e| e.to_string())
         .and_then(|exe| {
-            Command::new(exe)
-                .args(["probe", "install-stale"])
-                .current_dir(ctx.root)
+            ctx.sandbox
+                .wrap(
+                    &[&exe.to_string_lossy(), "probe", "install-stale"],
+                    ctx.root,
+                    &[],
+                )
+                .command()
                 .output()
                 .map_err(|e| e.to_string())
         });
@@ -1601,7 +2379,7 @@ fn stale_path(text: &str) -> Result<Option<String>, String> {
     ))
 }
 
-// a fix needing the spec or contract is neither a promotion nor a kill; the adjudicator halts and the run stops
+// a fix needing the spec or contract is neither promotion nor kill; the adjudicator halts the run
 fn adjudicator_halt(ctx: &mut GateCtx) -> GateOutcome {
     let Some(id) = halt_id(&ctx.stage_output) else {
         return pass("the adjudicator did not halt");
@@ -1635,7 +2413,11 @@ fn halt_id(output: &str) -> Option<String> {
 
 // an empty queue alone isn't exhaustion; pipeline's end_after_dry_rounds decides how many in a row is
 fn dry_round(ctx: &mut GateCtx) -> GateOutcome {
-    match takeable(ctx.root, ctx.cfg) {
+    match queue_of(ctx)
+        .blocks()
+        .ok()
+        .and_then(|b| tracker::takeable(&b))
+    {
         Some(task) => {
             *ctx.dry_rounds = 0;
             pass(format!(
@@ -1652,11 +2434,6 @@ fn dry_round(ctx: &mut GateCtx) -> GateOutcome {
     }
 }
 
-pub fn takeable(root: &Path, cfg: &Config) -> Option<String> {
-    let text = tasks_file(root, cfg).read().ok()?;
-    queue::ready_unattended(&queue::parse(&text).ok()?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1671,6 +2448,8 @@ mod tests {
         warnings: Vec<String>,
         halts: Vec<String>,
         dry_rounds: u32,
+        cache: tempfile::TempDir,
+        sandbox: crate::sandbox::Sandbox,
     }
 
     impl Env {
@@ -1683,7 +2462,7 @@ mod tests {
             repo.write(".enallagi/.gitignore", "events.jsonl\n*.log\nlogs/\n");
             let cmd = repo.stub_check(check_body);
             repo.write(
-                "enallagi.toml",
+                ".enallagi/enallagi.toml",
                 &format!(
                     "[check]\ncommand = \"{cmd}\"\ntimeout = \"{timeout}\"\nfail_name = '\\(fail\\) (.+)$'\n"
                 ),
@@ -1692,13 +2471,15 @@ mod tests {
             let cfg = crate::config::load(&repo.root).expect("load enallagi.toml");
             let writer = Writer::new(Log::open(&repo.root.join(".enallagi")));
             Env {
-                repo,
-                cfg,
                 writer,
                 stage_output: String::new(),
                 warnings: Vec::new(),
                 halts: Vec::new(),
                 dry_rounds: 0,
+                cache: tempfile::tempdir().expect("cache"),
+                sandbox: crate::sandbox::Sandbox::start(&repo.root, &cfg),
+                repo,
+                cfg,
             }
         }
 
@@ -1715,25 +2496,54 @@ mod tests {
                 warnings: &mut self.warnings,
                 halts: &mut self.halts,
                 dry_rounds: &mut self.dry_rounds,
+                cache: self.cache.path().to_path_buf(),
+                sandbox: &self.sandbox,
             }
         }
 
+        // a done carries the verifier's verdict, as a lane's would
         fn queue(&self, status: &str, scope: &str, rows: &str) {
-            self.repo.write(
-                "TASKS.md",
-                &format!(
-                    "## [T-001] first\nscope: {scope}\nrows: {rows}\nblockedBy: none\nstatus: {status}\n"
-                ),
-            );
+            let verdict = match status {
+                "done" => "verdict: verified by verifier\nspec: none\nstandards: none\n",
+                _ => "",
+            };
+            self.write_queue(&format!(
+                "## [T-001] first\nscope: {scope}\nrows: {rows}\nblockedBy: none\nstatus: {status}\n{verdict}"
+            ));
+        }
+
+        fn write_queue(&self, text: &str) {
+            self.repo.queue(".enallagi", text);
+        }
+
+        // two files under one id, which append refuses, so the second is written by hand
+        fn duplicate_queue(&self, status: &str) {
+            let text = |title: &str| format!("## [T-001] {title}\nstatus: {status}\n");
+            self.write_queue(&text("first"));
+            let first = self.tracker().path_of("T-001").expect("T-001");
+            let again = &block::parse(&text("again")).expect("parse")[0];
+            std::fs::write(
+                first.with_file_name(tracker::file_name(&again.id, &again.title)),
+                tracker::ticket_text(again),
+            )
+            .expect("write the duplicate");
+        }
+
+        fn tracker(&self) -> Tracker {
+            Tracker::open(&self.repo.root, &self.cfg.layout.harness_dir)
+        }
+
+        fn instance(&self, name: &str) -> String {
+            format!(".enallagi/{name}")
         }
 
         fn tasks_text(&self) -> String {
-            std::fs::read_to_string(crate::config::instance_path(
-                &self.repo.root,
-                &self.cfg.layout.harness_dir,
-                "TASKS.md",
-            ))
-            .expect("read TASKS.md")
+            let blocks = self.tracker().blocks().expect("read the queue");
+            blocks
+                .iter()
+                .map(block::block_text)
+                .collect::<Vec<_>>()
+                .join("\n\n")
         }
 
         fn log(&self) -> String {
@@ -1753,7 +2563,7 @@ mod tests {
             assert!(events.iter().any(|e| matches!(&e.kind,
                 Kind::Gate { gate, pass, .. } if gate == "scope" && !*pass)));
             assert!(events.iter().any(|e| matches!(&e.kind,
-                Kind::TaskStatus { to, by, .. } if to == "ready" && by == "scope")));
+                Kind::TaskStatus { to, by, .. } if to == "ready-for-agent" && by == "scope")));
             // the reason rides in the block, where the next implement stage reads it first
             assert!(
                 self.tasks_text()
@@ -1762,6 +2572,80 @@ mod tests {
                 self.tasks_text()
             );
         }
+    }
+
+    fn draft(num: &str, blocked: &str) -> String {
+        format!("# {num}: Step {num}\n\n**What to build:** step {num}.\n\n**Blocked by:** {blocked}\n\n**Status:** ready-for-agent\n\n- [ ] step {num} shows\n")
+    }
+
+    // T-001 queued, an accepted spec `app`, and its drafts left uncommitted as a decomposer leaves them
+    fn drafted(drafts: &[(&str, &str)]) -> Env {
+        let env = Env::new("exit 0\n");
+        env.write_queue("## [T-001] open\nstatus: ready-for-agent\n");
+        env.repo.write(
+            ".enallagi/specs/app/spec.md",
+            "# App\n\n**Status:** ready-for-agent\n",
+        );
+        env.repo.commit_all("spec");
+        for (num, blocked) in drafts {
+            env.repo.write(
+                &format!(".enallagi/specs/app/issues/{num}-step.md"),
+                &draft(num, blocked),
+            );
+        }
+        env
+    }
+
+    #[test]
+    fn tickets_numbers_drafts() {
+        let mut env = drafted(&[("01", "None"), ("02", "None"), ("03", "01, 02")]);
+        let out = run("tickets", &mut env.ctx(Some("app"), None));
+        assert!(out.pass, "{out:?}");
+        let t = env.tracker();
+        let blocks = t.blocks().unwrap();
+        let ids: Vec<&str> = blocks.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, ["T-001", "T-002", "T-003", "T-004"]);
+        for b in &blocks[1..] {
+            assert_eq!(tracker::state(b).as_deref(), Some("needs-triage"), "{b:?}");
+            assert_eq!(
+                block::field(b, "probe").as_deref(),
+                Some("decompose"),
+                "{b:?}"
+            );
+            assert!(block::field(b, "criteria").is_some(), "{b:?}");
+        }
+        assert_eq!(block::blockers(&blocks[3]), ["T-002", "T-003"]);
+        assert!(t
+            .path_of("T-004")
+            .unwrap()
+            .ends_with("app/issues/T-004-step.md"));
+        assert!(t.drafts("app").unwrap().is_empty());
+        assert!(
+            env.log()
+                .contains("decompose app: T-002, T-003, T-004 at needs-triage"),
+            "{}",
+            env.log()
+        );
+    }
+
+    #[test]
+    fn tickets_halts_on_cycle() {
+        let mut env = drafted(&[("01", "02"), ("02", "01")]);
+        let issues = env.repo.root.join(".enallagi/specs/app/issues");
+        let before = std::fs::read_to_string(issues.join("01-step.md")).unwrap();
+        let out = run("tickets", &mut env.ctx(Some("app"), None));
+        assert!(!out.pass && out.halt, "{out:?}");
+        assert!(
+            out.reason.contains("blocking cycle through 01, 02"),
+            "{out:?}"
+        );
+        assert_eq!(env.halts, vec![out.reason]);
+        assert_eq!(
+            std::fs::read_to_string(issues.join("01-step.md")).unwrap(),
+            before
+        );
+        assert_eq!(env.tracker().drafts("app").unwrap().len(), 2);
+        assert_eq!(env.tracker().blocks().unwrap().len(), 1);
     }
 
     fn globs(v: &[&str]) -> Vec<String> {
@@ -1844,7 +2728,7 @@ mod tests {
     }
 
     #[test]
-    fn a_commit_naming_no_task_is_refused() {
+    fn taskless_commit_refused() {
         let mut env = Env::new("exit 0\n");
         let base = head(&env.repo.root).expect("base");
         env.repo.write("src/schema.ts", "export const x = 5\n");
@@ -1874,6 +2758,418 @@ mod tests {
     }
 
     #[test]
+    fn task_bad_base_fails() {
+        let mut env = Env::new("exit 0\n");
+        let out = commit_task(&mut env.ctx(Some("T-001"), Some("deadbeef")));
+        assert!(
+            !out.pass && out.reason.contains("deadbeef"),
+            "{}",
+            out.reason
+        );
+        assert!(!out.reason.contains("every commit on"), "{}", out.reason);
+    }
+
+    #[test]
+    fn identity_bad_base_fails() {
+        let mut env = Env::new("exit 0\n");
+        let out = commit_identity(&mut env.ctx(Some("T-001"), Some("deadbeef")));
+        assert!(
+            !out.pass && out.reason.contains("deadbeef"),
+            "{}",
+            out.reason
+        );
+        assert!(!out.reason.contains("every commit on"), "{}", out.reason);
+    }
+
+    #[test]
+    fn scope_bad_base_fails() {
+        let mut env = Env::new("exit 0\n");
+        env.queue("done", "src/a.ts", "§11 row 1");
+        env.repo.commit_all("verdict");
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some("deadbeef")));
+        assert!(
+            !out.pass && out.reason.contains("deadbeef"),
+            "{}",
+            out.reason
+        );
+    }
+
+    // src/lib.txt changes and tests/t.sh is the lane's test; the check runs it
+    fn red_first_env(test: &str, check: &str, timeout: &str) -> (Env, String) {
+        let mut env = Env::timed(check, timeout);
+        env.cfg.layout.test_only_glob = globs(&["**/tests/**"]);
+        env.repo.write("src/lib.txt", "old\n");
+        env.queue("done", "src/* tests/*", "§11 row 1");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write("src/lib.txt", "new\n");
+        env.repo.write("tests/t.sh", test);
+        env.repo.commit_all("T-001 change");
+        (env, base)
+    }
+
+    const RUN_TEST: &str = "[ -f tests/t.sh ] && sh tests/t.sh\n";
+
+    #[test]
+    fn red_first_rejects_green() {
+        let (mut env, base) = red_first_env("true\n", RUN_TEST, "30m");
+        let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass, "{}", out.reason);
+        assert!(
+            out.reason.contains("tests/t.sh") && out.reason.contains(&base),
+            "{}",
+            out.reason
+        );
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
+    }
+
+    #[test]
+    fn red_first_passes_red() {
+        let (mut env, base) = red_first_env("grep -q new src/lib.txt\n", RUN_TEST, "30m");
+        let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        assert!(env.tasks_text().contains("status: done"));
+    }
+
+    #[test]
+    fn red_first_leaves_clean() {
+        let (mut env, base) = red_first_env("true\n", "sleep 30\n", "1s");
+        let trees = |env: &Env| git(&env.repo.root, &["worktree", "list"]).expect("list");
+        let (status, before) = (porcelain(&env.repo.root), trees(&env));
+        run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert_eq!(porcelain(&env.repo.root), status);
+        assert_eq!(trees(&env), before);
+    }
+
+    #[test]
+    fn red_first_timeout_halts() {
+        let (mut env, base) = red_first_env("true\n", "sleep 30\n", "1s");
+        let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass && out.halt, "{}", out.reason);
+    }
+
+    #[test]
+    fn red_first_baselined_red() {
+        let check = "[ -f tests/t.sh ] && sh tests/t.sh || exit 0\necho '(fail) alpha'; exit 1\n";
+        let (mut env, base) = red_first_env("true\n", check, "30m");
+        // uncommitted, as a nested install's baseline is absent from the scratch tree
+        env.repo.write(".enallagi/.check-baseline", "alpha\n");
+        let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass, "{}", out.reason);
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
+    }
+
+    #[test]
+    fn red_first_restores_rename() {
+        let (mut env, _) = red_first_env("true\n", RUN_TEST, "30m");
+        let base = env.head();
+        git(&env.repo.root, &["mv", "src/lib.txt", "src/moved.txt"]).expect("mv");
+        env.repo.write("tests/t.sh", "! [ -f src/lib.txt ]\n");
+        env.repo.commit_all("T-001 rename");
+        let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
+    fn red_first_without_tests() {
+        let (mut env, base) = red_first_env("true\n", RUN_TEST, "30m");
+        env.cfg.layout.test_only_glob = globs(&["**/spec/**"]);
+        let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(
+            out.pass && out.reason == "no test-only file changed",
+            "{}",
+            out.reason
+        );
+        env.cfg.layout.test_only_glob.clear();
+        let out = run("red-first", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(
+            out.pass && out.reason == "test_only_glob is empty",
+            "{}",
+            out.reason
+        );
+    }
+
+    fn skip_env(line: &str) -> (Env, String) {
+        let mut env = Env::new("exit 0\n");
+        let cargo = crate::runners::presets()
+            .into_iter()
+            .find(|r| r.name == "cargo");
+        env.cfg.layout.skip_patterns = cargo.expect("cargo preset").skip_patterns;
+        env.cfg.layout.test_glob = globs(&["tests/*.rs"]);
+        env.repo.write("tests/a.rs", "#[test]\nfn a() {}\n");
+        env.queue("done", "tests/*", "§11 row 1");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo
+            .write("tests/a.rs", &format!("#[test]\n{line}\nfn a() {{}}\n"));
+        env.repo.commit_all("T-001 change");
+        (env, base)
+    }
+
+    #[test]
+    fn skip_rejects_bare_ignore() {
+        let (mut env, base) = skip_env("#[ignore]");
+        let out = run("skip-added", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass, "{}", out.reason);
+        assert!(
+            out.reason.contains("tests/a.rs:2 #[ignore]"),
+            "{}",
+            out.reason
+        );
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
+    }
+
+    #[test]
+    fn skip_added_net() {
+        let (mut env, _) = skip_env("#[ignore]");
+        let base = env.head();
+        let old = "#[test]\n#[ignore]\nfn a() {}\n";
+        env.repo.write(
+            "tests/a.rs",
+            &format!("{old}#[test]\n#[ignore]\nfn b() {{}}\n"),
+        );
+        env.repo.commit_all("T-001 skip b");
+        let out = run("skip-added", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(
+            out.reason.contains("tests/a.rs:5 #[ignore]"),
+            "{}",
+            out.reason
+        );
+        assert!(!out.reason.contains("tests/a.rs:2"), "{}", out.reason);
+        env.repo
+            .write("tests/a.rs", &format!("{old}#[test]\nfn b() {{}}\n"));
+        env.repo.commit_all("T-001 unskip b");
+        env.queue("done", "tests/*", "§11 row 1");
+        env.repo.commit_all("verdict");
+        let out = run("skip-added", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    const LEAK: &str = r#"[{"RuleID":"aws-access-token","File":"src/key.txt","StartLine":1,"Commit":"abc123","Secret":"AKIAHIDDEN0SECRET99","Match":"key = AKIAHIDDEN0SECRET99"}]"#;
+
+    // a done task with an empty baseline committed
+    fn leak_env(report: &str, exit: i32) -> (Env, String) {
+        let env = Env::new("exit 0\n");
+        crate::fixture::stub_gitleaks(env.cache.path(), report, exit);
+        env.repo
+            .write(".enallagi/security/gitleaks-baseline.json", "[]\n");
+        env.queue("done", "src/*", "§11 row 1");
+        env.repo.commit_all("verdict");
+        let base = env.head();
+        env.repo.write("src/key.txt", "key\n");
+        env.repo.commit_all("T-001 change");
+        (env, base)
+    }
+
+    #[test]
+    fn security_holds_leak() {
+        let (mut env, base) = leak_env(LEAK, 1);
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass && out.halt, "{}", out.reason);
+        assert!(
+            out.reason.contains("aws-access-token src/key.txt:1 abc123"),
+            "{}",
+            out.reason
+        );
+        assert!(env.tasks_text().contains("status: ready-for-human"));
+        assert_eq!(env.halts, vec![out.reason]);
+    }
+
+    #[test]
+    fn reason_hides_secret() {
+        let (mut env, base) = leak_env(LEAK, 1);
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        let events =
+            std::fs::read_to_string(env.repo.root.join(".enallagi/events.jsonl")).expect("events");
+        assert!(events.contains("aws-access-token"), "{events}");
+        for text in [&out.reason, &events, &env.tasks_text()] {
+            assert!(!text.contains("AKIAHIDDEN0SECRET99"), "{text}");
+        }
+    }
+
+    #[test]
+    fn security_runs_gitleaks_redacted() {
+        let (mut env, base) = leak_env("[]", 0);
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        let argv = std::fs::read_to_string(env.cache.path().join("gitleaks.argv")).expect("argv");
+        let argv: Vec<&str> = argv.lines().collect();
+        let dir = env.repo.root.join(".enallagi");
+        let after = |flag: &str| argv.iter().position(|a| *a == flag).map(|i| argv[i + 1]);
+        assert_eq!(argv[0], "git");
+        assert!(
+            argv.contains(&format!("--log-opts={base}..HEAD").as_str()),
+            "{argv:?}"
+        );
+        assert!(argv.contains(&"--redact"), "{argv:?}");
+        assert_eq!(after("--report-format"), Some("json"));
+        let config = dir.join("gitleaks.toml").display().to_string();
+        assert_eq!(after("--config"), Some(config.as_str()));
+        let ignore = dir.join("gitleaksignore").display().to_string();
+        assert_eq!(after("--gitleaks-ignore-path"), Some(ignore.as_str()));
+        let report = after("--report-path").expect("--report-path");
+        assert!(
+            Path::new(report).starts_with(env.cache.path().join("security")),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn security_baselined_leak() {
+        // the stub drops findings only when the baseline holds them, as gitleaks does
+        for (held, passes) in [
+            (LEAK.replace("abc123", "def456"), false),
+            (LEAK.into(), true),
+        ] {
+            let (mut env, base) = leak_env(LEAK, 1);
+            let baseline = env
+                .repo
+                .root
+                .join(".enallagi/security/gitleaks-baseline.json");
+            std::fs::write(&baseline, held).expect("baseline");
+            let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+            assert_eq!(out.pass, passes, "{}", out.reason);
+            let argv =
+                std::fs::read_to_string(env.cache.path().join("gitleaks.argv")).expect("argv");
+            assert!(
+                argv.contains(&format!("--baseline-path\n{}\n", baseline.display())),
+                "{argv}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_baseline_halts() {
+        let (mut env, base) = leak_env("[]", 0);
+        std::fs::remove_dir_all(env.repo.root.join(".enallagi/security")).expect("rm");
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass && out.halt, "{}", out.reason);
+        assert!(out.reason.contains("enallagi init"), "{}", out.reason);
+    }
+
+    // records its argv and reports GHSA-test-0001 on `bad 1.0` for a lockfile that names `bad`
+    fn stub_osv(env: &Env) {
+        let cache = env.cache.path();
+        let pin = crate::security::default_pins()
+            .into_iter()
+            .find(|p| p.id == "osv-scanner" && p.platform == crate::security::platform())
+            .expect("an osv-scanner pin for this platform");
+        let c = cache.display();
+        std::fs::write(
+            crate::security::tool_path(&pin, cache),
+            format!(
+                r#"#!/bin/sh
+printf '%s\n' "$@" >> {c}/osv.argv
+lock= out=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --lockfile) lock=$2 ;;
+    --output) out=$2 ;;
+  esac
+  shift
+done
+if grep -q bad "$lock"; then
+  echo '{{"results":[{{"packages":[{{"package":{{"name":"bad","version":"1.0"}},"vulnerabilities":[{{"id":"GHSA-test-0001"}}]}}]}}]}}' > "$out"
+  exit 1
+fi
+echo '{{"results":[]}}' > "$out"
+"#
+            ),
+        )
+        .expect("stub osv-scanner");
+    }
+
+    // Cargo.lock holds `base_lock` at base and `head_lock` at HEAD
+    fn osv_env(base_lock: &str, head_lock: &str) -> (Env, String) {
+        let (env, _) = leak_env("[]", 0);
+        stub_osv(&env);
+        env.repo.write("Cargo.lock", base_lock);
+        env.repo.commit_all("lock");
+        let base = env.head();
+        env.repo.write("Cargo.lock", head_lock);
+        env.repo.commit_all("T-001 bump");
+        (env, base)
+    }
+
+    #[test]
+    fn security_new_advisory() {
+        let (mut env, base) = osv_env("good 1.0\n", "bad 1.0\n");
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass && !out.halt, "{}", out.reason);
+        assert!(
+            out.reason.contains("bad 1.0 GHSA-test-0001"),
+            "{}",
+            out.reason
+        );
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
+    }
+
+    #[test]
+    fn security_base_advisory() {
+        let (mut env, base) = osv_env("bad 1.0\n", "bad 1.0\nother 2.0\n");
+        env.repo.write(".enallagi/osv-scanner.toml", "");
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        let argv = std::fs::read_to_string(env.cache.path().join("osv.argv")).expect("argv");
+        let config = env.repo.root.join(".enallagi/osv-scanner.toml");
+        assert!(
+            argv.contains(&format!("--config\n{}\n", config.display())),
+            "{argv}"
+        );
+        assert!(argv.contains("--format\njson\n"), "{argv}");
+    }
+
+    // a client-root osv-scanner.toml the lane wrote would otherwise steer the scan
+    #[test]
+    fn security_osv_config_pinned() {
+        let (mut env, base) = osv_env("good 1.0\n", "bad 1.0\n");
+        env.repo.write(
+            "osv-scanner.toml",
+            "[[IgnoredVulns]]\nid = \"GHSA-test-0001\"\n",
+        );
+        run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        let argv = std::fs::read_to_string(env.cache.path().join("osv.argv")).expect("argv");
+        let scans = argv.matches("scan\n").count();
+        assert!(
+            scans > 0 && argv.matches("--config\n").count() == scans,
+            "{argv}"
+        );
+    }
+
+    #[test]
+    fn security_skips_osv_untouched() {
+        let (mut env, base) = leak_env("[]", 0);
+        stub_osv(&env);
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        assert!(!env.cache.path().join("osv.argv").exists());
+    }
+
+    #[test]
+    fn security_bad_exit_halts() {
+        let (mut env, base) = leak_env("[]", 2);
+        let out = run("security", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass && out.halt, "{}", out.reason);
+        assert!(out.reason.contains("scanner-stderr"), "{}", out.reason);
+        assert!(env.tasks_text().contains("status: done"));
+    }
+
+    #[test]
+    fn skip_passes_reasoned_ignore() {
+        let (mut env, base) = skip_env(r#"#[ignore = "sleeps four minutes"]"#);
+        let out = run("skip-added", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+        let (mut env, base) = skip_env("#[ignore]");
+        env.cfg.layout.skip_patterns.clear();
+        let out = run("skip-added", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(
+            out.pass && out.reason == "skip_patterns is empty",
+            "{}",
+            out.reason
+        );
+    }
+
+    #[test]
     fn commits_naming_the_task_pass() {
         let mut env = Env::new("exit 0\n");
         let base = head(&env.repo.root).expect("base");
@@ -1885,13 +3181,13 @@ mod tests {
     }
 
     #[test]
-    fn a_launcher_state_commit_is_exempt() {
+    fn launcher_state_commit_exempt() {
         let mut env = Env::new("exit 0\n");
         let base = head(&env.repo.root).expect("base");
         env.repo.write("src/schema.ts", "export const x = 7\n");
         env.repo.commit_all("feat(schema): T-001 bump x");
         env.queue("review", "src/schema.ts", "none — harness");
-        commit_instance(&env.ctx(None, None), &["TASKS.md"], "queue: verdict").expect("state");
+        commit_instance(&env.ctx(None, None), &[SPECS], "queue: verdict").expect("state");
         assert!(env.log().contains("queue: verdict"), "{}", env.log());
         let mut ctx = env.ctx(Some("T-001"), Some(&base));
         let out = commit_task(&mut ctx);
@@ -1908,20 +3204,42 @@ mod tests {
     }
 
     #[test]
-    fn red_not_on_baseline_is_a_rejection() {
+    fn overlaps_disjoint_prefixes() {
+        assert!(!overlaps(
+            &globs(&["src/tui/**"]),
+            &globs(&["src/gates.rs"])
+        ));
+        assert!(!overlaps(
+            &globs(&["docs/*.md", "src/a.rs"]),
+            &globs(&["src/b/**", "README.md"])
+        ));
+        assert!(overlaps(&globs(&["src/a"]), &globs(&["src/ab.rs"])));
+        assert!(overlaps(&globs(&["src/**"]), &globs(&["src/tui/view.rs"])));
+    }
+
+    #[test]
+    fn overlaps_empty_or_wild() {
+        for wild in [&[][..], &["**"][..], &["*.rs"][..]] {
+            assert!(overlaps(&globs(wild), &globs(&["docs/x.md"])), "{wild:?}");
+            assert!(overlaps(&globs(&["docs/x.md"]), &globs(wild)), "{wild:?}");
+        }
+    }
+
+    #[test]
+    fn unbaselined_red_rejected() {
         let env = Env::new("echo '(fail) alpha'\nexit 1\n");
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         assert!(r.red);
         assert_eq!(r.unforgiven, vec!["alpha".to_string()]);
         assert!(!r.accepts());
     }
 
     #[test]
-    fn red_on_baseline_is_forgiven() {
+    fn baselined_red_forgiven() {
         let env = Env::new("echo '(fail) alpha'\nexit 1\n");
         env.repo
             .write(".enallagi/.check-baseline", "# inherited\nalpha\n");
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         assert!(r.red);
         assert!(r.unforgiven.is_empty());
         assert_eq!(r.forgiven, vec!["alpha".to_string()]);
@@ -1929,19 +3247,19 @@ mod tests {
     }
 
     #[test]
-    fn one_forgiven_one_new_is_still_red() {
+    fn one_new_stays_red() {
         let env = Env::new("echo '(fail) alpha'\necho '(fail) beta [12ms]'\nexit 1\n");
         env.repo.write(".enallagi/.check-baseline", "alpha\n");
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         assert_eq!(r.unforgiven, vec!["beta".to_string()]);
         assert_eq!(r.forgiven, vec!["alpha".to_string()]);
         assert!(!r.accepts());
     }
 
     #[test]
-    fn red_it_cannot_name_fails_closed() {
+    fn unnamed_red_fails_closed() {
         let env = Env::new("echo boom\nexit 1\n");
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         assert!(r.red && r.unnamed);
         assert!(r.unforgiven.is_empty());
         assert!(!r.accepts());
@@ -1950,15 +3268,15 @@ mod tests {
     #[test]
     fn green_is_green() {
         let env = Env::new("exit 0\n");
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         assert!(!r.red && r.accepts());
     }
 
     #[test]
-    fn a_check_past_its_timeout_is_neither_red_nor_green() {
+    fn timed_out_undecided() {
         let mut env = Env::timed("sleep 10\n", "2s");
         let started = Instant::now();
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         let waited = started.elapsed();
         assert!(
             waited < Duration::from_secs(5),
@@ -1983,64 +3301,75 @@ mod tests {
         assert_eq!(env.halts, vec![out.reason]);
     }
 
+    // judged by what the child does if it lives, not by a clock: a surviving child touches `survived`
     #[test]
-    fn a_timed_out_check_kills_its_process_group() {
+    fn timeout_kills_group() {
         let mut runs = 0;
-        let pid = loop {
+        let (env, pid) = loop {
             runs += 1;
-            let env = Env::timed("sleep 30 & echo $! >child.pid\nsleep 30\n", "4s");
-            let started = Instant::now();
-            let r = check_delta(&env.repo.root, &env.cfg, false);
-            assert!(r.timed_out.is_some(), "{r:?}");
-            // a grandchild still holding the pipe would hold the gate for its own 30 seconds
-            let waited = started.elapsed();
-            assert!(
-                waited < Duration::from_secs(10),
-                "the gate waited {waited:?}"
+            // doubled each run, so no load outlasts the fork for long
+            let env = Env::timed(
+                "(sleep 60; touch survived) & echo $! >child.pid\nsleep 60\n",
+                &format!("{}s", 2 << runs),
             );
+            let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
+            assert!(r.timed_out.is_some(), "{r:?}");
             let pid = std::fs::read_to_string(env.repo.root.join("child.pid"))
                 .unwrap_or_default()
                 .trim()
                 .to_string();
             // under load the timeout can fire before the check reaches its fork, which proves nothing
             if !pid.is_empty() {
-                break pid;
+                break (env, pid);
             }
             assert!(
-                runs < 3,
+                runs < 5,
                 "the check never wrote its child's pid in {runs} runs"
             );
         };
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while alive(&pid) && Instant::now() < deadline {
+        while alive(&pid) {
             std::thread::sleep(Duration::from_millis(50));
         }
-        assert!(!alive(&pid), "the check's child {pid} outlived it");
+        assert!(
+            !env.repo.root.join("survived").exists(),
+            "the check's child {pid} outlived it"
+        );
     }
 
+    // bwrap's pid namespace ends a grandchild with the check, so only `off` can be held open by one
+    fn unconfined(env: &Env) -> crate::sandbox::Sandbox {
+        let mut cfg = env.cfg.clone();
+        cfg.sandbox.mode = crate::config::SandboxMode::Off;
+        crate::sandbox::Sandbox::start(&env.repo.root, &cfg)
+    }
+
+    // a gate that waited on the pipe would see the shell exit 0 and report no timeout
     #[test]
-    fn a_grandchild_on_the_pipe_is_bound_by_timeout() {
+    fn piped_grandchild_bound() {
         let env = Env::timed("sleep 25 & exit 0\n", "2s");
-        let started = Instant::now();
-        let r = check_delta(&env.repo.root, &env.cfg, false);
-        let waited = started.elapsed();
-        assert!(
-            waited < Duration::from_secs(5),
-            "the gate waited {waited:?}"
-        );
+        let sandbox = unconfined(&env);
+        let r = check_delta(&sandbox, &env.repo.root, &env.cfg, false);
         let reason = r.timed_out.as_deref().unwrap_or_default();
         assert!(reason.contains("2s"), "{r:?}");
         assert!(!r.red && !r.accepts(), "{r:?}");
     }
 
     #[test]
-    fn a_grandchild_outside_the_group_is_bound() {
-        let env = Env::timed("perl -e 'use POSIX; setsid(); sleep 12' & exit 0\n", "2s");
+    fn detached_grandchild_bound() {
+        let env = Env::timed(
+            "perl -e 'use POSIX; setsid(); sleep 120' & echo $! >gc.pid\nexit 0\n",
+            "2s",
+        );
+        let sandbox = unconfined(&env);
         let started = Instant::now();
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&sandbox, &env.repo.root, &env.cfg, false);
         let waited = started.elapsed();
+        if let Ok(pid) = std::fs::read_to_string(env.repo.root.join("gc.pid")) {
+            let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+        }
+        // a gate that waited on the grandchild returns after its 120 s, far past any load
         assert!(
-            waited < Duration::from_secs(5),
+            waited < Duration::from_secs(60),
             "the gate waited {waited:?}"
         );
         let reason = r.timed_out.as_deref().unwrap_or_default();
@@ -2049,7 +3378,7 @@ mod tests {
     }
 
     fn alive(pid: &str) -> bool {
-        Command::new("kill")
+        std::process::Command::new("kill")
             .args(["-0", pid])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -2113,12 +3442,12 @@ mod tests {
     }
 
     #[test]
-    fn check_delta_fills_the_tally() {
+    fn delta_fills_tally() {
         let env = Env::new(&format!(
             "cat <<'EOF'\n{}EOF\nexit 0\n",
             fourteen_result_lines()
         ));
-        let r = check_delta(&env.repo.root, &env.cfg, false);
+        let r = check_delta(&env.sandbox, &env.repo.root, &env.cfg, false);
         assert_eq!(r.exit, 0, "{}", r.output);
         assert_eq!(r.tally.passed, 471);
         assert_eq!(r.tally.lines, 14);
@@ -2206,6 +3535,19 @@ mod tests {
         assert_eq!(gate_tally(&env).map(|t| t.passed), Some(3));
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sandbox_refusal_halts() {
+        let mut cfg = Config::default();
+        cfg.sandbox.mode = crate::config::SandboxMode::Off;
+        let sb = crate::sandbox::Sandbox::start(Path::new("."), &cfg);
+        let profile = "(version 1)(allow network-outbound (remote ip \"localhost:0\"))";
+        let argv = ["/usr/bin/sandbox-exec", "-p", profile, "--", "true"];
+        let run = run_wrapped(&sb.wrap(&argv, Path::new("."), &[]), POLL * 100).unwrap();
+        let reason = hang_reason("the check", "true", POLL, &run).expect("a halt");
+        assert!(reason.contains("invalid port"), "{reason}");
+    }
+
     #[test]
     fn a_check_that_never_ran_does_not_warn() {
         let report = CheckReport {
@@ -2228,7 +3570,7 @@ mod tests {
     }
 
     #[test]
-    fn verdict_forces_back_a_done_with_a_dirty_tree() {
+    fn verdict_dirty_tree() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.commit_all("verdict");
@@ -2237,7 +3579,7 @@ mod tests {
         let out = run("verdict", &mut env.ctx(Some("T-001"), None));
         assert!(!out.pass);
         let text = env.tasks_text();
-        assert!(text.contains("status: ready"), "{text}");
+        assert!(text.contains("status: ready-for-agent"), "{text}");
         assert!(
             text.contains("gate: the verifier returned done with 1 uncommitted path(s): the work is not on the branch"),
             "{text}"
@@ -2248,13 +3590,13 @@ mod tests {
         assert_eq!(env.warnings.len(), 1);
         let events = env.events();
         assert!(events.iter().any(|e| matches!(&e.kind,
-            Kind::TaskStatus { task, to, by, .. } if task == "T-001" && to == "ready" && by == "verdict")));
+            Kind::TaskStatus { task, to, by, .. } if task == "T-001" && to == "ready-for-agent" && by == "verdict")));
         assert!(events.iter().any(|e| matches!(&e.kind,
             Kind::Gate { gate, pass, .. } if gate == "verdict" && !*pass)));
     }
 
     #[test]
-    fn verdict_forces_back_a_done_with_a_red_check() {
+    fn verdict_red_check() {
         let mut env = Env::new(
             "echo boom\necho 'error: something'\necho 'test result: FAILED. 0 passed; 1 failed; 0 ignored'\necho done\nexit 101\n",
         );
@@ -2267,7 +3609,7 @@ mod tests {
         assert!(out.reason.contains("exit 101"), "{}", out.reason);
         assert!(out.reason.contains("check tail:"), "{}", out.reason);
         assert!(out.reason.contains("error: something"), "{}", out.reason);
-        assert!(env.tasks_text().contains("status: ready"));
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
         assert!(env
             .log()
             .contains("chore(T-001): enallagi gate rejected a false VERIFIED"));
@@ -2293,67 +3635,241 @@ mod tests {
         assert!(env.warnings.is_empty());
     }
 
-    impl Env {
-        fn claimed(&mut self, allow: &[&str], verdicts: &str) {
-            let path = self.repo.root.join("enallagi.toml");
-            let toml = std::fs::read_to_string(&path).expect("read enallagi.toml");
-            let allow: Vec<String> = allow.iter().map(|p| format!("'{p}'")).collect();
-            self.repo.write(
-                "enallagi.toml",
-                &format!("{toml}claims_allow = [{}]\n", allow.join(", ")),
-            );
-            self.cfg = crate::config::load(&self.repo.root).expect("load enallagi.toml");
-            self.repo.write(
-                "TASKS.md",
-                &format!(
-                    "## [T-001] first\nscope: src/a.ts\nrows: none — harness\nblockedBy: none\nstatus: done\nnotes: IMPLEMENTER: did it.\n{verdicts}"
-                ),
-            );
-            self.repo.commit_all("verdict");
+    #[test]
+    fn verdict_requires_verified() {
+        for line in [
+            "",
+            "verdict: rejected by verifier: red\n",
+            "verdict: VERIFIED\n",
+        ] {
+            let mut env = Env::new("exit 0\n");
+            env.write_queue(&format!("## [T-001] first\nstatus: done\n{line}"));
+            env.repo.commit_all("verify");
+            let out = run("verdict", &mut env.ctx(Some("T-001"), None));
+            assert!(!out.pass, "{line}");
+            let text = env.tasks_text();
+            assert!(text.contains("status: review"), "{text}");
+            assert!(text.contains("gate: done without `verdict: verified by verifier`"));
         }
     }
 
     #[test]
-    fn a_claimed_pass_that_fails_is_forced_back() {
+    fn verdict_wants_both_axes() {
+        for (axes, missing) in [
+            ("standards: none\n", "spec:"),
+            ("spec: none\n", "standards:"),
+            ("spec:\nstandards: none\n", "spec:"),
+        ] {
+            let mut env = Env::new("exit 0\n");
+            env.write_queue(&format!(
+                "## [T-001] first\nstatus: done\nverdict: verified by verifier\n{axes}"
+            ));
+            env.repo.commit_all("verify");
+            let out = run("verdict", &mut env.ctx(Some("T-001"), None));
+            assert!(!out.pass, "{axes}");
+            assert!(
+                out.reason.contains(&format!("`{missing}`")),
+                "{}",
+                out.reason
+            );
+            let text = env.tasks_text();
+            assert!(text.contains("status: ready-for-agent"), "{text}");
+        }
+    }
+
+    #[test]
+    fn rejected_needs_reason() {
+        for (line, refused) in [
+            ("", true),
+            ("verdict: rejected by verifier\n", true),
+            ("verdict: rejected by verifier:  \n", true),
+            ("verdict: answered by implementer\n", true),
+            (
+                "verdict: rejected by verifier: `cargo test` is red\n",
+                false,
+            ),
+        ] {
+            let mut env = Env::new("exit 0\n");
+            env.queue("review", "src/a.ts", "none");
+            env.repo.commit_all("implement");
+            let base = env.head();
+            env.write_queue(&format!(
+                "## [T-001] first\nstatus: ready-for-agent\n{line}"
+            ));
+            env.repo.commit_all("verify");
+            let out = run("verdict", &mut env.ctx(Some("T-001"), Some(&base)));
+            assert_eq!(out.pass, !refused, "{line}: {}", out.reason);
+            let want = if refused { "review" } else { "ready-for-agent" };
+            assert!(
+                env.tasks_text().contains(&format!("status: {want}")),
+                "{line}"
+            );
+        }
+
+        // a gate's force-back, not a verifier's rejection, is not read
         let mut env = Env::new("exit 0\n");
-        env.claimed(
-            &["true", "false"],
-            "VERIFIER: VERIFIED.\nran: false\nexit: 0\n",
+        env.queue("ready-for-agent", "src/a.ts", "none");
+        env.repo.commit_all("implement");
+        let base = env.head();
+        let out = run("verdict", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
+    fn review_over_rejection() {
+        let mut env = Env::new("exit 0\n");
+        env.write_queue("## [T-001] first\nstatus: review\nverdict: rejected by verifier: red\n");
+        env.repo.commit_all("implement");
+        let out = run("implementer-not-done", &mut env.ctx(Some("T-001"), None));
+        assert!(!out.pass && out.skip_rest, "{out:?}");
+        let text = env.tasks_text();
+        assert!(text.contains("status: ready-for-agent"), "{text}");
+        assert!(text.contains("gate: the implementer set review over a rejection"));
+
+        let mut env = Env::new("exit 0\n");
+        env.write_queue("## [T-001] first\nstatus: review\nverdict: answered by implementer\n");
+        env.repo.commit_all("implement");
+        let out = run("implementer-not-done", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass && !out.skip_rest, "{out:?}");
+    }
+
+    impl Env {
+        fn claimed(&mut self, allow: &[&str], runs: &str) {
+            let path = self.repo.root.join(".enallagi/enallagi.toml");
+            let toml = std::fs::read_to_string(&path).expect("read enallagi.toml");
+            let allow: Vec<String> = allow.iter().map(|p| format!("'{p}'")).collect();
+            self.repo.write(
+                ".enallagi/enallagi.toml",
+                &format!("{toml}claims_allow = [{}]\n", allow.join(", ")),
+            );
+            self.cfg = crate::config::load(&self.repo.root).expect("load enallagi.toml");
+            self.write_queue(&format!(
+                "## [T-001] first\nscope: src/a.ts\nrows: none — harness\nblockedBy: none\nstatus: done\nverdict: verified by verifier\nspec: none\nstandards: none\n{runs}notes: IMPLEMENTER: did it.\n"
+            ));
+            self.repo.commit_all("verdict");
+        }
+    }
+
+    // a done round answering `F-1` and `F-2` with `answers`, its test file holding `fn held`
+    fn answering(answers: &str, runs: &str) -> (Env, String) {
+        let env = Env::new("exit 0\n");
+        let base = env.head();
+        env.repo.write("tests/t.rs", "fn held() {}\n");
+        env.repo.commit_all("T-001 fix");
+        env.write_queue(&format!(
+            "## [T-001] first\nscope: tests/*\nstatus: done\nfinding: F-1 thread round 1\n  > one\nfinding: F-2 comment round 1\n  > two\n{answers}verdict: verified by verifier\nspec: none\nstandards: none\n{runs}"
+        ));
+        env.repo.commit_all("verdict");
+        (env, base)
+    }
+
+    fn findings_of(answers: &str, runs: &str) -> (GateOutcome, String) {
+        let (mut env, base) = answering(answers, runs);
+        let out = run("findings", &mut env.ctx(Some("T-001"), Some(&base)));
+        (out, env.tasks_text())
+    }
+
+    #[test]
+    fn findings_rejects_unanswered() {
+        let (out, text) = findings_of("answer: F-1 accept held\n", "");
+        assert!(!out.pass && out.reason.contains("F-2"), "{}", out.reason);
+        assert!(text.contains("status: ready-for-agent"), "{text}");
+        let twice = "answer: F-1 accept held\nanswer: F-1 accept held\nanswer: F-2 accept held\n";
+        let (out, _) = findings_of(twice, "");
+        assert!(!out.pass && out.reason.contains("F-1"), "{}", out.reason);
+        let unheld = "answer: F-1 accept held\nanswer: F-2 accept missing\n";
+        let (out, _) = findings_of(unheld, "");
+        assert!(
+            !out.pass && out.reason.contains("missing"),
+            "{}",
+            out.reason
         );
+        let (out, text) = findings_of("answer: F-1 accept held\nanswer: F-2 accept held\n", "");
+        assert!(out.pass, "{}", out.reason);
+        assert!(text.contains("status: done"), "{text}");
+    }
+
+    #[test]
+    fn findings_skips_settled() {
+        let earlier =
+            "answer: F-1 accept gone\nsettled: F-1 https://x/1\nanswer: F-2 accept held\n";
+        let (out, _) = findings_of(earlier, "");
+        assert!(out.pass, "{}", out.reason);
+        assert!(out.reason.starts_with("1 finding"), "{}", out.reason);
+    }
+
+    #[test]
+    fn findings_rejects_bare_reject() {
+        let bare = "answer: F-1 accept held\nanswer: F-2 reject naming:\n";
+        let (out, text) = findings_of(bare, "");
+        assert!(!out.pass && out.reason.contains("F-2"), "{}", out.reason);
+        assert!(text.contains("status: ready-for-agent"), "{text}");
+        let unran = "answer: F-1 accept held\nanswer: F-2 reject naming: grep -q x README\n";
+        let (out, _) = findings_of(unran, "ran: true\nexit: 0\n");
+        assert!(!out.pass && out.reason.contains("ran:"), "{}", out.reason);
+        let (out, _) = findings_of(unran, "ran: grep -q x README\nexit: 1\n");
+        assert!(out.pass, "{}", out.reason);
+    }
+
+    #[test]
+    fn claimed_pass_fails() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(&["true", "false"], "ran: false\nexit: 0\n");
         let out = run("claims", &mut env.ctx(Some("T-001"), None));
         assert!(!out.pass, "{}", out.reason);
         assert!(out.reason.contains("`false`"), "{}", out.reason);
         assert!(out.reason.contains("claimed exit 0"), "{}", out.reason);
         assert!(out.reason.contains("1 and 1"), "{}", out.reason);
         assert!(
-            env.tasks_text().contains("status: ready"),
+            env.tasks_text().contains("status: ready-for-agent"),
             "{}",
             env.tasks_text()
         );
         assert!(env.events().iter().any(|e| matches!(&e.kind,
-            Kind::TaskStatus { to, by, .. } if to == "ready" && by == "claims")));
+            Kind::TaskStatus { to, by, .. } if to == "ready-for-agent" && by == "claims")));
     }
 
     #[test]
-    fn a_claim_that_reproduces_passes() {
+    fn claims_pairs_under_verdict() {
         let mut env = Env::new("exit 0\n");
-        env.claimed(
-            &["true", "false"],
-            "VERIFIER: REJECTED.\nran: false\nexit: 0\nVERIFIER: VERIFIED.\nran: true\nexit: 0\n",
+        env.claimed(&["true", "false"], "");
+        let path = env.tracker().path_of("T-001").expect("T-001");
+        let text = std::fs::read_to_string(&path).expect("ticket");
+        let text = text
+            .replace("## Comments\n\n", "## Comments\n\nran: false\nexit: 0\n")
+            .replace(
+                "verdict: verified by verifier\n",
+                "verdict: verified by verifier\nran: true\nexit: 0\n\nverdict: rejected by verifier: old\nran: false\nexit: 0\n",
+            );
+        std::fs::write(&path, text).expect("ticket");
+        env.repo.commit_all("verdict");
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert!(
+            out.reason.contains("`true` claimed exit 0"),
+            "{}",
+            out.reason
         );
+        assert!(!out.reason.contains("false"), "{}", out.reason);
+    }
+
+    #[test]
+    fn claim_reproduces() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(&["true", "false"], "ran: true\nexit: 0\n");
         let out = run("claims", &mut env.ctx(Some("T-001"), None));
         assert!(out.pass, "{}", out.reason);
         assert!(env.tasks_text().contains("status: done"));
     }
 
     #[test]
-    fn a_claim_that_flips_between_runs_is_flaky() {
+    fn claim_flaky() {
         let mut env = Env::new("exit 0\n");
         env.repo.write(
             "flaky.sh",
             "test -e flaky.mark && exit 1; touch flaky.mark\n",
         );
-        env.claimed(&["sh "], "VERIFIER: VERIFIED.\nran: sh flaky.sh\nexit: 0\n");
+        env.claimed(&["sh "], "ran: sh flaky.sh\nexit: 0\n");
         let out = run("claims", &mut env.ctx(Some("T-001"), None));
         assert!(out.pass, "{}", out.reason);
         assert!(out.reason.starts_with("flaky:"), "{}", out.reason);
@@ -2362,12 +3878,9 @@ mod tests {
     }
 
     #[test]
-    fn a_claim_outside_the_allowlist_never_runs() {
+    fn claim_outside_allowlist() {
         let mut env = Env::new("exit 0\n");
-        env.claimed(
-            &["true"],
-            "VERIFIER: VERIFIED.\nran: touch outside.mark\nexit: 0\n",
-        );
+        env.claimed(&["true"], "ran: touch outside.mark\nexit: 0\n");
         let out = run("claims", &mut env.ctx(Some("T-001"), None));
         assert!(out.pass, "{}", out.reason);
         assert!(!env.repo.root.join("outside.mark").exists());
@@ -2376,11 +3889,33 @@ mod tests {
     }
 
     #[test]
-    fn a_chained_claim_never_runs() {
+    fn claim_prefix_whole_word() {
         let mut env = Env::new("exit 0\n");
         env.claimed(
             &["true"],
-            "VERIFIER: VERIFIED.\nran: true; touch a.mark\nexit: 0\nran: true && touch b.mark\nexit: 0\nran: true | touch c.mark\nexit: 0\nran: true $(touch d.mark)\nexit: 0\nran: true `touch e.mark`\nexit: 0\nran: true > f.mark\nexit: 0\n",
+            "ran: truex\nexit: 0\nran: true\nexit: 0\nran: true --flag\nexit: 0\n",
+        );
+        let out = run("claims", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert!(
+            out.reason
+                .contains("reproduced: `true` claimed exit 0, re-ran exit 0 and 0; `true --flag`"),
+            "{}",
+            out.reason
+        );
+        assert!(
+            out.reason.ends_with("shell operator: `truex`"),
+            "{}",
+            out.reason
+        );
+    }
+
+    #[test]
+    fn chained_claim_skipped() {
+        let mut env = Env::new("exit 0\n");
+        env.claimed(
+            &["true"],
+            "ran: true; touch a.mark\nexit: 0\nran: true && touch b.mark\nexit: 0\nran: true | touch c.mark\nexit: 0\nran: true $(touch d.mark)\nexit: 0\nran: true `touch e.mark`\nexit: 0\nran: true > f.mark\nexit: 0\n",
         );
         let out = run("claims", &mut env.ctx(Some("T-001"), None));
         assert!(out.pass, "{}", out.reason);
@@ -2391,22 +3926,10 @@ mod tests {
     }
 
     #[test]
-    fn a_command_naming_verifier_does_not_start_a_verdict() {
-        let mut env = Env::new("exit 0\n");
-        env.claimed(
-            &["false", "grep "],
-            "VERIFIER: VERIFIED.\nran: false\nexit: 0\nran: grep -c VERIFIER TASKS.md\nexit: 0\n",
-        );
-        let out = run("claims", &mut env.ctx(Some("T-001"), None));
-        assert!(!out.pass, "{}", out.reason);
-        assert!(out.reason.contains("`false`"), "{}", out.reason);
-    }
-
-    #[test]
-    fn a_hung_claim_halts_after_one_run() {
+    fn hung_claim_halts() {
         let mut env = Env::timed("exit 0\n", "2s");
         env.repo.write("hang.sh", "echo run >>runs.log\nsleep 10\n");
-        env.claimed(&["sh "], "VERIFIER: VERIFIED.\nran: sh hang.sh\nexit: 0\n");
+        env.claimed(&["sh "], "ran: sh hang.sh\nexit: 0\n");
         let out = run("claims", &mut env.ctx(Some("T-001"), None));
         assert!(out.halt && !out.pass, "{out:?}");
         assert!(out.reason.contains("2s"), "{}", out.reason);
@@ -2416,9 +3939,9 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_claims_allow_passes() {
+    fn empty_claims_allow() {
         let mut env = Env::new("exit 0\n");
-        env.claimed(&[], "VERIFIER: VERIFIED.\nran: false\nexit: 0\n");
+        env.claimed(&[], "ran: false\nexit: 0\n");
         let out = run("claims", &mut env.ctx(Some("T-001"), None));
         assert!(out.pass, "{}", out.reason);
         assert_eq!(out.reason, "claims_allow is empty");
@@ -2432,54 +3955,119 @@ mod tests {
     }
 
     #[test]
-    fn a_task_id_lost_from_the_queue_halts() {
+    fn intact_refuses_deletion() {
         let mut env = Env::new("exit 0\n");
-        env.repo.write(
-            "TASKS.md",
-            "## [T-001] first\nscope: src/*\nstatus: review\n\n## [T-002] second\nscope: src/*\nstatus: ready\n",
+        env.write_queue(
+            "## [T-001] first\nscope: src/*\nstatus: review\n\n## [T-002] second\nscope: src/*\nstatus: ready-for-agent\n",
         );
         env.repo.commit_all("queue");
         let base = env.head();
-        env.repo
-            .write("TASKS.md", "## [T-001] first\nscope: src/*\nstatus: done\n");
-        env.repo.commit_all("heading lost");
+        env.write_queue("## [T-001] first\nscope: src/*\nstatus: done\n");
+        env.repo.write(
+            &env.instance("DECISIONS.md"),
+            "# DECISIONS\n\n## Rejected findings\n\n- [2026-11-06] T-002 claimed a gap\n\n## [T-002] second\n",
+        );
+        env.repo.commit_all("ticket deleted");
 
         let out = run("queue-intact", &mut env.ctx(Some("T-001"), Some(&base)));
-        assert!(!out.pass);
-        assert!(out.halt);
+        assert!(!out.pass && out.halt, "{}", out.reason);
         assert!(out.reason.contains("T-002"), "{}", out.reason);
         assert!(
-            out.reason.contains(&format!("git show {base}:TASKS.md")),
+            out.reason
+                .contains(&format!("git show {base}:{}", env.instance(SPECS))),
             "{}",
             out.reason
         );
     }
 
     #[test]
-    fn an_archived_id_is_not_a_loss() {
+    fn intact_passes_wontfix() {
         let mut env = Env::new("exit 0\n");
-        env.repo.write(
-            "TASKS.md",
-            "## [T-001] first\nscope: src/*\nstatus: review\n\n## [T-002] second\nscope: src/*\nstatus: done\n",
+        env.write_queue(
+            "## [T-001] first\nscope: src/*\nstatus: review\n\n## [T-002] second\nscope: src/*\nstatus: needs-triage\n",
         );
         env.repo.commit_all("queue");
         let base = env.head();
-        env.repo.write(
-            "TASKS.md",
-            "## [T-001] first\nscope: src/*\nstatus: review\n",
-        );
-        env.repo.write(
-            "DECISIONS.md",
-            "# DECISIONS\n\n## [T-002] second\nstatus: done\n",
-        );
-        env.repo.commit_all("archived");
+        env.tracker()
+            .set_status("T-002", "wontfix", "out of scope: a gap already closed")
+            .expect("wontfix");
+        env.repo.commit_all("killed");
 
         let out = run("queue-intact", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
+        let bad = "0".repeat(40);
+        let out = run("queue-intact", &mut env.ctx(Some("T-001"), Some(&bad)));
+        assert!(!out.pass, "{}", out.reason);
     }
 
     #[test]
-    fn scope_rejects_a_file_outside_the_globs() {
+    fn scope_rejects_foreign_ticket() {
+        let mut env = Env::new("exit 0\n");
+        env.write_queue(
+            "## [T-001] first\nscope: src/a.ts\nrows: §11 row 1\nstatus: review\n\n## [T-002] second\nscope: src/b.ts\nstatus: ready-for-agent\n",
+        );
+        env.repo.commit_all("queue");
+        let base = env.head();
+        env.repo.write("src/a.ts", "a");
+        env.repo.commit_all("feat: T-001 a");
+        env.tracker().set_status("T-001", "done", "").expect("done");
+        env.repo.commit_all("verify: T-001 verdict");
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+
+        let filed = "## [T-003] filed\nstatus: needs-triage\n";
+        env.tracker().append("repo", filed).expect("file a finding");
+        env.repo.commit_all("verify: T-001 verdict");
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+
+        env.repo
+            .write(".enallagi/.out-of-scope/naming.md", "# naming\n");
+        env.repo.commit_all("verify: T-001 verdict");
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(out.pass, "{}", out.reason);
+
+        let other = env.tracker().path_of("T-002").expect("T-002");
+        std::fs::write(&other, "# T-002: second\n\n**Status:** wontfix\n").expect("edit");
+        env.repo.commit_all("verify: T-001 verdict");
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(out.reason.contains("T-002-second.md"), "{}", out.reason);
+
+        env.tracker().set_status("T-001", "done", "").expect("done");
+        env.repo.commit_all("verify: T-001 verdict");
+        let base = env.head();
+        std::fs::remove_file(&other).expect("delete");
+        env.repo.commit_all("verify: T-001 verdict");
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass, "{}", out.reason);
+        assert!(out.reason.contains("T-002-second.md"), "{}", out.reason);
+    }
+
+    #[test]
+    fn scope_rejects_late_ticket() {
+        let mut env = Env::new("exit 0\n");
+        env.write_queue("## [T-001] first\nscope: src/a.ts\nrows: §11 row 1\nstatus: review\n");
+        env.repo.commit_all("queue");
+        let base = env.head();
+        env.repo.write("src/a.ts", "a");
+        env.repo.commit_all("feat: T-001 a");
+        env.tracker().set_status("T-001", "done", "").expect("done");
+        let filed = "## [T-002] filed ready\nstatus: ready-for-agent\n";
+        env.tracker().append("repo", filed).expect("file a ticket");
+        env.repo.commit_all("verify: T-001 verdict");
+
+        let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
+        assert!(!out.pass);
+        assert!(
+            out.reason.contains("T-002-filed-ready.md"),
+            "{}",
+            out.reason
+        );
+    }
+
+    #[test]
+    fn scope_outside_globs() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.commit_all("verdict");
@@ -2495,7 +4083,7 @@ mod tests {
             "{}",
             out.reason
         );
-        assert!(env.tasks_text().contains("status: ready"));
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
         assert!(
             env.warnings
                 .iter()
@@ -2554,7 +4142,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_rejects_the_same_edit_under_a_product_task() {
+    fn scope_product_task_edit() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", ".enallagi/*", "§11 row 1");
         env.repo.commit_all("verdict");
@@ -2565,7 +4153,7 @@ mod tests {
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
         assert!(out.reason.contains("touched the harness"), "{}", out.reason);
-        assert!(env.tasks_text().contains("status: ready"));
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
         assert!(env
             .log()
             .contains("chore(T-001): harness scope gate rejected a done verdict"));
@@ -2573,13 +4161,14 @@ mod tests {
     }
 
     #[test]
-    fn scope_rejects_a_grown_baseline() {
+    fn scope_rejects_grown_baseline() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".check-baseline", "none — harness");
-        env.repo.write(".check-baseline", "alpha\n");
+        env.queue("done", &env.instance(".check-baseline"), "none — harness");
+        env.repo.write(&env.instance(".check-baseline"), "alpha\n");
         env.repo.commit_all("verdict");
         let base = env.head();
-        env.repo.write(".check-baseline", "alpha\nbeta\n");
+        env.repo
+            .write(&env.instance(".check-baseline"), "alpha\nbeta\n");
         env.repo.commit_all("T-001 baseline grew");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -2597,15 +4186,16 @@ mod tests {
     }
 
     #[test]
-    fn scope_nets_a_baseline_line_added_then_removed() {
+    fn scope_nets_transient_line() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".check-baseline", "none — harness");
-        env.repo.write(".check-baseline", "alpha\n");
+        env.queue("done", &env.instance(".check-baseline"), "none — harness");
+        env.repo.write(&env.instance(".check-baseline"), "alpha\n");
         env.repo.commit_all("verdict");
         let base = env.head();
-        env.repo.write(".check-baseline", "alpha\nbeta\n");
+        env.repo
+            .write(&env.instance(".check-baseline"), "alpha\nbeta\n");
         env.repo.commit_all("T-001 baseline grew");
-        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.write(&env.instance(".check-baseline"), "alpha\n");
         env.repo.commit_all("T-001 remove");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -2614,15 +4204,16 @@ mod tests {
     }
 
     #[test]
-    fn scope_rejects_a_baseline_add_with_a_removal() {
+    fn scope_rejects_add_removal() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".check-baseline", "none — harness");
-        env.repo.write(".check-baseline", "alpha\n");
+        env.queue("done", &env.instance(".check-baseline"), "none — harness");
+        env.repo.write(&env.instance(".check-baseline"), "alpha\n");
         env.repo.commit_all("verdict");
         let base = env.head();
-        env.repo.write(".check-baseline", "alpha\nbeta\n");
+        env.repo
+            .write(&env.instance(".check-baseline"), "alpha\nbeta\n");
         env.repo.commit_all("T-001 baseline grew");
-        env.repo.write(".check-baseline", "beta\n");
+        env.repo.write(&env.instance(".check-baseline"), "beta\n");
         env.repo.commit_all("T-001 drop alpha");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -2637,13 +4228,14 @@ mod tests {
     }
 
     #[test]
-    fn scope_rejects_a_plus_prefixed_baseline_add() {
+    fn scope_rejects_plus_add() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".check-baseline", "none — harness");
-        env.repo.write(".check-baseline", "alpha\n");
+        env.queue("done", &env.instance(".check-baseline"), "none — harness");
+        env.repo.write(&env.instance(".check-baseline"), "alpha\n");
         env.repo.commit_all("verdict");
         let base = env.head();
-        env.repo.write(".check-baseline", "alpha\n+beta\n");
+        env.repo
+            .write(&env.instance(".check-baseline"), "alpha\n+beta\n");
         env.repo.commit_all("T-001 baseline grew");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -2658,15 +4250,16 @@ mod tests {
     }
 
     #[test]
-    fn scope_nets_a_minus_prefixed_baseline_add() {
+    fn scope_nets_minus_add() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".check-baseline", "none — harness");
-        env.repo.write(".check-baseline", "alpha\n");
+        env.queue("done", &env.instance(".check-baseline"), "none — harness");
+        env.repo.write(&env.instance(".check-baseline"), "alpha\n");
         env.repo.commit_all("verdict");
         let base = env.head();
-        env.repo.write(".check-baseline", "alpha\n-beta\n");
+        env.repo
+            .write(&env.instance(".check-baseline"), "alpha\n-beta\n");
         env.repo.commit_all("T-001 baseline grew");
-        env.repo.write(".check-baseline", "alpha\n");
+        env.repo.write(&env.instance(".check-baseline"), "alpha\n");
         env.repo.commit_all("T-001 remove");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -2675,13 +4268,14 @@ mod tests {
     }
 
     #[test]
-    fn scope_ignores_an_operator_baseline_line() {
+    fn scope_ignores_operator_baseline() {
         let mut env = Env::new("exit 0\n");
-        env.queue("done", ".check-baseline", "none — harness");
-        env.repo.write(".check-baseline", "alpha\n");
+        env.queue("done", &env.instance(".check-baseline"), "none — harness");
+        env.repo.write(&env.instance(".check-baseline"), "alpha\n");
         env.repo.commit_all("verdict");
         let base = env.head();
-        env.repo.write(".check-baseline", "alpha\nbeta\n");
+        env.repo
+            .write(&env.instance(".check-baseline"), "alpha\nbeta\n");
         env.repo.commit_all("fix: an operator baseline line");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -2690,27 +4284,35 @@ mod tests {
     }
 
     #[test]
-    fn scope_exempts_an_in_scope_hash_recut() {
+    fn scope_exempts_hash_recut() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
-        env.repo
-            .write("test-hashes.json", "{\n  \"src/a.ts\": \"aaa\"\n}\n");
+        env.repo.write(
+            &env.instance("test-hashes.json"),
+            "{\n  \"src/a.ts\": \"aaa\"\n}\n",
+        );
         env.repo.commit_all("verdict");
         let base = env.head();
-        env.repo
-            .write("test-hashes.json", "{\n  \"src/a.ts\": \"bbb\"\n}\n");
+        env.repo.write(
+            &env.instance("test-hashes.json"),
+            "{\n  \"src/a.ts\": \"bbb\"\n}\n",
+        );
         env.repo.commit_all("T-001 recut");
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
         assert!(out.pass, "{}", out.reason);
 
         let mut off = Env::new("exit 0\n");
         off.queue("done", "src/a.ts", "§11 row 1");
-        off.repo
-            .write("test-hashes.json", "{\n  \"src/b.ts\": \"aaa\"\n}\n");
+        off.repo.write(
+            &off.instance("test-hashes.json"),
+            "{\n  \"src/b.ts\": \"aaa\"\n}\n",
+        );
         off.repo.commit_all("verdict");
         let base = off.head();
-        off.repo
-            .write("test-hashes.json", "{\n  \"src/b.ts\": \"bbb\"\n}\n");
+        off.repo.write(
+            &off.instance("test-hashes.json"),
+            "{\n  \"src/b.ts\": \"bbb\"\n}\n",
+        );
         off.repo.commit_all("T-001 recut");
         let out = run("scope", &mut off.ctx(Some("T-001"), Some(&base)));
         assert!(!out.pass);
@@ -2773,7 +4375,7 @@ mod tests {
     }
 
     #[test]
-    fn implementer_not_done_forces_back_and_skips_rest() {
+    fn implementer_not_done_forced() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.commit_all("implement");
@@ -2781,7 +4383,7 @@ mod tests {
         let out = run("implementer-not-done", &mut env.ctx(Some("T-001"), None));
         assert!(!out.pass && out.skip_rest);
         let text = env.tasks_text();
-        assert!(text.contains("status: ready"), "{text}");
+        assert!(text.contains("status: ready-for-agent"), "{text}");
         assert!(text.contains(
             "gate: the implementer set done; only the verifier may, and the launcher gates that"
         ));
@@ -2791,8 +4393,13 @@ mod tests {
     }
 
     #[test]
-    fn stopping_short_of_review_skips_the_rest() {
-        for status in ["blocked", "needs-spec", "deferred", "ready"] {
+    fn short_of_review_skips() {
+        for status in [
+            "needs-info",
+            "wontfix",
+            "ready-for-agent",
+            "ready-for-human",
+        ] {
             let mut env = Env::new("exit 0\n");
             env.queue(status, "src/a.ts", "§11 row 1");
             env.repo.commit_all("implement");
@@ -2802,9 +4409,7 @@ mod tests {
         }
 
         let mut missing = Env::new("exit 0\n");
-        missing
-            .repo
-            .write("TASKS.md", "## [T-001] first\nscope: src/a.ts\n");
+        missing.write_queue("## [T-001] first\nscope: src/a.ts\n");
         missing.repo.commit_all("implement");
         let out = run(
             "implementer-not-done",
@@ -2835,30 +4440,27 @@ mod tests {
     }
 
     #[test]
-    fn dry_round_counts_and_resets() {
+    fn dry_round_counts() {
         let mut env = Env::new("exit 0\n");
-        env.queue("proposed", "src/a.ts", "§11 row 1");
+        env.queue("needs-triage", "src/a.ts", "§11 row 1");
         run("dry-round", &mut env.ctx(None, None));
         assert_eq!(env.dry_rounds, 1);
 
-        env.queue("ready", "src/a.ts", "§11 row 1");
+        env.queue("ready-for-agent", "src/a.ts", "§11 row 1");
         assert!(run("dry-round", &mut env.ctx(None, None)).pass);
         assert_eq!(env.dry_rounds, 0);
     }
 
     #[test]
-    fn unreadable_queue_fails_the_gate() {
+    fn unreadable_queue_fails() {
         let mut env = Env::new("exit 0\n");
-        env.repo.write(
-            "TASKS.md",
-            "## [T-001] first\nstatus: done\n\n## [T-001] again\nstatus: done\n",
-        );
+        env.duplicate_queue("done");
         env.repo.commit_all("bad queue");
         let out = run("verdict", &mut env.ctx(Some("T-001"), None));
         assert!(!out.pass);
         assert_eq!(out.reason, "unreadable");
         assert_eq!(env.warnings.len(), 1);
-        assert!(env.warnings[0].contains("TASKS.md could not be read"));
+        assert!(env.warnings[0].contains("the queue could not be read"));
     }
 
     #[test]
@@ -2890,16 +4492,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_queue_it_cannot_rewrite_emits_no_status_change() {
+    fn readonly_queue_no_status() {
         use std::os::unix::fs::PermissionsExt;
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/a.ts", "§11 row 1");
         env.repo.commit_all("verdict");
         env.repo.write("src/x.ts", "left behind");
-        let tasks =
-            crate::config::instance_path(&env.repo.root, &env.cfg.layout.harness_dir, "TASKS.md");
+        let tasks = env.tracker().path_of("T-001").expect("T-001");
         std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o444))
-            .expect("chmod TASKS.md");
+            .expect("chmod the queue");
 
         let out = run("verdict", &mut env.ctx(Some("T-001"), None));
         assert!(!out.pass);
@@ -2907,7 +4508,7 @@ mod tests {
         assert!(
             env.warnings
                 .iter()
-                .any(|w| w.contains("TASKS.md could not be rewritten")),
+                .any(|w| w.contains("the queue could not be rewritten")),
             "{:?}",
             env.warnings
         );
@@ -2940,14 +4541,16 @@ mod tests {
     }
 
     #[test]
-    fn scope_exempts_a_vendored_role() {
+    fn scope_exempts_vendored_role() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/**", "§11 row 1");
         env.repo.commit_all("verdict");
         let base = env.head();
         env.repo.write(".enallagi/roles/implementer.md", "# role\n");
-        env.repo
-            .write("harness.lock", &role_lock_toml(&[("implementer", "aaa")]));
+        env.repo.write(
+            &env.instance("harness.lock"),
+            &role_lock_toml(&[("implementer", "aaa")]),
+        );
         env.repo.commit_all("T-001 vendor implementer");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -2955,15 +4558,19 @@ mod tests {
     }
 
     #[test]
-    fn scope_rejects_a_recut_role_outside_scope() {
+    fn scope_rejects_recut_role() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/**", "§11 row 1");
-        env.repo
-            .write("harness.lock", &role_lock_toml(&[("implementer", "aaa")]));
+        env.repo.write(
+            &env.instance("harness.lock"),
+            &role_lock_toml(&[("implementer", "aaa")]),
+        );
         env.repo.commit_all("verdict");
         let base = env.head();
-        env.repo
-            .write("harness.lock", &role_lock_toml(&[("implementer", "bbb")]));
+        env.repo.write(
+            &env.instance("harness.lock"),
+            &role_lock_toml(&[("implementer", "bbb")]),
+        );
         env.repo.commit_all("T-001 recut implementer");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -2976,7 +4583,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_exempts_a_new_lock_key() {
+    fn scope_exempts_lock_key() {
         let mut env = Env::new("exit 0\n");
         env.queue(
             "done",
@@ -2984,12 +4591,12 @@ mod tests {
             "§11 row 1",
         );
         env.repo
-            .write("harness.lock", &lock_toml(&[("tdd", "aaa")]));
+            .write(&env.instance("harness.lock"), &lock_toml(&[("tdd", "aaa")]));
         env.repo.commit_all("verdict");
         let base = env.head();
         // the role fetched a second skill this stage; its id is new to the lock, absent at base
         env.repo.write(
-            "harness.lock",
+            &env.instance("harness.lock"),
             &lock_toml(&[("tdd", "aaa"), ("tdd-old", "aaa")]),
         );
         env.repo.commit_all("T-001 vendor tdd-old");
@@ -2999,20 +4606,24 @@ mod tests {
     }
 
     #[test]
-    fn scope_rejects_a_sha_only_recut_outside_scope() {
+    fn scope_rejects_sha_recut() {
         let mut env = Env::new("exit 0\n");
         env.queue(
             "done",
             ".enallagi/adapters/claude/skills/tdd/**",
             "§11 row 1",
         );
-        env.repo
-            .write("harness.lock", &lock_toml(&[("tdd-old", "aaa")]));
+        env.repo.write(
+            &env.instance("harness.lock"),
+            &lock_toml(&[("tdd-old", "aaa")]),
+        );
         env.repo.commit_all("verdict");
         let base = env.head();
         // only sha256 changes -- the id line itself never appears in the diff
-        env.repo
-            .write("harness.lock", &lock_toml(&[("tdd-old", "bbb")]));
+        env.repo.write(
+            &env.instance("harness.lock"),
+            &lock_toml(&[("tdd-old", "bbb")]),
+        );
         env.repo.commit_all("T-001 recut tdd-old");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -3025,7 +4636,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_allows_a_sha_only_recut_inside_scope() {
+    fn scope_allows_sha_recut() {
         let mut env = Env::new("exit 0\n");
         env.queue(
             "done",
@@ -3033,11 +4644,11 @@ mod tests {
             "§11 row 1",
         );
         env.repo
-            .write("harness.lock", &lock_toml(&[("tdd", "aaa")]));
+            .write(&env.instance("harness.lock"), &lock_toml(&[("tdd", "aaa")]));
         env.repo.commit_all("verdict");
         let base = env.head();
         env.repo
-            .write("harness.lock", &lock_toml(&[("tdd", "bbb")]));
+            .write(&env.instance("harness.lock"), &lock_toml(&[("tdd", "bbb")]));
         env.repo.commit_all("T-001 recut tdd");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -3045,7 +4656,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_rejects_a_removed_lock_key_outside_scope() {
+    fn scope_rejects_removed_key() {
         let mut env = Env::new("exit 0\n");
         env.queue(
             "done",
@@ -3053,13 +4664,13 @@ mod tests {
             "§11 row 1",
         );
         env.repo.write(
-            "harness.lock",
+            &env.instance("harness.lock"),
             &lock_toml(&[("tdd", "aaa"), ("tdd-old", "aaa")]),
         );
         env.repo.commit_all("verdict");
         let base = env.head();
         env.repo
-            .write("harness.lock", &lock_toml(&[("tdd", "aaa")]));
+            .write(&env.instance("harness.lock"), &lock_toml(&[("tdd", "aaa")]));
         env.repo.commit_all("T-001 drop tdd-old");
 
         let out = run("scope", &mut env.ctx(Some("T-001"), Some(&base)));
@@ -3072,11 +4683,13 @@ mod tests {
     }
 
     #[test]
-    fn scope_exempts_a_revendored_locked_skill() {
+    fn scope_exempts_revendored_skill() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/**", "§11 row 1");
-        env.repo
-            .write("harness.lock", &lock_toml(&[("demo", "aaa")]));
+        env.repo.write(
+            &env.instance("harness.lock"),
+            &lock_toml(&[("demo", "aaa")]),
+        );
         env.repo.commit_all("verdict");
         let base = env.head();
         // the id is already locked, so the re-vendoring leaves harness.lock byte-identical
@@ -3089,11 +4702,13 @@ mod tests {
     }
 
     #[test]
-    fn scope_rejects_a_rewritten_vendored_skill() {
+    fn scope_rejects_rewritten_skill() {
         let mut env = Env::new("exit 0\n");
         env.queue("done", "src/**", "§11 row 1");
-        env.repo
-            .write("harness.lock", &lock_toml(&[("demo", "aaa")]));
+        env.repo.write(
+            &env.instance("harness.lock"),
+            &lock_toml(&[("demo", "aaa")]),
+        );
         env.repo
             .write(".enallagi/adapters/claude/skills/demo/SKILL.md", "# demo\n");
         env.repo.commit_all("verdict");
@@ -3149,22 +4764,23 @@ mod tests {
     }
 
     #[test]
-    fn force_runs_the_force_form_of_the_check() {
+    fn force_runs_force_form() {
         let repo = Repo::new();
         let cmd = repo.stub_check("echo \"$1\" >> ran.txt\nexit 0\n");
         repo.write(
-            "enallagi.toml",
+            ".enallagi/enallagi.toml",
             &format!(
                 "[check]\ncommand = \"{cmd} plain\"\nforce = \"{cmd} forced\"\nfail_name = '\\(fail\\) (.+)$'\n"
             ),
         );
         let cfg = crate::config::load(&repo.root).expect("load enallagi.toml");
-        check_delta(&repo.root, &cfg, true);
+        let sandbox = crate::sandbox::Sandbox::start(&repo.root, &cfg);
+        check_delta(&sandbox, &repo.root, &cfg, true);
         assert_eq!(
             std::fs::read_to_string(repo.root.join("ran.txt")).expect("ran.txt"),
             "forced\n"
         );
-        check_delta(&repo.root, &cfg, false);
+        check_delta(&sandbox, &repo.root, &cfg, false);
         assert_eq!(
             std::fs::read_to_string(repo.root.join("ran.txt")).expect("ran.txt"),
             "forced\nplain\n"
@@ -3197,12 +4813,105 @@ mod tests {
     }
 
     #[test]
-    fn takeable_is_none_on_an_unreadable_queue() {
-        let env = Env::new("exit 0\n");
-        env.repo.write(
-            "TASKS.md",
-            "## [T-001] first\nstatus: ready\n\n## [T-001] again\nstatus: ready\n",
+    fn unreadable_queue_not_takeable() {
+        let mut env = Env::new("exit 0\n");
+        env.duplicate_queue("ready-for-agent");
+        assert!(!run("dry-round", &mut env.ctx(None, None)).pass);
+    }
+
+    // one holdout in the ticket's spec set, written after the last commit so no repo tracks it
+    fn holdout(env: &Env, name: &str, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let rel = format!(
+            ".enallagi/holdouts/{}/{name}",
+            tracker::repo_slug(&env.repo.root)
         );
-        assert!(takeable(&env.repo.root, &env.cfg).is_none());
+        env.repo.write(&rel, &format!("#!/bin/sh\n{body}"));
+        std::fs::set_permissions(
+            env.repo.root.join(rel),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("chmod");
+    }
+
+    fn holdout_env() -> Env {
+        let env = Env::new("exit 0\n");
+        env.queue("done", "src/*", "none");
+        env.repo.commit_all("verdict");
+        env
+    }
+
+    #[test]
+    fn holdout_red_forces_back() {
+        let mut env = holdout_env();
+        holdout(&env, "a.sh", "exit 0\n");
+        holdout(&env, "b.sh", "exit 1\n");
+        let out = run("holdout", &mut env.ctx(Some("T-001"), None));
+        assert!(!out.pass);
+        assert_eq!(out.reason, "holdouts: 1 of 2 red");
+        assert!(env.tasks_text().contains("status: ready-for-agent"));
+        assert!(env.tasks_text().contains("gate: holdouts: 1 of 2 red"));
+    }
+
+    #[test]
+    fn holdout_reason_names_none() {
+        let mut env = holdout_env();
+        holdout(&env, "leaky.sh", "echo LEAKYLINE\nexit 1\n");
+        run("holdout", &mut env.ctx(Some("T-001"), None));
+        let events = format!("{:?}", env.events());
+        let seen = [env.tasks_text(), events, env.warnings.join("\n")];
+        for text in &seen {
+            for word in ["leaky", "holdouts/", "LEAKYLINE"] {
+                assert!(!text.contains(word), "{word} in {text}");
+            }
+        }
+        let log = env
+            .cache
+            .path()
+            .join("holdouts")
+            .join(tracker::repo_slug(&env.repo.root))
+            .join("T-001/leaky.sh.log");
+        let text = std::fs::read_to_string(&log).expect("the holdout log");
+        assert!(text.contains("LEAKYLINE"), "{text}");
+    }
+
+    #[test]
+    fn holdout_leaves_tree_clean() {
+        let mut env = holdout_env();
+        holdout(
+            &env,
+            "copy.sh",
+            "cp \"$ENALLAGI_HOLDOUTS/data.txt\" ./copied.txt\n",
+        );
+        env.repo.write(
+            &format!(
+                ".enallagi/holdouts/{}/data.txt",
+                tracker::repo_slug(&env.repo.root)
+            ),
+            "data\n",
+        );
+        let trees = |env: &Env| git(&env.repo.root, &["worktree", "list"]).expect("list");
+        let (status, before) = (porcelain(&env.repo.root), trees(&env));
+        let out = run("holdout", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass, "{}", out.reason);
+        assert_eq!(porcelain(&env.repo.root), status);
+        assert_eq!(trees(&env), before);
+        assert!(!env.repo.root.join("copied.txt").exists());
+    }
+
+    #[test]
+    fn holdout_without_set() {
+        let mut env = holdout_env();
+        let out = run("holdout", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass && out.reason == "no holdout set", "{}", out.reason);
+        env.repo.write(
+            &format!(
+                ".enallagi/holdouts/{}/data.txt",
+                tracker::repo_slug(&env.repo.root)
+            ),
+            "not executable\n",
+        );
+        let out = run("holdout", &mut env.ctx(Some("T-001"), None));
+        assert!(out.pass && out.reason == "no holdout set", "{}", out.reason);
     }
 }

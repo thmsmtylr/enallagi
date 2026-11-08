@@ -1,4 +1,4 @@
-//! `enallagi init` -- installs in one pass: answers, files, adapter, skills, the state commit and a probe; or moves instance files into the harness directory, or prunes the defaulted keys out of enallagi.toml.
+//! `enallagi init` -- installs in one pass, or prunes the defaulted keys out of enallagi.toml
 
 use crate::config;
 use crate::init::{self, Answers, InitOpts};
@@ -7,7 +7,6 @@ use std::io::IsTerminal;
 pub struct Args {
     pub adapter: Option<String>,
     pub dry_run: bool,
-    pub move_files: bool,
     pub prune_defaults: bool,
     pub yes: bool,
     pub answers: Answers,
@@ -18,11 +17,7 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let cwd = std::env::current_dir()?;
-    let root = match crate::git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
-        Ok(top) => std::path::PathBuf::from(top),
-        Err(_) => cwd,
-    };
+    let root = super::root()?;
     let opts = InitOpts {
         adapter: args.adapter.clone(),
         dry_run: args.dry_run,
@@ -55,26 +50,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         root.display(),
         if args.dry_run { "  (dry run)" } else { "" }
     );
-    if args.move_files {
-        let moves = init::moves(&root)?;
-        if !args.dry_run {
-            init::relocate(&root, &moves)?;
-        }
-        let verb = if args.dry_run { "would move" } else { "moved" };
-        for (old, new) in &moves {
-            println!("  {verb}: {old} -> {new}");
-        }
-        println!("\nNext: git add the old and new paths, then re-run `enallagi init`.");
-        return Ok(0);
-    }
     let report = init::install(&root, &opts)?;
-
-    for (old, new) in &report.moves {
-        println!("  would move: {old} -> {new}");
-    }
-    if !report.moves.is_empty() {
-        println!("  nothing was moved; `enallagi init --move` moves them");
-    }
 
     let verb = if args.dry_run { "would write" } else { "wrote" };
     for path in &report.wrote {
@@ -160,8 +136,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         }
     }
 
-    // the skills a lane loads, vendored now rather than at the first stage; a stdin that is not a
-    // terminal is a fixture or a pipeline, where a fetch mid-install is a surprise, so it needs --sync
+    // a non-terminal stdin is a fixture or pipeline, where a mid-install fetch surprises: needs --sync
     let fetch = !args.frozen
         && !crate::skills::frozen_from_env(std::env::var_os("CI").as_deref())
         && (args.sync || std::io::stdin().is_terminal());
@@ -177,6 +152,14 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
                 println!("  skills: {err}; `enallagi skills sync` once the source is reachable");
             }
         }
+    }
+
+    match baseline(&root, &dir) {
+        Ok(Some(n)) => println!("  security: recorded a secrets baseline, {n} finding(s)"),
+        Ok(None) => {}
+        Err(err) => println!(
+            "  security: no secrets baseline ({err}); the security gate halts until `enallagi init` records one"
+        ),
     }
 
     // the verdict gate wants every instance edit committed; the operator should not have to know that
@@ -209,10 +192,7 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         }
     }
 
-    // what the tree says about itself, printed as `enallagi probe` prints it; a finding is a report,
-    // not a failed install, since a re-run over a repository with standing findings is still installed.
-    // The check is not run here: it is the repository's own suite and takes as long as it takes, so
-    // `check-red`, the one probe that reads it, is left to `enallagi probe`
+    // a finding is a report, not a failed install; the slow check waits for `enallagi probe`
     let unrun = crate::probes::CheckOutcome {
         ran: false,
         red: false,
@@ -272,17 +252,31 @@ fn vendor(root: &std::path::Path, cfg: &config::Config) -> anyhow::Result<Vec<St
         .collect())
 }
 
+// full history once, so an old leak fails no lane; a re-run keeps it, never baselining a new one
+fn baseline(root: &std::path::Path, dir: &str) -> Result<Option<usize>, String> {
+    let path = config::instance_path(root, dir, crate::security::BASELINE);
+    if path.is_file() {
+        return Ok(None);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let found = crate::security::gitleaks(root, dir, &config::cache_root(), &[], &path);
+    if found.is_err() {
+        let _ = std::fs::remove_file(&path);
+    }
+    Ok(Some(found?.len()))
+}
+
 // the same append `enallagi issue` makes, then the state commit that carries it
 fn queue_issue(root: &std::path::Path, dir: &str, reference: &str) -> anyhow::Result<String> {
-    let queue = crate::queue::Queue {
-        path: config::instance_path(root, dir, "TASKS.md"),
-    };
+    let t = crate::tracker::Tracker::open(root, dir);
     let decisions = std::fs::read_to_string(config::instance_path(root, dir, "DECISIONS.md"))
         .unwrap_or_default();
     let found = crate::issue::read(reference)?;
-    let (block, next) = crate::issue::append(&queue.read()?, &decisions, &found)?;
-    queue.write(&next)?;
+    let block = crate::issue::append(&t.blocks()?, &decisions, &found)?;
+    t.append(&crate::tracker::repo_slug(root), &block)?;
     let id = block.lines().next().unwrap_or_default().to_string();
-    crate::git::commit_instance(root, dir, &["TASKS.md"], &format!("queue: {id}"))?;
+    crate::git::commit_instance(root, dir, &[crate::tracker::SPECS], &format!("queue: {id}"))?;
     Ok(id)
 }

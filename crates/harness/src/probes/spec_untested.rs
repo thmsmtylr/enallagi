@@ -1,9 +1,10 @@
-//! Every exit-criteria row whose test does not exist.
+//! every exit-criteria row whose test does not exist
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
 
 pub struct Untested {
+    pub spec: String,
     pub name: String,
     pub test: String,
     pub line: usize,
@@ -14,7 +15,7 @@ pub fn untested_rows(ctx: &ProbeCtx) -> Res<Vec<Untested>> {
     let src = &ctx.cfg.layout.source_root;
     let mut out = Vec::new();
     for row in common::spec_rows(ctx)? {
-        // SPEC.md §12: rows live under source_root, so a name with a slash is tried there first
+        // rows live under source_root, so a name with a slash is tried there first
         let under_root = format!("{src}/{}", row.name);
         let path = if row.name.contains('/') && !common::exists(ctx.root, &under_root) {
             row.name.clone()
@@ -34,6 +35,7 @@ pub fn untested_rows(ctx: &ProbeCtx) -> Res<Vec<Untested>> {
             continue;
         };
         out.push(Untested {
+            spec: row.spec,
             name: row.name,
             test: row.test,
             line: row.line,
@@ -48,9 +50,8 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 }
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
-    let spec = &common::instance(ctx, &ctx.cfg.layout.spec);
     Ok(untested_rows(ctx)?
         .into_iter()
-        .map(|row| common::finding(spec, row.line, row.message))
+        .map(|row| common::finding(&row.spec, row.line, row.message))
         .collect())
 }

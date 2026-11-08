@@ -1,4 +1,5 @@
 name = "codex"
+hosts = ["api.openai.com", "chatgpt.com", "auth.openai.com"]
 argv = ["codex", "exec", "{prompt}", "--json"]
 bypass_flag = "--dangerously-bypass-approvals-and-sandbox"
 turn_cap = "none"

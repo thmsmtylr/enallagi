@@ -1,50 +1,92 @@
 version = 1
 
 [[skill]]
-id = "brainstorming"
-source = "github:obra/superpowers"
-rev = "v6.3.0"
-commit = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
-sha256 = "74edf03ea6d24ef53db48677b93558d14a979bdf052ca3f57ecdca0c66791608"
+id = "caveman-commit"
+source = "github:JuliusBrussee/caveman"
+rev = "v2.7.0"
+commit = "8b0c1d3699b8d83e87fe4605b378da20c41555e0"
+sha256 = "c788a282fc75b981b421dfdad5d84ea7f83f946c126daa39cfc7d3f97845e193"
 
 [[skill]]
-id = "debugging"
-source = "github:obra/superpowers"
-rev = "v6.3.0"
-commit = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
-sha256 = "808fc5717aa88ad65efff312b11c186294d3e6ee301afb584e2f86599b137787"
+id = "code-review"
+source = "github:mattpocock/skills"
+rev = "v1.3.2"
+commit = "d1478fcb140db0b93c0c8df17bcfd311844749d0"
+sha256 = "9c921a8d88138a41401d8897ca1bb852088ab1b7b605cdd04edc13e3e8aab6dd"
+
+[[skill]]
+id = "codebase-design"
+source = "github:mattpocock/skills"
+rev = "v1.3.2"
+commit = "d1478fcb140db0b93c0c8df17bcfd311844749d0"
+sha256 = "2c20617f87ec8af6a434859f381b2f061a69b530444e74eb39e78bb016a6d1e2"
+
+[[skill]]
+id = "diagnosing-bugs"
+source = "github:mattpocock/skills"
+rev = "v1.3.2"
+commit = "d1478fcb140db0b93c0c8df17bcfd311844749d0"
+sha256 = "849198df88cdb65fd0d97236604c1fca7ff2f22d2f705f9724a800d0266b118d"
+
+[[skill]]
+id = "domain-modeling"
+source = "github:mattpocock/skills"
+rev = "v1.3.2"
+commit = "d1478fcb140db0b93c0c8df17bcfd311844749d0"
+sha256 = "7b925d7b1e341a2eeae33ad68a8a8c0ab889a38ddd22a7598e4c240e5a7556a3"
 
 [[skill]]
 id = "ponytail"
 source = "github:DietrichGebert/ponytail"
-rev = "v4.8.4"
-commit = "bc9ee949d5f439e8b9f3bb92c6d6d3d1e6ebd324"
-sha256 = "d1ffcddbc486ab787d5797441e8b6e4717da3249c6786b83fc2abd2f12803c29"
+rev = "v5.3.3"
+commit = "7801d061243d7b753bad0e0b3c057cd250b11755"
+sha256 = "9badd22a32e19cb884e46dfa8d3aae82bb81dfa5484105b8b4f0262df823a509"
 
 [[skill]]
-id = "review-received"
+id = "ponytail-review"
+source = "github:DietrichGebert/ponytail"
+rev = "v5.3.3"
+commit = "7801d061243d7b753bad0e0b3c057cd250b11755"
+sha256 = "33fe4ebe22a460924e5d4a261e223df22e409cc94ab76182bee9fb91a3ef022e"
+
+[[skill]]
+id = "receiving-code-review"
 source = "github:obra/superpowers"
 rev = "v6.3.0"
 commit = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
 sha256 = "091df1629510af1b92fc4abd6f96732ebedb4cb2c0f3457e8f2740b0504a2438"
 
 [[skill]]
-id = "review-requested"
-source = "github:obra/superpowers"
-rev = "v6.3.0"
-commit = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
-sha256 = "d71cc01ba56d2325cf8af5f7c11837819b63ecd57de0bfdb812f7f3ff7751df8"
-
-[[skill]]
 id = "tdd"
-source = "github:obra/superpowers"
-rev = "v6.3.0"
-commit = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
-sha256 = "bf1b8216e523851a411e91d429a7c1c2a173e79d88957bc78e348218d50edd54"
+source = "github:mattpocock/skills"
+rev = "v1.3.2"
+commit = "d1478fcb140db0b93c0c8df17bcfd311844749d0"
+sha256 = "5505d25bbaa8fc14a79e4d20163936958992a2995b7f1dd1d6197edc9ed722e0"
 
 [[skill]]
-id = "verify-before-done"
+id = "to-tickets"
+source = "github:mattpocock/skills"
+rev = "v1.3.2"
+commit = "d1478fcb140db0b93c0c8df17bcfd311844749d0"
+sha256 = "56ec23c5b2782785d4e65bff9e315b6d3aeb4ef977c174a219e99489fada1995"
+
+[[skill]]
+id = "triage"
+source = "github:mattpocock/skills"
+rev = "v1.3.2"
+commit = "d1478fcb140db0b93c0c8df17bcfd311844749d0"
+sha256 = "917b0baf74be583e74f110857ed45df2766617f75c00baf61fd136d7af515edf"
+
+[[skill]]
+id = "verification-before-completion"
 source = "github:obra/superpowers"
 rev = "v6.3.0"
 commit = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
 sha256 = "2befe7fc55bcadaa3d97dd9e8efeb633d2561c0ebe74c5a8b17c4d9e7e4520b3"
+
+[[skill]]
+id = "writing-for-agents"
+source = "github:mattpocock/skills"
+rev = "v1.3.2"
+commit = "d1478fcb140db0b93c0c8df17bcfd311844749d0"
+sha256 = "551adca942227b44192edba88acd4e8db911f0121ce58ad16944ccf6a896a74a"

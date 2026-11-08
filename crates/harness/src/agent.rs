@@ -1,12 +1,11 @@
-//! Adapter presets: one static TOML file per supported coding agent, embedded into the binary and parsed on demand.
+//! adapter presets: one embedded TOML file per supported coding agent, parsed on demand
 
 use crate::config::{AgentConfig, Layout};
 use crate::events::{Kind, Writer};
 use regex::Regex;
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -53,9 +52,15 @@ pub struct Preset {
     pub model_flag: Option<String>,
     #[serde(default)]
     pub effort_flag: Option<String>,
-    // kept out of argv so a lane runs with the agent's permission checks unless the operator asks otherwise
+    // kept out of argv and added to every confined lane, since the sandbox is the boundary
     #[serde(default)]
     pub bypass_flag: Option<String>,
+    // the CLI's API and auth hosts, for the sandbox's allowlist
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    // the CLI's own state paths, writable from its lanes
+    #[serde(default)]
+    pub write: Vec<String>,
 }
 
 pub type Presets = BTreeMap<String, Preset>;
@@ -72,8 +77,6 @@ pub enum AgentError {
     Stopped,
     #[error("the agent command is empty")]
     EmptyCommand,
-    #[error("preset {0} declares no bypass flag, so dangerously_skip_permissions cannot apply")]
-    NoBypassFlag(String),
 }
 
 const PRESET_FILES: &[(&str, &str)] = &[
@@ -105,7 +108,7 @@ pub fn presets() -> Presets {
         .collect()
 }
 
-/// A model and an effort as one block reads them; the first level `resolve_task` looks at.
+/// a model and an effort as one block reads them; the first level `resolve_task` looks at
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Levels {
     pub model: Option<String>,
@@ -118,7 +121,7 @@ pub struct Resolved {
     pub levels: Levels,
 }
 
-// a hand-written command's cap is read back off its argv, never inherited from a preset it no longer matches
+// a hand-written command's cap is read off its argv, never inherited from a preset it left
 fn cap_of(argv: &[String]) -> TurnCap {
     if argv.iter().any(|w| w.contains("{timeout}")) {
         TurnCap::Time
@@ -139,10 +142,10 @@ fn drop_token(argv: &mut Vec<String>, token: &str) {
     }
 }
 
-// the name init.rs gives the plugin it writes for `--plugin-dir`; disabling it would take the harness's own hooks with it
+// the plugin init.rs writes for `--plugin-dir`; disabling it would drop the harness's own hooks
 const ADAPTER_PLUGIN: &str = "harness@inline";
 
-// `--settings` layers over the operator's own file rather than displacing it, so a plugin enabled there loads into every lane unless it is named false here
+// `--settings` layers over the operator's file, so a plugin enabled there loads unless named false
 fn plugins_off(file: &str) -> String {
     let path = match file.strip_prefix("~/") {
         Some(rest) => match std::env::var_os("HOME") {
@@ -166,7 +169,7 @@ fn plugins_off(file: &str) -> String {
     serde_json::Value::Object(off).to_string()
 }
 
-// the settings path rides in the token rather than a preset key, so only a preset that asks for the override names a vendor's file
+// the settings path rides in the token, so only a preset asking for the override names a vendor file
 fn fill_plugins_off(argv: &[String]) -> Vec<String> {
     static TOKEN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let re = TOKEN.get_or_init(|| {
@@ -184,7 +187,7 @@ pub fn resolve(cfg: &AgentConfig, role: &str, presets: &Presets) -> Result<Resol
     resolve_task(cfg, role, presets, &Levels::default())
 }
 
-/// `resolve` with the task's own levels, which outrank `[agent.<role>]` and `[agent]` in that order.
+/// `resolve` with the task's own levels, outranking `[agent.<role>]` then `[agent]`
 pub fn resolve_task(
     cfg: &AgentConfig,
     role: &str,
@@ -226,6 +229,8 @@ pub fn resolve_task(
             model_flag: None,
             effort_flag: None,
             bypass_flag: None,
+            hosts: Vec::new(),
+            write: Vec::new(),
         }
     } else {
         let mut preset = presets
@@ -249,13 +254,7 @@ pub fn resolve_task(
     if !matches!(preset.turn_cap, TurnCap::Time) {
         drop_token(&mut argv, "{timeout}");
     }
-    if cfg.dangerously_skip_permissions {
-        let flag = preset
-            .bypass_flag
-            .clone()
-            .ok_or_else(|| AgentError::NoBypassFlag(preset.name.clone()))?;
-        argv.push(flag);
-    }
+    argv.extend(preset.bypass_flag.clone());
     if let (Some(flag), Some(model)) = (&preset.model_flag, model) {
         argv.push(flag.clone());
         argv.push(model.to_string());
@@ -288,7 +287,7 @@ pub fn fill_layout(argv: &[String], layout: &Layout) -> Vec<String> {
     argv.iter().map(|w| fill_word(w, layout)).collect()
 }
 
-/// A preset's `env` with the same layout tokens its `argv` takes.
+/// a preset's `env` with the same layout tokens its `argv` takes
 pub fn fill_env(env: &BTreeMap<String, String>, layout: &Layout) -> BTreeMap<String, String> {
     env.iter()
         .map(|(k, v)| (k.clone(), fill_word(v, layout)))
@@ -305,20 +304,25 @@ pub struct UsageValues {
     pub turns: Option<u64>,
 }
 
-// agents stream one JSON object per line with totals in the last one, so the last parseable line wins
+// totals sit in the last object; a result line wins, as claude prints a system line after it
 pub fn extract_usage(output: &str, paths: &UsagePaths) -> UsageValues {
     let mut values = UsageValues::default();
-    let Some(last) = output.lines().rev().find_map(|line| {
-        serde_json::from_str::<serde_json::Value>(line.trim())
-            .ok()
-            .filter(serde_json::Value::is_object)
-    }) else {
+    let objects: Vec<serde_json::Value> = output
+        .lines()
+        .filter_map(|line| serde_json::from_str(line.trim()).ok())
+        .filter(serde_json::Value::is_object)
+        .collect();
+    let Some(last) = objects
+        .iter()
+        .rfind(|o| o["type"] == "result")
+        .or(objects.last())
+    else {
         return values;
     };
     let at = |path: &Option<String>| -> Option<&serde_json::Value> {
         path.as_deref()?
             .split('.')
-            .try_fold(&last, |node, key| node.get(key))
+            .try_fold(last, |node, key| node.get(key))
     };
     values.cost = at(&paths.cost).and_then(serde_json::Value::as_f64);
     values.input_tokens = at(&paths.input_tokens).and_then(serde_json::Value::as_u64);
@@ -335,7 +339,7 @@ pub fn extract_usage(output: &str, paths: &UsagePaths) -> UsageValues {
 fn reset_pattern() -> &'static Regex {
     static RESET: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     RESET.get_or_init(|| {
-        // the minutes are optional too: a live notice read `resets 2am` and the hour-only form must still wait
+        // minutes are optional too: a live notice read `resets 2am`, and the hour-only form must still wait
         Regex::new(
             r"(?i)resets\s+(?:([a-z]{3,9})\s+(\d{1,2})\s+at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)\s*\(([^)]+)\)",
         )
@@ -352,7 +356,7 @@ fn month_number(name: &str) -> Option<i8> {
     i8::try_from(index + 1).ok()
 }
 
-/// The dated part of a reset notice, `Sep 20 at 4am (Australia/Melbourne)`, in the notice's own words.
+/// the notice's dated part, `Sep 20 at 4am (Australia/Melbourne)`, in its own words
 pub fn dated_reset(notice: &str) -> Option<String> {
     let caps = reset_pattern().captures(notice)?;
     let month = caps.get(1)?;
@@ -361,7 +365,7 @@ pub fn dated_reset(notice: &str) -> Option<String> {
     Some(notice[month.start()..caps.get(0)?.end()].to_string())
 }
 
-// without this a session-limit notice reads as a finished iteration and burns the rest of the run doing nothing
+// else a session-limit notice reads as a finished iteration and burns the rest of the run
 pub fn seconds_until_reset(notice: &str, now: jiff::Zoned) -> Option<u64> {
     let caps = reset_pattern().captures(notice)?;
     let hour: i8 = caps.get(3)?.as_str().parse().ok()?;
@@ -424,6 +428,7 @@ pub struct StageSpawn<'a> {
     pub stage: String,
     pub task: Option<String>,
     pub preset: Preset,
+    pub role: crate::sandbox::RolePolicy,
 }
 
 #[derive(Debug)]
@@ -433,7 +438,7 @@ pub struct StageResult {
     pub output: String,
     pub usage: UsageValues,
     pub timed_out: bool,
-    /// The dated reset of a notice further out than the wait ceiling, once the stage has run.
+    /// a reset further out than the wait ceiling, once the stage has run
     pub reset_beyond_wait: Option<String>,
 }
 
@@ -458,7 +463,7 @@ extern "C" fn note_signal(signum: i32) {
     unsafe { signal(signum, SIG_DFL) };
 }
 
-/// Take SIGINT and SIGTERM, so a stop reaches the agent the launcher spawned instead of orphaning it.
+/// takes SIGINT and SIGTERM, so a stop reaches the spawned agent instead of orphaning it
 pub fn catch_stop_signals() {
     let handler = note_signal as extern "C" fn(i32) as usize;
     unsafe {
@@ -467,7 +472,6 @@ pub fn catch_stop_signals() {
     }
 }
 
-/// The name of the signal a stop arrived on, once one has.
 pub fn stop_signal() -> Option<&'static str> {
     match SIGNALLED.load(Ordering::Relaxed) {
         SIGINT => Some("SIGINT"),
@@ -495,8 +499,7 @@ fn stage_now() -> jiff::Zoned {
         .unwrap_or_else(jiff::Zoned::now)
 }
 
-// only the run's own verdict line, never a file the agent read or a command it wrote: both quote the
-// notice while working on this scan, and each cost a round a multi-hour sleep on 2026-09-16
+// only the run's verdict line: a file the agent read or a command it wrote can quote the notice
 fn notice_of(line: &str) -> Option<String> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         // a preset that prints plain text has no envelope to read, so the line stands as itself
@@ -517,15 +520,16 @@ fn notice_of(line: &str) -> Option<String> {
 // retried at most twice: an agent that prints the limit notice forever would hold the run forever
 pub fn spawn(
     s: &StageSpawn,
+    sandbox: &crate::sandbox::Sandbox,
     events: &mut Writer,
-    stop_file: &Path,
+    stop_files: &[PathBuf],
     rate_limit: &Regex,
 ) -> Result<StageResult, AgentError> {
     let mut attempt = 0u32;
     // one clock for the whole stage, not per attempt: retries and waits count against the seconds budget
     let started = Instant::now();
     loop {
-        let (exit, output, timed_out) = run_once(s, events)?;
+        let (exit, output, timed_out) = run_once(s, sandbox, events)?;
         let mut result = StageResult {
             exit,
             seconds: started.elapsed().as_secs(),
@@ -557,16 +561,16 @@ pub fn spawn(
             sleep_seconds,
             attempt,
         });
-        sleep_until(sleep_seconds, stop_file)?;
+        sleep_until(sleep_seconds, stop_files)?;
         attempt += 1;
     }
 }
 
-fn sleep_until(seconds: u64, stop_file: &Path) -> Result<(), AgentError> {
+fn sleep_until(seconds: u64, stop_files: &[PathBuf]) -> Result<(), AgentError> {
     let deadline = Instant::now() + Duration::from_secs(seconds);
     while let Some(left) = deadline.checked_duration_since(Instant::now()) {
         // the same predicate the halt reads: every writer of the marker writes a file, never a directory
-        if stop_file.is_file() || stop_signal().is_some() {
+        if stop_files.iter().any(|f| f.is_file()) || stop_signal().is_some() {
             return Err(AgentError::Stopped);
         }
         std::thread::sleep(left.min(POLL));
@@ -574,26 +578,38 @@ fn sleep_until(seconds: u64, stop_file: &Path) -> Result<(), AgentError> {
     Ok(())
 }
 
-fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), AgentError> {
+fn run_once(
+    s: &StageSpawn,
+    sandbox: &crate::sandbox::Sandbox,
+    events: &mut Writer,
+) -> Result<(i32, String, bool), AgentError> {
     let turns = s.turns.to_string();
     let timeout = s.timeout.map(|t| t.as_secs().to_string());
-    // the layout is reloaded here because StageSpawn carries the filled argv, not the layout that filled it
+    // reloaded because StageSpawn carries the filled argv, not the layout that filled it
     let cfg = crate::config::load(s.cwd).ok();
+    // unconfined, the CLI's own permission prompt is the only boundary left
+    let dropped = s
+        .preset
+        .bypass_flag
+        .as_ref()
+        .filter(|_| sandbox.name() == "off");
     let argv: Vec<String> = s
         .argv
         .iter()
+        .filter(|word| Some(*word) != dropped)
         .map(|word| {
-            // prompt substituted last, one pass each: a prompt that quotes {turns} or {prompt} must reach the agent verbatim
+            // prompt substituted last, one pass each, so a prompt quoting {turns} or {prompt} stays verbatim
             let word = word.replace("{turns}", &turns);
             let word = match &timeout {
                 Some(t) => word.replace("{timeout}", t),
                 None => word,
             };
-            let word = fill_lane(&word, s.cwd, cfg.as_ref());
             word.replace("{prompt}", &s.prompt)
         })
         .collect();
-    let (program, args) = argv.split_first().ok_or(AgentError::EmptyCommand)?;
+    if argv.is_empty() {
+        return Err(AgentError::EmptyCommand);
+    }
 
     let preset_env = match &cfg {
         Some(cfg) => fill_env(&s.preset.env, &cfg.layout),
@@ -601,10 +617,10 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
     };
 
     use std::os::unix::process::CommandExt;
-    let mut command = Command::new(program);
-    crate::config::drop_legacy_env(&mut command);
-    // a lane commits as the repository's configured identity; left to itself it invents one from
-    // whatever the agent's own session knows, and that identity lands in the operator's history
+    let mut command = sandbox
+        .wrap_as(&argv, s.cwd, &s.preset.write, &s.role)
+        .command();
+    // a lane commits as the repo's configured identity, not one the agent's session invents
     for (var, key) in [
         ("GIT_AUTHOR_NAME", "user.name"),
         ("GIT_COMMITTER_NAME", "user.name"),
@@ -619,8 +635,6 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
     }
     // the agent gets its own process group, so a stop reaches the lanes and shells it spawned too
     let mut child = command
-        .args(args)
-        .current_dir(s.cwd)
         .envs(&preset_env)
         .envs(&s.env)
         .stdin(Stdio::null())
@@ -630,14 +644,14 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         .spawn()?;
     let pgid = child.id();
 
-    // stdout and stderr interleave into one buffer: most presets put progress on stderr and gates read one stream
+    // stdout and stderr share one buffer: most presets log progress on stderr, gates read one stream
     let buffer = Arc::new(Mutex::new(String::new()));
     let mut readers = Vec::new();
     if let Some(out) = child.stdout.take() {
-        readers.push(drain(out, Arc::clone(&buffer)));
+        readers.push(crate::gates::drain(out, Arc::clone(&buffer)));
     }
     if let Some(err) = child.stderr.take() {
-        readers.push(drain(err, Arc::clone(&buffer)));
+        readers.push(crate::gates::drain(err, Arc::clone(&buffer)));
     }
 
     let started = Instant::now();
@@ -663,7 +677,7 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
         }
         std::thread::sleep(POLL);
     };
-    // a killed child can leave a grandchild holding the pipe, so the readers are joined only on a clean exit
+    // a killed child's grandchild can hold the pipe, so the readers are joined only on a clean exit
     if !timed_out && !stopped {
         for reader in readers {
             let _ = reader.join();
@@ -686,77 +700,7 @@ fn run_once(s: &StageSpawn, events: &mut Writer) -> Result<(i32, String, bool), 
     Ok((exit, output, timed_out))
 }
 
-/// What a sandboxed lane may do past its sandbox: run the check unsandboxed, since a suite may need a
-/// terminal or a cache outside the lane, read an issue, and commit to the product and state repositories.
-pub fn fill_lane(word: &str, cwd: &Path, cfg: Option<&crate::config::Config>) -> String {
-    if !word.contains("\"{lane_") && !word.contains("\"{state_git_dir}\"") {
-        return word.to_string();
-    }
-    let dir = cfg.map_or(".enallagi", |c| c.layout.harness_dir.as_str());
-    let mut unsandboxed: Vec<String> = cfg
-        .into_iter()
-        .flat_map(|c| [c.check.command.as_str(), c.check.force.as_str()])
-        .flat_map(command_prefixes)
-        .collect();
-    unsandboxed.push("gh issue view:*".to_string());
-    unsandboxed.sort();
-    unsandboxed.dedup();
-    let mut allowed: Vec<String> = unsandboxed.iter().map(|p| format!("Bash({p})")).collect();
-    allowed.extend([
-        "Bash(git add:*)".to_string(),
-        "Bash(git commit:*)".to_string(),
-        format!("Bash(git -C {dir}:*)"),
-    ]);
-    let state = crate::git::git(
-        &cwd.join(dir),
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )
-    .unwrap_or_else(|_| cwd.join(dir).join(".git").display().to_string());
-    let items = |list: &[String]| {
-        list.iter()
-            .map(|item| serde_json::Value::String(item.clone()).to_string())
-            .collect::<Vec<String>>()
-            .join(",")
-    };
-    word.replace("\"{lane_unsandboxed}\"", &items(&unsandboxed))
-        .replace("\"{lane_allowed}\"", &items(&allowed))
-        .replace("\"{state_git_dir}\"", &items(&[state]))
-}
-
-/// One `<program> <subcommand>:*` rule per command in a shell line; leading `VAR=value` words are dropped.
-pub fn command_prefixes(line: &str) -> Vec<String> {
-    line.split(['&', ';', '|'])
-        .filter_map(|part| {
-            let words: Vec<&str> = part
-                .split_whitespace()
-                .skip_while(|w| w.contains('=') && !w.starts_with('-'))
-                .collect();
-            let program = words.first()?;
-            Some(match words.get(1).filter(|w| !w.starts_with('-')) {
-                Some(sub) => format!("{program} {sub}:*"),
-                None => format!("{program}:*"),
-            })
-        })
-        .collect()
-}
-
-fn drain<R: Read + Send + 'static>(
-    pipe: R,
-    buffer: Arc<Mutex<String>>,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        let mut reader = BufReader::new(pipe);
-        let mut line = Vec::new();
-        while matches!(reader.read_until(b'\n', &mut line), Ok(n) if n > 0) {
-            if let Ok(mut text) = buffer.lock() {
-                text.push_str(&String::from_utf8_lossy(&line));
-            }
-            line.clear();
-        }
-    })
-}
-
-// at most one stage.output a second, or a chatty agent writes more event lines than the TUI can redraw off
+// at most one stage.output a second, or a chatty agent outruns the TUI's redraw
 fn flush(buffer: &Mutex<String>, sent: &mut usize, stage: &str, events: &mut Writer) {
     let chunk = match buffer.lock() {
         Ok(text) => {
@@ -819,34 +763,6 @@ mod tests {
     }
 
     #[test]
-    fn the_bypass_flag_rides_only_when_asked() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut cfg = crate::config::load(dir.path()).unwrap().agent;
-        cfg.preset = "claude".into();
-        let off = resolve(&cfg, "scout", &presets()).unwrap();
-        assert!(!off
-            .argv
-            .iter()
-            .any(|w| w == "--dangerously-skip-permissions"));
-        cfg.dangerously_skip_permissions = true;
-        let on = resolve(&cfg, "scout", &presets()).unwrap();
-        assert!(on
-            .argv
-            .iter()
-            .any(|w| w == "--dangerously-skip-permissions"));
-    }
-
-    #[test]
-    fn no_bypass_flag_refuses_the_skip() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut cfg = crate::config::load(dir.path()).unwrap().agent;
-        cfg.preset = "pi".into();
-        cfg.dangerously_skip_permissions = true;
-        let err = resolve(&cfg, "scout", &presets()).err().expect("refused");
-        assert!(err.to_string().contains("pi"), "{err}");
-    }
-
-    #[test]
     fn role_override_replaces_preset() {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = crate::config::load(dir.path()).unwrap().agent;
@@ -886,59 +802,13 @@ mod tests {
     }
 
     #[test]
-    fn a_check_line_names_one_rule_per_command() {
-        assert_eq!(
-            command_prefixes("CI=false npm test -- --serial"),
-            ["npm test:*"]
-        );
-        assert_eq!(
-            command_prefixes("cargo test -q && cargo clippy --all-targets"),
-            ["cargo test:*", "cargo clippy:*"]
-        );
-        assert_eq!(command_prefixes("pytest -q"), ["pytest:*"]);
-        assert!(command_prefixes("").is_empty());
-    }
-
-    #[test]
-    fn a_lane_runs_its_check_outside_the_sandbox() {
-        let r = crate::fixture::Repo::new();
-        r.write(
-            ".enallagi/enallagi.toml",
-            "[check]\ncommand = \"CI=false npm test -- --serial\"\nfail_name = '(.+)'\n",
-        );
-        crate::git::git(&r.root.join(".enallagi"), &["init", "-q"]).expect("git init");
-        let cfg = crate::config::load(&r.root).expect("config");
-        let argv = resolve(&cfg.agent, "default", &presets())
-            .expect("resolve")
-            .argv;
-        let argv: Vec<String> = argv
-            .iter()
-            .map(|w| fill_lane(w, &r.root, Some(&cfg)))
-            .collect();
-        let settings = settings_word(&argv);
-        let excluded = settings
-            .pointer("/sandbox/excludedCommands")
-            .expect("excluded");
-        assert!(
-            excluded.as_array().unwrap().contains(&"npm test:*".into()),
-            "{excluded}"
-        );
-        let allowed = settings.pointer("/permissions/allow").expect("allow");
-        assert!(
-            allowed
-                .as_array()
-                .unwrap()
-                .contains(&"Bash(npm test:*)".into()),
-            "{allowed}"
-        );
-        let write = settings
-            .pointer("/sandbox/filesystem/allowWrite/0")
-            .expect("allowWrite");
-        assert!(
-            write.as_str().unwrap().ends_with(".enallagi/.git"),
-            "{write}"
-        );
-        assert!(std::path::Path::new(write.as_str().unwrap()).is_absolute());
+    fn claude_no_sandbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = crate::config::load(dir.path()).unwrap().agent;
+        let s = settings_word(&resolve(&cfg, "scout", &presets()).unwrap().argv);
+        assert!(s.get("sandbox").is_none(), "{s}");
+        assert!(s.pointer("/permissions/allow").is_none(), "{s}");
+        assert!(s.pointer("/permissions/deny/0").is_some(), "{s}");
     }
 
     #[test]
@@ -953,7 +823,7 @@ mod tests {
         let argv = claude_with_plugins_file(&file.to_string_lossy());
         let plugins = settings_word(&argv)["enabledPlugins"].clone();
         assert_eq!(plugins["caveman@caveman"], serde_json::json!(false));
-        // a plugin no preset names still reaches the lane unless the list is read from the operator's own file
+        // a plugin no preset names still reaches the lane unless the list is read from the operator's file
         assert_eq!(plugins["never-seen@shop"], serde_json::json!(false));
         // the adapter arrives by --plugin-dir and must survive the override
         assert_eq!(plugins.get("harness@inline"), None);
@@ -1103,6 +973,18 @@ mod tests {
     }
 
     #[test]
+    fn cost_after_result() {
+        // claude 2.1.300 tail, result line trimmed
+        let out = concat!(
+            "{\"duration_api_ms\":28921,\"stop_reason\":\"end_turn\",\"session_id\":\"f830a49b-de54-4dcd-aad4-dcc68588d064\",\"total_cost_usd\":0.34952540000000004,\"usage\":{\"input_tokens\":24,\"cache_creation_input_tokens\":27608,\"cache_read_input_tokens\":375627,\"output_tokens\":2672},\"is_error\":false,\"num_turns\":15,\"subtype\":\"success\",\"type\":\"result\"}\n",
+            "{\"type\":\"system\",\"subtype\":\"session_state_changed\",\"state\":\"idle\",\"uuid\":\"c8c9eade-667f-4529-ab3c-c29c12ddb480\",\"session_id\":\"f830a49b-de54-4dcd-aad4-dcc68588d064\"}\n",
+        );
+        let u = extract_usage(out, &presets()["claude"].usage);
+        assert_eq!(u.cost, Some(0.34952540000000004));
+        assert_eq!(u.turns, Some(15));
+    }
+
+    #[test]
     fn usage_carries_four_disjoint_token_lanes() {
         let out = "{\"type\":\"result\",\"usage\":{\"input_tokens\":22,\"cache_creation_input_tokens\":54825,\"cache_read_input_tokens\":505740,\"output_tokens\":6233}}\n";
         let u = extract_usage(out, &presets()["claude"].usage);
@@ -1198,21 +1080,32 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_directory_ends_no_wait() {
+    fn stop_dir_ignored() {
         let dir = tempfile::tempdir().expect("tempdir");
         let stop = dir.path().join("STOP");
         std::fs::create_dir(&stop).expect("mkdir");
-        assert!(sleep_until(1, &stop).is_ok());
+        assert!(sleep_until(1, &[stop]).is_ok());
     }
 
     #[test]
-    fn a_stop_file_ends_the_wait_at_once() {
+    fn stop_file_ends_wait() {
         let dir = tempfile::tempdir().expect("tempdir");
         let stop = dir.path().join("STOP");
         std::fs::write(&stop, b"").expect("write");
         let started = Instant::now();
-        assert!(matches!(sleep_until(60, &stop), Err(AgentError::Stopped)));
+        assert!(matches!(sleep_until(60, &[stop]), Err(AgentError::Stopped)));
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    fn off() -> crate::sandbox::Sandbox {
+        crate::sandbox::Sandbox::start(Path::new("."), &crate::config::Config::default())
+    }
+
+    #[test]
+    fn every_preset_declares_hosts() {
+        for (name, p) in presets() {
+            assert!(!p.hosts.is_empty(), "{name}");
+        }
     }
 
     fn spawner<'a>(argv: Vec<String>, root: &'a std::path::Path) -> StageSpawn<'a> {
@@ -1226,6 +1119,7 @@ mod tests {
             stage: "x".into(),
             task: None,
             preset: presets()["claude"].clone(),
+            role: Default::default(),
         }
     }
 
@@ -1240,8 +1134,9 @@ mod tests {
         s.stage = "implement".into();
         let res = spawn(
             &s,
+            &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -1262,7 +1157,7 @@ mod tests {
     }
 
     #[test]
-    fn a_preset_env_value_takes_the_layout_tokens() {
+    fn preset_env_fills_tokens() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent("echo \"config=$CLAUDE_CONFIG_DIR\"");
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
@@ -1273,8 +1168,9 @@ mod tests {
         );
         let res = spawn(
             &s,
+            &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -1286,15 +1182,16 @@ mod tests {
     }
 
     #[test]
-    fn a_signalled_child_reports_128_plus_the_signal() {
+    fn signal_exits_128_plus() {
         let r = crate::fixture::Repo::new();
         // KILL, not INT: a job started with `&` from a non-interactive shell inherits SIGINT ignored
         let argv = r.stub_agent("kill -KILL $$");
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -1302,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    fn timeout_kills_and_reports_124() {
+    fn timeout_reports_124() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent("sleep 30");
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
@@ -1310,8 +1207,9 @@ mod tests {
         s.timeout = Some(std::time::Duration::from_secs(1));
         let res = spawn(
             &s,
+            &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -1320,7 +1218,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_file_during_the_limit_wait_stops_the_run() {
+    fn stop_ends_limit_wait() {
         let r = crate::fixture::Repo::new();
         std::fs::create_dir_all(stop_file(&r.root).parent().unwrap()).unwrap();
         std::fs::write(stop_file(&r.root), "").unwrap();
@@ -1335,8 +1233,9 @@ mod tests {
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let err = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap_err();
@@ -1353,7 +1252,7 @@ mod tests {
     }
 
     #[test]
-    fn a_result_line_notice_sleeps_the_stage() {
+    fn result_notice_sleeps() {
         let r = crate::fixture::Repo::new();
         std::fs::create_dir_all(stop_file(&r.root).parent().unwrap()).unwrap();
         std::fs::write(stop_file(&r.root), "").unwrap();
@@ -1368,8 +1267,9 @@ mod tests {
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let err = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap_err();
@@ -1386,9 +1286,9 @@ mod tests {
     }
 
     #[test]
-    fn an_out_of_range_reset_hour_does_not_sleep() {
+    fn bad_reset_hour_wakes() {
         let r = crate::fixture::Repo::new();
-        // the stop file and the fixed instant together: an hour read as 1am would be inside MAX_WAIT and sleep
+        // stop file plus fixed instant: an hour misread as 1am would fall inside MAX_WAIT and sleep
         std::fs::create_dir_all(stop_file(&r.root).parent().unwrap()).unwrap();
         std::fs::write(stop_file(&r.root), "").unwrap();
         fix_now(
@@ -1401,8 +1301,9 @@ mod tests {
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap();
@@ -1415,8 +1316,7 @@ mod tests {
             .any(|e| matches!(e.kind, Kind::Limit { .. })));
     }
 
-    // reset computed at run time, not fixed: a fixed timestamp would be in the past by the second retry
-    // BSD `date` first, GNU second, so this runs on both macOS and Linux
+    // computed at run time, as a fixed reset is past by the second retry; BSD `date`, then GNU
     fn limit_notice(bsd: &str, gnu: &str) -> String {
         const FMT: &str = "'+hit your session limit resets %I:%M%p (UTC)'";
         format!("date -u -v+{bsd} {FMT} 2>/dev/null || date -u -d '{gnu}' {FMT}")
@@ -1424,7 +1324,7 @@ mod tests {
 
     #[test]
     #[ignore = "sleeps up to four minutes waiting out two synthetic session limits"]
-    fn rate_limit_is_retried_at_most_twice() {
+    fn limit_retries_twice() {
         let r = crate::fixture::Repo::new();
         let runs = r.root.join("runs");
         let notice = limit_notice("1M", "+1 minute");
@@ -1432,8 +1332,9 @@ mod tests {
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap();
@@ -1458,13 +1359,13 @@ mod tests {
     }
 
     #[test]
-    fn a_limit_notice_the_agent_quoted_is_not_a_limit() {
+    fn quoted_notice_ignored() {
         let r = crate::fixture::Repo::new();
         let runs = r.root.join("runs");
-        // both shapes seen on 2026-09-16: a file the agent read, and a command the agent wrote
+        // both shapes seen live: a file the agent read, and a command the agent wrote
         let read = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"assert!(seconds_until_reset(\"You've hit your session limit · resets 12:40am (Australia/Melbourne)\").is_some());"}]}}"#;
         let wrote = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"printf '%s' \"You've hit your session limit · resets 12:40am (Australia/Melbourne)\" > stub"}}]}}"#;
-        // the notice carries an apostrophe, and an unescaped one ends the shell string and hangs the stage on the syntax error it prints
+        // the notice's apostrophe, unescaped, ends the shell string and hangs the stage on its syntax error
         let argv = r.stub_agent(&format!(
             "echo x >> {}; printf '%s\\n%s\\n' '{}' '{}'",
             runs.display(),
@@ -1474,8 +1375,9 @@ mod tests {
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap();
@@ -1492,7 +1394,7 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_is_substituted_last() {
+    fn prompt_substituted_last() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent("printf '%s|%s\\n' \"$1\" \"$2\"");
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
@@ -1501,8 +1403,9 @@ mod tests {
         s.turns = 7;
         let res = spawn(
             &s,
+            &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("never").unwrap(),
         )
         .unwrap();
@@ -1510,14 +1413,15 @@ mod tests {
     }
 
     #[test]
-    fn a_reset_more_than_six_hours_out_is_not_a_limit() {
+    fn distant_reset_ignored() {
         let r = crate::fixture::Repo::new();
         let argv = r.stub_agent(&limit_notice("10H", "+10 hours"));
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("hit your session limit").unwrap(),
         )
         .unwrap();
@@ -1531,7 +1435,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dated_reset_past_the_ceiling_halts() {
+    fn dated_reset_halts() {
         let r = crate::fixture::Repo::new();
         fix_now(
             jiff::civil::date(2026, 9, 18)
@@ -1545,8 +1449,9 @@ mod tests {
         let mut w = Writer::new(Log::open(&r.root.join(".enallagi")));
         let res = spawn(
             &spawner(argv, &r.root),
+            &off(),
             &mut w,
-            &stop_file(&r.root),
+            &[stop_file(&r.root)],
             &Regex::new("hit your weekly limit").unwrap(),
         )
         .unwrap();
@@ -1564,7 +1469,7 @@ mod tests {
     }
 
     #[test]
-    fn an_override_command_keeps_the_tokens_it_spells_out() {
+    fn override_keeps_tokens() {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = crate::config::load(dir.path()).unwrap().agent;
         cfg.preset = "gemini".into();
@@ -1580,7 +1485,7 @@ mod tests {
 
         cfg.command = Some(vec!["mytool".into(), "{prompt}".into()]);
         let r = resolve(&cfg, "scout", &presets()).unwrap();
-        assert_eq!(r.argv, ["mytool".to_string(), "{prompt}".to_string()]);
+        assert_eq!(r.argv, ["mytool", "{prompt}", "--yolo"]);
         assert_eq!(r.preset.turn_cap, TurnCap::None);
     }
 }

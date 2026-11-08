@@ -1,4 +1,4 @@
-//! A rail naming `test-hashes.json` as enforcement is only true if every file it names has a key there — rail-unenforced goes quiet once the file merely exists.
+//! a rail naming `test-hashes.json` as enforcement while a file it names has no key there
 
 use super::common::{self, Res};
 use super::rail_unenforced::is_path;

@@ -1,17 +1,17 @@
-//! A friction recorded twice in PROGRESS.md that no LEARNINGS.md rule, earned rule or dated kill line covers, matched by token overlap, not exact text; and an earned rule whose class recurred after its promotion.
+//! a friction recorded twice that no rule or kill line covers, and an earned rule whose class recurred
 
 use super::common::{self, Res};
 use super::ponytail_ceiling;
 use super::{Finding, ProbeCtx, ProbeResult};
 use std::collections::{BTreeSet, HashMap};
 
-// FRICTION_OVERLAP on FRICTION_FIXTURE (tests/probes.rs): reworded pair 0.8750, near-miss pair 0.4762, by `overlap` over `common::normal` words
+// on FRICTION_FIXTURE: reworded pair 0.8750, near-miss pair 0.4762, by `overlap` over normal words
 const FRICTION_OVERLAP: f64 = 0.5;
-// RARE_SHARED: PROGRESS.md:136 and :199 share 4 rare long words, no other pair of its 71 frictions more than 2, FRICTION_FIXTURE's near-miss 2
+// two real frictions share 4 rare long words, no other pair of 71 more than 2, the near-miss 2
 const RARE_SHARED: usize = 3;
-// shorter words are the connective prose that a near-miss pair shares, `lane` and `time` in FRICTION_FIXTURE
+// shorter words are connective prose a near-miss pair shares, `lane` and `time` in FRICTION_FIXTURE
 const RARE_WORD_LEN: usize = 5;
-// PROSE_WORDS: closed-class words of RARE_WORD_LEN or more, dropped before RARE_SHARED counts; PROSE_SHARE_FIXTURE's pair falls 4 -> 1, LONG_REPEAT_FIXTURE's 7 -> 6, this repo's PROGRESS.md:136 and :199 hold at 3
+// closed-class words of RARE_WORD_LEN or more, dropped before RARE_SHARED counts
 const PROSE_WORDS: [&str; 54] = [
     "about",
     "after",
@@ -92,7 +92,7 @@ fn overlap(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
     }
 }
 
-// a long word only these two frictions carry: counted, not divided, so a longer rewrite of one friction still matches
+// a long word only these two carry: counted, not divided, so a longer rewrite still matches
 fn rare_shared(
     a: &BTreeSet<String>,
     b: &BTreeSet<String>,
@@ -158,14 +158,13 @@ fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
     } else {
         vec![]
     };
-    // the rule a repeat owes is the adjudicator's, and it writes it under `## Earned rules`, never LEARNINGS.md
+    // the rule a repeat owes is the adjudicator's, under `## Earned rules`, never LEARNINGS.md
     coverage.extend(
         common::earned_rules(ctx)?
             .iter()
             .map(|(_, rule)| words(rule)),
     );
-    // a rule the ablation gate refuses closes as a dated refutation instead; `PROGRESS.md` keeps a
-    // kill line about anything else from counting
+    // a refused rule closes as a dated refutation; any other kill line in PROGRESS.md stops the count
     coverage.extend(
         ponytail_ceiling::kill_lines(ctx)?
             .iter()

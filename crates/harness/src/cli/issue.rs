@@ -1,8 +1,8 @@
-//! `enallagi issue <ref>` -- appends the block one GitHub issue becomes, or prints it and writes nothing under --dry-run.
+//! `enallagi issue <ref>` -- appends the block a GitHub issue becomes; --dry-run only prints it
 
 use crate::config;
 use crate::issue::{self, IssueError};
-use crate::queue::Queue;
+use crate::tracker::{self, Tracker};
 
 pub struct Args {
     pub reference: String,
@@ -10,15 +10,14 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
-    let root = std::env::current_dir()?;
+    let root = super::root()?;
     let dir = config::harness_dir(&root);
-    let path = config::instance_path(&root, &dir, "TASKS.md");
-    let queue = Queue { path };
+    let t = Tracker::open(&root, &dir);
     let decisions = std::fs::read_to_string(config::instance_path(&root, &dir, "DECISIONS.md"))
         .unwrap_or_default();
     let appended = issue::read(&args.reference)
-        .and_then(|found| issue::append(&queue.read()?, &decisions, &found));
-    let (block, next) = match appended {
+        .and_then(|found| issue::append(&t.blocks()?, &decisions, &found));
+    let block = match appended {
         Ok(appended) => appended,
         Err(err @ (IssueError::BadRef(_) | IssueError::Gh { .. } | IssueError::Queued { .. })) => {
             eprintln!("{err}");
@@ -30,9 +29,9 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
         println!("{block}");
         return Ok(0);
     }
-    queue.write(&next)?;
+    let path = t.append(&tracker::repo_slug(&root), &block)?;
     let id = block.lines().next().unwrap_or_default();
     println!("  proposed: {id}");
-    println!("  queue: {}", queue.path.display());
+    println!("  queue: {}", path.display());
     Ok(0)
 }

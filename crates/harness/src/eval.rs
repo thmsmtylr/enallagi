@@ -1,4 +1,4 @@
-//! The eval runner and the three-condition admission gate for a candidate rule.
+//! the eval runner and the three-condition admission gate for a candidate rule
 
 use crate::agent;
 use crate::config;
@@ -43,8 +43,7 @@ fn eval_dir(pkg: &Path, name: &str) -> PathBuf {
 }
 
 fn needs_agent(pkg: &Path, name: &str) -> bool {
-    // presence, not readability: a prompt.txt that is a directory or a broken symlink is a broken
-    // fixture, and reading it fails below, where is_file() would have silently skipped the agent
+    // presence, not readability: a prompt.txt that is a directory or broken link fails the read below
     eval_dir(pkg, name)
         .join("prompt.txt")
         .symlink_metadata()
@@ -66,7 +65,7 @@ fn list_evals(pkg: &Path) -> Vec<String> {
 
 fn resolve_agent(pkg: &Path) -> Option<Vec<String>> {
     if let Ok(env) = std::env::var("EVAL_AGENT") {
-        let words: Vec<String> = env.split_whitespace().map(String::from).collect();
+        let words = shell_words(&env);
         if !words.is_empty() {
             return Some(words);
         }
@@ -78,10 +77,42 @@ fn resolve_agent(pkg: &Path) -> Option<Vec<String>> {
         .map(|r| r.argv)
 }
 
-fn run_script(script: &Path, cwd: &Path, pkg: Option<&Path>) -> bool {
-    let mut cmd = Command::new("bash");
-    cmd.arg(script).current_dir(cwd);
-    // the fixture was installed by this binary, so a script's `enallagi` must be this binary too, not an older one on PATH
+// sh word splitting with quotes and backslashes, no expansion; an unclosed quote runs to the end
+fn shell_words(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut word: Option<String> = None;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c.is_whitespace() {
+            out.extend(word.take());
+            continue;
+        }
+        let w = word.get_or_insert_with(String::new);
+        match c {
+            '\'' => w.extend(chars.by_ref().take_while(|&c| c != '\'')),
+            '"' => {
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => match chars.next() {
+                            Some(n @ ('"' | '\\' | '$' | '`')) => w.push(n),
+                            Some(n) => w.extend(['\\', n]),
+                            None => w.push('\\'),
+                        },
+                        c => w.push(c),
+                    }
+                }
+            }
+            '\\' => w.extend(chars.next()),
+            c => w.push(c),
+        }
+    }
+    out.extend(word);
+    out
+}
+
+// this binary installed the fixture, so a script's `enallagi` must be it, not an older one on PATH
+fn bin_first(cmd: &mut Command) {
     if let Some(bin) = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf))
@@ -92,6 +123,12 @@ fn run_script(script: &Path, cwd: &Path, pkg: Option<&Path>) -> bool {
             cmd.env("PATH", joined);
         }
     }
+}
+
+fn run_script(script: &Path, cwd: &Path, pkg: Option<&Path>) -> bool {
+    let mut cmd = Command::new("bash");
+    cmd.arg(script).current_dir(cwd);
+    bin_first(&mut cmd);
     if let Some(pkg) = pkg {
         cmd.env("EVAL_PKG", pkg);
     }
@@ -99,10 +136,11 @@ fn run_script(script: &Path, cwd: &Path, pkg: Option<&Path>) -> bool {
 }
 
 fn run_agent(argv: &[String], prompt: &str, cwd: &Path) -> bool {
-    let argv = match config::load(cwd) {
-        Ok(cfg) => agent::fill_layout(argv, &cfg.layout),
+    let cfg = match config::load(cwd) {
+        Ok(cfg) => cfg,
         Err(_) => return false,
     };
+    let argv = agent::fill_layout(argv, &cfg.layout);
     let words: Vec<String> = argv
         .iter()
         .map(|w| w.replace("{prompt}", prompt).replace("{turns}", "40"))
@@ -110,14 +148,44 @@ fn run_agent(argv: &[String], prompt: &str, cwd: &Path) -> bool {
     let Some((program, rest)) = words.split_first() else {
         return false;
     };
-    Command::new(program)
-        .args(rest)
+    let mut cmd = Command::new(program);
+    bin_first(&mut cmd);
+    // the ticket the launcher would hand this lane, so the hooks see the lane's ENALLAGI_TASK
+    let task = crate::tracker::Tracker::open(cwd, &cfg.layout.harness_dir)
+        .blocks()
+        .ok()
+        .and_then(|b| crate::tracker::takeable(&b));
+    if let Some(task) = task {
+        cmd.env("ENALLAGI_TASK", task);
+    }
+    cmd.args(rest)
         .current_dir(cwd)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+// an adapter's agent file is a second copy of its role, so an ablated role is ablated there too
+fn agents_follow_roles(root: &Path) {
+    let dir = config::harness_dir(root);
+    let at = |rel: &str| config::instance_path(root, &dir, rel);
+    let (Ok(roles), Ok(adapters)) = (
+        std::fs::read_dir(at("roles")),
+        std::fs::read_dir(at("adapters")),
+    ) else {
+        return;
+    };
+    let roles: Vec<_> = roles.flatten().map(|e| e.path()).collect();
+    for agents in adapters.flatten().map(|a| a.path().join("agents")) {
+        for role in &roles {
+            let copy = agents.join(role.file_name().unwrap_or_default());
+            if copy.is_file() {
+                let _ = std::fs::copy(role, copy);
+            }
+        }
+    }
 }
 
 fn run_one(pkg: &Path, name: &str, agent_argv: &[String], ablate: bool) -> Outcome {
@@ -140,22 +208,23 @@ fn run_one(pkg: &Path, name: &str, agent_argv: &[String], ablate: bool) -> Outco
         if !run_script(&ablate_sh, &repo.root, Some(pkg)) {
             return Outcome::FixtureError;
         }
+        agents_follow_roles(&repo.root);
     }
 
-    // committed before setup.sh, so a setup that leaves work uncommitted on purpose is what the agent sees
+    // committed before setup.sh, so work setup leaves uncommitted is what the agent sees
     let _ = git::commit_paths(&repo.root, &["."], "fixture");
 
     if !run_script(&dir.join("setup.sh"), &repo.root, Some(pkg)) {
         return Outcome::FixtureError;
     }
 
-    // no prompt.txt is an eval that asks a role nothing, so no agent is spawned and none need be configured
+    // no prompt.txt asks a role nothing, so no agent is spawned and none need be configured
     if needs_agent(pkg, name) {
         let prompt = match std::fs::read_to_string(dir.join("prompt.txt")) {
             Ok(p) => p,
             Err(_) => return Outcome::FixtureError,
         };
-        // An agent that did not run is not a role that disobeyed.
+        // an agent that did not run is not a role that disobeyed
         if !run_agent(agent_argv, &prompt, &repo.root) {
             return Outcome::AgentError;
         }
@@ -298,4 +367,15 @@ pub fn gate(pkg: &Path, name: &str, agent: Option<Vec<String>>) -> anyhow::Resul
 
     println!("GATE {name} ACCEPT fixes its case, fails without itself, regresses nothing");
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn shell_words_quotes() {
+        assert_eq!(
+            super::shell_words(r#"a 'b c' "d\"e" f\ g"#),
+            ["a", "b c", "d\"e", "f g"]
+        );
+    }
 }

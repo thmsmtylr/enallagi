@@ -1,7 +1,8 @@
-//! A block title past 72 characters: a pull request subject is cut at 72, and a title that runs to a sentence reads as an essay.
+//! a block title past 72 characters, where a pull request subject is cut
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
+use crate::{block, tracker};
 
 pub const CAP: usize = 72;
 
@@ -10,41 +11,22 @@ pub fn probe(ctx: &ProbeCtx) -> ProbeResult {
 }
 
 fn find(ctx: &ProbeCtx) -> Res<Vec<Finding>> {
-    let tasks = common::instance(ctx, "TASKS.md");
-    let text = common::read(ctx.root, &tasks)?;
-    let heading = common::re(r"^## \[T-(\d+)\] (.*)$")?;
-    // titles written before the cap are the record they were written as; every citation names them verbatim
+    // titles written before the cap stand as written; every citation names them verbatim
     let from = ctx.cfg.queue.title_cap_from;
-    // an imported issue keeps its author's title until the adjudicator writes the task's at promotion
-    let foreign: Vec<String> = crate::queue::parse(&text)
-        .unwrap_or_default()
-        .iter()
-        .filter(|b| {
-            crate::queue::field(b, "status").as_deref() == Some("proposed")
-                && crate::queue::field(b, "probe").as_deref() == Some("issue")
-        })
-        .map(|b| b.id.clone())
-        .collect();
     let mut found = Vec::new();
-    for (at, line) in text.lines().enumerate() {
-        let Some(caps) = heading.captures(line) else {
-            continue;
-        };
-        let (Some(number), Some(title)) = (caps.get(1), caps.get(2)) else {
-            continue;
-        };
-        if foreign.contains(&format!("T-{}", number.as_str())) {
+    for (tasks, b) in common::tickets(ctx)? {
+        // an imported issue keeps its author's title until the adjudicator writes the task's at promotion
+        if tracker::state(&b).as_deref() == Some("needs-triage")
+            && block::field(&b, "probe").as_deref() == Some("issue")
+        {
             continue;
         }
-        let number: u32 = number
-            .as_str()
-            .parse()
-            .map_err(|e| format!("{tasks}: {e}"))?;
-        let chars = title.as_str().trim().chars().count();
+        let number: u32 = b.id[2..].parse().map_err(|e| format!("{tasks}: {e}"))?;
+        let chars = b.title.chars().count();
         if number >= from && chars > CAP {
             found.push(common::finding(
                 &tasks,
-                at + 1,
+                b.line,
                 format!(
                     "T-{:03} title runs to {chars} characters, past the {CAP} cap",
                     number

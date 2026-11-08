@@ -10,7 +10,7 @@ An autonomous task loop for a coding agent, in one static binary.
 - Runs each task in a fresh agent process, never a long-lived session.
 - Splits the work across five roles that cannot grade each other.
 - Re-derives every `done` from the tree instead of trusting a claim.
-- Runs each lane in its own git worktree and fast-forwards on success.
+- Runs each lane in its own git worktree and fast-forwards on success, up to `[parallel] writers` lanes at once.
 - Wraps any headless agent CLI, with thirteen presets shipped.
 - Pins every vendored skill by commit and hash.
 
@@ -41,24 +41,13 @@ enallagi init --yes            # or takes every default, as a stdin that is not 
 Turn an issue into a task:
 
 ```bash
-enallagi issue owner/repo#12   # appends a proposed block to .enallagi/TASKS.md; `init --issue <url>` does the same
+enallagi issue owner/repo#12   # files a needs-triage ticket under .enallagi/specs/; `init --issue <url>` does the same
 ```
 
-The block quotes the issue in `notes:`. The first run's adjudicator writes what done means and
-sets it `ready`; `$EDITOR .enallagi/TASKS.md` does the same by hand.
+The ticket quotes the issue under `## Comments`. The first run's adjudicator writes what done
+means and sets it `ready-for-agent`; editing the ticket file does the same by hand.
 
-Or write a task into `.enallagi/TASKS.md` by hand:
-
-```markdown
-## [T-001] the date parser drops a timezone
-scope: src/date.ts, src/date.test.ts
-blockedBy:
-status: ready
-rows: none — harness
-criteria:
-  - `npm test -- date` passes with a case for `+10:00`
-notes:
-```
+Or write the ticket file by hand, as [docs/setup.md](docs/setup.md) shows.
 
 Run it:
 
@@ -74,21 +63,27 @@ enallagi run --pr-per-task --iterations 3    # or one pull request per task, ope
 
 ## How a run works
 
-Each iteration takes the first `ready` task whose blockers are `done`.
+Each iteration takes the lowest-id `ready-for-agent` ticket whose blockers are `done` or `open`.
+A ticket answering review findings on its open pull request goes first.
 
 - The implementer edits only the paths on the task's `scope:` line.
-- It commits, writes its notes, and sets the task to `review`.
+- It commits, writes its notes under `## Comments`, and sets the ticket to `review`.
 - The verifier reads the criteria and returns `done` or a rejection.
 - Gates then re-run behind that verdict and can overturn it.
 
-A `done` the gates disagree with goes back to `ready`. A question the criteria do not answer
-becomes `needs-spec` and halts the run.
+A `done` the gates disagree with goes back to `ready-for-agent`. A question the criteria do not
+answer becomes `needs-info` and halts the run.
 
 `enallagi run --pipeline task` runs only the pipeline named. Repeat the flag to name more than one.
-With none named, every pipeline in `.enallagi/enallagi.toml` is eligible.
+With none named, each iteration runs the first configured pipeline whose `when` holds.
 
 The pipeline, gate, probe, key and file tables are in [docs/reference.md](docs/reference.md).
 Changing a skill, a pipeline or a stage is in [docs/pipeline.md](docs/pipeline.md).
+
+`docs/demo.sh` shows one accepted spec run from decompose to a dark merge in a throwaway repository, with no credential and no network.
+Stub agents stand in for the model, and the binary's GitHub twin stands in for `gh`, with Kilo and Greptile scripted to review.
+The run decomposes the spec, implements and verifies under the sandbox, passes the operator's holdout, answers both bots' findings and pushes, then merges under `merge = "auto"`.
+It prints the stages, the holdout gate, the respond round and the merge, and deletes the repository on exit.
 
 ## Configuration
 
@@ -111,11 +106,8 @@ A tree that matches none has the agent propose a check, written only once the ch
 
 - `agent.preset` names the CLI to drive, or `custom` with your own `agent.command`.
 - `agent.model` and `agent.effort` set defaults. A role or a task can override both.
-- A `claude` lane runs sandboxed with edits accepted, so it needs no bypass flag. See [docs/configuration.md](docs/configuration.md).
-- `agent.dangerously_skip_permissions` adds the preset's bypass flag to every lane. Default `false`.
-- `enallagi run --dangerously-skip-permissions` does the same for one run.
-  A preset that declares no bypass flag refuses the run.
-- `run.start` records the choice as `permissions_skipped`, and `enallagi events` prints it.
+- Every lane runs in the binary's own sandbox (`[sandbox] mode = "native"`, the default) with its preset's bypass flag. See [docs/configuration.md](docs/configuration.md).
+- `[sandbox] mode = "off"` runs lanes unconfined. `run.start` records the mode, and `enallagi events` prints it.
 - `check.command` is the single command that decides green.
 - `[[skill]]` declares a skill to vendor, with its `rev` and the gate that enforces it.
 
@@ -132,10 +124,10 @@ Budgets come from the environment. Set `BUDGET_USD`, `BUDGET_SECONDS`, or `BUDGE
 - `events --summary` prints one row per task: stages, verify rounds, rejections, overturned verdicts, seconds, cost and token lanes.
 - `tasks` reads and edits the queue. `base` prints the commit a task was queued against.
 - `tasks landed` lists each done task, its commits, and `no branch`, `built <branch>` or `pushed <url>`. `--built` keeps the branches waiting on a push.
-- `issue` appends a GitHub issue, and `review` a pull request's review comments, as `proposed` tasks.
+- `issue` appends a GitHub issue, and `review` a pull request's review comments, as `needs-triage` tickets.
 - `probe` reports findings. `gate` runs one gate. `hook` is the agent's lifecycle entry point.
 - `audit` proposes a learning for each class of finding that recurs. `skills` resolves declared skills. `eval` runs the evals.
-- `pr` builds a pull request. It builds a task whose commits conflict with the default branch on the newest `task/<id>` branch, built this run or on the remote, that changed a conflicting file and takes the commits, and its description names that task. A `blockedBy:` task whose branch is on the remote is a base the same way. When no branch takes the commits, the refusal names the conflicting files.
+- `pr` builds a pull request. It builds a task whose commits conflict with the default branch on the newest `task/<id>` branch, built this run or on the remote, that changed a conflicting file and takes the commits, and its description names that task. A `**Blocked by:**` ticket whose branch is on the remote is a base the same way. When no branch takes the commits, the refusal names the conflicting files.
 
 `enallagi pr --push` reads the target's contribution guide first.
 A sentence there that refuses or conditions generated changes stops the push.

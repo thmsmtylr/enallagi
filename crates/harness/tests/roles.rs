@@ -1,4 +1,4 @@
-//! Roles declared and fetched like skills: `[[role]]` in enallagi.toml, pinned in harness.lock.
+//! roles declared and fetched like skills: `[[role]]` in enallagi.toml, pinned in harness.lock
 
 use enallagi::agent::presets;
 use enallagi::config;
@@ -36,7 +36,7 @@ fn sha256(bytes: &[u8]) -> String {
 fn declare(repo: &Repo, source: &str, rev: Option<&str>) -> config::Config {
     let rev = rev.map_or(String::new(), |r| format!("rev = \"{r}\"\n"));
     repo.write(
-        "enallagi.toml",
+        ".enallagi/enallagi.toml",
         &format!(
             "[check]\ncommand = \"true\"\n\n[[role]]\nname = \"implementer\"\nsource = \"{source}\"\npath = \"roles\"\n{rev}"
         ),
@@ -145,7 +145,7 @@ fn a_drifted_role_is_refused_under_frozen() {
     assert_eq!(fs::read_to_string(&vendored).expect("restored"), BODY);
 }
 
-// one implement stage on a stub agent; the run renders <harness_dir>/run/roles/implementer.md before spawning
+// one implement stage on a stub agent; the run renders run/roles/implementer.md before spawning
 fn pipeline_repo() -> Repo {
     let repo = Repo::new();
     repo.write(
@@ -163,13 +163,12 @@ fn pipeline_repo() -> Repo {
         argv.join(", ")
     );
     let skills = repo.local_skills(&toml);
-    repo.write("enallagi.toml", &format!("{toml}{skills}"));
-    repo.write(
-        "TASKS.md",
-        "## [T-001] do the thing\n\nscope: src/a.ts\nrows: none — harness\nstatus: ready\ncriteria:\n  - it happens\n",
+    repo.write(".enallagi/enallagi.toml", &format!("{toml}{skills}"));
+    repo.queue(
+        ".enallagi",
+        "## [T-001] do the thing\n\nscope: src/a.ts\nrows: none — harness\nstatus: ready-for-agent\ncriteria:\n  - it happens\n",
     );
-    repo.write("SPEC.md", "# spec\n");
-    repo.write("PROGRESS.md", "# progress\n");
+    repo.write(".enallagi/PROGRESS.md", "# progress\n");
     repo.commit_all("harness");
     repo
 }
@@ -211,25 +210,25 @@ fn an_undeclared_role_falls_back() {
 }
 
 #[test]
-fn immutable_refuses_an_edit_to_a_role() {
+fn immutable_refuses_role() {
     let repo = Repo::new();
     repo.write(
         ".enallagi/harness.lock",
         "version = 1\n\n[[role]]\nid = \"implementer\"\nsource = \"path:vendor\"\nsha256 = \"ab\"\n",
     );
     let input = |path: &str| format!(r#"{{"tool_input":{{"file_path":"{path}"}}}}"#);
-    let (code, msg) = hooks::immutable(&repo.root, &input(".enallagi/roles/implementer.md"));
+    let (code, msg) = hooks::immutable(&repo.root, &input(".enallagi/roles/implementer.md"), None);
     assert_eq!(code, 2, "{msg}");
     assert!(msg.contains("harness.lock"), "{msg}");
     assert!(msg.contains("locked role `implementer`"), "{msg}");
 
-    let (code, msg) = hooks::immutable(&repo.root, &input(".enallagi/roles/verifier.md"));
+    let (code, msg) = hooks::immutable(&repo.root, &input(".enallagi/roles/verifier.md"), None);
     assert_eq!(code, 0, "{msg}");
 }
 
 // the arm lives on step 7 itself, so the assertion reads that line and not the whole prompt
 #[test]
-fn the_commit_step_names_both_arms() {
+fn commit_step_arms() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/implementer.md");
     let text = fs::read_to_string(&source).expect("read roles/implementer.md");
     let step = text
@@ -241,7 +240,7 @@ fn the_commit_step_names_both_arms() {
         "git status --porcelain",
         "already committed at",
         "no commit",
-        "status: review",
+        "**Status:** review",
     ] {
         assert!(step.contains(want), "step 7 wants {want}: {step}");
     }
@@ -264,7 +263,7 @@ fn the_notes_step_requires_the_author_marker() {
 
 // each phrase is one reproduction rule; losing one lets an unreproduced claim reach done
 #[test]
-fn the_verifier_reproduces_each_claim() {
+fn verifier_reproduces_claims() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/verifier.md");
     let text = fs::read_to_string(&source).expect("read roles/verifier.md");
     for want in [
@@ -278,7 +277,7 @@ fn the_verifier_reproduces_each_claim() {
         "A check that exits non-zero is a rejection",
         "never put down to the environment",
         "out of a probe's reach",
-        "A verdict line with neither",
+        "A claim with neither",
     ] {
         assert!(text.contains(want), "roles/verifier.md wants {want:?}");
     }
@@ -286,9 +285,9 @@ fn the_verifier_reproduces_each_claim() {
 
 // the `claims` gate parses these two lines, so the rendered prompt must ask for both
 #[test]
-fn the_verifier_ends_with_ran_and_exit_lines() {
+fn verifier_ran_exit_lines() {
     let repo = Repo::new();
-    repo.write("enallagi.toml", "[check]\ncommand = \"true\"\n");
+    repo.write(".enallagi/enallagi.toml", "[check]\ncommand = \"true\"\n");
     let cfg = config::load(&repo.root).expect("load");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles/verifier.md");
     let text = config::subst(
@@ -316,4 +315,135 @@ fn the_adjudicator_gates_each_proposed_learning() {
     ] {
         assert!(text.contains(want), "roles/adjudicator.md wants {want:?}");
     }
+}
+
+// the forms a role is told to write are the forms the tracker reads
+#[test]
+fn roles_name_verdict_forms() {
+    for role in ["verifier", "implementer"] {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../roles/{role}.md"));
+        let text = fs::read_to_string(&source).expect("read role");
+        for form in enallagi::tracker::VERDICT_FORMS {
+            assert!(
+                text.contains(&format!("`verdict: {form}`")),
+                "roles/{role}.md names no `verdict: {form}`"
+            );
+        }
+    }
+}
+
+// the answers the `findings` gate reads, named the same in both roles
+#[test]
+fn roles_name_answer_forms() {
+    for name in ["verifier", "implementer"] {
+        for form in [
+            "`answer: F-<n> accept <test>`",
+            "`answer: F-<n> reject <concept>: <command>`",
+        ] {
+            assert!(role(name).contains(form), "roles/{name}.md names no {form}");
+        }
+    }
+}
+
+// each shipped role's {{skill:<id>}} tokens, rendered, that the config declares no skill for
+fn unresolved(cfg: &config::Config) -> Vec<String> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../roles");
+    let mut names: Vec<_> = fs::read_dir(&dir)
+        .expect("read roles/")
+        .map(|e| e.expect("entry").path())
+        .collect();
+    names.sort();
+    let mut out = Vec::new();
+    for path in names {
+        let text = config::subst(&fs::read_to_string(&path).expect("role"), cfg);
+        for id in skills::required_ids(&text) {
+            if !cfg.skill.iter().any(|s| s.id == id) {
+                let role = path.file_name().expect("name").to_string_lossy();
+                out.push(format!("{role}: {id}"));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn every_role_skill_resolves() {
+    let repo = Repo::new();
+    repo.write(".enallagi/enallagi.toml", "[check]\ncommand = \"true\"\n");
+    let mut cfg = config::load(&repo.root).expect("load");
+    assert_eq!(unresolved(&cfg), Vec::<String>::new());
+    cfg.skill.retain(|s| s.id != "writing-for-agents");
+    assert_eq!(unresolved(&cfg), ["implementer.md: writing-for-agents"]);
+}
+
+fn role(name: &str) -> String {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../roles/{name}.md"));
+    fs::read_to_string(&source).expect("read role")
+}
+
+#[test]
+fn implementer_loads_codebase_design() {
+    assert!(role("implementer").contains("{{skill:codebase-design}}"));
+}
+
+#[test]
+fn implementer_updates_stated_doc() {
+    let text = role("implementer");
+    for want in [
+        "updates the doc that states it in the same commit",
+        "a change no doc states touches no doc",
+    ] {
+        assert!(text.contains(want), "roles/implementer.md wants {want:?}");
+    }
+}
+
+// a stub agent's result alone passed a writer the real run broke
+#[test]
+fn verifier_copies_writers() {
+    let text = role("verifier");
+    for want in [
+        "writes files or calls a model",
+        "cp -R __ENALLAGI_DIR__",
+        "never the live __ENALLAGI_DIR__",
+    ] {
+        assert!(text.contains(want), "roles/verifier.md wants {want:?}");
+    }
+}
+
+#[test]
+fn adjudicator_takes_decomposed() {
+    let text = role("adjudicator");
+    for want in [
+        "{{skill:triage}}",
+        "A `probe: decompose` ticket is anchored by its spec",
+        "set it to `needs-info` and halt",
+        "`ready-for-human`",
+        "__ENALLAGI_DIR__/.out-of-scope/<concept>.md",
+    ] {
+        assert!(text.contains(want), "roles/adjudicator.md wants {want:?}");
+    }
+    assert!(!text.contains("append the same line to `## Rejected findings`"));
+}
+
+// docs move with code only when the ticket's scope names the doc
+#[test]
+fn adjudicator_scopes_stated_doc() {
+    let text = role("adjudicator");
+    for want in [
+        "makes a doc, skill or role file wrong, add that file to `scope:`",
+        "name the line that states it under `## Comments`",
+    ] {
+        assert!(text.contains(want), "roles/adjudicator.md wants {want:?}");
+    }
+}
+
+// every rule the decomposer stated is a gate, so the role is the skill plus the check
+#[test]
+fn decomposer_skill_only() {
+    let text = role("decomposer");
+    let body = text.split("\n---\n").nth(1).expect("frontmatter");
+    assert!(body.contains("{{skill:to-tickets}}"), "{body}");
+    assert!(body.contains("enallagi tasks check <spec>"), "{body}");
+    assert!(!body.contains("Protocol:"), "{body}");
+    assert!(body.lines().count() <= 3, "{body}");
 }

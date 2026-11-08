@@ -1,4 +1,5 @@
 name = "gemini"
+hosts = ["cloudcode-pa.googleapis.com", "oauth2.googleapis.com", "www.googleapis.com", "generativelanguage.googleapis.com"]
 argv = ["gemini", "-p", "{prompt}", "--output-format", "stream-json"]
 bypass_flag = "--yolo"
 turn_cap = "config"

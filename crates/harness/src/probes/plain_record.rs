@@ -1,4 +1,4 @@
-//! A commit subject, a task note or a printed line that comments on the change instead of recording it.
+//! a commit subject, task note or printed line that comments on the change instead of recording it
 
 use super::common::{self, Res};
 use super::{Finding, ProbeCtx, ProbeResult};
@@ -109,14 +109,13 @@ fn subjects(ctx: &ProbeCtx, rules: &Rules, found: &mut Vec<Finding>) -> Res<()> 
 }
 
 fn notes(ctx: &ProbeCtx, rules: &Rules, found: &mut Vec<Finding>) -> Res<()> {
-    let tasks = common::instance(ctx, "TASKS.md");
     let fence = common::re(r"^\s*```")?;
     let quoted = common::re("`[^`]*`")?;
     let verdict = common::re(r"^\s*REJECTED\b")?;
     // a notes: field carries no blank line, so the verifier's paragraph ends where the next author signs
     let author = common::re(r"^\s*(IMPLEMENTER|VERIFIED|VERIFIER|OPERATOR)\b")?;
-    for block in common::task_blocks(ctx)? {
-        let Some((start, _)) = common::field(&block, "notes") else {
+    for (tasks, block) in common::tickets(ctx)? {
+        let Some((start, _)) = crate::block::field_at(&block, "notes") else {
             continue;
         };
         let mut fenced = false;
@@ -126,7 +125,7 @@ fn notes(ctx: &ProbeCtx, rules: &Rules, found: &mut Vec<Finding>) -> Res<()> {
                 fenced = !fenced;
                 continue;
             }
-            // a note is required to paste its command and its output, so only the prose around them is read
+            // a note pastes its command and its output, so only the prose around them is read
             if fenced {
                 continue;
             }
@@ -135,7 +134,7 @@ fn notes(ctx: &ProbeCtx, rules: &Rules, found: &mut Vec<Finding>) -> Res<()> {
             } else if author.is_match(text) || text.trim().is_empty() {
                 rejected = false;
             }
-            // the verifier wrote the rejection and the paragraph under it; an implementer cannot clear someone else's words
+            // the verifier wrote the rejection and its paragraph; an implementer cannot clear another's words
             if rejected {
                 continue;
             }

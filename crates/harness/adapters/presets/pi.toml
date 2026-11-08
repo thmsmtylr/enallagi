@@ -1,4 +1,5 @@
 name = "pi"
+hosts = ["api.anthropic.com", "platform.claude.com"]
 argv = ["pi", "-p", "{prompt}", "--mode", "json"]
 turn_cap = "none"
 model_flag = "--model"

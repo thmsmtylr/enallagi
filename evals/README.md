@@ -18,11 +18,19 @@ enallagi eval --gate <name>   decide a candidate rule
 `--gate` is the write-path check on a new `__ENALLAGI_DIR__/LEARNINGS.md` rule. It accepts only when the eval passes
 with the rule, fails with the rule ablated, and every other eval still passes.
 
-The agent comes from `EVAL_AGENT`, else `__ENALLAGI_DIR__/enallagi.toml`'s `[agent]`. With neither, `enallagi eval`
+The agent comes from `EVAL_AGENT`, split into words as a shell would, quotes included, else `__ENALLAGI_DIR__/enallagi.toml`'s `[agent]`. With neither, `enallagi eval`
 refuses rather than reporting a result it did not measure.
 
-`verifier-findings` builds a JavaScript fixture and needs `bun` on `PATH`. Without it the
-`setup.sh` exits non-zero and the eval reports `ERROR`, not a result.
+`verifier-findings` and `verifier-filing` build a JavaScript fixture and need `bun` on `PATH`. Without it
+the `setup.sh` exits non-zero and the eval reports `ERROR`, not a result.
+
+## decomposer
+
+`decomposer` checks the decompose stage end to end. Its fixture is one accepted spec, `calc`, with
+three exit criteria, the third needing the other two. It passes when `enallagi tasks check calc`
+exits 0 on at least two drafts and `spec.md` is unchanged. It has no `ablate.sh`: the role carries
+no rule of its own, only `to-tickets` and the check, so there is nothing to ablate, and
+`--gate decomposer` rejects for that reason.
 
 ## cold-start
 
@@ -51,6 +59,6 @@ Run against `claude -p` on 2026-09-02, `--gate verifier` rejected the rule it wa
 GATE verifier REJECT the case passes with the rule ablated, so the rule changed no outcome
 ```
 
-The rule was `verifier.md` step 0, which says uncommitted source is a rejection. With it removed,
-the model still rejected the uncommitted task. On that model and that fixture the line is not
-load-bearing; one sample is not a reason to delete it.
+The rule was `verifier.md` step 0, which said uncommitted source is a rejection. With it removed,
+the model still rejected the uncommitted task, in this run and in two later ones, so the step was
+deleted. The `verifier` eval stays as a plain case with no `ablate.sh`.

@@ -1,9 +1,9 @@
-//! `enallagi hook <name>` -- reads the agent's payload on stdin and exits with the code the named hook returns.
+//! `enallagi hook <name>` -- the agent's payload on stdin, exiting with the named hook's code
 
 use std::io::Read;
 use std::path::PathBuf;
 
-use crate::{git, hooks};
+use crate::hooks;
 
 pub struct Args {
     pub name: String,
@@ -15,11 +15,7 @@ fn root() -> anyhow::Result<PathBuf> {
             return Ok(PathBuf::from(dir));
         }
     }
-    let cwd = std::env::current_dir()?;
-    Ok(match git::git(&cwd, &["rev-parse", "--show-toplevel"]) {
-        Ok(top) => PathBuf::from(top),
-        Err(_) => cwd,
-    })
+    super::root()
 }
 
 pub fn run(args: &Args) -> anyhow::Result<i32> {
@@ -28,7 +24,11 @@ pub fn run(args: &Args) -> anyhow::Result<i32> {
     std::io::stdin().read_to_string(&mut input)?;
 
     let (code, message) = match args.name.as_str() {
-        "immutable" => hooks::immutable(&root, &input),
+        "immutable" => hooks::immutable(
+            &root,
+            &input,
+            std::env::var("ENALLAGI_TASK").ok().as_deref(),
+        ),
         "one-writer" => hooks::one_writer(&root, &input),
         "verify-done" => hooks::verify_done(&root, &input),
         "skills" => hooks::skills_contract(&root),

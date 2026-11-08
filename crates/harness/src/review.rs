@@ -1,20 +1,23 @@
-//! review: a pull request's open review comments, read with gh, become proposed blocks. No model writes them.
+//! a pull request's threads, reviews, comments and failed checks, read with gh, as findings
 
+use crate::block::{self, QueueError};
 use crate::issue;
-use crate::queue::{self, QueueError};
-use std::path::Path;
-use std::process::Command;
 
-// ponytail: first:100 on each list; a longer pull request is reported short rather than read, and
-// `hasNextPage` is what says so. Follow the cursors when one repository needs it.
+// ponytail: first:100 per list, a longer pull is reported short; follow the cursors when needed
 const QUERY: &str = concat!(
-    "query($owner:String!,$repo:String!,$number:Int!){",
-    "repository(owner:$owner,name:$repo){pullRequest(number:$number){",
-    "reviews(first:100){pageInfo{hasNextPage} nodes{body}}",
+    "query ReviewThreads($owner:String!,$repo:String!,$number:Int!){",
+    "repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid ",
+    "comments(first:100){pageInfo{hasNextPage} nodes{{who} body url}} ",
+    "reviews(first:100){pageInfo{hasNextPage} nodes{{who} body url}} ",
     "reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated ",
-    "comments(first:100){pageInfo{hasNextPage} nodes{path line startLine body url}}}}",
+    "comments(first:100){pageInfo{hasNextPage} nodes{{who} path line startLine body url}}}} ",
+    "commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ",
+    "... on CheckRun{name conclusion detailsUrl} ... on StatusContext{context state targetUrl}}}}}}}",
     "}}}",
 );
+
+// the loop's own replies carry this, so a read never takes them for findings
+pub const OWN: &str = "<!-- enallagi:";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReviewError {
@@ -33,6 +36,15 @@ struct Nodes<T> {
     page: Option<PageInfo>,
 }
 
+impl<T> Default for Nodes<T> {
+    fn default() -> Self {
+        Nodes {
+            nodes: Vec::new(),
+            page: None,
+        }
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PageInfo {
@@ -45,14 +57,21 @@ impl<T> Nodes<T> {
     }
 }
 
+// a review body or a plain comment
 #[derive(Debug, serde::Deserialize)]
-struct Summary {
+struct Note {
+    #[serde(flatten)]
+    who: bots::Who,
     body: String,
+    #[serde(default)]
+    url: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Remark {
+    #[serde(flatten)]
+    who: bots::Who,
     path: Option<String>,
     #[serde(default)]
     line: Option<u64>,
@@ -72,11 +91,47 @@ struct Thread {
     comments: Nodes<Remark>,
 }
 
+// a CheckRun or a StatusContext, as the rollup's contexts carry them
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct Check {
+    name: Option<String>,
+    conclusion: Option<String>,
+    details_url: Option<String>,
+    context: Option<String>,
+    state: Option<String>,
+    target_url: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct Rollup {
+    contexts: Nodes<Check>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct Commit {
+    status_check_rollup: Option<Rollup>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct Head {
+    commit: Commit,
+}
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PullRequest {
-    reviews: Nodes<Summary>,
+    #[serde(default)]
+    head_ref_oid: String,
+    #[serde(default)]
+    comments: Nodes<Note>,
+    reviews: Nodes<Note>,
     review_threads: Nodes<Thread>,
+    #[serde(default)]
+    commits: Nodes<Head>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -95,26 +150,40 @@ struct Response {
     data: Data,
 }
 
-// what a block needs from one thread: its anchor, its first words, its permalink and what followed
-#[derive(Debug)]
-pub struct Anchored {
-    pub path: String,
-    pub body: String,
+#[derive(Debug, Clone, Default)]
+pub struct Finding {
+    /// `F-<n>`, in read order
+    pub id: String,
+    /// `thread`, `review`, `comment` or `check`
+    pub source: &'static str,
+    /// the vendor for a bot in the table, else the account's own name
+    pub by: String,
+    /// two findings match on thread id, a summary's marker, else `by`, path and plain body
+    pub key: String,
     pub url: String,
-    pub replies: Vec<String>,
-    // the same finding raised again on the same lines: its permalinks, never who wrote them
-    pub also: Vec<String>,
-    // the host's id for the thread, so landing the block can answer and resolve it
-    pub thread: Option<String>,
+    pub path: Option<String>,
     lines: (Option<u64>, Option<u64>),
+    /// the host's id for a resolvable thread
+    pub thread: Option<String>,
+    /// the count a bot's summary carries
+    pub severity: Option<u64>,
+    pub body: String,
+    /// later comments in an open thread, quoted under its block
+    pub replies: Vec<String>,
+    /// the same finding raised again on the same lines: its permalinks
+    pub also: Vec<String>,
+    /// a summary or a check: its URL outlives its words, so the URL carries nothing
+    pub reused: bool,
 }
 
 #[derive(Debug, Default)]
 pub struct Found {
-    pub anchored: Vec<Anchored>,
-    pub unanchored: usize,
+    pub findings: Vec<Finding>,
+    /// the head the read saw
+    pub head: String,
     pub settled: usize,
-    // later comments in an open thread, quoted under the thread's block
+    /// every unresolved thread's id, as the read saw it
+    pub open: Vec<String>,
     pub folded: usize,
     // a list came back at its page limit, so what follows was never read
     pub short: bool,
@@ -124,7 +193,6 @@ pub struct Found {
 pub struct Appended {
     pub blocks: Vec<String>,
     pub carried: Vec<(String, String)>,
-    pub queue: String,
 }
 
 fn valid<'a>(
@@ -162,7 +230,7 @@ pub fn gh_args(reference: &str) -> Result<Vec<String>, ReviewError> {
         "api".to_string(),
         "graphql".to_string(),
         "-f".to_string(),
-        format!("query={QUERY}"),
+        format!("query={}", QUERY.replace("{who}", bots::WHO)),
         "-f".to_string(),
         format!("owner={owner}"),
         "-f".to_string(),
@@ -172,123 +240,197 @@ pub fn gh_args(reference: &str) -> Result<Vec<String>, ReviewError> {
     ])
 }
 
-// the head branch `enallagi pr` builds; an open pull request on any other head is not this loop's
-const BRANCH_PREFIX: &str = "task/";
+// the poll's skip key in one small read: state, head, newest comment and review, check rollup
+const LIGHT: &str = concat!(
+    "query PullState($owner:String!,$repo:String!,$number:Int!){",
+    "repository(owner:$owner,name:$repo){pullRequest(number:$number){",
+    "state headRefOid comments(last:1){nodes{url}} reviews(last:1){nodes{url}} ",
+    "commits(last:1){nodes{commit{statusCheckRollup{state}}}}",
+    "}}}",
+);
 
-#[derive(Debug, serde::Deserialize)]
-pub struct Open {
-    pub url: String,
-    #[serde(rename = "headRefName")]
-    pub head: String,
+#[derive(Debug, PartialEq)]
+pub struct Light {
+    /// `OPEN`, `MERGED` or `CLOSED`
+    pub state: String,
+    /// what `polled` holds: equal keys mean nothing new to read
+    pub key: String,
+    /// the head's check rollup, `SUCCESS` when every check passed
+    pub rollup: String,
 }
 
-/// The open pull requests whose head branch this checkout built. No such branch is no host call.
-pub fn open_pulls(root: &Path) -> Result<Vec<Open>, ReviewError> {
-    let pattern = format!("refs/heads/{BRANCH_PREFIX}*");
-    let refs = crate::git::git(
-        root,
-        &["for-each-ref", "--format=%(refname:short)", &pattern],
-    )
-    .map_err(|e| ReviewError::Gh {
-        command: format!("git for-each-ref {pattern}"),
-        reason: e.to_string(),
-    })?;
-    // a branch whose tip HEAD already carries was merged, and its pull request is closed
-    let built: Vec<&str> = refs
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .filter(|b| !crate::git::git_ok(root, &["merge-base", "--is-ancestor", b, "HEAD"]))
-        .collect();
-    if built.is_empty() {
-        return Ok(Vec::new());
-    }
-    let args = [
-        "pr",
-        "list",
-        "--state",
-        "open",
-        "--limit",
-        "100",
-        "--json",
-        "url,headRefName",
-    ];
-    let failed = |reason: String| ReviewError::Gh {
-        command: format!("gh {}", args.join(" ")),
-        reason,
+pub fn light(reference: &str) -> Result<Light, ReviewError> {
+    let mut args = gh_args(reference)?;
+    args[3] = format!("query={LIGHT}");
+    let v: serde_json::Value = call(&args)?;
+    let pull = &v["data"]["repository"]["pullRequest"];
+    // `polled` is read back trimmed, so an empty part is written `-`
+    let word = |v: &serde_json::Value| match v.as_str() {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => "-".to_string(),
     };
-    let out = Command::new("gh")
-        .args(args)
-        .current_dir(root)
-        .output()
-        .map_err(|e| failed(e.to_string()))?;
-    if !out.status.success() {
-        return Err(failed(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ));
-    }
-    let open: Vec<Open> = serde_json::from_slice(&out.stdout).map_err(|e| failed(e.to_string()))?;
-    Ok(open
-        .into_iter()
-        .filter(|p| built.contains(&p.head.as_str()))
-        .collect())
+    let key = [
+        word(&pull["headRefOid"]),
+        word(&pull["comments"]["nodes"][0]["url"]),
+        word(&pull["reviews"]["nodes"][0]["url"]),
+        word(&pull["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"]),
+    ];
+    Ok(Light {
+        state: pull["state"].as_str().unwrap_or_default().to_string(),
+        rollup: key[3].clone(),
+        key: key.join(" "),
+    })
 }
+
+fn call<T: serde::de::DeserializeOwned>(args: &[String]) -> Result<T, ReviewError> {
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    serde_json::from_str(&write(None, &args)?).map_err(|e| failed(&args, e.to_string()))
+}
+const FAILED: [&str; 6] = [
+    "FAILURE",
+    "ERROR",
+    "TIMED_OUT",
+    "CANCELLED",
+    "ACTION_REQUIRED",
+    "STARTUP_FAILURE",
+];
 
 fn collect(response: Response) -> Found {
     let pull = response.data.repository.pull_request;
-    // a review's own words carry no anchor, so they are a finding nobody can scope
-    let unanchored = pull
-        .reviews
-        .nodes
-        .iter()
-        .filter(|r| !r.body.trim().is_empty())
-        .count();
     let mut found = Found {
-        unanchored,
-        short: pull.reviews.short() || pull.review_threads.short(),
+        head: pull.head_ref_oid,
+        short: pull.reviews.short() || pull.review_threads.short() || pull.comments.short(),
         ..Found::default()
     };
+    // a bot that left a thread at this head restates it in its summary
+    let mut threaded: Vec<String> = Vec::new();
     for thread in pull.review_threads.nodes {
         found.short |= thread.comments.short();
-        let thread_id = thread.id;
+        if !thread.is_resolved {
+            found.open.extend(thread.id.clone());
+        }
+        // resolved or not, the thread is what the bot's summary counts
+        if let Some(r) = thread.comments.nodes.iter().find(|r| r.path.is_some()) {
+            if !thread.is_outdated {
+                threaded.push(r.who.name());
+            }
+        }
         if thread.is_resolved || thread.is_outdated {
             found.settled += thread.comments.nodes.len();
             continue;
         }
         // the response ranks no comment, so the first anchored one names the thread
-        let mut remarks = thread.comments.nodes.into_iter();
-        let first = loop {
-            match remarks.next() {
-                Some(remark) => match remark.path {
-                    Some(path) => {
-                        break Some(Anchored {
-                            path,
-                            body: remark.body,
-                            url: remark.url,
-                            replies: Vec::new(),
-                            also: Vec::new(),
-                            thread: thread_id.clone(),
-                            lines: (remark.start_line, remark.line),
-                        });
-                    }
-                    None => found.unanchored += 1,
-                },
-                None => break None,
-            }
+        let mut remarks = thread.comments.nodes;
+        let at = remarks.iter().position(|r| r.path.is_some()).unwrap_or(0);
+        if remarks.is_empty() || remarks[at].body.contains(OWN) {
+            continue;
+        }
+        let first = remarks.remove(at);
+        let by = first.who.name();
+        let replies: Vec<String> = remarks.into_iter().skip(at).map(|r| r.body).collect();
+        found.folded += replies.len();
+        let finding = Finding {
+            source: "thread",
+            key: thread
+                .id
+                .clone()
+                .unwrap_or_else(|| gist(&by, first.path.as_deref(), &first.body)),
+            by,
+            url: first.url,
+            path: first.path,
+            lines: (first.start_line, first.line),
+            thread: thread.id,
+            body: first.body,
+            replies,
+            ..Finding::default()
         };
-        if let Some(mut first) = first {
-            first.replies = remarks.map(|r| r.body).collect();
-            found.folded += first.replies.len();
-            let same = found.anchored.iter_mut().find(|a| {
-                a.path == first.path
-                    && a.lines == first.lines
-                    && plain(&a.body) == plain(&first.body)
-            });
-            match same {
-                Some(a) => a.also.push(first.url),
-                None => found.anchored.push(first),
+        // a fold drops its thread id, so only a threadless finding folds
+        let same = found.findings.iter_mut().find(|a| {
+            finding.thread.is_none()
+                && a.path.is_some()
+                && a.path == finding.path
+                && a.lines == finding.lines
+                && plain(&a.body) == plain(&finding.body)
+        });
+        match same {
+            Some(a) => a.also.push(finding.url),
+            None => found.findings.push(finding),
+        }
+    }
+    let notes = pull
+        .reviews
+        .nodes
+        .into_iter()
+        .map(|n| ("review", n))
+        .chain(pull.comments.nodes.into_iter().map(|n| ("comment", n)));
+    for (source, note) in notes {
+        if note.body.trim().is_empty() || note.body.contains(OWN) {
+            continue;
+        }
+        let by = note.who.name();
+        let summary = bots::summary(&by, &note.body);
+        if let Some((_, count)) = &summary {
+            if threaded.contains(&by) || *count == Some(0) {
+                continue;
             }
         }
+        // a summary rewritten with new rows is a new finding; one left alone stays carried
+        let (key, same) = match &summary {
+            Some((marker, _)) => {
+                let words = crate::skills::sha256(plain(&note.body).as_bytes());
+                (format!("{marker} {}", &words[..12]), marker.to_string())
+            }
+            None => {
+                let gist = gist(&by, None, &note.body);
+                (gist.clone(), gist)
+            }
+        };
+        let finding = Finding {
+            source,
+            by,
+            key,
+            url: note.url,
+            reused: summary.is_some(),
+            severity: summary.and_then(|(_, count)| count),
+            body: note.body,
+            ..Finding::default()
+        };
+        // a summary edited in place, or posted again, is one finding: the newest words win
+        let first = found.findings.iter_mut().find(|f| {
+            f.key == same || (f.by == finding.by && f.key.starts_with(&format!("{same} ")))
+        });
+        match first {
+            Some(f) => *f = finding,
+            None => found.findings.push(finding),
+        }
+    }
+    let checks = pull
+        .commits
+        .nodes
+        .into_iter()
+        .next_back()
+        .and_then(|h| h.commit.status_check_rollup)
+        .map(|r| r.contexts.nodes)
+        .unwrap_or_default();
+    for check in checks {
+        let name = check.name.or(check.context).unwrap_or_default();
+        let conclusion = check.conclusion.or(check.state).unwrap_or_default();
+        if !FAILED.contains(&conclusion.as_str()) {
+            continue;
+        }
+        let url = check.details_url.or(check.target_url).unwrap_or_default();
+        found.findings.push(Finding {
+            source: "check",
+            by: name.clone(),
+            key: format!("check {name} {}", found.head),
+            body: format!("{name}: {conclusion} {url}"),
+            url,
+            reused: true,
+            ..Finding::default()
+        });
+    }
+    for (n, f) in found.findings.iter_mut().enumerate() {
+        f.id = format!("F-{}", n + 1);
     }
     found
 }
@@ -302,57 +444,73 @@ fn plain(body: &str) -> String {
         .join(" ")
 }
 
+/// who said what where, wording aside: one request raised again in a new thread keeps its gist
+pub fn gist(by: &str, path: Option<&str>, body: &str) -> String {
+    format!("{by} {} {}", path.unwrap_or("-"), plain(body))
+}
+
 pub fn read(reference: &str) -> Result<Found, ReviewError> {
-    let args = gh_args(reference)?;
-    let failed = |reason: String| ReviewError::Gh {
-        command: format!("gh {}", args.join(" ")),
-        reason,
-    };
-    let out = Command::new("gh")
-        .args(&args)
-        .output()
-        .map_err(|e| failed(e.to_string()))?;
-    if !out.status.success() {
-        return Err(failed(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ));
-    }
-    let response: Response =
-        serde_json::from_slice(&out.stdout).map_err(|e| failed(e.to_string()))?;
-    Ok(collect(response))
+    Ok(collect(call(&gh_args(reference)?)?))
 }
 
 // a comment has no title, so the block takes its first line without the marker that opens it
-fn title(comment: &Anchored) -> String {
-    comment
-        .body
+fn title(f: &Finding) -> String {
+    f.body
         .lines()
         .map(|l| l.trim().trim_start_matches(['#', '>']).trim())
-        .find(|l| !l.is_empty())
-        .map_or_else(|| comment.path.clone(), str::to_string)
+        .find(|l| !l.is_empty() && !l.starts_with("<!--"))
+        .map_or_else(|| f.url.clone(), str::to_string)
 }
 
-pub fn render(comment: &Anchored, id: &str) -> String {
-    let mut lines = issue::scaffold(id, &title(comment), &comment.path);
-    lines.push(format!("notes: {}", comment.url));
-    if let Some(thread) = &comment.thread {
+pub fn render(f: &Finding, id: &str) -> String {
+    let scope = f.path.as_deref().unwrap_or(block::SCOPE_PLACEHOLDER);
+    let mut lines = issue::scaffold(id, &title(f), scope);
+    lines.push(format!("notes: {}", f.url));
+    if let Some(thread) = &f.thread {
         lines.push(format!("  thread: {thread}"));
     }
-    if !comment.also.is_empty() {
-        for url in std::iter::once(&comment.url).chain(&comment.also) {
+    if !f.also.is_empty() {
+        for url in std::iter::once(&f.url).chain(&f.also) {
             lines.push(format!("  > {url}"));
         }
     }
-    issue::quote(&comment.body, &mut lines);
-    for reply in &comment.replies {
+    issue::quote(&f.body, &mut lines);
+    for reply in &f.replies {
         lines.push("  >".to_string());
         issue::quote(reply, &mut lines);
     }
     lines.join("\n")
 }
 
-/// The thread id a block carries from the moment `append` wrote it, or none for a block with no origin thread.
-pub fn thread_of(block: &queue::Block) -> Option<String> {
+/// a `finding:` line, its fields indented under it, its body quoted
+pub fn entry(f: &Finding, id: &str, round: u64) -> String {
+    let mut lines = vec![
+        format!("finding: {id} {} round {round}", f.source),
+        format!("  by: {}", f.by),
+        format!("  key: {}", f.key),
+        format!("  url: {}", f.url),
+    ];
+    if let Some(path) = &f.path {
+        let at = match f.lines {
+            (Some(a), Some(b)) if a != b => format!(":{a}-{b}"),
+            (_, Some(l)) | (Some(l), None) => format!(":{l}"),
+            _ => String::new(),
+        };
+        lines.push(format!("  anchor: {path}{at}"));
+    }
+    // `thread-id`, not `thread`: `thread_of` reads the first `thread:` as a block's origin
+    if let Some(thread) = &f.thread {
+        lines.push(format!("  thread-id: {thread}"));
+    }
+    if let Some(n) = f.severity {
+        lines.push(format!("  severity: {n}"));
+    }
+    issue::quote(&f.body, &mut lines);
+    lines.join("\n")
+}
+
+/// the origin thread id `append` wrote into a block, if any
+pub fn thread_of(block: &block::Block) -> Option<String> {
     block
         .body
         .iter()
@@ -362,70 +520,205 @@ pub fn thread_of(block: &queue::Block) -> Option<String> {
         .map(str::to_string)
 }
 
-const SETTLE: &str = concat!(
-    "mutation($thread:ID!,$body:String!){",
-    "addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$thread,body:$body}){comment{url}} ",
-    "resolveReviewThread(input:{threadId:$thread}){thread{isResolved}}",
+pub const REPLY: &str = concat!(
+    "mutation ReplyThread($thread:ID!,$body:String!){",
+    "addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$thread,body:$body}){comment{url}}",
     "}",
 );
 
-/// Replies on the thread with the sha that answered it and resolves it, through the same gh the read uses.
-pub fn settle(root: &Path, thread: &str, sha: &str) -> Result<(), ReviewError> {
-    let body = format!("Answered in {sha} by enallagi.");
-    let args = [
-        "api",
-        "graphql",
-        "-f",
-        &format!("query={SETTLE}"),
-        "-f",
-        &format!("thread={thread}"),
-        "-f",
-        &format!("body={body}"),
-    ];
-    let failed = |reason: String| ReviewError::Gh {
-        command: format!("gh api graphql -f thread={thread}"),
-        reason,
-    };
-    let out = Command::new("gh")
-        .args(args)
-        .current_dir(root)
-        .output()
-        .map_err(|e| failed(e.to_string()))?;
-    if !out.status.success() {
-        return Err(failed(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ));
-    }
-    Ok(())
+pub const RESOLVE: &str =
+    "mutation ResolveThread($thread:ID!){resolveReviewThread(input:{threadId:$thread}){thread{isResolved}}}";
+
+// a write runs under `token` as `GH_TOKEN` when one is set, else gh's own auth
+fn write(token: Option<&str>, args: &[&str]) -> Result<String, ReviewError> {
+    crate::pr::gh(None, token, args)
+        .map(|out| out.trim().to_string())
+        .map_err(|reason| failed(args, reason))
 }
 
-pub fn append(text: &str, decisions: &str, found: &Found) -> Result<Appended, ReviewError> {
+fn failed(args: &[&str], reason: String) -> ReviewError {
+    let command = args.iter().take(3).copied().collect::<Vec<_>>().join(" ");
+    ReviewError::Gh {
+        command: format!("gh {command}"),
+        reason,
+    }
+}
+/// returns the reply's URL
+pub fn reply(token: Option<&str>, thread: &str, body: &str) -> Result<String, ReviewError> {
+    let out = write(
+        token,
+        &[
+            "api",
+            "graphql",
+            "-f",
+            &format!("query={REPLY}"),
+            "-f",
+            &format!("thread={thread}"),
+            "-f",
+            &format!("body={body}"),
+        ],
+    )?;
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap_or_default();
+    Ok(
+        v["data"]["addPullRequestReviewThreadReply"]["comment"]["url"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+    )
+}
+
+pub fn resolve(token: Option<&str>, thread: &str) -> Result<(), ReviewError> {
+    write(
+        token,
+        &[
+            "api",
+            "graphql",
+            "-f",
+            &format!("query={RESOLVE}"),
+            "-f",
+            &format!("thread={thread}"),
+        ],
+    )
+    .map(drop)
+}
+
+/// replies `body` on the thread and resolves it; returns the reply's URL
+pub fn settle(token: Option<&str>, thread: &str, body: &str) -> Result<String, ReviewError> {
+    reply(token, thread, body).and_then(|url| resolve(token, thread).map(|_| url))
+}
+
+pub fn rereview(token: Option<&str>, pr: &str, who: &str) -> Result<(), ReviewError> {
+    write(token, &["pr", "edit", pr, "--add-reviewer", who]).map(drop)
+}
+
+/// returns the comment's URL
+pub fn comment(token: Option<&str>, pr: &str, body: &str) -> Result<String, ReviewError> {
+    write(token, &["pr", "comment", pr, "--body", body])
+}
+
+/// the blocks the findings become, given the queue's tickets; the caller appends them
+pub fn append(
+    blocks: &[block::Block],
+    decisions: &str,
+    found: &Found,
+) -> Result<Appended, ReviewError> {
     let expired = issue::expired_at(decisions);
-    let archived = queue::parse(decisions)?;
-    let mut blocks = queue::parse(text)?;
+    let archived = block::parse(decisions)?;
+    let mut blocks = blocks.to_vec();
     let mut out = Appended::default();
-    let mut next = text.trim_end_matches('\n').to_string();
-    for comment in &found.anchored {
-        let carrier = issue::carrier(blocks.iter(), &comment.url)
-            .or_else(|| issue::carrier(archived.iter().filter(|b| b.line < expired), &comment.url));
+    for f in &found.findings {
+        let carrier = issue::carrier(blocks.iter(), &f.url)
+            .or_else(|| issue::carrier(archived.iter().filter(|b| b.line < expired), &f.url));
         if let Some(task) = carrier {
-            out.carried.push((task, comment.url.clone()));
+            out.carried.push((task, f.url.clone()));
             continue;
         }
-        let block = render(comment, &queue::next_id(&blocks, &archived));
-        if !next.is_empty() {
-            next.push_str("\n\n");
-        }
-        next.push_str(&block);
-        blocks = queue::parse(&next)?;
+        let block = render(f, &block::next_id(&blocks, &archived));
+        blocks.extend(block::parse(&block)?);
         out.blocks.push(block);
     }
-    out.queue = if out.blocks.is_empty() {
-        text.to_string()
-    } else {
-        format!("{next}\n")
-    };
     Ok(out)
+}
+
+// the only vendor-specific code; a bot not in it is read under its own name
+mod bots {
+    pub(super) const WHO: &str = "author{login __typename}";
+
+    struct Bot {
+        // GraphQL logins; REST's carry `[bot]`, which `name` drops
+        logins: &'static [&'static str],
+        vendor: &'static str,
+        // the marker of the one summary comment it edits in place, or ""
+        summary: &'static str,
+        // where the summary states its count of findings
+        count: Option<&'static str>,
+    }
+
+    const BOTS: &[Bot] = &[
+        Bot {
+            logins: &["kilo-code-bot"],
+            vendor: "Kilo",
+            summary: "<!-- kilo-review -->",
+            // `[*]`, not `\*`: the floor scan reads a ticket marker in an escaped one
+            count: Some(r"[*]{2}Status:[*]{2} (\d+) Issues? Found"),
+        },
+        // `greptile_confidence_score:N` is a confidence, not a count
+        Bot {
+            logins: &["greptile-apps"],
+            vendor: "Greptile",
+            summary: "<!-- greptile_summary -->",
+            count: None,
+        },
+        Bot {
+            logins: &["copilot-pull-request-reviewer"],
+            vendor: "Copilot",
+            summary: "",
+            count: None,
+        },
+        Bot {
+            logins: &["cursor"],
+            vendor: "Cursor Bugbot",
+            summary: "",
+            count: None,
+        },
+        Bot {
+            logins: &["coderabbitai"],
+            vendor: "CodeRabbit",
+            summary: "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->",
+            count: None,
+        },
+        Bot {
+            logins: &["claude"],
+            vendor: "Claude",
+            summary: "<!-- bhfn:1:",
+            count: None,
+        },
+    ];
+
+    #[derive(Debug, Default, serde::Deserialize)]
+    pub(super) struct Who {
+        #[serde(default)]
+        author: Option<Account>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct Account {
+        login: String,
+        #[serde(rename = "__typename", default)]
+        kind: String,
+    }
+
+    impl Who {
+        /// the table bot's vendor, else the login without `[bot]`; a deleted account is GitHub's `ghost`
+        pub(super) fn name(&self) -> String {
+            let Some(a) = &self.author else {
+                return "ghost".to_string();
+            };
+            let stripped = a.login.strip_suffix("[bot]");
+            let bot = a.kind == "Bot" || stripped.is_some();
+            let login = stripped.unwrap_or(&a.login);
+            BOTS.iter()
+                .find(|b| bot && b.logins.contains(&login))
+                .map_or_else(|| login.to_string(), |b| b.vendor.to_string())
+        }
+    }
+
+    /// a summary's marker and count, when `by` is a table bot and `body` carries its marker
+    pub(super) fn summary(by: &str, body: &str) -> Option<(&'static str, Option<u64>)> {
+        let b = BOTS
+            .iter()
+            .find(|b| b.vendor == by && !b.summary.is_empty() && body.contains(b.summary))?;
+        let count = b.count.and_then(|re| {
+            regex::Regex::new(re)
+                .ok()?
+                .captures(body)?
+                .get(1)?
+                .as_str()
+                .parse()
+                .ok()
+        });
+        Some((b.summary, count))
+    }
 }
 
 #[cfg(test)]
@@ -434,17 +727,203 @@ mod tests {
 
     fn anchored(path: &str, body: &str, url: &str) -> Found {
         Found {
-            anchored: vec![Anchored {
-                path: path.to_string(),
+            findings: vec![Finding {
+                path: Some(path.to_string()),
                 body: body.to_string(),
                 url: url.to_string(),
-                replies: Vec::new(),
-                also: Vec::new(),
-                thread: None,
-                lines: (None, None),
+                ..Finding::default()
             }],
             ..Found::default()
         }
+    }
+
+    use crate::fixture::twin;
+
+    // the read of a twin pull, so every shape is the one the twin serves from the recordings
+    fn served(pull: &twin::Pull) -> Found {
+        collect(serde_json::from_value(twin::threads(pull)).expect("parse"))
+    }
+
+    fn note(login: &str, kind: &str, body: &str, n: u32) -> twin::Note {
+        twin::Note {
+            author: login.to_string(),
+            typename: kind.to_string(),
+            body: body.to_string(),
+            url: format!("https://github.com/o/r/pull/1#issuecomment-{n}"),
+        }
+    }
+
+    fn bot_pull(bot: &str, texts: &[&str]) -> twin::Pull {
+        let mut pull = twin::Pull {
+            number: 1,
+            url: "https://github.com/o/r/pull/1".to_string(),
+            ..twin::Pull::default()
+        };
+        let rec = twin::recordings()
+            .into_iter()
+            .find(|r| r.bot == bot)
+            .expect("recording");
+        let found: Vec<twin::Finding> = texts
+            .iter()
+            .map(|t| twin::Finding {
+                bot: bot.to_string(),
+                path: "src/a.rs".to_string(),
+                line: 1,
+                text: t.to_string(),
+            })
+            .collect();
+        twin::post(&mut pull, &rec, &found.iter().collect::<Vec<_>>());
+        pull
+    }
+
+    #[test]
+    fn plain_comment_finding() {
+        let mut pull = bot_pull("kilo", &[]);
+        pull.comments
+            .push(note("pat", "User", "please rename this", 1));
+        pull.reviews
+            .push(note("sam", "User", "looks risky overall", 2));
+        let found = served(&pull);
+        let got: Vec<(&str, &str, &str)> = found
+            .findings
+            .iter()
+            .map(|f| (f.id.as_str(), f.source, f.by.as_str()))
+            .collect();
+        assert_eq!(got, [("F-1", "review", "sam"), ("F-2", "comment", "pat")]);
+        assert_eq!(found.findings[1].body, "please rename this");
+        assert!(found.findings[1].url.ends_with("#issuecomment-1"));
+    }
+
+    #[test]
+    fn login_maps_vendor() {
+        let mut pull = bot_pull("kilo", &[]);
+        for (n, (login, kind)) in [
+            ("kilo-code-bot[bot]", "Bot"),
+            ("copilot-pull-request-reviewer", "Bot"),
+            ("someone-else[bot]", "Bot"),
+            ("kilo-code-bot", "User"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            pull.comments
+                .push(note(login, kind, &format!("remark {n}"), n as u32));
+        }
+        let by: Vec<String> = served(&pull).findings.into_iter().map(|f| f.by).collect();
+        assert_eq!(by, ["Kilo", "Copilot", "someone-else", "kilo-code-bot"]);
+    }
+
+    #[test]
+    fn summary_dedups_by_marker() {
+        let mut pull = bot_pull("kilo", &["first"]);
+        pull.threads.clear();
+        let edited = pull.comments[0].body.replace("1 Issues", "2 Issues");
+        pull.comments.push(note("kilo-code-bot", "Bot", &edited, 9));
+        let found = served(&pull);
+        assert_eq!(found.findings.len(), 1, "{:?}", found.findings);
+        let f = &found.findings[0];
+        assert_eq!((f.source, f.by.as_str()), ("comment", "Kilo"));
+        assert!(f.key.starts_with("<!-- kilo-review --> "), "{}", f.key);
+        assert_eq!(f.severity, Some(2));
+        assert!(f.url.ends_with("#issuecomment-9"));
+    }
+
+    #[test]
+    fn rewritten_summary_rekeyed() {
+        let key = |text: &str| {
+            let mut pull = bot_pull("greptile", &[]);
+            let rec = twin::recordings().into_iter().find(|r| r.bot == "greptile");
+            let row = twin::Finding {
+                bot: "greptile".to_string(),
+                text: text.to_string(),
+                ..twin::Finding::default()
+            };
+            twin::post(&mut pull, &rec.expect("recording"), &[&row]);
+            served(&pull).findings[0].key.clone()
+        };
+        assert_eq!(key("the error path"), key("the error path"));
+        assert_ne!(key("the error path"), key("the null path"));
+    }
+
+    #[test]
+    fn repeat_thread_kept() {
+        let mut pull = bot_pull("kilo", &["drops the offset"]);
+        let mut again = pull.threads[0].clone();
+        again.id = "PRRT_again".to_string();
+        pull.threads.push(again);
+        let threads: Vec<Option<String>> = served(&pull)
+            .findings
+            .into_iter()
+            .map(|f| f.thread)
+            .collect();
+        assert_eq!(threads.len(), 2, "{threads:?}");
+        assert!(threads.iter().all(Option::is_some), "{threads:?}");
+    }
+
+    #[test]
+    fn summary_beside_threads() {
+        let found = served(&bot_pull("greptile", &["drops the offset"]));
+        let sources: Vec<&str> = found.findings.iter().map(|f| f.source).collect();
+        assert_eq!(sources, ["thread"]);
+        assert_eq!(found.findings[0].by, "Greptile");
+
+        let mut pull = bot_pull("kilo", &["x"]);
+        pull.threads[0].resolved = true;
+        assert!(served(&pull).findings.is_empty());
+        pull.threads.clear();
+        pull.comments[0].body = pull.comments[0].body.replace("1 Issues", "0 Issues");
+        assert!(served(&pull).findings.is_empty());
+
+        pull.comments[0].body = pull.comments[0].body.replace("0 Issues", "1 Issues");
+        assert_eq!(served(&pull).findings.len(), 1);
+    }
+
+    #[test]
+    fn failed_check_finding() {
+        let mut pull = bot_pull("kilo", &[]);
+        pull.head_sha = "abc".to_string();
+        pull.checks = vec![
+            serde_json::json!({"__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "https://github.com/o/r/actions/runs/7/job/8"}),
+            serde_json::json!({"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "https://x/2"}),
+            serde_json::json!({"__typename": "StatusContext", "context": "ci/legacy", "state": "ERROR", "targetUrl": "https://x/3"}),
+        ];
+        let found = served(&pull);
+        let got: Vec<(&str, &str, &str)> = found
+            .findings
+            .iter()
+            .map(|f| (f.source, f.key.as_str(), f.body.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "check",
+                    "check test abc",
+                    "test: FAILURE https://github.com/o/r/actions/runs/7/job/8"
+                ),
+                (
+                    "check",
+                    "check ci/legacy abc",
+                    "ci/legacy: ERROR https://x/3"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn own_reply_ignored() {
+        let mut pull = bot_pull("kilo", &[]);
+        pull.comments.push(note(
+            "pat",
+            "User",
+            "<!-- enallagi:F-1 -->\nAnswered in abc1234.",
+            1,
+        ));
+        pull.comments
+            .push(note("pat", "User", "and this one is mine", 2));
+        let found = served(&pull);
+        assert_eq!(found.findings.len(), 1, "{:?}", found.findings);
+        assert_eq!(found.findings[0].body, "and this one is mine");
     }
 
     #[test]
@@ -469,46 +948,48 @@ mod tests {
     }
 
     #[test]
-    fn a_settled_thread_yields_no_comment() {
+    fn settled_thread_silent() {
         let json = include_str!("../tests/fixtures/reviews/settled.json");
         let found = collect(serde_json::from_str(json).expect("parse"));
         assert_eq!(found.settled, 2);
-        assert_eq!(found.anchored.len(), 1);
-        assert_eq!(found.anchored[0].path, "src/cli.rs");
+        assert_eq!(found.findings.len(), 1);
+        assert_eq!(found.findings[0].path.as_deref(), Some("src/cli.rs"));
     }
 
     #[test]
-    fn a_body_fence_leaves_the_queue_parseable() {
-        let body = format!("```\n{}", queue::heading("T-9", "x"));
+    fn body_fence_parseable() {
+        let body = format!("```\n{}", block::heading("T-9", "x"));
         let found = anchored("src/a.rs", &body, "https://x/pull/1#discussion_r1");
-        let out = append("", "", &found).unwrap();
-        let blocks = queue::parse(&out.queue).unwrap();
+        let out = append(&[], "", &found).unwrap();
+        let blocks = block::parse(&out.blocks[0]).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].id, "T-001");
     }
 
     #[test]
-    fn a_block_carries_its_thread_from_append() {
+    fn block_carries_thread() {
         let json = include_str!("../tests/fixtures/reviews/thread.json");
         let found = collect(serde_json::from_str(json).expect("parse"));
-        let out = append("", "", &found).unwrap();
-        let blocks = queue::parse(&out.queue).unwrap();
+        let out = append(&[], "", &found).unwrap();
+        let blocks = block::parse(&out.blocks[0]).unwrap();
         assert_eq!(thread_of(&blocks[0]).as_deref(), Some("PRRT_kwDOA1"));
         let bare = anchored("src/a.rs", "x", "https://x/pull/1#discussion_r1");
-        let out = append("", "", &bare).unwrap();
-        assert_eq!(thread_of(&queue::parse(&out.queue).unwrap()[0]), None);
+        let out = append(&[], "", &bare).unwrap();
+        assert_eq!(thread_of(&block::parse(&out.blocks[0]).unwrap()[0]), None);
     }
 
     #[test]
-    fn a_comment_already_queued_is_carried() {
+    fn queued_comment_carried() {
         let found = anchored("src/a.rs", "x", "https://x/pull/1#discussion_r12");
         let queued = format!(
             "{}\nnotes: https://x/pull/1#discussion_r123\n",
-            queue::heading("T-001", "a")
+            block::heading("T-001", "a")
         );
+        let mut queued = block::parse(&queued).unwrap();
         let out = append(&queued, "", &found).unwrap();
         assert_eq!(out.blocks.len(), 1, "a longer id read as the same comment");
-        let out = append(&out.queue, "", &found).unwrap();
+        queued.extend(block::parse(&out.blocks[0]).unwrap());
+        let out = append(&queued, "", &found).unwrap();
         assert!(out.blocks.is_empty());
         assert_eq!(out.carried[0].0, "T-002");
     }

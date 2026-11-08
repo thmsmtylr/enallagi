@@ -1,4 +1,4 @@
-//! `enallagi init`, then every read-only subcommand, against one fresh install: the binary an operator actually types, not a module call.
+//! `enallagi init`, then every read-only subcommand, against one fresh install through the binary
 
 use enallagi::fixture::Repo;
 
@@ -24,7 +24,7 @@ fn run(repo: &Repo, args: &[&str]) -> Out {
 fn installed() -> Repo {
     let repo = Repo::new();
     repo.write(
-        "enallagi.toml",
+        ".enallagi/enallagi.toml",
         "[check]\ncommand = \"true\"\nfail_name = \"x\"\n",
     );
     let out = run(&repo, &["init"]);
@@ -58,8 +58,7 @@ fn run_dry_run_prints_the_plan_and_exits_0() {
     let repo = installed();
     let out = run(&repo, &["run", "--iterations", "1", "--dry-run"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
-    // init seeds no task, so the plan is discovery; discover's `when` negates task's, so exactly
-    // one of the pair is ever planned
+    // init seeds no task, so the plan is discovery; discover's `when` negates task's
     assert!(
         out.stdout
             .contains("=== pipeline discover (!queue.takeable) ==="),
@@ -81,7 +80,7 @@ fn tasks_list_prints_the_seeded_queue() {
 }
 
 #[test]
-fn skills_list_prints_every_declared_skill() {
+fn skills_list_prints_all() {
     let repo = installed();
     let out = run(&repo, &["skills", "list"]);
     assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
@@ -91,7 +90,7 @@ fn skills_list_prints_every_declared_skill() {
         .filter_map(|l| l.split_whitespace().next())
         .collect();
     let cfg = enallagi::config::load(&repo.root).expect("config");
-    assert_eq!(cfg.skill.len(), 8);
+    assert_eq!(cfg.skill.len(), 13);
     assert_eq!(
         ids,
         cfg.skill.iter().map(|s| s.id.as_str()).collect::<Vec<_>>()
