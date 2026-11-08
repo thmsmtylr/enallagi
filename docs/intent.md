@@ -1,6 +1,6 @@
 # Intent: what enallagi is for
 
-Author: Thomas Taylor. Status: accepted 2026-09-04. Format: Stage 1 of the AI-native SDLC playbook
+Status: accepted. Format: Stage 1 of the AI-native SDLC playbook
 (References).
 
 ## Problem
@@ -41,7 +41,7 @@ else, and `docs/bootstrap.sh --check` fails on a history with no verifier reject
 
 ## What exists today
 
-Measured 2026-09-08 against the Rust binary that replaced the bash package:
+Measured against the Rust binary that replaced the bash package:
 
 - `cargo test -p enallagi -q 2>&1 | grep 'test result'` → 285 passed / 0 failed / 3 ignored, summed
   across the crate's `test result:` lines (lib, main, seven integration files, doctests).
@@ -97,8 +97,7 @@ engineer reading the repository cold.
   `apple-darwin`. Runtime dependencies: `git`, the agent CLI named in the configuration, and the check
   command named in the configuration. Crate dependencies: `clap`, `serde`, `serde_json`, `toml`,
   `ratatui`, `crossterm`, `globset`, `regex`, `sha2`, `jiff`, `thiserror`, `anyhow`; `tempfile` in
-  tests. Git is invoked as a subprocess, not linked. Supersedes "Bash and `python3` only"
-  (2026-09-04 to 2026-09-07).
+  tests. Git is invoked as a subprocess, not linked. Supersedes "Bash and `python3` only".
 - **Vendor-neutral.** The agent is any CLI with a headless mode. No adapter is the default; the
   Claude Code adapter is one of several, each a settings file.
 
